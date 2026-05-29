@@ -11,7 +11,7 @@ const PROVIDERS: { value: PersonaConfig['provider']; label: string }[] = [
   { value: 'claude_code', label: 'Claude Code (CLI)' },
   { value: 'codex', label: 'Codex (CLI)' },
   { value: 'openrouter', label: 'OpenRouter (API)' },
-  { value: 'ollama', label: 'Ollama (Local)' },
+  { value: 'local', label: 'Local (omlx / OpenAI-compatible)' },
 ];
 
 const ALL_TOOLS = ['read_file', 'write_file', 'run_command', 'list_files', 'search', 'web_fetch'];
@@ -102,7 +102,7 @@ export default function PersonaEditor({ onClose, onCreated }: PersonaEditorProps
                   if (e.target.value === 'claude_code') setModel('claude-sonnet-4');
                   else if (e.target.value === 'codex') setModel('codex-default');
                   else if (e.target.value === 'openrouter') setModel('openrouter/anthropic/claude-sonnet-4');
-                  else if (e.target.value === 'ollama') setModel('qwen2.5:14b');
+                  else if (e.target.value === 'local') setModel('qwen2.5:14b');
                 }}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
               >

@@ -65,8 +65,9 @@ export function searchMemories(db: Database.Database, projectId: string, query: 
 
   scored.sort((a, b) => b.score - a.score);
 
-  const top = scored.filter(s => s.score > 0).slice(0, limit);
-  return top.length > 0 ? top.map(s => s.mem) : all.slice(0, limit);
+  // Only return memories that actually match the query — never fall back to
+  // injecting arbitrary recent memories, which pollutes agent prompts.
+  return scored.filter(s => s.score > 0).slice(0, limit).map(s => s.mem);
 }
 
 export function getMemoriesByCategory(db: Database.Database, projectId: string, category: string): Memory[] {
@@ -87,6 +88,40 @@ export function deleteMemory(db: Database.Database, id: string): void {
 
 export function updateMemory(db: Database.Database, id: string, content: string): void {
   db.prepare('UPDATE memories SET content = ? WHERE id = ?').run(content, id);
+}
+
+export function setMemoryEmbedding(db: Database.Database, id: string, embedding: number[]): void {
+  db.prepare('UPDATE memories SET embedding_json = ? WHERE id = ?').run(JSON.stringify(embedding), id);
+}
+
+export interface MemoryVector {
+  id: string;
+  content: string;
+  category: string;
+  embedding: number[] | null;
+}
+
+/** Recent memories for a project with their parsed embedding vectors (if any). */
+export function getMemoryVectors(db: Database.Database, projectId: string, limit = 200): MemoryVector[] {
+  const rows = db.prepare(
+    'SELECT id, content, category, embedding_json FROM memories WHERE project_id = ? ORDER BY created_at DESC LIMIT ?'
+  ).all(projectId, limit) as { id: string; content: string; category: string; embedding_json: string | null }[];
+
+  return rows.map(r => ({
+    id: r.id,
+    content: r.content,
+    category: r.category,
+    embedding: r.embedding_json ? safeParseVector(r.embedding_json) : null,
+  }));
+}
+
+function safeParseVector(json: string): number[] | null {
+  try {
+    const v = JSON.parse(json);
+    return Array.isArray(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 // ---- Full text search helpers

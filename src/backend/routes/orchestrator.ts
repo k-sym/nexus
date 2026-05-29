@@ -38,9 +38,9 @@ export async function registerOrchestratorRoutes(fastify: FastifyInstance) {
   fastify.get('/api/agents/usage', async (request) => {
     const { projectId } = request.query as { projectId?: string };
 
-    const projectFilter = projectId
-      ? `JOIN tasks t ON t.id = ar.task_id WHERE t.project_id = '${projectId.replace(/'/g, "''")}'`
-      : '';
+    const join = projectId ? 'JOIN tasks t ON t.id = ar.task_id' : '';
+    const where = projectId ? 'WHERE t.project_id = ?' : '';
+    const params = projectId ? [projectId] : [];
 
     const totals = db.prepare(
       `SELECT
@@ -49,19 +49,19 @@ export async function registerOrchestratorRoutes(fastify: FastifyInstance) {
          COALESCE(SUM(ar.completion_tokens), 0) as completion_tokens,
          COALESCE(SUM(ar.total_tokens), 0) as total_tokens,
          COALESCE(SUM(ar.duration_ms), 0) as duration_ms
-       FROM agent_runs ar ${projectFilter}`
-    ).get() as any;
+       FROM agent_runs ar ${join} ${where}`
+    ).get(...params) as any;
 
     const byProvider = db.prepare(
       `SELECT
          ar.provider,
          COUNT(*) as runs,
          COALESCE(SUM(ar.total_tokens), 0) as total_tokens
-       FROM agent_runs ar ${projectFilter}
-       ${projectFilter ? 'AND' : 'WHERE'} ar.provider IS NOT NULL
+       FROM agent_runs ar ${join}
+       ${where ? where + ' AND' : 'WHERE'} ar.provider IS NOT NULL
        GROUP BY ar.provider
        ORDER BY total_tokens DESC`
-    ).all();
+    ).all(...params);
 
     return { totals, byProvider };
   });

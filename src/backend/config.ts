@@ -17,8 +17,13 @@ const CONFIG_PATH = path.join(NEXUS_DIR, 'config.yaml');
 const DEFAULT_CONFIG: NexusConfig = {
   server: { port: 4173 },
   models: {
-    openrouter: { api_key: '${OPENROUTING_API_KEY}' },
-    ollama: { base_url: 'http://localhost:11434' },
+    openrouter: { api_key: '${OPENROUTER_API_KEY}' },
+    local: {
+      base_url: 'http://127.0.0.1:4001/v1',
+      api_key: '${OMLX_API_KEY}',
+      embedding_model: '',
+      rerank_model: '',
+    },
   },
   mem0: {
     api_url: 'http://localhost:8051',
@@ -38,7 +43,7 @@ const DEFAULT_CONFIG: NexusConfig = {
   },
   claude_code: {
     command: 'claude',
-    args: ['--no-interactive'],
+    args: [],
   },
   codex: {
     command: 'codex',
@@ -119,7 +124,7 @@ function seedDefaultPersonas(): void {
       yaml: {
         name: 'Cron Runner',
         slug: 'cron-runner',
-        provider: 'ollama',
+        provider: 'local',
         model: 'qwen2.5:14b',
         system_prompt: 'You are a task automation assistant. Execute scheduled tasks efficiently and report results concisely.',
         tools: ['read_file', 'write_file', 'run_command'],
@@ -152,8 +157,30 @@ export function loadConfig(): NexusConfig {
   }
 
   const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-  const parsed = yaml.load(raw) as NexusConfig;
-  return { ...DEFAULT_CONFIG, ...parsed };
+  const parsed = (yaml.load(raw) as Partial<NexusConfig>) || {};
+  // Deep-merge over defaults so configs written by older versions (missing
+  // nested keys like models.local) still load with sane fallbacks rather than
+  // producing `undefined` and crashing at access time.
+  return deepMerge(DEFAULT_CONFIG, parsed) as NexusConfig;
+}
+
+/** Recursively merge `source` over `base`. Arrays and primitives are replaced. */
+function deepMerge<T>(base: T, source: any): T {
+  if (source === null || source === undefined) return base;
+  if (Array.isArray(base) || typeof base !== 'object' || base === null) {
+    return (source ?? base) as T;
+  }
+  const out: any = { ...base };
+  for (const key of Object.keys(source)) {
+    const baseVal = (base as any)[key];
+    const srcVal = source[key];
+    if (baseVal && typeof baseVal === 'object' && !Array.isArray(baseVal) && srcVal && typeof srcVal === 'object' && !Array.isArray(srcVal)) {
+      out[key] = deepMerge(baseVal, srcVal);
+    } else if (srcVal !== undefined) {
+      out[key] = srcVal;
+    }
+  }
+  return out as T;
 }
 
 export function saveConfig(config: NexusConfig): void {
@@ -164,6 +191,17 @@ export function saveConfig(config: NexusConfig): void {
 
 export function resolveEnvVars(value: string): string {
   return value.replace(/\$\{(\w+)\}/g, (_, name) => process.env[name] || '');
+}
+
+/**
+ * Resolve the OpenRouter API key, tolerating both the documented
+ * OPENROUTER_API_KEY and the legacy OPENROUTING_API_KEY spelling, plus any
+ * literal/interpolated value stored in config.yaml.
+ */
+export function resolveOpenRouterKey(config: NexusConfig): string {
+  const fromConfig = resolveEnvVars(config.models.openrouter.api_key || '');
+  if (fromConfig) return fromConfig;
+  return process.env.OPENROUTER_API_KEY || process.env.OPENROUTING_API_KEY || '';
 }
 
 export function getNexusDir(): string {

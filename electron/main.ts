@@ -5,10 +5,18 @@ import { fork } from 'child_process';
 let mainWindow: BrowserWindow | null = null;
 let backendProcess: ReturnType<typeof fork> | null = null;
 
+// __dirname is electron/dist at runtime, so the repo root is two levels up.
+const REPO_ROOT = path.join(__dirname, '..', '..');
+
+// Dev mode = unpackaged AND not explicitly forced into prod. Setting
+// NEXUS_ELECTRON_PROD=1 lets you exercise the production flow (boot the
+// compiled backend, load the built frontend) without packaging the app.
+const isDev = !app.isPackaged && process.env.NEXUS_ELECTRON_PROD !== '1';
+
 function startBackend() {
-  const backendEntry = path.join(__dirname, '..', 'src', 'backend', 'dist', 'index.js');
+  const backendEntry = path.join(REPO_ROOT, 'src', 'backend', 'dist', 'index.js');
   backendProcess = fork(backendEntry, [], {
-    cwd: path.join(__dirname, '..'),
+    cwd: REPO_ROOT,
     stdio: 'inherit',
   });
 }
@@ -22,25 +30,29 @@ function createWindow() {
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0f0f14',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, '..', 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
 
-  const isDev = !app.isPackaged;
-
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
     mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'src', 'frontend', 'dist', 'index.html'));
+    mainWindow.loadFile(path.join(REPO_ROOT, 'src', 'frontend', 'dist', 'index.html'));
   }
 }
 
 app.whenReady().then(() => {
-  startBackend();
-  setTimeout(createWindow, 1500);
+  // In dev the backend is run separately (npm run dev:backend via tsx); in
+  // prod (packaged, or NEXUS_ELECTRON_PROD=1) we boot the compiled backend.
+  if (!isDev) {
+    startBackend();
+    setTimeout(createWindow, 1500);
+  } else {
+    createWindow();
+  }
 });
 
 app.on('window-all-closed', () => {

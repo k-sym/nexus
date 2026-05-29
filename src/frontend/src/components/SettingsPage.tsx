@@ -93,12 +93,46 @@ export default function SettingsPage() {
               Current: <span className="font-mono">{config.models.openrouter.api_key || '(unset)'}</span>. Leave blank to keep unchanged.
             </p>
           </Field>
-          <Field label="Ollama Base URL">
+          <Field label="Local Server Base URL">
             <input
               type="text"
-              value={config.models.ollama.base_url}
-              onChange={e => update(['models', 'ollama', 'base_url'], e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 focus:outline-none focus:border-indigo-500/50"
+              value={config.models.local?.base_url ?? ''}
+              onChange={e => update(['models', 'local', 'base_url'], e.target.value)}
+              placeholder="http://localhost:8000/v1"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+            />
+            <p className="text-[10px] text-zinc-600 mt-1">
+              OpenAI-compatible endpoint (omlx, LM Studio, llama.cpp…). Include the /v1 suffix.
+            </p>
+          </Field>
+          <Field label="Local Server API Key">
+            <input
+              type="text"
+              value={config.models.local?.api_key ?? ''}
+              onChange={e => update(['models', 'local', 'api_key'], e.target.value)}
+              placeholder="${OMLX_API_KEY} or paste a key"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+            />
+            <p className="text-[10px] text-zinc-600 mt-1">
+              omlx requires this. Supports <span className="font-mono">{'${ENV_VAR}'}</span> interpolation.
+            </p>
+          </Field>
+          <Field label="Embedding Model (optional)">
+            <input
+              type="text"
+              value={config.models.local?.embedding_model ?? ''}
+              onChange={e => update(['models', 'local', 'embedding_model'], e.target.value)}
+              placeholder="leave blank to use lexical search"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+            />
+          </Field>
+          <Field label="Reranker Model (optional)">
+            <input
+              type="text"
+              value={config.models.local?.rerank_model ?? ''}
+              onChange={e => update(['models', 'local', 'rerank_model'], e.target.value)}
+              placeholder="leave blank to disable reranking"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
             />
           </Field>
         </Section>

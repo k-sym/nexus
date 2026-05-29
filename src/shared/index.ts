@@ -76,7 +76,9 @@ export interface FileAttachment {
 export interface PersonaConfig {
   name: string;
   slug: string;
-  provider: 'claude_code' | 'codex' | 'openrouter' | 'ollama';
+  // 'local' = any OpenAI-compatible local server (omlx, LM Studio, llama.cpp…).
+  // 'ollama' is kept as a legacy alias, treated identically to 'local'.
+  provider: 'claude_code' | 'codex' | 'openrouter' | 'local' | 'ollama';
   model: string;
   system_prompt: string;
   tools: string[];
@@ -89,7 +91,16 @@ export interface NexusConfig {
   server: { port: number };
   models: {
     openrouter: { api_key: string };
-    ollama: { base_url: string };
+    // Local OpenAI-compatible server. base_url should include the /v1 suffix,
+    // e.g. http://localhost:8000/v1 for omlx. embedding_model / rerank_model
+    // are optional; empty means that capability is disabled (memory falls back
+    // to lexical TF-IDF search).
+    local: {
+      base_url: string;
+      api_key: string;
+      embedding_model: string;
+      rerank_model: string;
+    };
   };
   mem0: {
     api_url: string;

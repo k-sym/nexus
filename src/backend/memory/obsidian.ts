@@ -13,7 +13,8 @@ import { Project } from '@nexus/shared';
 import { getNexusDir } from '../config';
 
 interface ObsidianSyncCallbacks {
-  onFileChanged: (vaultPath: string, relativePath: string) => void;
+  /** Fired when an externally-edited memory markdown file changes. */
+  onMemoryEdited: (memoryId: string, content: string) => void;
 }
 
 export function getVaultPath(): string {
@@ -47,9 +48,9 @@ export function writeTaskSummary(db: Database.Database, project: Project, taskId
   ].filter(Boolean).join('\n');
 
   const body = [
-    `# ${title}`,
-    '',
     frontmatter,
+    '',
+    `# ${title}`,
     '',
     content,
   ].join('\n');
@@ -79,13 +80,15 @@ export function writeChatArchive(projectSlug: string, title: string, threadId: s
   fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
 }
 
-export function writeMemory(projectSlug: string, content: string, category: string): void {
+export function writeMemory(projectSlug: string, memoryId: string, content: string, category: string): void {
   const dir = ensureProjectDir(projectSlug);
-  const date = new Date().toISOString().slice(0, 19).replace('T', ' ').replace(/:/g, '-');
-  const filePath = path.join(dir, 'Memory', `${date} ${category}.md`);
+  // Filename is keyed on the memory id so updates overwrite the same file
+  // rather than accumulating duplicates.
+  const filePath = path.join(dir, 'Memory', `${memoryId}.md`);
 
   const body = [
     `---`,
+    `id: ${memoryId}`,
     `category: ${category}`,
     `date: ${new Date().toISOString()}`,
     `---`,
@@ -106,31 +109,31 @@ export function startObsidianWatcher(db: Database.Database, callbacks: ObsidianS
   });
 
   watcher.on('change', (filePath: string) => {
-    const relativePath = path.relative(vaultPath, filePath);
-    if (relativePath.endsWith('.md')) {
-      const frontmatter = parseFrontmatter(filePath);
-      if (frontmatter.category === 'memory') {
-        callbacks.onFileChanged(vaultPath, relativePath);
-      }
+    if (!filePath.endsWith('.md')) return;
+    // Only memory files (which carry an `id` in their frontmatter) sync back.
+    const parsed = parseMarkdown(filePath);
+    if (parsed.frontmatter.id) {
+      callbacks.onMemoryEdited(parsed.frontmatter.id, parsed.body.trim());
     }
   });
 
   console.log('[memory] Obsidian vault watcher started');
 }
 
-function parseFrontmatter(filePath: string): Record<string, string> {
+/** Split a markdown file into its YAML frontmatter map and remaining body. */
+function parseMarkdown(filePath: string): { frontmatter: Record<string, string>; body: string } {
   try {
     const raw = fs.readFileSync(filePath, 'utf-8');
-    const match = raw.match(/^---\n([\s\S]*?)\n---/);
-    if (!match) return {};
-    const result: Record<string, string> = {};
+    const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+    if (!match) return { frontmatter: {}, body: raw };
+    const frontmatter: Record<string, string> = {};
     for (const line of match[1].split('\n')) {
-      const [key, ...rest] = line.split(':');
-      if (key && rest.length > 0) result[key.trim()] = rest.join(':').trim();
+      const idx = line.indexOf(':');
+      if (idx > 0) frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
     }
-    return result;
+    return { frontmatter, body: match[2] };
   } catch {
-    return {};
+    return { frontmatter: {}, body: '' };
   }
 }
 

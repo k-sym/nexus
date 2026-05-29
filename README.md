@@ -35,7 +35,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Projects** | Link existing local git repos. NEXUS adds a `project_docs/` structure for specs, plans, and uploads. |
 | **Kanban** | 5-column board (Triage → To Do → In Progress → Review → Deploy) with drag-and-drop. |
 | **Orchestrator** | Watches for tasks entering "In Progress" and dispatches them to the right agent automatically. |
-| **Multi-provider agents** | Spawns Claude Code & Codex as CLI subprocesses; calls OpenRouter & Ollama over HTTP. |
+| **Multi-provider agents** | Spawns Claude Code & Codex as CLI subprocesses; calls OpenRouter and any local OpenAI-compatible server (omlx, LM Studio, …) over HTTP. |
 | **Personas** | YAML-defined agent personalities. Assign different models to coding, review, deploy, etc. |
 | **Memory** | Local searchable memory store, auto-injected into agent context, mirrored to an Obsidian vault. |
 | **Chat** | Per-project conversational interface with file drag-and-drop and 48-hour archival to Obsidian. |
@@ -66,7 +66,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 │             ├ claude (CLI)                              │
 │             ├ codex  (CLI)                              │
 │             ├ openrouter (HTTP)                         │
-│             └ ollama (HTTP)                             │
+│             └ local (HTTP, OpenAI-compatible)           │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -90,7 +90,7 @@ The backend runs everything in a single Node process: the Fastify HTTP API, the 
 - **Node.js** ≥ 20
 - **Claude Code CLI** (`claude`) — for the Developer persona ([install](https://docs.claude.com/claude-code))
 - **Codex CLI** (`codex`) — for the Reviewer persona (optional)
-- **Ollama** — for local/cron tasks (optional, [install](https://ollama.com))
+- **A local OpenAI-compatible LLM server** — for local/cron tasks (optional). On Apple Silicon, [omlx](https://github.com/jundot/omlx) is recommended (one server for chat, embeddings, and reranking); LM Studio or llama.cpp's server work too.
 - **OpenRouter API key** — for the Generalist persona and chat ([get one](https://openrouter.ai/keys))
 
 ### Install
@@ -104,10 +104,11 @@ npm install
 (cd electron && npm install)
 ```
 
-### Set your API key
+### Set your API keys
 
 ```bash
-export OPENROUTER_API_KEY="sk-or-..."
+export OPENROUTER_API_KEY="sk-or-..."   # for OpenRouter agents + chat
+export OMLX_API_KEY="..."               # for the local model server (if it requires auth, e.g. omlx)
 ```
 
 ### Run in dev
@@ -125,12 +126,15 @@ Open http://localhost:5173
 ### Run as Electron app
 
 ```bash
-# Build the frontend and backend first
-cd src/shared && npx tsc
-cd ../backend && npx tsc
-cd ../frontend && npx vite build
-cd ../../electron && npm run dev
+# Build everything (shared, backend, frontend, electron)
+npm run build
+
+# Launch Electron in production mode: it boots the compiled backend and loads
+# the built frontend (no separate dev servers needed).
+NEXUS_ELECTRON_PROD=1 npm run --workspace=electron dev
 ```
+
+Without `NEXUS_ELECTRON_PROD=1`, an unpackaged Electron launch runs in dev mode and expects the Vite dev server on `:5173` and the backend already running (see "Run in dev" above).
 
 On first run, NEXUS creates `~/.nexus/` with default config, four starter personas, an Obsidian vault, and the SQLite database.
 
@@ -167,8 +171,11 @@ server:
 models:
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"   # env var interpolation
-  ollama:
-    base_url: "http://localhost:11434"
+  local:                               # any OpenAI-compatible server (omlx, LM Studio, …)
+    base_url: "http://127.0.0.1:4001/v1"
+    api_key: "${OMLX_API_KEY}"         # omlx requires auth; env interpolation supported
+    embedding_model: ""                # optional; blank = lexical (TF-IDF) memory search
+    rerank_model: ""                   # optional; blank = no reranking (cosine only)
 
 mem0:
   api_url: "http://localhost:8051"
@@ -187,7 +194,7 @@ scheduler:
 
 claude_code:
   command: "claude"
-  args: ["--no-interactive"]
+  args: []                       # extra CLI flags; the prompt is passed via -p
 
 codex:
   command: "codex"
@@ -235,7 +242,7 @@ Personas are agent personalities defined as YAML files in `~/.nexus/personas/`. 
 ```yaml
 name: Code Reviewer
 slug: reviewer
-provider: codex          # claude_code | codex | openrouter | ollama
+provider: codex          # claude_code | codex | openrouter | local
 model: codex-default
 system_prompt: |
   You are a senior code reviewer. Focus on correctness,
@@ -247,7 +254,7 @@ startup_scripts:
 token_budget: 3000
 ```
 
-Four personas ship by default: **Developer** (Claude Code), **Reviewer** (Codex), **Generalist** (OpenRouter), **Cron Runner** (Ollama). Edit them via the Personas page or directly as YAML.
+Four personas ship by default: **Developer** (Claude Code), **Reviewer** (Codex), **Generalist** (OpenRouter), **Cron Runner** (local model server). Edit them via the Personas page or directly as YAML.
 
 **Column-Agent Mapping**: Each project can map a default persona to each Kanban column (e.g. the Review column defaults to "Reviewer"). Configure this from the panel below the Kanban board.
 
@@ -260,7 +267,7 @@ The orchestrator is a background loop (polls every 5s) that:
 3. Builds a prompt containing: persona system prompt, project name/description, task details, the `project_docs/` file index, other tasks in the project, and relevant memories.
 4. Dispatches to the persona's provider:
    - **claude_code** / **codex** → spawned as CLI subprocesses (5-minute timeout).
-   - **openrouter** / **ollama** → called over HTTP.
+   - **openrouter** / **local** → called over HTTP (OpenAI-compatible chat completions).
 5. Streams output to `~/.nexus/workspaces/<slug>/outputs/<task-id>.log`.
 6. On success → advances the task to the next column and extracts key insights into memory. On failure → moves the task back to Triage.
 
@@ -270,7 +277,8 @@ Every run is recorded in the `agent_runs` table. See live status at `GET /api/ag
 
 A local, searchable memory store (kept in SQLite, no external Mem0 service required) with the same conceptual API as Mem0.
 
-- **Auto-injection**: Before an agent runs, the top N relevance-ranked memories (TF-IDF scored, stop-word filtered) are injected within a configurable token budget.
+- **Auto-injection**: Before an agent runs, the top N relevance-ranked memories are injected within a configurable token budget. Retrieval is two-tier: if `models.local.embedding_model` is set, memories are embedded on write and recalled by cosine similarity, then (if `rerank_model` is set) reordered by a cross-encoder reranker for precision. With no embedding model configured it falls back to lexical TF-IDF scoring (stop-word filtered). If the local server is unreachable, retrieval degrades gracefully back to TF-IDF.
+  - Recommended local stack (Apple Silicon / omlx): `Qwen3-Embedding-0.6B` for embeddings + `Qwen3-Reranker-0.6B` for reranking. Pin the embedding model so it stays resident; the reranker only runs on the top ~20 candidates.
 - **Extraction**: After an agent completes, sentences containing decision/insight keywords ("decided", "chose", "important", "learned", …) are auto-saved, plus a run summary.
 - **Obsidian mirror**: Every memory is written as a markdown file with YAML frontmatter under the vault. A `chokidar` watcher picks up external edits for bidirectional sync.
 - **Manual control**: Search and add memories from the Memory panel in the Chat view.
@@ -306,7 +314,7 @@ Example: *"Every weekday at 9 AM, generate a standup digest for this project."* 
 | Coding | Claude Code | CLI subprocess | Developer |
 | Code Review | Codex | CLI subprocess | Reviewer |
 | General / Marketing / Media | OpenRouter | HTTP API | Generalist |
-| Cron / Menial | Ollama (local) | HTTP API | Cron Runner |
+| Cron / Menial | Local server (omlx, …) | HTTP API (OpenAI-compatible) | Cron Runner |
 
 Spawning Claude Code and Codex as **CLI subprocesses** (rather than calling their APIs) is deliberate — it lets you use them as standalone tools and sidesteps subscription-in-harness restrictions.
 
@@ -410,7 +418,7 @@ nexus/
 │   │   │   └── orchestrator.ts
 │   │   ├── orchestrator/
 │   │   │   ├── index.ts         # Polling loop + dispatch
-│   │   │   ├── providers.ts     # Claude Code / Codex / OpenRouter / Ollama
+│   │   │   ├── providers.ts     # Claude Code / Codex / OpenRouter / local (OpenAI-compatible)
 │   │   │   └── context.ts       # Prompt builder + memory injection
 │   │   ├── memory/
 │   │   │   ├── index.ts         # Unified memory service
@@ -467,7 +475,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 | Chat replies "Config needed" | Set `OPENROUTER_API_KEY` in your environment and restart the backend. |
 | `no such column` SQLite error | An old DB predates a schema change. Migrations handle most cases; if needed, delete `~/.nexus/nexus.db*` and restart. |
 | Claude Code task fails instantly | Ensure the `claude` CLI is installed and on your `PATH`. Check `~/.nexus/workspaces/<slug>/outputs/<task-id>.log`. |
-| Ollama tasks fail | Confirm Ollama is running (`ollama serve`) and the model in the persona exists (`ollama pull qwen2.5:14b`). |
+| Local model tasks fail | Confirm your local server is running and reachable at `models.local.base_url` (e.g. `http://localhost:8000/v1`), and that the persona's `model` matches a loaded model name (check `GET {base_url}/models`). |
 | Agent never picks up a task | The task must be in **In Progress**. Check `GET /api/agents/status` and the backend console logs. |
 | Tailwind build warning | The `content option missing` warning under Vite 6 is benign; styles use direct Tailwind palette classes. |
 

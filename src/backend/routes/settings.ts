@@ -45,7 +45,12 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       ...incoming,
       models: {
         openrouter: { api_key: apiKey },
-        ollama: { base_url: incoming.models?.ollama?.base_url ?? current.models.ollama.base_url },
+        local: {
+          base_url: incoming.models?.local?.base_url ?? current.models.local.base_url,
+          api_key: incoming.models?.local?.api_key ?? current.models.local.api_key,
+          embedding_model: incoming.models?.local?.embedding_model ?? current.models.local.embedding_model,
+          rerank_model: incoming.models?.local?.rerank_model ?? current.models.local.rerank_model,
+        },
       },
     };
 

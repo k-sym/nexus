@@ -3,13 +3,13 @@
   "private": true,
   "version": "0.1.0",
   "description": "Personal agent orchestration platform",
-  "main": "dist/electron/main.js",
+  "main": "electron/dist/main.js",
   "scripts": {
-    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:electron\"",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:electron\"",
     "dev:backend": "npm run --workspace=src/backend dev",
     "dev:frontend": "npm run --workspace=src/frontend dev",
     "dev:electron": "wait-on http://localhost:5173 && npm run --workspace=electron dev",
-    "build": "npm run --workspace=src/shared build && npm run --workspace=src/backend build && npm run --workspace=src/frontend build",
+    "build": "npm run --workspace=src/shared build && npm run --workspace=src/backend build && npm run --workspace=src/frontend build && npm run --workspace=electron build",
     "typecheck": "npm run --workspace=src/shared typecheck && npm run --workspace=src/backend typecheck && npm run --workspace=src/frontend typecheck"
   },
   "workspaces": [

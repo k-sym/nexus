@@ -23,7 +23,7 @@ export interface TaskContext {
   memoryContext: string;
 }
 
-export function buildTaskContext(db: Database.Database, task: Task): TaskContext {
+export async function buildTaskContext(db: Database.Database, task: Task): Promise<TaskContext> {
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(task.project_id) as Project;
   const persona = resolvePersona(db, project, task);
   const projectDocs = listProjectDocs(project.repo_path);
@@ -31,7 +31,7 @@ export function buildTaskContext(db: Database.Database, task: Task): TaskContext
     'SELECT id, title, status, priority FROM tasks WHERE project_id = ? AND id != ?'
   ).all(project.id, task.id) as Task[];
   const query = `${task.title} ${task.description}`.trim();
-  const relevantMemories = query.length > 5 ? getRelevantMemories(db, project.id, query) : [];
+  const relevantMemories = query.length > 5 ? await getRelevantMemories(db, project.id, query) : [];
   const memoryContext = relevantMemories.length > 0
     ? '## Relevant Memories\n' + relevantMemories.map(m => `- ${m}`).join('\n')
     : '';

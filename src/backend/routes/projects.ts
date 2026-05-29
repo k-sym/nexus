@@ -7,6 +7,16 @@ import { Project, Task, TaskStatus } from '@nexus/shared';
 export async function registerProjectRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
 
+  /** Ensure a unique project slug by appending -2, -3, … on collision. */
+  function uniqueSlug(database: typeof db, base: string): string {
+    let candidate = base;
+    let n = 2;
+    while (database.prepare('SELECT 1 FROM projects WHERE slug = ?').get(candidate)) {
+      candidate = `${base}-${n++}`;
+    }
+    return candidate;
+  }
+
   fastify.get('/api/projects', async () => {
     const rows = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all();
     return rows as Project[];
@@ -32,7 +42,8 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
-    const slug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+    const baseSlug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'project';
+    const slug = uniqueSlug(db, baseSlug);
     const now = new Date().toISOString();
 
     const project: Project = {

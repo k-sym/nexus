@@ -7,9 +7,10 @@
  */
 import Database from 'better-sqlite3';
 import { Project } from '@nexus/shared';
-import { Memory, MemoryInput, createMemory, searchMemories, getAllMemories, deleteMemory, updateMemory } from './store';
+import { Memory, MemoryInput, createMemory, searchMemories, getAllMemories, deleteMemory, updateMemory, setMemoryEmbedding, getMemoryVectors } from './store';
 import { getVaultPath, ensureProjectDir, writeTaskSummary, writeChatArchive, writeMemory, startObsidianWatcher } from './obsidian';
-import { loadConfig, resolveEnvVars } from '../config';
+import { embeddingsEnabled, embedTexts, rerankModel, rerank, cosineSimilarity } from './embeddings';
+import { loadConfig } from '../config';
 
 export { Memory, MemoryInput, getAllMemories, deleteMemory, updateMemory } from './store';
 export { getVaultPath, ensureProjectDir, writeTaskSummary, writeChatArchive, writeMemory } from './obsidian';
@@ -37,8 +38,14 @@ export function initMemorySystem(db: Database.Database): void {
   ensureMemoryTables(db);
 
   startObsidianWatcher(db, {
-    onFileChanged: (vaultPath: string, relativePath: string) => {
-      console.log('[memory] Obsidian file changed:', relativePath);
+    onMemoryEdited: (memoryId: string, content: string) => {
+      if (!content) return;
+      const existing = db.prepare('SELECT content FROM memories WHERE id = ?').get(memoryId) as { content: string } | undefined;
+      // Only write back genuine external edits to known memories.
+      if (existing && existing.content !== content) {
+        updateMemory(db, memoryId, content);
+        console.log('[memory] Synced external edit back to DB:', memoryId);
+      }
     },
   });
 
@@ -48,21 +55,57 @@ export function initMemorySystem(db: Database.Database): void {
 export function addMemory(db: Database.Database, input: MemoryInput): Memory {
   const mem = createMemory(db, input);
   if (input.project_id) {
-    writeMemory(input.project_id, mem.content, mem.category);
+    const slug = projectSlug(db, input.project_id);
+    if (slug) writeMemory(slug, mem.id, mem.content, mem.category);
+  }
+  // Best-effort, non-blocking embedding so semantic search can find this later.
+  // Failures (server down, no model configured) are logged and ignored — the
+  // memory still works via lexical fallback.
+  if (embeddingsEnabled()) {
+    embedTexts([mem.content])
+      .then(([vec]) => { if (vec) setMemoryEmbedding(db, mem.id, vec); })
+      .catch(err => console.error('[memory] embed-on-write failed:', err.message));
   }
   return mem;
 }
 
-export function getRelevantMemories(db: Database.Database, projectId: string, query: string, maxResults?: number, tokenBudget?: number): string[] {
+/** Look up a project's vault slug from its id. */
+export function projectSlug(db: Database.Database, projectId: string): string | null {
+  const row = db.prepare('SELECT slug FROM projects WHERE id = ?').get(projectId) as { slug: string } | undefined;
+  return row?.slug ?? null;
+}
+
+interface RankedMemory {
+  content: string;
+  category: string;
+}
+
+export async function getRelevantMemories(db: Database.Database, projectId: string, query: string, maxResults?: number, tokenBudget?: number): Promise<string[]> {
   const config = loadConfig();
   const maxMem = maxResults || config.mem0.auto_inject.max_memories;
   const budget = tokenBudget || config.mem0.auto_inject.token_budget;
 
-  const memories = searchMemories(db, projectId, query, maxMem);
+  let ranked: RankedMemory[] = [];
+
+  // Stage 1: semantic recall + optional rerank, if an embedding model is set.
+  if (embeddingsEnabled()) {
+    try {
+      ranked = await semanticSearch(db, projectId, query, maxMem);
+    } catch (err: any) {
+      console.error('[memory] semantic search failed, falling back to lexical:', err.message);
+      ranked = [];
+    }
+  }
+
+  // Fallback: lexical TF-IDF (also covers memories not yet embedded).
+  if (ranked.length === 0) {
+    ranked = searchMemories(db, projectId, query, maxMem).map(m => ({ content: m.content, category: m.category }));
+  }
+
+  // Apply the token budget.
   const results: string[] = [];
   let totalTokens = 0;
-
-  for (const mem of memories) {
+  for (const mem of ranked) {
     const estimated = estimateTokens(mem.content);
     if (totalTokens + estimated > budget && results.length > 0) break;
     results.push(`[${mem.category}] ${mem.content}`);
@@ -70,6 +113,38 @@ export function getRelevantMemories(db: Database.Database, projectId: string, qu
   }
 
   return results;
+}
+
+/**
+ * Two-stage retrieval: embed the query, take the top candidates by cosine
+ * similarity, then (if a reranker is configured) rerank for precision.
+ */
+async function semanticSearch(db: Database.Database, projectId: string, query: string, maxMem: number): Promise<RankedMemory[]> {
+  const [queryVec] = await embedTexts([query]);
+  if (!queryVec) return [];
+
+  const embedded = getMemoryVectors(db, projectId).filter(m => m.embedding);
+  if (embedded.length === 0) return [];
+
+  // First pass: cosine similarity → top ~20 candidates for the reranker.
+  const candidatePoolSize = Math.max(maxMem, 20);
+  const byCosine = embedded
+    .map(m => ({ m, score: cosineSimilarity(queryVec, m.embedding!) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, candidatePoolSize)
+    .map(x => x.m);
+
+  // Second pass: rerank, if configured. On failure, keep the cosine order.
+  if (rerankModel()) {
+    try {
+      const order = await rerank(query, byCosine.map(m => m.content), maxMem);
+      return order.map(o => ({ content: byCosine[o.index].content, category: byCosine[o.index].category }));
+    } catch (err: any) {
+      console.error('[memory] rerank failed, using cosine order:', err.message);
+    }
+  }
+
+  return byCosine.slice(0, maxMem).map(m => ({ content: m.content, category: m.category }));
 }
 
 export function formatMemoryContext(memories: string[]): string {

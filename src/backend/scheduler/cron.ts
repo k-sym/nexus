@@ -46,13 +46,17 @@ export function parseCron(expr: string): CronFields | null {
   if (parts.length !== 5) return null;
 
   try {
-    return {
+    const fields: CronFields = {
       minute: parseField(parts[0], 0, 59),
       hour: parseField(parts[1], 0, 23),
       dayOfMonth: parseField(parts[2], 1, 31),
       month: parseField(parts[3], 1, 12),
       dayOfWeek: parseField(parts[4], 0, 6),
     };
+    // A field that produced no valid values (e.g. "abc" or "99") is invalid —
+    // it would silently never fire otherwise.
+    if (Object.values(fields).some(vals => vals.length === 0)) return null;
+    return fields;
   } catch {
     return null;
   }

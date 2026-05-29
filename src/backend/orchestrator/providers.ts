@@ -1,10 +1,11 @@
 /**
  * Agent providers.
  *
- * One function per provider, all returning a ProviderResult. CLI providers
- * (Claude Code, Codex) are spawned as child processes with a 5-minute timeout
- * and their stdout/stderr streamed to a callback. API providers (OpenRouter,
- * Ollama) are called over HTTP, with Ollama consuming a streaming response.
+ * Each provider returns a ProviderResult. CLI providers (Claude Code, Codex)
+ * are spawned as child processes with a 5-minute timeout, streaming their
+ * stdout/stderr to a callback. HTTP providers (OpenRouter and any local
+ * OpenAI-compatible server such as omlx) share a single client that differs
+ * only by base URL and auth.
  */
 import { spawn, ChildProcess } from 'child_process';
 import { PersonaConfig } from '@nexus/shared';
@@ -34,15 +35,45 @@ export function estimateTokens(text: string): number {
 
 const TIMEOUT_MS = 300_000;
 
-export function runClaudeCode(workspace: string, prompt: string, onOutput: StreamCallback): Promise<ProviderResult> {
+export interface CliConfig {
+  command: string;
+  args: string[];
+}
+
+/**
+ * Spawn a CLI agent as a child process, streaming output and enforcing a
+ * 5-minute timeout. Shared by the Claude Code and Codex providers; the only
+ * difference between them is the command and how the prompt is passed.
+ */
+function runCli(
+  command: string,
+  args: string[],
+  workspace: string,
+  prompt: string,
+  onOutput: StreamCallback,
+): Promise<ProviderResult> {
   return new Promise(resolve => {
     const startTime = Date.now();
     const fullOutput: string[] = [];
+    let settled = false;
 
-    const child = spawn('claude', ['--no-interactive', '-p', prompt], {
+    const child = spawn(command, args, {
       cwd: workspace,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
+
+    const finish = (result: Omit<ProviderResult, 'durationMs' | 'usage'>) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      const output = fullOutput.join('');
+      resolve({
+        ...result,
+        output,
+        durationMs: Date.now() - startTime,
+        usage: estimateUsage(prompt, output),
+      });
+    };
 
     child.stdout.on('data', (data: Buffer) => {
       const text = data.toString();
@@ -55,111 +86,75 @@ export function runClaudeCode(workspace: string, prompt: string, onOutput: Strea
     });
 
     child.on('close', (code: number | null) => {
-      const output = fullOutput.join('');
-      resolve({
-        ok: code === 0,
-        output,
-        durationMs: Date.now() - startTime,
-        usage: estimateUsage(prompt, output),
-      });
+      finish({ ok: code === 0, output: '', error: code === 0 ? undefined : `Exited with code ${code}` });
     });
 
     child.on('error', (err: Error) => {
-      const output = fullOutput.join('');
-      resolve({
-        ok: false,
-        output,
-        error: err.message,
-        durationMs: Date.now() - startTime,
-        usage: estimateUsage(prompt, output),
-      });
+      finish({ ok: false, output: '', error: err.message });
     });
 
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      const output = fullOutput.join('');
-      resolve({
-        ok: false,
-        output,
-        error: 'Timed out after 5 minutes',
-        durationMs: Date.now() - startTime,
-        usage: estimateUsage(prompt, output),
-      });
+      finish({ ok: false, output: '', error: 'Timed out after 5 minutes' });
     }, TIMEOUT_MS);
   });
 }
 
-export function runCodex(workspace: string, prompt: string, onOutput: StreamCallback): Promise<ProviderResult> {
-  return new Promise(resolve => {
-    const startTime = Date.now();
-    const fullOutput: string[] = [];
-
-    const child = spawn('codex', [prompt], {
-      cwd: workspace,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-
-    child.stdout.on('data', (data: Buffer) => {
-      const text = data.toString();
-      fullOutput.push(text);
-      onOutput(text);
-    });
-
-    child.stderr.on('data', (data: Buffer) => {
-      fullOutput.push(data.toString());
-    });
-
-    child.on('close', (code: number | null) => {
-      const output = fullOutput.join('');
-      resolve({
-        ok: code === 0,
-        output,
-        durationMs: Date.now() - startTime,
-        usage: estimateUsage(prompt, output),
-      });
-    });
-
-    child.on('error', (err: Error) => {
-      const output = fullOutput.join('');
-      resolve({
-        ok: false,
-        output,
-        error: err.message,
-        durationMs: Date.now() - startTime,
-        usage: estimateUsage(prompt, output),
-      });
-    });
-
-    setTimeout(() => {
-      child.kill('SIGTERM');
-      const output = fullOutput.join('');
-      resolve({
-        ok: false,
-        output,
-        error: 'Timed out after 5 minutes',
-        durationMs: Date.now() - startTime,
-        usage: estimateUsage(prompt, output),
-      });
-    }, TIMEOUT_MS);
-  });
+export function runClaudeCode(
+  workspace: string,
+  prompt: string,
+  onOutput: StreamCallback,
+  config?: CliConfig,
+  model?: string,
+): Promise<ProviderResult> {
+  const command = config?.command || 'claude';
+  const args = [...(config?.args ?? []), ...(model ? ['--model', model] : []), '-p', prompt];
+  return runCli(command, args, workspace, prompt, onOutput);
 }
 
-export async function runOpenRouter(
+export function runCodex(
+  workspace: string,
+  prompt: string,
+  onOutput: StreamCallback,
+  config?: CliConfig,
+  model?: string,
+): Promise<ProviderResult> {
+  const command = config?.command || 'codex';
+  const args = [...(config?.args ?? []), ...(model && model !== 'codex-default' ? ['--model', model] : []), prompt];
+  return runCli(command, args, workspace, prompt, onOutput);
+}
+
+export interface OpenAICompatibleOptions {
+  /** Base URL including the /v1 suffix, e.g. https://openrouter.ai/api/v1. */
+  baseUrl: string;
+  /** Bearer token; omit/empty for local servers that need no auth. */
+  apiKey?: string;
+  /** Extra headers (e.g. OpenRouter's HTTP-Referer / X-Title). */
+  headers?: Record<string, string>;
+}
+
+/**
+ * Call any OpenAI-compatible chat completions endpoint. Used for both
+ * OpenRouter (cloud) and local servers (omlx, LM Studio, llama.cpp, …) — the
+ * only differences are the base URL, auth, and a few optional headers.
+ */
+export async function runOpenAICompatible(
   persona: PersonaConfig,
   prompt: string,
-  apiKey: string,
-  onOutput: StreamCallback
+  opts: OpenAICompatibleOptions,
+  onOutput: StreamCallback,
 ): Promise<ProviderResult> {
   const startTime = Date.now();
 
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    if (!opts.baseUrl) throw new Error('No base_url configured for this provider');
+
+    const response = await fetch(`${opts.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`,
-        'HTTP-Referer': 'https://nexus.local',
-        'X-Title': 'NEXUS Agent',
+        ...(opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {}),
+        ...(opts.headers ?? {}),
       },
       body: JSON.stringify({
         model: persona.model,
@@ -174,14 +169,16 @@ export async function runOpenRouter(
 
     if (!response.ok) {
       const body = await response.text();
-      throw new Error(`OpenRouter API error ${response.status}: ${body}`);
+      throw new Error(`API error ${response.status}: ${body}`);
     }
 
     const data = await response.json() as any;
+    if (data.error) throw new Error(data.error.message || String(data.error));
+
     const content = data.choices?.[0]?.message?.content || '';
     onOutput(content);
 
-    // Prefer real usage from the API; fall back to estimate.
+    // Prefer real usage from the API; fall back to an estimate if absent.
     const usage: TokenUsage = data.usage
       ? {
           prompt: data.usage.prompt_tokens ?? 0,
@@ -200,88 +197,6 @@ export async function runOpenRouter(
     return {
       ok: false,
       output: '',
-      error: err.message,
-      durationMs: Date.now() - startTime,
-      usage: { prompt: 0, completion: 0, total: 0 },
-    };
-  }
-}
-
-export async function runOllama(
-  persona: PersonaConfig,
-  prompt: string,
-  baseUrl: string,
-  onOutput: StreamCallback
-): Promise<ProviderResult> {
-  const startTime = Date.now();
-  const fullOutput: string[] = [];
-  let promptTokens = 0;
-  let completionTokens = 0;
-
-  try {
-    const response = await fetch(`${baseUrl}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: persona.model,
-        messages: [
-          { role: 'system', content: persona.system_prompt },
-          { role: 'user', content: prompt },
-        ],
-        stream: true,
-      }),
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama error ${response.status}: ${await response.text()}`);
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('No response body');
-
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const chunk = JSON.parse(line);
-          const content = chunk.message?.content || '';
-          if (content) {
-            fullOutput.push(content);
-            onOutput(content);
-          }
-          // Ollama reports token counts on the final chunk.
-          if (chunk.prompt_eval_count) promptTokens = chunk.prompt_eval_count;
-          if (chunk.eval_count) completionTokens = chunk.eval_count;
-          if (chunk.done) break;
-        } catch { /* skip malformed */ }
-      }
-    }
-
-    const output = fullOutput.join('');
-    const usage: TokenUsage = (promptTokens || completionTokens)
-      ? { prompt: promptTokens, completion: completionTokens, total: promptTokens + completionTokens }
-      : estimateUsage(`${persona.system_prompt}\n${prompt}`, output);
-
-    return {
-      ok: true,
-      output,
-      durationMs: Date.now() - startTime,
-      usage,
-    };
-  } catch (err: any) {
-    return {
-      ok: false,
-      output: fullOutput.join(''),
       error: err.message,
       durationMs: Date.now() - startTime,
       usage: { prompt: 0, completion: 0, total: 0 },

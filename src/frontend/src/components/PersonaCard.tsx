@@ -12,7 +12,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   claude_code: 'Claude Code',
   codex: 'Codex',
   openrouter: 'OpenRouter',
-  ollama: 'Ollama (Local)',
+  local: 'Local (omlx)',
+  ollama: 'Local (legacy)',
 };
 
 export default function PersonaCard({ persona, onDelete, onRefresh }: PersonaCardProps) {

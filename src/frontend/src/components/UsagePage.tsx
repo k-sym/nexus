@@ -22,7 +22,8 @@ const PROVIDER_LABELS: Record<string, string> = {
   claude_code: 'Claude Code',
   codex: 'Codex',
   openrouter: 'OpenRouter',
-  ollama: 'Ollama',
+  local: 'Local (omlx)',
+  ollama: 'Local (legacy)',
 };
 
 export default function UsagePage({ projectId }: UsagePageProps) {

@@ -3,18 +3,18 @@
  *
  * Polls every 5s for tasks in "in_progress" that have no running agent, then
  * resolves a persona, builds a context-rich prompt, dispatches to the correct
- * provider (Claude Code / Codex subprocess, or OpenRouter / Ollama HTTP), and
- * advances or fails the task based on the result. Also runs the 48h chat
+ * provider (Claude Code / Codex subprocess, or OpenRouter / local
+ * OpenAI-compatible HTTP), and advances or fails the task. Also runs the 48h chat
  * archival sweep and extracts key insights into the memory store.
  */
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { TaskStatus } from '@nexus/shared';
-import { getNexusDir, loadConfig, resolveEnvVars } from '../config';
+import { getNexusDir, loadConfig, resolveOpenRouterKey, resolveEnvVars } from '../config';
 import { buildTaskContext, buildAgentPrompt, TaskContext } from './context';
-import { runClaudeCode, runCodex, runOpenRouter, runOllama, ProviderResult } from './providers';
-import { addMemory } from '../memory';
+import { runClaudeCode, runCodex, runOpenAICompatible, ProviderResult } from './providers';
+import { addMemory, projectSlug } from '../memory';
 import { writeTaskSummary, writeChatArchive } from '../memory/obsidian';
 
 const POLL_INTERVAL_MS = 5000;
@@ -57,7 +57,7 @@ async function dispatchTask(db: Database.Database, config: ReturnType<typeof loa
   let ctx: TaskContext;
 
   try {
-    ctx = buildTaskContext(db, taskRow as any);
+    ctx = await buildTaskContext(db, taskRow as any);
   } catch (err: any) {
     completeAgentRun(db, runId, 'failed', '', err.message);
     moveTask(db, projectId(db, taskId, taskRow.project_id), taskId, 'triage');
@@ -67,7 +67,7 @@ async function dispatchTask(db: Database.Database, config: ReturnType<typeof loa
   const prompt = buildAgentPrompt(ctx);
   const outputPath = getOutputPath(ctx.project.slug, taskId);
   const persona = ctx.persona;
-  const workspace = persona.workspace.replace('{project}', ctx.project.repo_path.replace(/^~/, process.env.HOME || '')).replace('{project_name}', ctx.project.slug);
+  const workspace = resolveWorkspace(persona.workspace, ctx.project.repo_path, ctx.project.slug);
 
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
 
@@ -80,23 +80,30 @@ async function dispatchTask(db: Database.Database, config: ReturnType<typeof loa
   switch (persona.provider) {
     case 'claude_code':
       console.log(`[orchestrator] Spawning Claude Code for task ${taskId}`);
-      result = await runClaudeCode(workspace, prompt, appendOutput);
+      result = await runClaudeCode(workspace, prompt, appendOutput, config.claude_code, persona.model);
       break;
 
     case 'codex':
       console.log(`[orchestrator] Spawning Codex for task ${taskId}`);
-      result = await runCodex(workspace, prompt, appendOutput);
+      result = await runCodex(workspace, prompt, appendOutput, config.codex, persona.model);
       break;
 
     case 'openrouter':
       console.log(`[orchestrator] Calling OpenRouter API for task ${taskId}`);
-      const apiKey = resolveEnvVars(config.models.openrouter.api_key);
-      result = await runOpenRouter(persona, prompt, apiKey, appendOutput);
+      result = await runOpenAICompatible(persona, prompt, {
+        baseUrl: 'https://openrouter.ai/api/v1',
+        apiKey: resolveOpenRouterKey(config),
+        headers: { 'HTTP-Referer': 'https://nexus.local', 'X-Title': 'NEXUS Agent' },
+      }, appendOutput);
       break;
 
-    case 'ollama':
-      console.log(`[orchestrator] Calling Ollama for task ${taskId}`);
-      result = await runOllama(persona, prompt, config.models.ollama.base_url, appendOutput);
+    case 'local':
+    case 'ollama': // legacy alias
+      console.log(`[orchestrator] Calling local model server for task ${taskId}`);
+      result = await runOpenAICompatible(persona, prompt, {
+        baseUrl: config.models.local.base_url,
+        apiKey: resolveEnvVars(config.models.local.api_key),
+      }, appendOutput);
       break;
 
     default:
@@ -139,6 +146,24 @@ function moveTask(db: Database.Database, projectId: string, taskId: string, stat
 function projectId(db: Database.Database, taskId: string, fallback: string): string {
   const row = db.prepare('SELECT project_id FROM tasks WHERE id = ?').get(taskId) as { project_id: string } | undefined;
   return row?.project_id || fallback;
+}
+
+function expandHome(p: string): string {
+  if (p.startsWith('~')) return path.join(process.env.HOME || '', p.slice(1));
+  return p;
+}
+
+/**
+ * Resolve the working directory an agent runs in. The default personas use a
+ * `~/Projects/{project}` template, which is just a placeholder — the real
+ * location is the project's registered repo_path, so we prefer that. Only a
+ * persona workspace with no `{project}` placeholder is treated as a genuine
+ * custom path and honored as-is.
+ */
+function resolveWorkspace(template: string, repoPath: string, slug: string): string {
+  const repo = expandHome(repoPath);
+  if (!template || template.includes('{project')) return repo;
+  return expandHome(template.replace('{project_name}', slug).replace('{project}', slug));
 }
 
 function getOutputPath(projectSlug: string, taskId: string): string {
@@ -238,7 +263,9 @@ function archiveOldChats(db: Database.Database): void {
 
       if (messages.length < 2) continue;
 
-      writeChatArchive(thread.project_id, thread.title, thread.id, messages);
+      const slug = projectSlug(db, thread.project_id);
+      if (!slug) continue;
+      writeChatArchive(slug, thread.title, thread.id, messages);
 
       const now = new Date().toISOString();
       db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?').run(now, thread.id);

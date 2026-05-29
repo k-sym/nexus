@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import { ChatThread, ChatMessage, PersonaConfig } from '@nexus/shared';
 import { getRelevantMemories } from '../memory';
-import { resolveEnvVars } from '../config';
+import { loadConfig, resolveOpenRouterKey } from '../config';
 import fs from 'fs';
 import path from 'path';
 
@@ -64,13 +64,13 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(thread.project_id) as any;
 
     const model = body.model || 'openrouter/anthropic/claude-sonnet-4';
-    const apiKey = resolveEnvVars(process.env.OPENROUTING_API_KEY || process.env.OPENROUTER_API_KEY || '');
+    const apiKey = resolveOpenRouterKey(loadConfig());
 
     let systemPrompt = 'You are a helpful assistant in NEXUS, an agent orchestration platform.';
     let memoryContext = '';
 
     if (project) {
-      memoryContext = getRelevantMemories(db, project.id, body.content).map(m => `- ${m}`).join('\n');
+      memoryContext = (await getRelevantMemories(db, project.id, body.content)).map(m => `- ${m}`).join('\n');
       const projectDocsDir = path.join(project.repo_path, 'project_docs');
       const docsList: string[] = [];
       for (const sub of ['specs', 'plans', 'uploads']) {
