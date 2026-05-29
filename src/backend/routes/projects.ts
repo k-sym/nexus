@@ -1,8 +1,17 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { Project, Task, TaskStatus } from '@nexus/shared';
+
+/** Expand a leading ~ to the user's home dir; paths are stored absolute. */
+function expandHome(p: string): string {
+  if (!p) return p;
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
 
 export async function registerProjectRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -35,9 +44,10 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
   fastify.post('/api/projects', async (request) => {
     const body = request.body as { name: string; description?: string; repo_path: string };
+    const repoPath = expandHome(body.repo_path);
 
-    if (!fs.existsSync(body.repo_path)) {
-      const err = new Error(`Path does not exist: ${body.repo_path}`) as any;
+    if (!repoPath || !fs.existsSync(repoPath)) {
+      const err = new Error(`Path does not exist: ${repoPath || body.repo_path}`) as any;
       err.statusCode = 400;
       throw err;
     }
@@ -51,7 +61,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       slug,
       name: body.name,
       description: body.description || '',
-      repo_path: body.repo_path,
+      repo_path: repoPath,
       config_json: '{}',
       created_at: now,
       updated_at: now,
@@ -60,7 +70,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     db.prepare('INSERT INTO projects (id, slug, name, description, repo_path, config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .run(project.id, project.slug, project.name, project.description, project.repo_path, project.config_json, project.created_at, project.updated_at);
 
-    const docsDir = path.join(body.repo_path, 'project_docs');
+    const docsDir = path.join(repoPath, 'project_docs');
     for (const sub of ['specs', 'plans', 'uploads']) {
       const dir = path.join(docsDir, sub);
       if (!fs.existsSync(dir)) {
@@ -82,9 +92,16 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
+    const repoPath = body.repo_path !== undefined ? expandHome(body.repo_path) : undefined;
+    if (repoPath !== undefined && !fs.existsSync(repoPath)) {
+      const err = new Error(`Path does not exist: ${repoPath}`) as any;
+      err.statusCode = 400;
+      throw err;
+    }
+
     const now = new Date().toISOString();
     db.prepare('UPDATE projects SET name = COALESCE(?, name), description = COALESCE(?, description), repo_path = COALESCE(?, repo_path), config_json = COALESCE(?, config_json), updated_at = ? WHERE id = ?')
-      .run(body.name, body.description, body.repo_path, body.config_json, now, id);
+      .run(body.name ?? null, body.description ?? null, repoPath ?? null, body.config_json ?? null, now, id);
 
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   });
