@@ -1,0 +1,29 @@
+{
+  "name": "nexus",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Personal agent orchestration platform",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:electron\"",
+    "dev:backend": "npm run --workspace=src/backend dev",
+    "dev:frontend": "npm run --workspace=src/frontend dev",
+    "dev:electron": "wait-on http://localhost:5173 && npm run --workspace=electron dev",
+    "build": "npm run --workspace=src/shared build && npm run --workspace=src/backend build && npm run --workspace=src/frontend build",
+    "typecheck": "npm run --workspace=src/shared typecheck && npm run --workspace=src/backend typecheck && npm run --workspace=src/frontend typecheck"
+  },
+  "workspaces": [
+    "src/shared",
+    "src/backend",
+    "src/frontend",
+    "electron"
+  ],
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.0",
+    "wait-on": "^8.0.1"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

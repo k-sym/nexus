@@ -1,0 +1,15 @@
+{
+  "name": "nexus-electron",
+  "private": true,
+  "version": "0.1.0",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsc && electron .",
+    "build": "tsc",
+    "watch": "tsc -w"
+  },
+  "devDependencies": {
+    "electron": "^34.0.0",
+    "typescript": "^5.6.0"
+  }
+}

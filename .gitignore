@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+vendor/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Build output
+dist/
+.output/
+.nuxt/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Testing
+coverage/
+
+# Claude Code
+.claude/
+project_docs/database/archive/client_ra_data.sql
+
+# KS Workflows
+project_docs/
+.worktrees/
+.worktrees/
+
