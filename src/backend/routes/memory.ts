@@ -1,6 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { MemoryInput } from '../memory/store';
-import { addMemory, getRelevantMemories, getAllMemories, deleteMemory, updateMemory } from '../memory';
+import { MemoryInput, addMemory, getRelevantMemories, getAllMemories, deleteMemory, updateMemory } from '../memory';
 
 export async function registerMemoryRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -24,13 +23,13 @@ export async function registerMemoryRoutes(fastify: FastifyInstance) {
   fastify.put('/api/memories/:id', async (request) => {
     const { id } = request.params as { id: string };
     const { content } = request.body as { content: string };
-    updateMemory(db, id, content);
+    await updateMemory(db, id, content);
     return { success: true };
   });
 
   fastify.delete('/api/memories/:id', async (request) => {
     const { id } = request.params as { id: string };
-    deleteMemory(db, id);
+    await deleteMemory(db, id);
     return { success: true };
   });
 }

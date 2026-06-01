@@ -42,3 +42,6 @@ project_docs/
 .worktrees/
 .worktrees/
 
+
+# Claude Code local settings
+settings.local.json

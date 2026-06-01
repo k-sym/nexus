@@ -123,7 +123,7 @@ async function dispatchTask(db: Database.Database, config: ReturnType<typeof loa
     moveTask(db, ctx.project.id, taskId, nextStatus);
     console.log(`[orchestrator] Task ${taskId} completed -> ${nextStatus}`);
 
-    extractAndStoreMemory(db, ctx, result.output);
+    await extractAndStoreMemory(db, ctx, result.output);
     writeTaskSummary(db, ctx.project, taskId, taskRow.title, nextStatus, result.output.slice(0, 2000), ctx.persona.name);
   } else {
     moveTask(db, ctx.project.id, taskId, 'triage');
@@ -208,7 +208,7 @@ function completeAgentRun(
   );
 }
 
-function extractAndStoreMemory(db: Database.Database, ctx: TaskContext, output: string): void {
+async function extractAndStoreMemory(db: Database.Database, ctx: TaskContext, output: string): Promise<void> {
   const sentences = output.split(/[.\n]+/).filter(s => s.trim().length > 20);
   const keyInsights: string[] = [];
 
@@ -224,7 +224,7 @@ function extractAndStoreMemory(db: Database.Database, ctx: TaskContext, output: 
 
   for (const insight of keyInsights.slice(0, 3)) {
     try {
-      addMemory(db, {
+      await addMemory(db, {
         project_id: ctx.project.id,
         agent_id: ctx.persona.slug,
         category: 'agent_run',
@@ -235,7 +235,7 @@ function extractAndStoreMemory(db: Database.Database, ctx: TaskContext, output: 
   }
 
   try {
-    addMemory(db, {
+    await addMemory(db, {
       project_id: ctx.project.id,
       agent_id: ctx.persona.slug,
       category: 'decision',

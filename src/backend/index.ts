@@ -24,7 +24,7 @@ import { registerMemoryRoutes } from './routes/memory';
 import { registerScheduleRoutes } from './routes/schedules';
 import { registerSettingsRoutes } from './routes/settings';
 import { startOrchestrator } from './orchestrator';
-import { initMemorySystem, ensureMemoryTables } from './memory';
+import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
 
 async function main() {
@@ -32,8 +32,7 @@ async function main() {
 
   const db = getDb(getDbPath());
   seedPersonas(db);
-  ensureMemoryTables(db);
-  initMemorySystem(db);
+  await initMemorySystem(db);
   startOrchestrator(db);
   if (config.scheduler.enabled) {
     startScheduler(db);

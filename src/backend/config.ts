@@ -25,8 +25,8 @@ const DEFAULT_CONFIG: NexusConfig = {
       rerank_model: '',
     },
   },
-  mem0: {
-    api_url: 'http://localhost:8051',
+  memory: {
+    daemon_url: 'http://127.0.0.1:4100',
     auto_inject: {
       enabled: true,
       max_memories: 5,

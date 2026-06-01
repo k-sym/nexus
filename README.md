@@ -37,7 +37,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Orchestrator** | Watches for tasks entering "In Progress" and dispatches them to the right agent automatically. |
 | **Multi-provider agents** | Spawns Claude Code & Codex as CLI subprocesses; calls OpenRouter and any local OpenAI-compatible server (omlx, LM Studio, …) over HTTP. |
 | **Personas** | YAML-defined agent personalities. Assign different models to coding, review, deploy, etc. |
-| **Memory** | Local searchable memory store, auto-injected into agent context, mirrored to an Obsidian vault. |
+| **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
 | **Chat** | Per-project conversational interface with file drag-and-drop and 48-hour archival to Obsidian. |
 | **Scheduler** | Built-in cron for recurring tasks (daily digests, weekly reviews, etc.). |
 | **Token usage** | Per-run token tracking (exact for API providers, estimated for CLI) with a project-scoped Usage view. |
@@ -61,23 +61,24 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 │  │   Routes ── Orchestrator ── Scheduler ── Memory   │ │
 │  └──┬──────────┬──────────────┬──────────────┬──────┘ │
 │     │          │              │              │         │
-│  SQLite     Sub-agent     Obsidian       Memory store  │
-│ (nexus.db)  spawner       vault sync     (in SQLite)   │
-│             ├ claude (CLI)                              │
+│  SQLite     Sub-agent     Memory client  Local models │
+│ (nexus.db)  spawner       → daemon       (4001/2/3)    │
+│             ├ claude (CLI)   (HTTP :4100)               │
 │             ├ codex  (CLI)                              │
 │             ├ openrouter (HTTP)                         │
 │             └ local (HTTP, OpenAI-compatible)           │
 └───────────────────────────────────────────────────────┘
 ```
 
-The backend runs everything in a single Node process: the Fastify HTTP API, the orchestrator polling loop, the scheduler loop, and the Obsidian file watcher. The frontend is a React SPA served by Vite in dev and bundled into the Electron app for production.
+The backend runs the Fastify HTTP API, the orchestrator polling loop, and the scheduler loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and OpenClaw's CLI agents reach it over MCP). Nexus's own `nexus.db` holds projects/tasks/chats; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Electron app for production.
 
 ### Packages
 
 | Path | Package | Role |
 |---|---|---|
 | `src/shared` | `@nexus/shared` | Shared TypeScript types and constants |
-| `src/backend` | `@nexus/backend` | Fastify API, orchestrator, scheduler, memory |
+| `src/backend` | `@nexus/backend` | Fastify API, orchestrator, scheduler |
+| `src/memory-daemon` | `@nexus/memory-daemon` | Standalone memory daemon (vault + index + retrieval), HTTP :4100 + MCP |
 | `src/frontend` | `@nexus/frontend` | React dashboard |
 | `electron` | `nexus-electron` | Electron shell that boots the backend + loads the UI |
 
@@ -114,10 +115,15 @@ export OMLX_API_KEY="..."               # for the local model server (if it requ
 ### Run in dev
 
 ```bash
-# Terminal 1 — backend (Fastify on :4173, orchestrator, scheduler)
+# Terminal 1 — memory daemon (vault + index + retrieval, HTTP :4100).
+# Required for memory features; the backend degrades gracefully if it's down.
+# Better yet, run it as a LaunchD agent — see src/memory-daemon/README.md.
+cd src/memory-daemon && npm install --no-workspaces && npm start
+
+# Terminal 2 — backend (Fastify on :4173, orchestrator, scheduler)
 cd src/backend && npm run dev
 
-# Terminal 2 — frontend (Vite on :5173)
+# Terminal 3 — frontend (Vite on :5173)
 cd src/frontend && npm run dev
 ```
 
@@ -171,22 +177,32 @@ server:
 models:
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"   # env var interpolation
-  local:                               # any OpenAI-compatible server (omlx, LM Studio, …)
+  local:                               # OpenAI-compatible server(s) for chat / cron personas
     base_url: "http://127.0.0.1:4001/v1"
-    api_key: "${OMLX_API_KEY}"         # omlx requires auth; env interpolation supported
-    embedding_model: ""                # optional; blank = lexical (TF-IDF) memory search
-    rerank_model: ""                   # optional; blank = no reranking (cosine only)
+    api_key: "${OMLX_API_KEY}"         # if your server requires auth; env interpolation supported
 
-mem0:
-  api_url: "http://localhost:8051"
+# Memory is served by the standalone @nexus/memory-daemon (separate process, see
+# src/memory-daemon/). The Obsidian vault is canonical; the SQLite index is rebuildable.
+# This `memory:` block is shared: the Nexus backend reads `daemon_url` + `auto_inject`;
+# the daemon reads `port`/`vault_path`/`models`/`retrieval` (all optional — it defaults
+# them, so a minimal config only needs daemon_url + auto_inject).
+memory:
+  daemon_url: "http://127.0.0.1:4100"  # Nexus backend -> daemon (HTTP)
   auto_inject:
     enabled: true
-    max_memories: 5        # top N memories injected into agent context
-    token_budget: 1000     # hard cap on injected memory tokens
-
-obsidian:
-  vault_path: "~/.nexus/obsidian"
-  sync_interval_seconds: 30
+    max_memories: 5            # top N memories injected into agent context
+    token_budget: 1000         # hard cap on injected memory tokens
+  # --- daemon's own settings (optional; defaults shown) ---
+  port: 4100
+  vault_path: "~/.nexus/obsidian"      # canonical markdown vault (source of truth)
+  models:                              # local llama stack, loopback only
+    gen_url:    "http://127.0.0.1:4001/v1"   # 9B — HyDE + KG triple extraction
+    embed_url:  "http://127.0.0.1:4002/v1"   # nomic-embed-text-v1.5 (768-dim)
+    rerank_url: "http://127.0.0.1:4003/v1"   # Qwen3-Reranker-0.6B
+  retrieval:
+    hyde: true
+    sentence_threshold: 0.05   # cross-encoder noise floor for sentence trimming
+    token_budget: 1500         # cap on assembled recall context
 
 scheduler:
   enabled: true
@@ -275,15 +291,15 @@ Every run is recorded in the `agent_runs` table. See live status at `GET /api/ag
 
 ### Memory
 
-A local, searchable memory store (kept in SQLite, no external Mem0 service required) with the same conceptual API as Mem0.
+Memory is served by the standalone **`@nexus/memory-daemon`** (`src/memory-daemon/`, port 4100) — a separate process shared by Nexus (over HTTP) and OpenClaw's CLI agents (over MCP). The Nexus backend's memory module is a thin client (`MemoryClient`) to that daemon.
 
-- **Auto-injection**: Before an agent runs, the top N relevance-ranked memories are injected within a configurable token budget. Retrieval is two-tier: if `models.local.embedding_model` is set, memories are embedded on write and recalled by cosine similarity, then (if `rerank_model` is set) reordered by a cross-encoder reranker for precision. With no embedding model configured it falls back to lexical TF-IDF scoring (stop-word filtered). If the local server is unreachable, retrieval degrades gracefully back to TF-IDF.
-  - Recommended local stack (Apple Silicon / omlx): `Qwen3-Embedding-0.6B` for embeddings + `Qwen3-Reranker-0.6B` for reranking. Pin the embedding model so it stays resident; the reranker only runs on the top ~20 candidates.
-- **Extraction**: After an agent completes, sentences containing decision/insight keywords ("decided", "chose", "important", "learned", …) are auto-saved, plus a run summary.
-- **Obsidian mirror**: Every memory is written as a markdown file with YAML frontmatter under the vault. A `chokidar` watcher picks up external edits for bidirectional sync.
-- **Manual control**: Search and add memories from the Memory panel in the Chat view.
+- **Markdown is canonical**: every memory is a markdown file with YAML frontmatter (incl. a stable ULID `id`) in the Obsidian vault. The SQLite index (sqlite-vec vectors + FTS5 + a knowledge-graph `facts` table) is **disposable and rebuildable** from the vault at any time — there is no precious index to lose. A `chokidar` watcher picks up external edits (last-writer-wins; loop-suppressed against the daemon's own writes).
+- **Hybrid retrieval**: optional HyDE (via the 9B on 4001) → sentence + chunk vector KNN (nomic-embed, 4002) fused with FTS5 prefix search by Reciprocal Rank Fusion → cross-encoder rerank (Qwen3-Reranker, 4003) → surgical sentence trimming + small-to-big parent-chunk expansion, capped to a token budget. Degrades gracefully to FTS-only if the model stack is down.
+- **Knowledge graph**: subject-relation-object triples are extracted per memory (9B, strict JSON, fixed vocabulary) and fused into recall as related facts. Additive — extraction failure never breaks retrieval.
+- **Auto-injection**: before an agent runs, the top relevance-ranked memories are injected within a configurable token budget (`memory.auto_inject`).
+- **Extraction**: after an agent completes, decision/insight sentences plus a run summary are saved as new memories.
 
-Categories: `general`, `decision`, `chat`, `agent_run`, `specs`.
+Namespaces: `nexus` (per project), `openclaw`, `global`. Categories: `general`, `decision`, `chat`, `agent_run`, `specs`. See `src/memory-daemon/README.md` for the HTTP/MCP surface and ops.
 
 ### Chat
 
@@ -421,9 +437,7 @@ nexus/
 │   │   │   ├── providers.ts     # Claude Code / Codex / OpenRouter / local (OpenAI-compatible)
 │   │   │   └── context.ts       # Prompt builder + memory injection
 │   │   ├── memory/
-│   │   │   ├── index.ts         # Unified memory service
-│   │   │   ├── store.ts         # SQLite store + TF-IDF search
-│   │   │   └── obsidian.ts      # Markdown writer + file watcher
+│   │   │   └── client.ts        # thin HTTP client to @nexus/memory-daemon (:4100)
 │   │   └── scheduler/
 │   │       ├── index.ts         # Scheduler loop
 │   │       └── cron.ts          # Cron parser + next-run calc

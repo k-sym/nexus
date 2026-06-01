@@ -1,0 +1,36 @@
+{
+  "name": "@nexus/memory-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Standalone local memory daemon for Nexus + OpenClaw. Markdown-canonical vault, rebuildable SQLite index (sqlite-vec + FTS5), local llama retrieval stack.",
+  "bin": {
+    "nexus-memory": "./dist/src/index.js",
+    "nexus-memory-mcp": "./dist/src/mcp/stdio.js"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc && cp src/db/schema.sql dist/src/db/schema.sql",
+    "typecheck": "tsc --noEmit",
+    "probe": "tsx scripts/probe-native.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.10.0",
+    "chokidar": "^4.0.3",
+    "fastify": "^5.2.0",
+    "gray-matter": "^4.0.3",
+    "js-yaml": "^4.1.0",
+    "sqlite-vec": "^0.1.7-alpha.2",
+    "ulid": "^2.3.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.0"
+  }
+}

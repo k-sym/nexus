@@ -4,7 +4,8 @@
  * Opens ~/.nexus/nexus.db, enables WAL + foreign keys, and runs idempotent
  * CREATE TABLE statements plus guarded ALTER TABLE migrations for columns
  * added after a table's original creation. Tables: projects, tasks, personas,
- * schedules, chat_threads, chat_messages, memories, agent_runs.
+ * schedules, chat_threads, chat_messages, agent_runs. (Memory lives in the
+ * standalone @nexus/memory-daemon, not here.)
  */
 import Database from 'better-sqlite3';
 
@@ -83,17 +84,6 @@ function runMigrations(db: Database.Database) {
       created_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS memories (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL,
-      agent_id TEXT,
-      category TEXT NOT NULL DEFAULT 'general',
-      content TEXT NOT NULL,
-      embedding_json TEXT,
-      metadata_json TEXT DEFAULT '{}',
-      created_at TEXT NOT NULL
-    );
-
     CREATE TABLE IF NOT EXISTS agent_runs (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -116,9 +106,10 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
-    CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project_id);
-    CREATE INDEX IF NOT EXISTS idx_memories_category ON memories(category);
   `);
+
+  // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
+  db.exec('DROP TABLE IF EXISTS memories;');
 
   const columns = db.pragma('table_info(projects)') as { name: string }[];
   const hasConfigJson = columns.some(c => c.name === 'config_json');
