@@ -1,13 +1,22 @@
 import { Persona } from '@nexus/shared';
+import { AgentHealth } from '../api';
 
 interface SidebarProps {
   personas: Persona[];
   view: string;
   /** whether a project is currently active (project-scoped views need one) */
   hasProject: boolean;
+  /** live per-agent health from Mission Control, keyed by persona slug */
+  agentStatus: Record<string, AgentHealth>;
   onSelectView: (v: string) => void;
   onSelectAgent: (slug: string) => void;
 }
+
+const DOT_COLOR: Record<AgentHealth, string> = {
+  online: 'bg-emerald-500',
+  ready: 'bg-amber-500',
+  offline: 'bg-zinc-600',
+};
 
 const VIEWS: { id: string; label: string; icon: string }[] = [
   { id: 'kanban', label: 'Kanban', icon: '▦' },
@@ -30,14 +39,16 @@ function NavItem({
   dimmed,
   onClick,
   icon,
-  dot,
+  dotColor,
+  dotTitle,
   children,
 }: {
   active: boolean;
   dimmed?: boolean;
   onClick: () => void;
   icon?: string;
-  dot?: boolean;
+  dotColor?: string;
+  dotTitle?: string;
   children: string;
 }) {
   return (
@@ -47,14 +58,14 @@ function NavItem({
         active ? 'bg-indigo-500/20 text-white' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/30'
       } ${dimmed ? 'opacity-50' : ''}`}
     >
-      {dot && <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0" title="status unknown" />}
+      {dotColor && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} title={dotTitle} />}
       {icon && <span className="text-sm leading-none w-4 text-center shrink-0">{icon}</span>}
       <span className="truncate">{children}</span>
     </button>
   );
 }
 
-export default function Sidebar({ personas, view, hasProject, onSelectView, onSelectAgent }: SidebarProps) {
+export default function Sidebar({ personas, view, hasProject, agentStatus, onSelectView, onSelectAgent }: SidebarProps) {
   return (
     <aside className="w-52 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
       <GroupLabel>Views</GroupLabel>
@@ -71,17 +82,21 @@ export default function Sidebar({ personas, view, hasProject, onSelectView, onSe
       ))}
 
       <GroupLabel>Agents</GroupLabel>
-      {personas.map(p => (
-        <NavItem
-          key={p.slug}
-          active={view === `agent:${p.slug}`}
-          dimmed={!hasProject}
-          onClick={() => onSelectAgent(p.slug)}
-          dot
-        >
-          {p.name}
-        </NavItem>
-      ))}
+      {personas.map(p => {
+        const st = agentStatus[p.slug] ?? 'offline';
+        return (
+          <NavItem
+            key={p.slug}
+            active={view === `agent:${p.slug}`}
+            dimmed={!hasProject}
+            onClick={() => onSelectAgent(p.slug)}
+            dotColor={DOT_COLOR[st]}
+            dotTitle={st}
+          >
+            {p.name}
+          </NavItem>
+        );
+      })}
       {personas.length === 0 && (
         <div className="px-3 py-2 text-xs text-zinc-600">No agents yet</div>
       )}

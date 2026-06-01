@@ -36,6 +36,15 @@ export interface DaemonListItem {
   updated_at: string;
 }
 
+export interface DaemonHealth {
+  status: string;
+  vault?: string;
+  db?: string;
+  memories?: number;
+  jobs?: { pending: number; dead: number };
+  models?: { gen: boolean; embed: boolean; rerank: boolean };
+}
+
 export interface DaemonScope {
   namespace?: string;
   project?: string | null;
@@ -81,6 +90,6 @@ export const daemon = {
     return req<unknown>('DELETE', `/memories/${encodeURIComponent(id)}`);
   },
   health() {
-    return req<{ status: string }>('GET', '/health');
+    return req<DaemonHealth>('GET', '/health');
   },
 };

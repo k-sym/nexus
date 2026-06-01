@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Project, Task, Persona, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
-import { api } from './api';
+import { api, MissionStatus, AgentHealth } from './api';
 import TopBar from './components/TopBar';
 import Sidebar from './components/Sidebar';
+import MissionControl from './components/MissionControl';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import MemoryView from './components/MemoryView';
@@ -52,6 +53,25 @@ export default function App() {
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
+  const [status, setStatus] = useState<MissionStatus | null>(null);
+  const [statusLoading, setStatusLoading] = useState(false);
+
+  const loadStatus = useCallback(async () => {
+    setStatusLoading(true);
+    try {
+      setStatus(await api.missionControl.get());
+    } catch (err) {
+      console.error('Failed to load status:', err);
+    } finally {
+      setStatusLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+    const interval = setInterval(loadStatus, 15000);
+    return () => clearInterval(interval);
+  }, [loadStatus]);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -148,7 +168,14 @@ export default function App() {
     if (view === 'personas') return <PersonasPage />;
     if (view === 'settings') return <SettingsPage />;
     if (view === 'mission-control')
-      return <Placeholder title="◆ Mission Control" note="Status of every agent, every memory, every signal. Lands in build step 3." />;
+      return (
+        <MissionControl
+          status={status}
+          loading={statusLoading}
+          onRefresh={loadStatus}
+          onSelectAgent={slug => goToView(`agent:${slug}`)}
+        />
+      );
     if (view === 'tickets')
       return <Placeholder title="🎫 Tickets" note="Your assigned Jira tickets, synced in. Lands in build step 4." />;
 
@@ -249,6 +276,7 @@ export default function App() {
           personas={personas}
           view={view}
           hasProject={!!activeProjectId}
+          agentStatus={Object.fromEntries((status?.agents ?? []).map(a => [a.slug, a.status])) as Record<string, AgentHealth>}
           onSelectView={v => goToView(v as View)}
           onSelectAgent={slug => goToView(`agent:${slug}`)}
         />
