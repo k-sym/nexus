@@ -102,8 +102,9 @@ export interface NexusConfig {
       rerank_model: string;
     };
   };
-  mem0: {
-    api_url: string;
+  memory: {
+    // The standalone @nexus/memory-daemon (markdown-canonical vault + index).
+    daemon_url: string;
     auto_inject: {
       enabled: boolean;
       max_memories: number;

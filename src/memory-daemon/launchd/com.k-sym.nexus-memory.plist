@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Always-on user agent for the Nexus memory daemon.
+  Convention matches com.k-sym.llama-* (see local-model-stack.md): RunAtLoad + KeepAlive,
+  loopback only, logs under ~/Library/Logs/.
+
+  Install (manual — the build does NOT do this for you):
+    cp src/memory-daemon/launchd/com.k-sym.nexus-memory.plist ~/Library/LaunchAgents/
+    # edit the two PATH placeholders below first, then:
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.k-sym.nexus-memory.plist
+  Restart:  launchctl kickstart -k gui/$(id -u)/com.k-sym.nexus-memory
+  Stop:     launchctl bootout  gui/$(id -u)/com.k-sym.nexus-memory
+  Requires: (cd src/memory-daemon && npm run build) so dist/src/index.js exists.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.k-sym.nexus-memory</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/homebrew/bin/node</string>
+        <string>__REPLACE_WITH_ABS_PATH__/nexus/src/memory-daemon/dist/src/index.js</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPLACE_WITH_ABS_PATH__/nexus/src/memory-daemon</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__REPLACE_WITH_HOME__/Library/Logs/nexus-memory.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPLACE_WITH_HOME__/Library/Logs/nexus-memory.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

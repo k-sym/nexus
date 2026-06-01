@@ -1,21 +1,15 @@
 /**
- * Obsidian vault sync.
+ * Obsidian vault writers for task summaries and chat archives.
  *
- * Writes memories, task summaries, and chat archives as markdown (with YAML
- * frontmatter) under ~/.nexus/obsidian/Projects/<slug>/. A chokidar watcher
- * detects external edits to memory files for bidirectional sync.
+ * Memory files and vault-watching are owned by @nexus/memory-daemon now; this module
+ * only writes Tasks/ and Chats/ markdown under ~/.nexus/obsidian/Projects/<slug>/
+ * (which the daemon indexes alongside everything else in the shared vault).
  */
 import fs from 'fs';
 import path from 'path';
-import chokidar from 'chokidar';
 import Database from 'better-sqlite3';
 import { Project } from '@nexus/shared';
 import { getNexusDir } from '../config';
-
-interface ObsidianSyncCallbacks {
-  /** Fired when an externally-edited memory markdown file changes. */
-  onMemoryEdited: (memoryId: string, content: string) => void;
-}
 
 export function getVaultPath(): string {
   return path.join(getNexusDir(), 'obsidian');
@@ -78,63 +72,6 @@ export function writeChatArchive(projectSlug: string, title: string, threadId: s
   }
 
   fs.writeFileSync(filePath, lines.join('\n'), 'utf-8');
-}
-
-export function writeMemory(projectSlug: string, memoryId: string, content: string, category: string): void {
-  const dir = ensureProjectDir(projectSlug);
-  // Filename is keyed on the memory id so updates overwrite the same file
-  // rather than accumulating duplicates.
-  const filePath = path.join(dir, 'Memory', `${memoryId}.md`);
-
-  const body = [
-    `---`,
-    `id: ${memoryId}`,
-    `category: ${category}`,
-    `date: ${new Date().toISOString()}`,
-    `---`,
-    '',
-    content,
-  ].join('\n');
-
-  fs.writeFileSync(filePath, body, 'utf-8');
-}
-
-export function startObsidianWatcher(db: Database.Database, callbacks: ObsidianSyncCallbacks): void {
-  const vaultPath = getVaultPath();
-
-  const watcher = chokidar.watch(vaultPath, {
-    ignored: /(^|[\/\\])\.|node_modules/,
-    persistent: true,
-    ignoreInitial: true,
-  });
-
-  watcher.on('change', (filePath: string) => {
-    if (!filePath.endsWith('.md')) return;
-    // Only memory files (which carry an `id` in their frontmatter) sync back.
-    const parsed = parseMarkdown(filePath);
-    if (parsed.frontmatter.id) {
-      callbacks.onMemoryEdited(parsed.frontmatter.id, parsed.body.trim());
-    }
-  });
-
-  console.log('[memory] Obsidian vault watcher started');
-}
-
-/** Split a markdown file into its YAML frontmatter map and remaining body. */
-function parseMarkdown(filePath: string): { frontmatter: Record<string, string>; body: string } {
-  try {
-    const raw = fs.readFileSync(filePath, 'utf-8');
-    const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
-    if (!match) return { frontmatter: {}, body: raw };
-    const frontmatter: Record<string, string> = {};
-    for (const line of match[1].split('\n')) {
-      const idx = line.indexOf(':');
-      if (idx > 0) frontmatter[line.slice(0, idx).trim()] = line.slice(idx + 1).trim();
-    }
-    return { frontmatter, body: match[2] };
-  } catch {
-    return { frontmatter: {}, body: '' };
-  }
 }
 
 function safeFilename(name: string): string {

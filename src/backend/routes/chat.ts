@@ -139,7 +139,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       if (project) {
         const { addMemory } = await import('../memory');
         try {
-          addMemory(db, {
+          await addMemory(db, {
             project_id: project.id,
             agent_id: thread.agent_id,
             category: 'chat',
