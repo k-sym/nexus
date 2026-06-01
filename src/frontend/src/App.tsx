@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Project, Task, Persona, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
+import { Project, Task, Persona, Ticket, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
 import { api, MissionStatus, AgentHealth } from './api';
 import TopBar from './components/TopBar';
 import Sidebar from './components/Sidebar';
 import MissionControl from './components/MissionControl';
+import TicketsView from './components/TicketsView';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import MemoryView from './components/MemoryView';
@@ -142,6 +143,18 @@ export default function App() {
     if (activeProjectId) await loadTasks(activeProjectId);
   };
 
+  const handleCreateTaskFromTicket = async (projectId: string, ticket: Ticket) => {
+    const p = (ticket.priority || '').toLowerCase();
+    const priority = ['low', 'medium', 'high', 'urgent'].includes(p) ? p : 'medium';
+    await api.projects.createTask(projectId, {
+      title: `[${ticket.key}] ${ticket.summary}`,
+      description: `From Jira ${ticket.key}${ticket.url ? ` (${ticket.url})` : ''}\n\n${ticket.summary}`,
+      status: 'triage',
+      priority,
+    });
+    if (projectId === activeProjectId) await loadTasks(projectId);
+  };
+
   const handleProjectUpdate = (updated: Project) => {
     setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
     if (updated.id === activeProjectId) setActiveProject(updated);
@@ -177,7 +190,7 @@ export default function App() {
         />
       );
     if (view === 'tickets')
-      return <Placeholder title="🎫 Tickets" note="Your assigned Jira tickets, synced in. Lands in build step 4." />;
+      return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
 
     // Everything below is project-scoped.
     if (!activeProject) {

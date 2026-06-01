@@ -1,4 +1,4 @@
-import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig } from '@nexus/shared';
+import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket } from '@nexus/shared';
 
 const API = '/api';
 
@@ -84,6 +84,9 @@ export const api = {
   },
   missionControl: {
     get: () => fetchJson<MissionStatus>(`${API}/mission-control`),
+  },
+  tickets: {
+    list: () => fetchJson<Ticket[]>(`${API}/tickets`),
   },
   memory: {
     search: (projectId: string, query: string) => fetchJson<string[]>(`${API}/projects/${projectId}/memories?q=${encodeURIComponent(query)}`),
