@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Project, Task, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
+import { Project, Task, Persona, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
 import { api } from './api';
+import TopBar from './components/TopBar';
 import Sidebar from './components/Sidebar';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
@@ -12,13 +13,41 @@ import ProjectModal from './components/ProjectModal';
 import TaskModal from './components/TaskModal';
 import ColumnAgentMapping from './components/ColumnAgentMapping';
 
-type ActiveView = 'kanban' | 'chat' | 'scheduler' | 'usage' | 'personas' | 'settings';
+// Global (project-less) views vs project-scoped views vs per-agent rooms (`agent:<slug>`).
+type View =
+  | 'mission-control'
+  | 'tickets'
+  | 'personas'
+  | 'settings'
+  | 'kanban'
+  | 'chat'
+  | 'memory'
+  | 'scheduler'
+  | 'usage'
+  | `agent:${string}`;
+
+const GLOBAL_VIEWS = ['mission-control', 'tickets', 'personas', 'settings'];
+const isGlobalView = (v: View) => GLOBAL_VIEWS.includes(v);
+const isAgentView = (v: View) => v.startsWith('agent:');
+
+/** Lightweight stand-in for views landing in later build steps. */
+function Placeholder({ title, note }: { title: string; note: string }) {
+  return (
+    <div className="flex-1 flex items-center justify-center">
+      <div className="text-center max-w-sm">
+        <h2 className="text-xl font-semibold text-zinc-300 mb-2">{title}</h2>
+        <p className="text-zinc-500 text-sm">{note}</p>
+      </div>
+    </div>
+  );
+}
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [personas, setPersonas] = useState<Persona[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [view, setView] = useState<ActiveView>('kanban');
+  const [view, setView] = useState<View>('mission-control');
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
@@ -45,6 +74,7 @@ export default function App() {
 
   useEffect(() => {
     refreshProjects();
+    api.personas.list().then(setPersonas).catch(err => console.error('Failed to load personas:', err));
   }, [refreshProjects]);
 
   useEffect(() => {
@@ -67,17 +97,16 @@ export default function App() {
   }, [activeProjectId, loadTasks]);
 
   const handleCreateProject = async (data: { name: string; description: string; repo_path: string }) => {
-    await api.projects.create(data);
+    const created = await api.projects.create(data);
     setShowProjectModal(false);
     await refreshProjects();
+    setActiveProjectId(created.id);
+    setView('kanban');
   };
 
   const handleCreateTask = async (data: { title: string; description: string; priority: string }) => {
     if (!activeProjectId || !taskModalColumn) return;
-    await api.projects.createTask(activeProjectId, {
-      ...data,
-      status: taskModalColumn,
-    });
+    await api.projects.createTask(activeProjectId, { ...data, status: taskModalColumn });
     setTaskModalColumn(null);
     await loadTasks(activeProjectId);
   };
@@ -93,116 +122,141 @@ export default function App() {
   };
 
   const handleProjectUpdate = (updated: Project) => {
-    setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+    setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
     if (updated.id === activeProjectId) setActiveProject(updated);
   };
 
-  return (
-    <div className="flex h-screen w-screen overflow-hidden">
-      <Sidebar
-        projects={projects}
-        activeProjectId={(view === 'personas' || view === 'settings') ? null : activeProjectId}
-        activeGlobalView={view === 'personas' ? 'personas' : view === 'settings' ? 'settings' : null}
-        onSelectProject={id => { setActiveProjectId(id); setView('kanban'); }}
-        onNewProject={() => setShowProjectModal(true)}
-        onSelectPersonas={() => setView('personas')}
-        onSelectSettings={() => setView('settings')}
-      />
+  // --- navigation helpers ---------------------------------------------------
+  const goToView = (v: View) => {
+    // project-scoped views need an active project — auto-pick the first if none.
+    if (!isGlobalView(v) && !activeProjectId && projects.length > 0) {
+      setActiveProjectId(projects[0].id);
+    }
+    setView(v);
+  };
 
-      <main className="flex-1 flex flex-col min-w-0">
-        {view === 'personas' ? (
-          <PersonasPage />
-        ) : view === 'settings' ? (
-          <SettingsPage />
-        ) : activeProject ? (
-          <>
-            <header className="flex items-center justify-between px-6 py-3 border-b border-zinc-800 bg-zinc-900">
-              <div>
-                <h1 className="text-lg font-semibold">{activeProject.name}</h1>
-                <p className="text-xs text-zinc-500">{activeProject.repo_path}</p>
-              </div>
-              <div className="flex gap-1 bg-zinc-950 rounded-lg p-1">
-                <button
-                  onClick={() => setView('kanban')}
-                  className={`px-4 py-1.5 text-sm rounded-md transition-colors ${view === 'kanban' ? 'bg-indigo-500 text-white' : 'text-zinc-500 hover:text-zinc-200'}`}
-                >
-                  Kanban
-                </button>
-                <button
-                  onClick={() => setView('chat')}
-                  className={`px-4 py-1.5 text-sm rounded-md transition-colors ${view === 'chat' ? 'bg-indigo-500 text-white' : 'text-zinc-500 hover:text-zinc-200'}`}
-                >
-                  Chat
-                </button>
-                <button
-                  onClick={() => setView('scheduler')}
-                  className={`px-4 py-1.5 text-sm rounded-md transition-colors ${view === 'scheduler' ? 'bg-indigo-500 text-white' : 'text-zinc-500 hover:text-zinc-200'}`}
-                >
-                  Scheduler
-                </button>
-                <button
-                  onClick={() => setView('usage')}
-                  className={`px-4 py-1.5 text-sm rounded-md transition-colors ${view === 'usage' ? 'bg-indigo-500 text-white' : 'text-zinc-500 hover:text-zinc-200'}`}
-                >
-                  Usage
-                </button>
-              </div>
-            </header>
+  const selectProject = (id: string) => {
+    setActiveProjectId(id);
+    if (isGlobalView(view)) setView('kanban');
+  };
 
-            <div className="flex-1 overflow-hidden">
-              {view === 'kanban' ? (
-                <KanbanBoard
-                  tasks={tasks}
-                  columns={KANBAN_COLUMNS}
-                  columnLabels={KANBAN_COLUMN_LABELS}
-                  onMoveTask={handleMoveTask}
-                  onAddTask={(status) => setTaskModalColumn(status)}
-                  onEditTask={() => {}}
-                  onDeleteTask={handleDeleteTask}
-                />
-              ) : view === 'chat' ? (
-                <ChatPanel projectId={activeProject.id} />
-              ) : view === 'usage' ? (
-                <UsagePage projectId={activeProject.id} />
-              ) : (
-                <SchedulerPage projectId={activeProject.id} />
-              )}
-            </div>
+  const agentName = (slug: string) => personas.find(p => p.slug === slug)?.name ?? slug;
 
-            {view === 'kanban' && (
-              <div className="border-t border-zinc-800 bg-zinc-900 px-6 py-3">
-                <details className="group">
-                  <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-200 transition-colors select-none">
-                    Column-Agent Mapping — click to configure default agents per Kanban column
-                  </summary>
-                  <div className="mt-3 max-w-md">
-                    <ColumnAgentMapping project={activeProject} onUpdate={handleProjectUpdate} />
-                  </div>
-                </details>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <h2 className="text-xl font-semibold text-zinc-500 mb-2">Welcome to NEXUS</h2>
-              <p className="text-zinc-500 text-sm mb-4">Create your first project to get started</p>
+  // --- main content ---------------------------------------------------------
+  const renderMain = () => {
+    if (view === 'personas') return <PersonasPage />;
+    if (view === 'settings') return <SettingsPage />;
+    if (view === 'mission-control')
+      return <Placeholder title="◆ Mission Control" note="Status of every agent, every memory, every signal. Lands in build step 3." />;
+    if (view === 'tickets')
+      return <Placeholder title="🎫 Tickets" note="Your assigned Jira tickets, synced in. Lands in build step 4." />;
+
+    // Everything below is project-scoped.
+    if (!activeProject) {
+      return (
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <h2 className="text-xl font-semibold text-zinc-400 mb-2">No project selected</h2>
+            <p className="text-zinc-500 text-sm mb-4">
+              {projects.length === 0 ? 'Create your first project to get started' : 'Pick a project from the top bar'}
+            </p>
+            {projects.length === 0 && (
               <button
                 onClick={() => setShowProjectModal(true)}
-                className="px-6 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-500 transition-colors"
+                className="px-6 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-colors"
               >
                 New Project
               </button>
-            </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const viewLabel = isAgentView(view)
+      ? agentName(view.slice('agent:'.length))
+      : view.charAt(0).toUpperCase() + view.slice(1);
+
+    return (
+      <>
+        <header className="flex items-center justify-between px-6 py-3 border-b border-zinc-800 bg-zinc-900 shrink-0">
+          <div>
+            <h1 className="text-lg font-semibold">{activeProject.name}</h1>
+            <p className="text-xs text-zinc-500">{activeProject.repo_path}</p>
+          </div>
+          <span className="text-xs text-zinc-500 uppercase tracking-wider">{viewLabel}</span>
+        </header>
+
+        <div className="flex-1 overflow-hidden">
+          {view === 'kanban' ? (
+            <KanbanBoard
+              tasks={tasks}
+              columns={KANBAN_COLUMNS}
+              columnLabels={KANBAN_COLUMN_LABELS}
+              onMoveTask={handleMoveTask}
+              onAddTask={status => setTaskModalColumn(status)}
+              onEditTask={() => {}}
+              onDeleteTask={handleDeleteTask}
+            />
+          ) : view === 'chat' ? (
+            <ChatPanel projectId={activeProject.id} />
+          ) : view === 'memory' ? (
+            <Placeholder title="🧠 Memory" note="Standalone memory search + capture (lifted out of Chat). Lands in build step 2." />
+          ) : view === 'usage' ? (
+            <UsagePage projectId={activeProject.id} />
+          ) : view === 'scheduler' ? (
+            <SchedulerPage projectId={activeProject.id} />
+          ) : isAgentView(view) ? (
+            <Placeholder
+              title={`${agentName(view.slice('agent:'.length))} — control room`}
+              note="Per-agent chat + running tasks for this project. Lands in build step 5 (first harness: Claude Code)."
+            />
+          ) : null}
+        </div>
+
+        {view === 'kanban' && (
+          <div className="border-t border-zinc-800 bg-zinc-900 px-6 py-3 shrink-0">
+            <details className="group">
+              <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-200 transition-colors select-none">
+                Column-Agent Mapping — click to configure default agents per Kanban column
+              </summary>
+              <div className="mt-3 max-w-md">
+                <ColumnAgentMapping project={activeProject} onUpdate={handleProjectUpdate} />
+              </div>
+            </details>
           </div>
         )}
-      </main>
+      </>
+    );
+  };
+
+  return (
+    <div className="flex flex-col h-screen w-screen overflow-hidden">
+      <TopBar
+        projects={projects}
+        activeProjectId={activeProjectId}
+        isGlobal={isGlobalView(view)}
+        view={view}
+        onSelectGlobal={v => setView(v)}
+        onSelectProject={selectProject}
+        onNewProject={() => setShowProjectModal(true)}
+        onOpenPalette={() => {}}
+      />
+
+      <div className="flex flex-1 min-h-0">
+        <Sidebar
+          personas={personas}
+          view={view}
+          hasProject={!!activeProjectId}
+          onSelectView={v => goToView(v as View)}
+          onSelectAgent={slug => goToView(`agent:${slug}`)}
+        />
+
+        <main className="flex-1 flex flex-col min-w-0">{renderMain()}</main>
+      </div>
 
       {showProjectModal && (
-        <ProjectModal
-          onClose={() => setShowProjectModal(false)}
-          onSubmit={handleCreateProject}
-        />
+        <ProjectModal onClose={() => setShowProjectModal(false)} onSubmit={handleCreateProject} />
       )}
 
       {taskModalColumn && (
