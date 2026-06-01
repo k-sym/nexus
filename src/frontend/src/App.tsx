@@ -5,6 +5,7 @@ import TopBar from './components/TopBar';
 import Sidebar from './components/Sidebar';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
+import MemoryView from './components/MemoryView';
 import PersonasPage from './components/PersonasPage';
 import SchedulerPage from './components/SchedulerPage';
 import SettingsPage from './components/SettingsPage';
@@ -201,7 +202,7 @@ export default function App() {
           ) : view === 'chat' ? (
             <ChatPanel projectId={activeProject.id} />
           ) : view === 'memory' ? (
-            <Placeholder title="🧠 Memory" note="Standalone memory search + capture (lifted out of Chat). Lands in build step 2." />
+            <MemoryView projectId={activeProject.id} />
           ) : view === 'usage' ? (
             <UsagePage projectId={activeProject.id} />
           ) : view === 'scheduler' ? (

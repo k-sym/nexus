@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { ChatThread, ChatMessage, FileAttachment } from '@nexus/shared';
 import { api } from '../api';
-import MemorySearch from './MemorySearch';
 
 interface ChatPanelProps {
   projectId: string;
@@ -275,7 +274,6 @@ export default function ChatPanel({ projectId }: ChatPanelProps) {
           </div>
         )}
       </div>
-      <MemorySearch projectId={projectId} />
     </div>
   );
 }
