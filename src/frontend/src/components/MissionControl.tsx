@@ -1,3 +1,4 @@
+import { Gauge } from '@phosphor-icons/react';
 import { AgentHealth, AgentStatus, MissionStatus } from '../api';
 
 interface MissionControlProps {
@@ -68,7 +69,7 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
     <div className="flex-1 overflow-y-auto">
       <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
         <div>
-          <h1 className="text-xl font-semibold">◆ Mission Control</h1>
+          <h1 className="text-xl font-semibold flex items-center gap-2"><Gauge size={22} weight="fill" /> Mission Control</h1>
           <p className="text-xs text-zinc-500">Status of every agent, every memory, every signal.</p>
         </div>
         <button

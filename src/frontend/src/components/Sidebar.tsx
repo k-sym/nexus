@@ -1,5 +1,7 @@
+import { ReactNode } from 'react';
 import { Persona } from '@nexus/shared';
 import { AgentHealth } from '../api';
+import { Kanban, ChatCircle, Brain, Clock, ChartBar, UsersThree, Gear, type Icon } from '@phosphor-icons/react';
 
 interface SidebarProps {
   personas: Persona[];
@@ -18,12 +20,12 @@ const DOT_COLOR: Record<AgentHealth, string> = {
   offline: 'bg-zinc-600',
 };
 
-const VIEWS: { id: string; label: string; icon: string }[] = [
-  { id: 'kanban', label: 'Kanban', icon: '▦' },
-  { id: 'chat', label: 'Chat', icon: '💬' },
-  { id: 'memory', label: 'Memory', icon: '🧠' },
-  { id: 'scheduler', label: 'Scheduler', icon: '⏱' },
-  { id: 'usage', label: 'Usage', icon: '📊' },
+const VIEWS: { id: string; label: string; Icon: Icon }[] = [
+  { id: 'kanban', label: 'Kanban', Icon: Kanban },
+  { id: 'chat', label: 'Chat', Icon: ChatCircle },
+  { id: 'memory', label: 'Memory', Icon: Brain },
+  { id: 'scheduler', label: 'Scheduler', Icon: Clock },
+  { id: 'usage', label: 'Usage', Icon: ChartBar },
 ];
 
 function GroupLabel({ children }: { children: string }) {
@@ -46,7 +48,7 @@ function NavItem({
   active: boolean;
   dimmed?: boolean;
   onClick: () => void;
-  icon?: string;
+  icon?: ReactNode;
   dotColor?: string;
   dotTitle?: string;
   children: string;
@@ -59,7 +61,7 @@ function NavItem({
       } ${dimmed ? 'opacity-50' : ''}`}
     >
       {dotColor && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} title={dotTitle} />}
-      {icon && <span className="text-sm leading-none w-4 text-center shrink-0">{icon}</span>}
+      {icon && <span className="shrink-0 flex items-center justify-center w-4">{icon}</span>}
       <span className="truncate">{children}</span>
     </button>
   );
@@ -69,15 +71,15 @@ export default function Sidebar({ personas, view, hasProject, agentStatus, onSel
   return (
     <aside className="w-52 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
       <GroupLabel>Views</GroupLabel>
-      {VIEWS.map(v => (
+      {VIEWS.map(({ id, label, Icon }) => (
         <NavItem
-          key={v.id}
-          active={view === v.id}
+          key={id}
+          active={view === id}
           dimmed={!hasProject}
-          onClick={() => onSelectView(v.id)}
-          icon={v.icon}
+          onClick={() => onSelectView(id)}
+          icon={<Icon size={16} />}
         >
-          {v.label}
+          {label}
         </NavItem>
       ))}
 
@@ -102,10 +104,10 @@ export default function Sidebar({ personas, view, hasProject, agentStatus, onSel
       )}
 
       <GroupLabel>Self</GroupLabel>
-      <NavItem active={view === 'personas'} onClick={() => onSelectView('personas')} icon="👤">
+      <NavItem active={view === 'personas'} onClick={() => onSelectView('personas')} icon={<UsersThree size={16} />}>
         Personas
       </NavItem>
-      <NavItem active={view === 'settings'} onClick={() => onSelectView('settings')} icon="⚙️">
+      <NavItem active={view === 'settings'} onClick={() => onSelectView('settings')} icon={<Gear size={16} />}>
         Settings
       </NavItem>
 

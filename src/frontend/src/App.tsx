@@ -182,8 +182,8 @@ export default function App() {
   // --- command palette entries ---------------------------------------------
   const commands: Command[] = useMemo(() => {
     const cmds: Command[] = [
-      { id: 'view-mission-control', label: '◆ Mission Control', hint: 'View', run: () => setView('mission-control') },
-      { id: 'view-tickets', label: '🎫 Tickets', hint: 'View', run: () => setView('tickets') },
+      { id: 'view-mission-control', label: 'Mission Control', hint: 'View', run: () => setView('mission-control') },
+      { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => setView('tickets') },
     ];
     ([['kanban', 'Kanban'], ['chat', 'Chat'], ['memory', 'Memory'], ['scheduler', 'Scheduler'], ['usage', 'Usage']] as const)
       .forEach(([id, label]) => cmds.push({ id: `view-${id}`, label, hint: 'View', keywords: 'open', run: () => goToView(id as View) }));
