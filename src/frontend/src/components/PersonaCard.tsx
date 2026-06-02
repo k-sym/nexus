@@ -1,5 +1,6 @@
 import { Persona, PersonaConfig, Provider } from '@nexus/shared';
 import { useState, useEffect } from 'react';
+import { PencilSimple, Trash, CaretDown, CaretUp } from '@phosphor-icons/react';
 import { api } from '../api';
 
 interface PersonaCardProps {
@@ -57,17 +58,18 @@ export default function PersonaCard({ persona, onDelete, onEdit, onRefresh }: Pe
           {loading && <span className="text-xs text-zinc-500">Loading...</span>}
           <button
             onClick={(e) => { e.stopPropagation(); onEdit(persona.slug); }}
-            className="text-zinc-500/50 hover:text-zinc-200 text-xs transition-colors"
+            className="flex items-center gap-1 text-xs text-zinc-300 hover:text-white border border-zinc-700 hover:border-zinc-600 rounded px-2 py-1 transition-colors"
           >
-            Edit
+            <PencilSimple size={13} /> Edit
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(persona.slug); }}
-            className="text-zinc-500/30 hover:text-red-400 text-xs transition-colors"
+            title="Remove persona"
+            className="text-zinc-600 hover:text-red-400 transition-colors"
           >
-            Remove
+            <Trash size={15} />
           </button>
-          <span className="text-zinc-500 text-xs">{expanded ? '▲' : '▼'}</span>
+          <span className="text-zinc-500">{expanded ? <CaretUp size={14} /> : <CaretDown size={14} />}</span>
         </div>
       </div>
 
