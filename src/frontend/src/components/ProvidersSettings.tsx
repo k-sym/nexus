@@ -8,6 +8,7 @@ const KINDS: { value: ProviderKind; label: string }[] = [
   { value: 'claude_code', label: 'Claude Code (CLI)' },
   { value: 'codex', label: 'Codex (CLI)' },
   { value: 'opencode', label: 'OpenCode (CLI)' },
+  { value: 'hermes', label: 'Hermes (remote HTTP agent)' },
 ];
 
 const blank: Partial<Provider> = { name: '', kind: 'openai_compat', base_url: '', api_key: '', default_model: '' };
@@ -105,7 +106,7 @@ export default function ProvidersSettings() {
           >
             {KINDS.map(k => <option key={k.value} value={k.value}>{k.label}</option>)}
           </select>
-          {editing.kind === 'openai_compat' && (
+          {(editing.kind === 'openai_compat' || editing.kind === 'hermes') && (
             <>
               <input
                 value={editing.base_url ?? ''}
