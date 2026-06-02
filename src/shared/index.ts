@@ -88,7 +88,7 @@ export interface FileAttachment {
 }
 
 /** A configured, testable provider instance (a harness endpoint the app can use). */
-export type ProviderKind = 'claude_code' | 'codex' | 'opencode' | 'openai_compat';
+export type ProviderKind = 'claude_code' | 'codex' | 'opencode' | 'hermes' | 'openai_compat';
 export interface Provider {
   id: string;
   name: string;
