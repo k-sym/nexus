@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Project, Task, Persona, Ticket, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
 import { api, MissionStatus, AgentHealth } from './api';
 import TopBar from './components/TopBar';
+import CommandPalette, { Command } from './components/CommandPalette';
 import Sidebar from './components/Sidebar';
 import MissionControl from './components/MissionControl';
 import TicketsView from './components/TicketsView';
@@ -45,6 +46,7 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -62,6 +64,17 @@ export default function App() {
     const interval = setInterval(loadStatus, 15000);
     return () => clearInterval(interval);
   }, [loadStatus]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setPaletteOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -164,6 +177,25 @@ export default function App() {
   };
 
   const agentName = (slug: string) => personas.find(p => p.slug === slug)?.name ?? slug;
+
+  // --- command palette entries ---------------------------------------------
+  const commands: Command[] = useMemo(() => {
+    const cmds: Command[] = [
+      { id: 'view-mission-control', label: '◆ Mission Control', hint: 'View', run: () => setView('mission-control') },
+      { id: 'view-tickets', label: '🎫 Tickets', hint: 'View', run: () => setView('tickets') },
+    ];
+    ([['kanban', 'Kanban'], ['chat', 'Chat'], ['memory', 'Memory'], ['scheduler', 'Scheduler'], ['usage', 'Usage']] as const)
+      .forEach(([id, label]) => cmds.push({ id: `view-${id}`, label, hint: 'View', keywords: 'open', run: () => goToView(id as View) }));
+    projects.forEach(p => cmds.push({ id: `proj-${p.id}`, label: p.name, hint: 'Project', keywords: p.repo_path, run: () => selectProject(p.id) }));
+    personas.forEach(p => cmds.push({ id: `agent-${p.slug}`, label: p.name, hint: 'Agent', keywords: `chat ${p.slug}`, run: () => goToView(`agent:${p.slug}`) }));
+    cmds.push({ id: 'act-new-project', label: 'New project…', hint: 'Action', run: () => setShowProjectModal(true) });
+    if (activeProjectId) cmds.push({ id: 'act-new-task', label: 'New task (Triage)…', hint: 'Action', keywords: 'kanban', run: () => setTaskModalColumn('triage') });
+    cmds.push({ id: 'act-personas', label: 'Personas', hint: 'Action', keywords: 'agents', run: () => setView('personas') });
+    cmds.push({ id: 'act-settings', label: 'Settings', hint: 'Action', run: () => setView('settings') });
+    cmds.push({ id: 'act-refresh', label: 'Refresh status', hint: 'Action', run: () => loadStatus() });
+    return cmds;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, personas, activeProjectId, view]);
 
   // --- main content ---------------------------------------------------------
   const renderMain = () => {
@@ -278,7 +310,7 @@ export default function App() {
         onSelectGlobal={v => setView(v)}
         onSelectProject={selectProject}
         onNewProject={() => setShowProjectModal(true)}
-        onOpenPalette={() => {}}
+        onOpenPalette={() => setPaletteOpen(true)}
       />
 
       <div className="flex flex-1 min-h-0">
@@ -293,6 +325,8 @@ export default function App() {
 
         <main className="flex-1 flex flex-col min-w-0">{renderMain()}</main>
       </div>
+
+      <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
 
       {showProjectModal && (
         <ProjectModal onClose={() => setShowProjectModal(false)} onSubmit={handleCreateProject} />
