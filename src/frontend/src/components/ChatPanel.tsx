@@ -1,17 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChatThread, ChatMessage, FileAttachment } from '@nexus/shared';
+import { ChatThread, ChatMessage, FileAttachment, Persona } from '@nexus/shared';
 import { api } from '../api';
 
 interface ChatPanelProps {
   projectId: string;
+  /** When set, the panel is scoped to one agent: threads are filtered to it,
+   *  new threads use it, and the agent selector is hidden (control-room mode). */
+  agentSlug?: string;
 }
 
-export default function ChatPanel({ projectId }: ChatPanelProps) {
+export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
-  const [selectedAgent, setSelectedAgent] = useState('generalist');
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState(agentSlug ?? '');
   const [isTyping, setIsTyping] = useState(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
@@ -22,14 +26,13 @@ export default function ChatPanel({ projectId }: ChatPanelProps) {
   const loadThreads = useCallback(async () => {
     try {
       const data = await api.chat.threads(projectId);
-      setThreads(data);
-      if (data.length > 0 && !activeThreadId) {
-        setActiveThreadId(data[0].id);
-      }
+      const filtered = agentSlug ? data.filter(t => t.agent_id === agentSlug) : data;
+      setThreads(filtered);
+      setActiveThreadId(prev => (prev && filtered.some(t => t.id === prev) ? prev : filtered[0]?.id ?? null));
     } catch (err) {
       console.error('Failed to load threads:', err);
     }
-  }, [projectId, activeThreadId]);
+  }, [projectId, agentSlug]);
 
   const loadMessages = useCallback(async (threadId: string) => {
     try {
@@ -45,6 +48,15 @@ export default function ChatPanel({ projectId }: ChatPanelProps) {
   }, [projectId, loadThreads]);
 
   useEffect(() => {
+    api.personas.list().then(setPersonas).catch(err => console.error('Failed to load personas:', err));
+  }, []);
+
+  useEffect(() => {
+    if (agentSlug) setSelectedAgent(agentSlug);
+    else setSelectedAgent(prev => prev || personas[0]?.slug || '');
+  }, [agentSlug, personas]);
+
+  useEffect(() => {
     if (activeThreadId) {
       loadMessages(activeThreadId);
     } else {
@@ -57,8 +69,10 @@ export default function ChatPanel({ projectId }: ChatPanelProps) {
   }, [messages]);
 
   const handleNewThread = async () => {
+    const agent = selectedAgent || agentSlug;
+    if (!agent) return;
     try {
-      const thread = await api.chat.createThread(projectId, selectedAgent);
+      const thread = await api.chat.createThread(projectId, agent);
       setThreads(prev => [thread, ...prev]);
       setActiveThreadId(thread.id);
       setMessages([]);
@@ -70,14 +84,16 @@ export default function ChatPanel({ projectId }: ChatPanelProps) {
 
   const handleSend = async () => {
     if (!input.trim() && attachments.length === 0) return;
-    if (!activeThreadId) {
-      const thread = await api.chat.createThread(projectId, selectedAgent);
+
+    let threadId = activeThreadId;
+    if (!threadId) {
+      const agent = selectedAgent || agentSlug;
+      if (!agent) return;
+      const thread = await api.chat.createThread(projectId, agent);
       setThreads(prev => [thread, ...prev]);
       setActiveThreadId(thread.id);
+      threadId = thread.id;
     }
-
-    const threadId = activeThreadId || threads[0]?.id;
-    if (!threadId) return;
 
     const content = input;
     const attachmentsJson = attachments.length > 0 ? JSON.stringify(attachments) : '[]';
@@ -86,12 +102,16 @@ export default function ChatPanel({ projectId }: ChatPanelProps) {
     setAttachments([]);
     setIsTyping(true);
 
+    // Optimistically show the user's message while the agent runs.
+    setMessages(prev => [
+      ...prev,
+      { id: `tmp-${Date.now()}`, thread_id: threadId!, role: 'user', content, attachments_json: attachmentsJson, created_at: new Date().toISOString() },
+    ]);
+
     try {
-      await api.chat.sendMessage(threadId, 'user', content, attachmentsJson);
-
-      const assistantMsg = await api.chat.sendMessage(threadId, 'assistant', `I received your message: "${content}". This is a stub response — model integration coming in Phase 2.`);
+      // Backend persists the user turn, runs the thread's agent, and saves the reply.
+      await api.chat.sendMessage(threadId, content, attachmentsJson);
       await loadMessages(threadId);
-
     } catch (err) {
       console.error('Failed to send message:', err);
     } finally {
@@ -174,19 +194,21 @@ export default function ChatPanel({ projectId }: ChatPanelProps) {
       <div className="flex-1 flex flex-col min-w-0">
         {activeThreadId ? (
           <>
-            {/* Agent selector */}
-            <div className="px-4 py-2 border-b border-zinc-800 flex items-center gap-3">
-              <span className="text-xs text-zinc-500">Agent:</span>
-              <select
-                value={selectedAgent}
-                onChange={(e) => setSelectedAgent(e.target.value)}
-                className="bg-zinc-950 border border-zinc-800 text-sm rounded px-2 py-1 text-zinc-200"
-              >
-                <option value="generalist">Generalist</option>
-                <option value="developer">Developer</option>
-                <option value="reviewer">Reviewer</option>
-              </select>
-            </div>
+            {/* Agent selector (hidden in single-agent control-room mode) */}
+            {!agentSlug && (
+              <div className="px-4 py-2 border-b border-zinc-800 flex items-center gap-3">
+                <span className="text-xs text-zinc-500">New chats use:</span>
+                <select
+                  value={selectedAgent}
+                  onChange={(e) => setSelectedAgent(e.target.value)}
+                  className="bg-zinc-950 border border-zinc-800 text-sm rounded px-2 py-1 text-zinc-200"
+                >
+                  {personas.map(p => (
+                    <option key={p.slug} value={p.slug}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3">

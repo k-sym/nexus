@@ -8,8 +8,8 @@
  * only by base URL and auth.
  */
 import { spawn, ChildProcess } from 'child_process';
-import { PersonaConfig } from '@nexus/shared';
-import { resolveEnvVars } from '../config';
+import { NexusConfig, PersonaConfig } from '@nexus/shared';
+import { resolveEnvVars, resolveOpenRouterKey } from '../config';
 
 export interface TokenUsage {
   prompt: number;
@@ -45,6 +45,12 @@ export interface CliConfig {
  * 5-minute timeout. Shared by the Claude Code and Codex providers; the only
  * difference between them is the command and how the prompt is passed.
  */
+/** Strip ANSI/terminal escape sequences a CLI might emit when not on a TTY. */
+function stripAnsi(s: string): string {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '');
+}
+
 function runCli(
   command: string,
   args: string[],
@@ -54,48 +60,45 @@ function runCli(
 ): Promise<ProviderResult> {
   return new Promise(resolve => {
     const startTime = Date.now();
-    const fullOutput: string[] = [];
+    const stdoutChunks: string[] = [];
+    const stderrChunks: string[] = [];
     let settled = false;
 
+    // stdin: 'ignore' so the CLI sees EOF immediately (the prompt is passed via
+    // args, not stdin) — otherwise it waits ~3s and warns about missing stdin.
     const child = spawn(command, args, {
       cwd: workspace,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    const finish = (result: Omit<ProviderResult, 'durationMs' | 'usage'>) => {
+    const finish = (ok: boolean, errOverride?: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const output = fullOutput.join('');
-      resolve({
-        ...result,
-        output,
-        durationMs: Date.now() - startTime,
-        usage: estimateUsage(prompt, output),
-      });
+      // Only stdout is the answer; on failure include stderr (or stdout as a
+      // fallback) alongside the exit code so the real reason isn't swallowed.
+      const output = stripAnsi(stdoutChunks.join('')).trim();
+      const stderr = stripAnsi(stderrChunks.join('')).trim();
+      const error = ok ? undefined : [errOverride, stderr || output].filter(Boolean).join(' — ') || 'unknown error';
+      resolve({ ok, output, error, durationMs: Date.now() - startTime, usage: estimateUsage(prompt, output) });
     };
 
-    child.stdout.on('data', (data: Buffer) => {
+    child.stdout!.on('data', (data: Buffer) => {
       const text = data.toString();
-      fullOutput.push(text);
+      stdoutChunks.push(text);
       onOutput(text);
     });
 
-    child.stderr.on('data', (data: Buffer) => {
-      fullOutput.push(data.toString());
+    child.stderr!.on('data', (data: Buffer) => {
+      stderrChunks.push(data.toString());
     });
 
-    child.on('close', (code: number | null) => {
-      finish({ ok: code === 0, output: '', error: code === 0 ? undefined : `Exited with code ${code}` });
-    });
-
-    child.on('error', (err: Error) => {
-      finish({ ok: false, output: '', error: err.message });
-    });
+    child.on('close', (code: number | null) => finish(code === 0, code === 0 ? undefined : `Exited with code ${code}`));
+    child.on('error', (err: Error) => finish(false, err.message));
 
     const timer = setTimeout(() => {
       child.kill('SIGTERM');
-      finish({ ok: false, output: '', error: 'Timed out after 5 minutes' });
+      finish(false, 'Timed out after 5 minutes');
     }, TIMEOUT_MS);
   });
 }
@@ -209,4 +212,80 @@ function estimateUsage(promptText: string, outputText: string): TokenUsage {
   const prompt = estimateTokens(promptText);
   const completion = estimateTokens(outputText);
   return { prompt, completion, total: prompt + completion };
+}
+
+const OPENROUTER_BASE = 'https://openrouter.ai/api/v1';
+
+/** Map a persona's abstract tool names to Claude Code CLI tool names. */
+function mapToolsToClaude(tools: string[]): string[] {
+  const map: Record<string, string[]> = {
+    read_file: ['Read'],
+    write_file: ['Write', 'Edit'],
+    run_command: ['Bash'],
+    list_files: ['Glob', 'Grep'],
+  };
+  const out = new Set<string>();
+  for (const t of tools ?? []) (map[t] ?? []).forEach(x => out.add(x));
+  return [...out];
+}
+
+/** Normalize a configured model to a CLI alias the `claude` binary accepts. */
+function claudeModelAlias(model: string): string | undefined {
+  if (!model) return undefined;
+  const m = model.toLowerCase();
+  if (m.includes('opus')) return 'opus';
+  if (m.includes('haiku')) return 'haiku';
+  if (m.includes('sonnet')) return 'sonnet';
+  return model;
+}
+
+/**
+ * Dispatch a prompt to whichever provider a persona is configured for, returning
+ * a uniform ProviderResult. CLI providers (Claude Code / Codex) get the persona's
+ * system prompt prepended (one-shot prompt); HTTP providers receive it as a system
+ * message. Shared by chat (agent control rooms) so the thread's agent actually
+ * drives the reply. The `prompt` should be the conversation body WITHOUT the
+ * system prompt (this adds it where needed).
+ */
+export function runPersona(
+  persona: PersonaConfig,
+  prompt: string,
+  workspace: string,
+  config: NexusConfig,
+  onOutput: StreamCallback,
+): Promise<ProviderResult> {
+  const withSystem = persona.system_prompt ? `${persona.system_prompt}\n\n${prompt}` : prompt;
+
+  switch (persona.provider) {
+    case 'claude_code': {
+      // Full tools, scoped to the persona's declared toolset (--allowedTools),
+      // rather than a blanket permission bypass.
+      const allowed = mapToolsToClaude(persona.tools);
+      const args = [
+        ...(config.claude_code.args ?? []),
+        ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
+      ];
+      return runClaudeCode(workspace, withSystem, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(persona.model));
+    }
+    case 'codex':
+      return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, persona.model);
+    case 'openrouter':
+      return runOpenAICompatible(
+        persona,
+        prompt,
+        { baseUrl: OPENROUTER_BASE, apiKey: resolveOpenRouterKey(config), headers: { 'HTTP-Referer': 'https://nexus.local', 'X-Title': 'NEXUS' } },
+        onOutput,
+      );
+    case 'local':
+    case 'ollama':
+      return runOpenAICompatible(persona, prompt, { baseUrl: config.models.local.base_url, apiKey: config.models.local.api_key }, onOutput);
+    default:
+      return Promise.resolve({
+        ok: false,
+        output: '',
+        error: `Unknown provider: ${persona.provider}`,
+        durationMs: 0,
+        usage: { prompt: 0, completion: 0, total: 0 },
+      });
+  }
 }

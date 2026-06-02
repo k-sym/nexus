@@ -63,8 +63,9 @@ export const api = {
     createThread: (projectId: string, agentId: string) =>
       fetchJson<ChatThread>(`${API}/projects/${projectId}/threads`, { method: 'POST', body: JSON.stringify({ agent_id: agentId }) }),
     messages: (threadId: string) => fetchJson<ChatMessage[]>(`${API}/threads/${threadId}/messages`),
-    sendMessage: (threadId: string, role: 'user' | 'assistant' | 'system', content: string, attachments?: string) =>
-      fetchJson<ChatMessage>(`${API}/threads/${threadId}/messages`, { method: 'POST', body: JSON.stringify({ role, content, attachments }) }),
+    // Posts the user's turn; the backend runs the thread's agent and returns the assistant reply.
+    sendMessage: (threadId: string, content: string, attachments?: string) =>
+      fetchJson<ChatMessage>(`${API}/threads/${threadId}/messages`, { method: 'POST', body: JSON.stringify({ content, attachments }) }),
     archive: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}/archive`, { method: 'POST' }),
   },
   personas: {

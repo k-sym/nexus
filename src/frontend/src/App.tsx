@@ -7,6 +7,7 @@ import MissionControl from './components/MissionControl';
 import TicketsView from './components/TicketsView';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
+import AgentRoom from './components/AgentRoom';
 import MemoryView from './components/MemoryView';
 import PersonasPage from './components/PersonasPage';
 import SchedulerPage from './components/SchedulerPage';
@@ -32,18 +33,6 @@ type View =
 const GLOBAL_VIEWS = ['mission-control', 'tickets', 'personas', 'settings'];
 const isGlobalView = (v: View) => GLOBAL_VIEWS.includes(v);
 const isAgentView = (v: View) => v.startsWith('agent:');
-
-/** Lightweight stand-in for views landing in later build steps. */
-function Placeholder({ title, note }: { title: string; note: string }) {
-  return (
-    <div className="flex-1 flex items-center justify-center">
-      <div className="text-center max-w-sm">
-        <h2 className="text-xl font-semibold text-zinc-300 mb-2">{title}</h2>
-        <p className="text-zinc-500 text-sm">{note}</p>
-      </div>
-    </div>
-  );
-}
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -248,10 +237,18 @@ export default function App() {
           ) : view === 'scheduler' ? (
             <SchedulerPage projectId={activeProject.id} />
           ) : isAgentView(view) ? (
-            <Placeholder
-              title={`${agentName(view.slice('agent:'.length))} — control room`}
-              note="Per-agent chat + running tasks for this project. Lands in build step 5 (first harness: Claude Code)."
-            />
+            (() => {
+              const slug = view.slice('agent:'.length);
+              return (
+                <AgentRoom
+                  projectId={activeProject.id}
+                  slug={slug}
+                  name={agentName(slug)}
+                  agent={status?.agents.find(a => a.slug === slug)}
+                  runningTasks={tasks.filter(t => t.assigned_agent === slug && t.status === 'in_progress')}
+                />
+              );
+            })()
           ) : null}
         </div>
 
