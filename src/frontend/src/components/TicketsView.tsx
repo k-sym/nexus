@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Ticket as TicketIcon } from '@phosphor-icons/react';
 import { Project, Ticket } from '@nexus/shared';
 import { api } from '../api';
 
@@ -85,7 +86,7 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
       <div className="flex-1 flex flex-col min-w-0">
         <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
           <div>
-            <h1 className="text-xl font-semibold">🎫 Tickets</h1>
+            <h1 className="text-xl font-semibold flex items-center gap-2"><TicketIcon size={22} weight="fill" /> Tickets</h1>
             <p className="text-xs text-zinc-500">Jira tickets assigned to you ({tickets.length}). Synced in; Jira stays canonical.</p>
           </div>
           <button

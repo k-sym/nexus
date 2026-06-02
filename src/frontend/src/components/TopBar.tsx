@@ -1,4 +1,5 @@
 import { Project } from '@nexus/shared';
+import { Gauge, Ticket } from '@phosphor-icons/react';
 
 interface TopBarProps {
   projects: Project[];
@@ -48,11 +49,11 @@ export default function TopBar({
       <div className="w-px h-5 bg-zinc-800 mx-1 shrink-0" />
 
       {/* Global pins */}
-      <button onClick={() => onSelectGlobal('mission-control')} className={pin(view === 'mission-control')}>
-        ◆ Mission Control
+      <button onClick={() => onSelectGlobal('mission-control')} className={`${pin(view === 'mission-control')} flex items-center gap-1.5`}>
+        <Gauge size={16} weight={view === 'mission-control' ? 'fill' : 'regular'} /> Mission Control
       </button>
-      <button onClick={() => onSelectGlobal('tickets')} className={pin(view === 'tickets')}>
-        🎫 Tickets
+      <button onClick={() => onSelectGlobal('tickets')} className={`${pin(view === 'tickets')} flex items-center gap-1.5`}>
+        <Ticket size={16} weight={view === 'tickets' ? 'fill' : 'regular'} /> Tickets
       </button>
 
       <div className="w-px h-5 bg-zinc-800 mx-1 shrink-0" />
