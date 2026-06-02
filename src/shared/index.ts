@@ -88,7 +88,7 @@ export interface FileAttachment {
 }
 
 /** A configured, testable provider instance (a harness endpoint the app can use). */
-export type ProviderKind = 'claude_code' | 'codex' | 'openai_compat';
+export type ProviderKind = 'claude_code' | 'codex' | 'opencode' | 'openai_compat';
 export interface Provider {
   id: string;
   name: string;
@@ -99,6 +99,10 @@ export interface Provider {
   api_key: string | null;
   /** optional default model for this provider. */
   default_model: string | null;
+  /** curated list of model identifiers this provider offers (shown in the persona dropdown). */
+  models: string[];
+  /** optional free-form CLI launch flags — OpenCode only (e.g. "--agent build"). */
+  args: string | null;
   created_at: string;
 }
 
