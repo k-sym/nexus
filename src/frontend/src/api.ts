@@ -2,7 +2,9 @@ import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket,
 
 export interface ProviderTestResult { ok: boolean; detail: string; latencyMs?: number }
 
-const API = '/api';
+// Dev: '/api' is proxied to :4173 by vite. Prod (Electron file://): the preload
+// exposes an absolute base via __NEXUS_API__ so cross-origin /api calls resolve.
+const API = (globalThis as unknown as { __NEXUS_API__?: string }).__NEXUS_API__ ?? '/api';
 
 export type AgentHealth = 'online' | 'ready' | 'offline';
 

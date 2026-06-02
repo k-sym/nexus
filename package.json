@@ -9,7 +9,8 @@
     "dev:backend": "npm run --workspace=src/backend dev",
     "dev:frontend": "npm run --workspace=src/frontend dev",
     "dev:electron": "wait-on http://localhost:5173 && npm run --workspace=electron dev",
-    "build": "npm run --workspace=src/shared build && npm run --workspace=src/backend build && npm run --workspace=src/frontend build && npm run --workspace=electron build",
+    "build": "npm run --workspace=src/shared build && npm run --workspace=src/backend build && npm run --workspace=src/frontend build && npm run --workspace=electron build && npm run build:daemon",
+    "build:daemon": "npm --prefix src/memory-daemon run build",
     "typecheck": "npm run --workspace=src/shared typecheck && npm run --workspace=src/backend typecheck && npm run --workspace=src/frontend typecheck"
   },
   "workspaces": [
