@@ -31,25 +31,43 @@ function rowToProvider(row: any): Provider {
 }
 
 /**
- * Seed default providers from the existing config when the table is empty.
- * Idempotent: stable ids + INSERT OR IGNORE, so a racing double-boot (two tsx
- * reloads) can't create duplicates, and user-deleted seeds aren't recreated.
+ * Seed default providers, and backfill ones added in later versions.
+ *
+ * Fresh DB (empty table): seed the full default set, then stamp `user_version = 1`
+ * so the OpenCode backfill below is considered satisfied. Existing DB: seeding is
+ * skipped, but providers introduced after the initial seed are added once, gated on
+ * `user_version`, so a user who later deletes one isn't fighting a re-add every boot.
+ * Idempotent throughout: stable ids + INSERT OR IGNORE survive racing double-boots.
  */
 export function seedProviders(db: Database.Database): void {
   const n = (db.prepare('SELECT COUNT(*) as n FROM providers').get() as { n: number }).n;
-  if (n > 0) return;
-  const config = loadConfig();
   const now = new Date().toISOString();
-  const ins = db.prepare(`INSERT OR IGNORE INTO providers (${COLS}) VALUES (@id, @name, @kind, @base_url, @api_key, @default_model, @models, @args, @created_at)`);
-  const seed = [
-    { id: 'seed-openrouter', name: 'OpenRouter', kind: 'openai_compat', base_url: 'https://openrouter.ai/api/v1', api_key: config.models.openrouter.api_key || null, default_model: 'anthropic/claude-sonnet-4', models: JSON.stringify([]), args: null, created_at: now },
-    { id: 'seed-local', name: 'Local (omlx)', kind: 'openai_compat', base_url: config.models.local.base_url || 'http://127.0.0.1:4001/v1', api_key: config.models.local.api_key || null, default_model: null, models: JSON.stringify([]), args: null, created_at: now },
-    { id: 'seed-claude-code', name: 'Claude Code', kind: 'claude_code', base_url: null, api_key: null, default_model: 'sonnet', models: JSON.stringify(['opus', 'sonnet', 'haiku']), args: null, created_at: now },
-    { id: 'seed-codex', name: 'Codex', kind: 'codex', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['gpt-5.5', 'gpt-5.3-codex']), args: null, created_at: now },
-    { id: 'seed-opencode', name: 'OpenCode', kind: 'opencode', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['openrouter/anthropic/claude-sonnet-4.5']), args: null, created_at: now },
-  ];
-  for (const p of seed) ins.run(p);
-  console.log(`[providers] seeded ${seed.length} default providers`);
+  const insSql = `INSERT OR IGNORE INTO providers (${COLS}) VALUES (@id, @name, @kind, @base_url, @api_key, @default_model, @models, @args, @created_at)`;
+  // Shared by the fresh seed and the existing-DB backfill (single source of truth).
+  const opencode = { id: 'seed-opencode', name: 'OpenCode', kind: 'opencode', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['openrouter/anthropic/claude-sonnet-4.5']), args: null, created_at: now };
+
+  if (n === 0) {
+    const config = loadConfig();
+    const ins = db.prepare(insSql);
+    const seed = [
+      { id: 'seed-openrouter', name: 'OpenRouter', kind: 'openai_compat', base_url: 'https://openrouter.ai/api/v1', api_key: config.models.openrouter.api_key || null, default_model: 'anthropic/claude-sonnet-4', models: JSON.stringify([]), args: null, created_at: now },
+      { id: 'seed-local', name: 'Local (omlx)', kind: 'openai_compat', base_url: config.models.local.base_url || 'http://127.0.0.1:4001/v1', api_key: config.models.local.api_key || null, default_model: null, models: JSON.stringify([]), args: null, created_at: now },
+      { id: 'seed-claude-code', name: 'Claude Code', kind: 'claude_code', base_url: null, api_key: null, default_model: 'sonnet', models: JSON.stringify(['opus', 'sonnet', 'haiku']), args: null, created_at: now },
+      { id: 'seed-codex', name: 'Codex', kind: 'codex', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['gpt-5.5', 'gpt-5.3-codex']), args: null, created_at: now },
+      opencode,
+    ];
+    for (const p of seed) ins.run(p);
+    console.log(`[providers] seeded ${seed.length} default providers`);
+    db.pragma('user_version = 1');
+    return;
+  }
+
+  // Existing DB: one-time backfill of providers introduced after the initial seed.
+  const uv = db.pragma('user_version', { simple: true }) as number;
+  if (uv >= 1) return;
+  db.prepare(insSql).run(opencode);
+  console.log('[providers] backfilled OpenCode provider (one-time)');
+  db.pragma('user_version = 1');
 }
 
 /** Test connectivity: ping /models for HTTP providers, or run `--version` for CLIs. */
