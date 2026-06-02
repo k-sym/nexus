@@ -87,12 +87,30 @@ export interface FileAttachment {
   mime_type: string;
 }
 
+/** A configured, testable provider instance (a harness endpoint the app can use). */
+export type ProviderKind = 'claude_code' | 'codex' | 'openai_compat';
+export interface Provider {
+  id: string;
+  name: string;
+  kind: ProviderKind;
+  /** openai_compat only — base URL incl. /v1 (OpenRouter, omlx, LM Studio, llama.cpp…). */
+  base_url: string | null;
+  /** openai_compat only — bearer token; supports ${ENV_VAR} interpolation. */
+  api_key: string | null;
+  /** optional default model for this provider. */
+  default_model: string | null;
+  created_at: string;
+}
+
 export interface PersonaConfig {
   name: string;
   slug: string;
+  // Legacy provider enum — kept as a fallback when provider_id is unset.
   // 'local' = any OpenAI-compatible local server (omlx, LM Studio, llama.cpp…).
   // 'ollama' is kept as a legacy alias, treated identically to 'local'.
   provider: 'claude_code' | 'codex' | 'openrouter' | 'local' | 'ollama';
+  /** Preferred: references a first-class Provider record by id. */
+  provider_id?: string;
   model: string;
   system_prompt: string;
   tools: string[];

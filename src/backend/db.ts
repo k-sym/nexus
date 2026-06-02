@@ -101,6 +101,16 @@ function runMigrations(db: Database.Database) {
       completed_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS providers (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      base_url TEXT,
+      api_key TEXT,
+      default_model TEXT,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS tickets (
       key TEXT PRIMARY KEY,
       summary TEXT NOT NULL DEFAULT '',
