@@ -106,7 +106,11 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const workspace = project?.repo_path || process.cwd();
 
     // 4. Run the persona's provider (synchronous).
+    console.log(`[chat] running ${persona.provider} (${persona.model}) for "${persona.slug}" in ${workspace}`);
     const result = await runPersona(persona, promptBody, workspace, config, () => {});
+    if (!result.ok) {
+      console.error(`[chat] ${persona.provider} (${persona.model}) failed in ${workspace}: ${result.error}`);
+    }
     const content = result.ok
       ? (result.output.trim() || '[empty response]')
       : `[${persona.provider} error] ${result.error || 'unknown error'}`;

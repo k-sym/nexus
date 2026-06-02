@@ -75,9 +75,11 @@ function runCli(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // Only stdout is the answer; stderr is diagnostics surfaced on failure.
+      // Only stdout is the answer; on failure include stderr (or stdout as a
+      // fallback) alongside the exit code so the real reason isn't swallowed.
       const output = stripAnsi(stdoutChunks.join('')).trim();
-      const error = ok ? undefined : errOverride || stripAnsi(stderrChunks.join('')).trim() || 'unknown error';
+      const stderr = stripAnsi(stderrChunks.join('')).trim();
+      const error = ok ? undefined : [errOverride, stderr || output].filter(Boolean).join(' — ') || 'unknown error';
       resolve({ ok, output, error, durationMs: Date.now() - startTime, usage: estimateUsage(prompt, output) });
     };
 
