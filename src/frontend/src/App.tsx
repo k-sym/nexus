@@ -18,6 +18,7 @@ import UsagePage from './components/UsagePage';
 import ProjectModal from './components/ProjectModal';
 import TaskModal from './components/TaskModal';
 import ColumnAgentMapping from './components/ColumnAgentMapping';
+import OpenCodeModelsView from './components/OpenCodeModelsView';
 
 // Global (project-less) views vs project-scoped views vs per-agent rooms (`agent:<slug>`).
 type View =
@@ -25,6 +26,7 @@ type View =
   | 'tickets'
   | 'personas'
   | 'settings'
+  | 'opencode-models'
   | 'kanban'
   | 'chat'
   | 'memory'
@@ -32,7 +34,7 @@ type View =
   | 'usage'
   | `agent:${string}`;
 
-const GLOBAL_VIEWS = ['mission-control', 'tickets', 'personas', 'settings'];
+const GLOBAL_VIEWS = ['mission-control', 'tickets', 'personas', 'settings', 'opencode-models'];
 const isGlobalView = (v: View) => GLOBAL_VIEWS.includes(v);
 const isAgentView = (v: View) => v.startsWith('agent:');
 
@@ -193,6 +195,7 @@ export default function App() {
     if (activeProjectId) cmds.push({ id: 'act-new-task', label: 'New task (Triage)…', hint: 'Action', keywords: 'kanban', run: () => setTaskModalColumn('triage') });
     cmds.push({ id: 'act-personas', label: 'Personas', hint: 'Action', keywords: 'agents', run: () => setView('personas') });
     cmds.push({ id: 'act-settings', label: 'Settings', hint: 'Action', run: () => setView('settings') });
+    cmds.push({ id: 'act-opencode-models', label: 'OpenCode Models', hint: 'Action', keywords: 'opencode openrouter models', run: () => setView('opencode-models') });
     cmds.push({ id: 'act-refresh', label: 'Refresh status', hint: 'Action', run: () => loadStatus() });
     return cmds;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -202,6 +205,7 @@ export default function App() {
   const renderMain = () => {
     if (view === 'personas') return <PersonasPage />;
     if (view === 'settings') return <SettingsPage />;
+    if (view === 'opencode-models') return <OpenCodeModelsView />;
     if (view === 'mission-control')
       return (
         <MissionControl

@@ -77,7 +77,7 @@ async function probeAgent(p: PersonaRow, config: NexusConfig, providersById: Map
     status = r.status;
     latencyMs = r.latencyMs;
     detail = baseUrl || 'no base_url';
-  } else if (kind === 'claude_code' || kind === 'codex') {
+  } else if (kind === 'claude_code' || kind === 'codex' || kind === 'opencode') {
     status = 'ready';
     detail = 'CLI';
   } else {

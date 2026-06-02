@@ -7,6 +7,7 @@ const KINDS: { value: ProviderKind; label: string }[] = [
   { value: 'openai_compat', label: 'OpenAI-compatible (OpenRouter / local / omlx)' },
   { value: 'claude_code', label: 'Claude Code (CLI)' },
   { value: 'codex', label: 'Codex (CLI)' },
+  { value: 'opencode', label: 'OpenCode (CLI)' },
 ];
 
 const blank: Partial<Provider> = { name: '', kind: 'openai_compat', base_url: '', api_key: '', default_model: '' };
@@ -126,6 +127,26 @@ export default function ProvidersSettings() {
             placeholder="Default model (optional)"
             className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
           />
+          {(editing.kind === 'claude_code' || editing.kind === 'codex') && (
+            <textarea
+              value={(editing.models ?? []).join('\n')}
+              onChange={e => setEditing({ ...editing, models: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) })}
+              placeholder={'Models (one per line)\nopus\nsonnet\nhaiku'}
+              rows={3}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50 resize-none"
+            />
+          )}
+          {editing.kind === 'opencode' && (
+            <>
+              <div className="text-[11px] text-zinc-500">Models for OpenCode are curated in the <span className="text-zinc-300">OpenCode Models</span> view.</div>
+              <input
+                value={editing.args ?? ''}
+                onChange={e => setEditing({ ...editing, args: e.target.value })}
+                placeholder="Extra CLI args (optional, e.g. --agent build)"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+              />
+            </>
+          )}
           <div className="flex gap-2">
             <button onClick={save} className="px-3 py-1.5 text-sm bg-indigo-500 text-white rounded hover:bg-indigo-600">Save provider</button>
             <button onClick={() => setEditing(null)} className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100">Cancel</button>

@@ -36,6 +36,20 @@ export function estimateTokens(text: string): number {
   return Math.ceil(text.trim().split(/\s+/).filter(Boolean).length * 1.3);
 }
 
+/** Split a free-form CLI args string into argv. v1: whitespace split (no quote handling). */
+export function splitArgs(s: string | null | undefined): string[] {
+  return (s ?? '').trim().split(/\s+/).filter(Boolean);
+}
+
+/** Build argv for `opencode run`: model flag (if any), then extra args, then the prompt. */
+export function buildOpenCodeArgs(
+  model: string | null | undefined,
+  args: string | null | undefined,
+  prompt: string,
+): string[] {
+  return ['run', ...(model ? ['--model', model] : []), ...splitArgs(args), prompt];
+}
+
 const TIMEOUT_MS = 300_000;
 
 export interface CliConfig {
@@ -152,6 +166,19 @@ export async function runCodex(
     /* file missing (early failure) — fall back to whatever stdout we captured */
   }
   return result;
+}
+
+export function runOpenCode(
+  workspace: string,
+  prompt: string,
+  onOutput: StreamCallback,
+  model?: string,
+  extraArgs?: string | null,
+): Promise<ProviderResult> {
+  // A bare `opencode` opens the interactive TUI; `run` is required for headless one-shot.
+  // OpenCode uses its OWN provider credentials (e.g. OpenRouter) — Nexus just invokes the CLI.
+  const args = buildOpenCodeArgs(model, extraArgs, prompt);
+  return runCli('opencode', args, workspace, prompt, onOutput);
 }
 
 export interface OpenAICompatibleOptions {
@@ -296,6 +323,8 @@ export function runPersona(
       }
       case 'codex':
         return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, model);
+      case 'opencode':
+        return runOpenCode(workspace, withSystem, onOutput, model, provider.args);
       case 'openai_compat': {
         const baseUrl = resolveEnvVars(provider.base_url || '');
         const apiKey = resolveEnvVars(provider.api_key || '');

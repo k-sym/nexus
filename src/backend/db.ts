@@ -108,6 +108,8 @@ function runMigrations(db: Database.Database) {
       base_url TEXT,
       api_key TEXT,
       default_model TEXT,
+      models TEXT DEFAULT '[]',
+      args TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -169,6 +171,19 @@ function runMigrations(db: Database.Database) {
   ];
   for (const [col, sql] of runMigrations) {
     if (!runColNames.has(col)) {
+      db.exec(sql);
+    }
+  }
+
+  // Provider curated-models + args migrations (for DBs created before this feature).
+  const provCols = db.pragma('table_info(providers)') as { name: string }[];
+  const provColNames = new Set(provCols.map(c => c.name));
+  const provMigrations: Array<[string, string]> = [
+    ['models', "ALTER TABLE providers ADD COLUMN models TEXT DEFAULT '[]'"],
+    ['args', 'ALTER TABLE providers ADD COLUMN args TEXT'],
+  ];
+  for (const [col, sql] of provMigrations) {
+    if (!provColNames.has(col)) {
       db.exec(sql);
     }
   }
