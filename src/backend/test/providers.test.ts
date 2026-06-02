@@ -24,3 +24,11 @@ test('buildOpenCodeArgs omits --model when no model is given', () => {
   assert.deepEqual(buildOpenCodeArgs('', null, 'hi'), ['run', 'hi']);
   assert.deepEqual(buildOpenCodeArgs(undefined, undefined, 'hi'), ['run', 'hi']);
 });
+
+import { hermesHealthUrl } from '../orchestrator/providers';
+
+test('hermesHealthUrl derives /health from a /v1 base', () => {
+  assert.equal(hermesHealthUrl('http://100.87.109.31:8642/v1'), 'http://100.87.109.31:8642/health');
+  assert.equal(hermesHealthUrl('http://100.87.109.31:8642/v1/'), 'http://100.87.109.31:8642/health');
+  assert.equal(hermesHealthUrl('http://h:8642'), 'http://h:8642/health');
+});

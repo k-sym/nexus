@@ -11,9 +11,10 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import { TaskStatus } from '@nexus/shared';
-import { getNexusDir, loadConfig, resolveOpenRouterKey, resolveEnvVars } from '../config';
+import { getNexusDir, loadConfig } from '../config';
 import { buildTaskContext, buildAgentPrompt, TaskContext } from './context';
-import { runClaudeCode, runCodex, runOpenAICompatible, ProviderResult } from './providers';
+import { runPersona } from './providers';
+import { getProviderById } from '../routes/providers';
 import { addMemory, projectSlug } from '../memory';
 import { writeTaskSummary, writeChatArchive } from '../memory/obsidian';
 
@@ -75,45 +76,14 @@ async function dispatchTask(db: Database.Database, config: ReturnType<typeof loa
     try { fs.appendFileSync(outputPath, chunk); } catch { /* ignore */ }
   };
 
-  let result: ProviderResult;
-
-  switch (persona.provider) {
-    case 'claude_code':
-      console.log(`[orchestrator] Spawning Claude Code for task ${taskId}`);
-      result = await runClaudeCode(workspace, prompt, appendOutput, config.claude_code, persona.model);
-      break;
-
-    case 'codex':
-      console.log(`[orchestrator] Spawning Codex for task ${taskId}`);
-      result = await runCodex(workspace, prompt, appendOutput, config.codex, persona.model);
-      break;
-
-    case 'openrouter':
-      console.log(`[orchestrator] Calling OpenRouter API for task ${taskId}`);
-      result = await runOpenAICompatible(persona, prompt, {
-        baseUrl: 'https://openrouter.ai/api/v1',
-        apiKey: resolveOpenRouterKey(config),
-        headers: { 'HTTP-Referer': 'https://nexus.local', 'X-Title': 'NEXUS Agent' },
-      }, appendOutput);
-      break;
-
-    case 'local':
-    case 'ollama': // legacy alias
-      console.log(`[orchestrator] Calling local model server for task ${taskId}`);
-      result = await runOpenAICompatible(persona, prompt, {
-        baseUrl: config.models.local.base_url,
-        apiKey: resolveEnvVars(config.models.local.api_key),
-      }, appendOutput);
-      break;
-
-    default:
-      result = { ok: false, output: '', error: `Unknown provider: ${persona.provider}`, durationMs: 0, usage: { prompt: 0, completion: 0, total: 0 } };
-  }
+  const provider = persona.provider_id ? getProviderById(db, persona.provider_id) : undefined;
+  console.log(`[orchestrator] Dispatching via ${provider ? `${provider.name} (${provider.kind})` : persona.provider} for task ${taskId}`);
+  const result = await runPersona(persona, prompt, workspace, config, appendOutput, provider);
 
   const status = result.ok ? 'completed' : 'failed';
   completeAgentRun(db, runId, status, result.output, result.error, {
-    provider: persona.provider,
-    model: persona.model,
+    provider: provider?.name ?? persona.provider,
+    model: persona.model || provider?.default_model || '',
     usage: result.usage,
     durationMs: result.durationMs,
   });

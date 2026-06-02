@@ -5,6 +5,7 @@ import { ChatThread, ChatMessage, PersonaConfig, Provider } from '@nexus/shared'
 import { getRelevantMemories, addMemory } from '../memory';
 import { loadConfig } from '../config';
 import { runPersona } from '../orchestrator/providers';
+import { getProviderById } from './providers';
 
 const MAX_HISTORY = 12;
 
@@ -106,10 +107,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const workspace = project?.repo_path || process.cwd();
 
     // 4. Resolve the persona's provider record (if any) and run it (synchronous).
-    let provider: Provider | undefined;
-    if (persona.provider_id) {
-      provider = db.prepare('SELECT id, name, kind, base_url, api_key, default_model, created_at FROM providers WHERE id = ?').get(persona.provider_id) as Provider | undefined;
-    }
+    const provider: Provider | undefined = persona.provider_id ? getProviderById(db, persona.provider_id) : undefined;
     console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}`);
     const result = await runPersona(persona, promptBody, workspace, config, () => {}, provider);
     if (!result.ok) {

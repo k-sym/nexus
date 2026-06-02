@@ -12,6 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { spawn } from 'child_process';
 import { Provider, ProviderKind } from '@nexus/shared';
 import { loadConfig, resolveEnvVars } from '../config';
+import { hermesHealthUrl } from '../orchestrator/providers';
 
 const COLS = 'id, name, kind, base_url, api_key, default_model, models, args, created_at';
 
@@ -30,6 +31,12 @@ function rowToProvider(row: any): Provider {
   };
 }
 
+/** Load a provider by id with all columns parsed (models/args included). */
+export function getProviderById(db: Database.Database, id: string): Provider | undefined {
+  const row = db.prepare(`SELECT ${COLS} FROM providers WHERE id = ?`).get(id);
+  return row ? rowToProvider(row) : undefined;
+}
+
 /**
  * Seed default providers, and backfill ones added in later versions.
  *
@@ -39,12 +46,31 @@ function rowToProvider(row: any): Provider {
  * `user_version`, so a user who later deletes one isn't fighting a re-add every boot.
  * Idempotent throughout: stable ids + INSERT OR IGNORE survive racing double-boots.
  */
+/** Auto-provision the Hermes persona (stable id so racing boots can't duplicate). */
+function seedHermesPersona(db: Database.Database): void {
+  const yaml = [
+    'name: Hermes',
+    'slug: hermes',
+    'provider: openrouter',
+    'provider_id: seed-hermes',
+    "model: ''",
+    "system_prompt: 'You are Hermes, a remote scheduling/automation agent.'",
+    'tools: []',
+    "workspace: '~/Projects/{project}'",
+    'startup_scripts: []',
+    'token_budget: 4000',
+  ].join('\n') + '\n';
+  db.prepare('INSERT OR IGNORE INTO personas (id, name, slug, config_yaml, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run('seed-hermes-persona', 'Hermes', 'hermes', yaml, new Date().toISOString());
+}
+
 export function seedProviders(db: Database.Database): void {
   const n = (db.prepare('SELECT COUNT(*) as n FROM providers').get() as { n: number }).n;
   const now = new Date().toISOString();
   const insSql = `INSERT OR IGNORE INTO providers (${COLS}) VALUES (@id, @name, @kind, @base_url, @api_key, @default_model, @models, @args, @created_at)`;
   // Shared by the fresh seed and the existing-DB backfill (single source of truth).
   const opencode = { id: 'seed-opencode', name: 'OpenCode', kind: 'opencode', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['openrouter/anthropic/claude-sonnet-4.5']), args: null, created_at: now };
+  const hermes = { id: 'seed-hermes', name: 'Hermes', kind: 'hermes', base_url: 'http://100.87.109.31:8642/v1', api_key: '${HERMES_API_KEY}', default_model: 'hermes-agent', models: JSON.stringify(['hermes-agent']), args: null, created_at: now };
 
   if (n === 0) {
     const config = loadConfig();
@@ -55,23 +81,48 @@ export function seedProviders(db: Database.Database): void {
       { id: 'seed-claude-code', name: 'Claude Code', kind: 'claude_code', base_url: null, api_key: null, default_model: 'sonnet', models: JSON.stringify(['opus', 'sonnet', 'haiku']), args: null, created_at: now },
       { id: 'seed-codex', name: 'Codex', kind: 'codex', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['gpt-5.5', 'gpt-5.3-codex']), args: null, created_at: now },
       opencode,
+      hermes,
     ];
     for (const p of seed) ins.run(p);
     console.log(`[providers] seeded ${seed.length} default providers`);
-    db.pragma('user_version = 1');
+    seedHermesPersona(db);
+    db.pragma('user_version = 2');
     return;
   }
 
-  // Existing DB: one-time backfill of providers introduced after the initial seed.
+  // Existing DB: one-time backfills, gated by user_version (each runs exactly once).
   const uv = db.pragma('user_version', { simple: true }) as number;
-  if (uv >= 1) return;
-  db.prepare(insSql).run(opencode);
-  console.log('[providers] backfilled OpenCode provider (one-time)');
-  db.pragma('user_version = 1');
+  if (uv >= 2) return;
+  const ins = db.prepare(insSql);
+  if (uv < 1) {
+    ins.run(opencode);
+    console.log('[providers] backfilled OpenCode provider (one-time)');
+  }
+  if (uv < 2) {
+    ins.run(hermes);
+    seedHermesPersona(db);
+    console.log('[providers] backfilled Hermes provider + persona (one-time)');
+  }
+  db.pragma('user_version = 2');
 }
 
 /** Test connectivity: ping /models for HTTP providers, or run `--version` for CLIs. */
 async function testProvider(p: Provider): Promise<{ ok: boolean; detail: string; latencyMs?: number }> {
+  if (p.kind === 'hermes') {
+    const url = hermesHealthUrl(resolveEnvVars(p.base_url || ''));
+    const start = Date.now();
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      const body: any = await res.json().catch(() => ({}));
+      const ok = res.ok && body?.status === 'ok';
+      return { ok, detail: ok ? (body.platform || 'ok') : `HTTP ${res.status}`, latencyMs: Date.now() - start };
+    } catch (err: any) {
+      return { ok: false, detail: err.name === 'AbortError' ? 'timed out' : err.message };
+    }
+  }
   if (p.kind === 'openai_compat') {
     if (!p.base_url) return { ok: false, detail: 'No base URL configured' };
     const url = `${p.base_url.replace(/\/$/, '')}/models`;
