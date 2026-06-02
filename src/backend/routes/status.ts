@@ -11,6 +11,7 @@ import yaml from 'js-yaml';
 import { NexusConfig, Provider } from '@nexus/shared';
 import { loadConfig, resolveEnvVars } from '../config';
 import { daemon } from '../memory/client';
+import { hermesHealthUrl } from '../orchestrator/providers';
 
 type AgentStatus = 'online' | 'ready' | 'offline';
 
@@ -34,6 +35,24 @@ async function probeLocalModels(baseUrl: string, apiKey?: string): Promise<{ sta
     return { status: res.ok ? 'online' : 'offline', latencyMs: Date.now() - start };
   } catch {
     return { status: 'offline' };
+  }
+}
+
+/** Probe a Hermes agent's /health endpoint. online iff it returns {"status":"ok"}. */
+async function probeHermes(baseUrl: string): Promise<{ status: AgentStatus; latencyMs?: number; detail?: string }> {
+  if (!baseUrl) return { status: 'offline', detail: 'no base_url' };
+  const url = hermesHealthUrl(baseUrl);
+  const start = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 1500);
+    const res = await fetch(url, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const body: any = await res.json().catch(() => ({}));
+    const ok = res.ok && body?.status === 'ok';
+    return { status: ok ? 'online' : 'offline', latencyMs: Date.now() - start, detail: body?.platform || url };
+  } catch {
+    return { status: 'offline', detail: 'unreachable' };
   }
 }
 
@@ -77,6 +96,11 @@ async function probeAgent(p: PersonaRow, config: NexusConfig, providersById: Map
     status = r.status;
     latencyMs = r.latencyMs;
     detail = baseUrl || 'no base_url';
+  } else if (kind === 'hermes') {
+    const r = await probeHermes(baseUrl);
+    status = r.status;
+    latencyMs = r.latencyMs;
+    detail = r.detail;
   } else if (kind === 'claude_code' || kind === 'codex' || kind === 'opencode') {
     status = 'ready';
     detail = 'CLI';

@@ -12,6 +12,7 @@ import { v4 as uuid } from 'uuid';
 import { spawn } from 'child_process';
 import { Provider, ProviderKind } from '@nexus/shared';
 import { loadConfig, resolveEnvVars } from '../config';
+import { hermesHealthUrl } from '../orchestrator/providers';
 
 const COLS = 'id, name, kind, base_url, api_key, default_model, models, args, created_at';
 
@@ -72,6 +73,21 @@ export function seedProviders(db: Database.Database): void {
 
 /** Test connectivity: ping /models for HTTP providers, or run `--version` for CLIs. */
 async function testProvider(p: Provider): Promise<{ ok: boolean; detail: string; latencyMs?: number }> {
+  if (p.kind === 'hermes') {
+    const url = hermesHealthUrl(resolveEnvVars(p.base_url || ''));
+    const start = Date.now();
+    try {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(url, { signal: ctrl.signal });
+      clearTimeout(timer);
+      const body: any = await res.json().catch(() => ({}));
+      const ok = res.ok && body?.status === 'ok';
+      return { ok, detail: ok ? (body.platform || 'ok') : `HTTP ${res.status}`, latencyMs: Date.now() - start };
+    } catch (err: any) {
+      return { ok: false, detail: err.name === 'AbortError' ? 'timed out' : err.message };
+    }
+  }
   if (p.kind === 'openai_compat') {
     if (!p.base_url) return { ok: false, detail: 'No base URL configured' };
     const url = `${p.base_url.replace(/\/$/, '')}/models`;
