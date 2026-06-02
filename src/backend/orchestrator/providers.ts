@@ -8,6 +8,9 @@
  * only by base URL and auth.
  */
 import { spawn, ChildProcess } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { NexusConfig, PersonaConfig } from '@nexus/shared';
 import { resolveEnvVars, resolveOpenRouterKey } from '../config';
 
@@ -115,7 +118,7 @@ export function runClaudeCode(
   return runCli(command, args, workspace, prompt, onOutput);
 }
 
-export function runCodex(
+export async function runCodex(
   workspace: string,
   prompt: string,
   onOutput: StreamCallback,
@@ -123,8 +126,32 @@ export function runCodex(
   model?: string,
 ): Promise<ProviderResult> {
   const command = config?.command || 'codex';
-  const args = [...(config?.args ?? []), ...(model && model !== 'codex-default' ? ['--model', model] : []), prompt];
-  return runCli(command, args, workspace, prompt, onOutput);
+  // Codex must run via `exec` to be non-interactive — a bare `codex "<prompt>"`
+  // forwards to the interactive TUI, which fails when spawned without a TTY.
+  // `--output-last-message` writes just the final reply (stdout is a verbose
+  // transcript). `workspace-write` gives it scoped tools within the project dir.
+  const outFile = path.join(os.tmpdir(), `nexus-codex-${process.pid}-${Date.now()}.txt`);
+  const args = [
+    'exec',
+    '--skip-git-repo-check',
+    '--sandbox', 'workspace-write',
+    ...(config?.args ?? []),
+    ...(model && model !== 'codex-default' ? ['--model', model] : []),
+    '--output-last-message', outFile,
+    prompt,
+  ];
+
+  const result = await runCli(command, args, workspace, prompt, onOutput);
+
+  // Prefer the clean final message file over the verbose stdout transcript.
+  try {
+    const last = fs.readFileSync(outFile, 'utf8').trim();
+    fs.unlinkSync(outFile);
+    if (last) return { ...result, output: last };
+  } catch {
+    /* file missing (early failure) — fall back to whatever stdout we captured */
+  }
+  return result;
 }
 
 export interface OpenAICompatibleOptions {

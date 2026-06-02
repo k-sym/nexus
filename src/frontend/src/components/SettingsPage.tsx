@@ -137,49 +137,29 @@ export default function SettingsPage() {
           </Field>
         </Section>
 
-        {/* Chat */}
-        <Section title="Chat">
-          <Field label="Default Chat Model">
-            <input
-              type="text"
-              value={config.chat.model}
-              onChange={e => update(['chat', 'model'], e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 focus:outline-none focus:border-indigo-500/50"
-            />
-          </Field>
-          <Field label="Archive chats older than (hours)">
-            <input
-              type="number"
-              value={config.chat.hot_storage_hours}
-              onChange={e => update(['chat', 'hot_storage_hours'], parseInt(e.target.value, 10) || 48)}
-              className="w-32 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
-            />
-          </Field>
-        </Section>
-
         {/* Memory */}
         <Section title="Memory Auto-Injection">
           <Field label="Enabled">
             <button
-              onClick={() => update(['mem0', 'auto_inject', 'enabled'], !config.mem0.auto_inject.enabled)}
-              className={`px-3 py-1 text-xs rounded transition-colors ${config.mem0.auto_inject.enabled ? 'bg-green-500/20 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}
+              onClick={() => update(['memory', 'auto_inject', 'enabled'], !config.memory.auto_inject.enabled)}
+              className={`px-3 py-1 text-xs rounded transition-colors ${config.memory.auto_inject.enabled ? 'bg-green-500/20 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}
             >
-              {config.mem0.auto_inject.enabled ? 'Enabled' : 'Disabled'}
+              {config.memory.auto_inject.enabled ? 'Enabled' : 'Disabled'}
             </button>
           </Field>
           <Field label="Max memories injected">
             <input
               type="number"
-              value={config.mem0.auto_inject.max_memories}
-              onChange={e => update(['mem0', 'auto_inject', 'max_memories'], parseInt(e.target.value, 10) || 5)}
+              value={config.memory.auto_inject.max_memories}
+              onChange={e => update(['memory', 'auto_inject', 'max_memories'], parseInt(e.target.value, 10) || 5)}
               className="w-32 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
             />
           </Field>
           <Field label="Token budget">
             <input
               type="number"
-              value={config.mem0.auto_inject.token_budget}
-              onChange={e => update(['mem0', 'auto_inject', 'token_budget'], parseInt(e.target.value, 10) || 1000)}
+              value={config.memory.auto_inject.token_budget}
+              onChange={e => update(['memory', 'auto_inject', 'token_budget'], parseInt(e.target.value, 10) || 1000)}
               className="w-32 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
             />
           </Field>
