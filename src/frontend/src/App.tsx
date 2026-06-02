@@ -262,7 +262,7 @@ export default function App() {
               onDeleteTask={handleDeleteTask}
             />
           ) : view === 'chat' ? (
-            <ChatPanel projectId={activeProject.id} />
+            <ChatPanel projectId={activeProject.id} agents={status?.agents} />
           ) : view === 'memory' ? (
             <MemoryView projectId={activeProject.id} />
           ) : view === 'usage' ? (

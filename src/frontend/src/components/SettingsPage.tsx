@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
+import ProvidersSettings from './ProvidersSettings';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<any>(null);
@@ -79,7 +80,10 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-6">
-        {/* Models */}
+        {/* Providers — first-class, addable, testable */}
+        <ProvidersSettings />
+
+        {/* Models (memory daemon + legacy fallback config) */}
         <Section title="Models">
           <Field label="OpenRouter API Key">
             <input

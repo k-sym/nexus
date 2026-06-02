@@ -11,7 +11,7 @@ import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { NexusConfig, PersonaConfig } from '@nexus/shared';
+import { NexusConfig, PersonaConfig, Provider } from '@nexus/shared';
 import { resolveEnvVars, resolveOpenRouterKey } from '../config';
 
 export interface TokenUsage {
@@ -280,8 +280,30 @@ export function runPersona(
   workspace: string,
   config: NexusConfig,
   onOutput: StreamCallback,
+  provider?: Provider,
 ): Promise<ProviderResult> {
   const withSystem = persona.system_prompt ? `${persona.system_prompt}\n\n${prompt}` : prompt;
+
+  // Provider-first: a persona that references a Provider record dispatches by the
+  // provider's kind + endpoint. (Legacy `provider` enum below is the fallback.)
+  if (provider) {
+    const model = persona.model || provider.default_model || '';
+    switch (provider.kind) {
+      case 'claude_code': {
+        const allowed = mapToolsToClaude(persona.tools);
+        const args = [...(config.claude_code.args ?? []), ...(allowed.length ? ['--allowedTools', allowed.join(',')] : [])];
+        return runClaudeCode(workspace, withSystem, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(model));
+      }
+      case 'codex':
+        return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, model);
+      case 'openai_compat': {
+        const baseUrl = resolveEnvVars(provider.base_url || '');
+        const apiKey = resolveEnvVars(provider.api_key || '');
+        const headers = /openrouter\.ai/.test(baseUrl) ? { 'HTTP-Referer': 'https://nexus.local', 'X-Title': 'NEXUS' } : undefined;
+        return runOpenAICompatible({ ...persona, model }, prompt, { baseUrl, apiKey, headers }, onOutput);
+      }
+    }
+  }
 
   switch (persona.provider) {
     case 'claude_code': {

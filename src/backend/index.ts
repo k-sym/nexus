@@ -25,6 +25,7 @@ import { registerScheduleRoutes } from './routes/schedules';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerStatusRoutes } from './routes/status';
 import { registerTicketRoutes } from './routes/tickets';
+import { registerProviderRoutes, seedProviders } from './routes/providers';
 import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
@@ -34,6 +35,7 @@ async function main() {
 
   const db = getDb(getDbPath());
   seedPersonas(db);
+  seedProviders(db);
   await initMemorySystem(db);
   startOrchestrator(db);
   if (config.scheduler.enabled) {
@@ -56,6 +58,7 @@ async function main() {
   app.register(registerSettingsRoutes);
   app.register(registerStatusRoutes);
   app.register(registerTicketRoutes);
+  app.register(registerProviderRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 

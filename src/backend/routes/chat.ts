@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import yaml from 'js-yaml';
-import { ChatThread, ChatMessage, PersonaConfig } from '@nexus/shared';
+import { ChatThread, ChatMessage, PersonaConfig, Provider } from '@nexus/shared';
 import { getRelevantMemories, addMemory } from '../memory';
 import { loadConfig } from '../config';
 import { runPersona } from '../orchestrator/providers';
@@ -105,9 +105,13 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     const workspace = project?.repo_path || process.cwd();
 
-    // 4. Run the persona's provider (synchronous).
-    console.log(`[chat] running ${persona.provider} (${persona.model}) for "${persona.slug}" in ${workspace}`);
-    const result = await runPersona(persona, promptBody, workspace, config, () => {});
+    // 4. Resolve the persona's provider record (if any) and run it (synchronous).
+    let provider: Provider | undefined;
+    if (persona.provider_id) {
+      provider = db.prepare('SELECT id, name, kind, base_url, api_key, default_model, created_at FROM providers WHERE id = ?').get(persona.provider_id) as Provider | undefined;
+    }
+    console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}`);
+    const result = await runPersona(persona, promptBody, workspace, config, () => {}, provider);
     if (!result.ok) {
       console.error(`[chat] ${persona.provider} (${persona.model}) failed in ${workspace}: ${result.error}`);
     }

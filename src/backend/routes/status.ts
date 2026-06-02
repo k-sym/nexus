@@ -8,8 +8,8 @@
  */
 import { FastifyInstance } from 'fastify';
 import yaml from 'js-yaml';
-import { NexusConfig } from '@nexus/shared';
-import { loadConfig } from '../config';
+import { NexusConfig, Provider } from '@nexus/shared';
+import { loadConfig, resolveEnvVars } from '../config';
 import { daemon } from '../memory/client';
 
 type AgentStatus = 'online' | 'ready' | 'offline';
@@ -21,15 +21,15 @@ interface PersonaRow {
   config_yaml: string;
 }
 
-/** Probe a local OpenAI-compatible server's /models endpoint (short timeout). */
-async function probeLocalModels(baseUrl: string): Promise<{ status: AgentStatus; latencyMs?: number }> {
+/** Probe an OpenAI-compatible server's /models endpoint (short timeout). */
+async function probeLocalModels(baseUrl: string, apiKey?: string): Promise<{ status: AgentStatus; latencyMs?: number }> {
   if (!baseUrl) return { status: 'offline' };
   const url = `${baseUrl.replace(/\/$/, '')}/models`;
   const start = Date.now();
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 1500);
-    const res = await fetch(url, { signal: ctrl.signal });
+    const res = await fetch(url, { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, signal: ctrl.signal });
     clearTimeout(timer);
     return { status: res.ok ? 'online' : 'offline', latencyMs: Date.now() - start };
   } catch {
@@ -42,44 +42,49 @@ async function probeLocalModels(baseUrl: string): Promise<{ status: AgentStatus;
  * and healthy; `ready` = configured but idle/unverified (CLI adapters land in a
  * later step); `offline` = unreachable or not configured.
  */
-async function probeAgent(p: PersonaRow, config: NexusConfig) {
-  let provider = 'unknown';
-  let model = '';
-  try {
-    const c = yaml.load(p.config_yaml) as { provider?: string; model?: string };
-    provider = c?.provider ?? 'unknown';
-    model = c?.model ?? '';
-  } catch {
-    /* malformed persona yaml — treat as unknown */
+async function probeAgent(p: PersonaRow, config: NexusConfig, providersById: Map<string, Provider>) {
+  let c: { provider?: string; provider_id?: string; model?: string } = {};
+  try { c = (yaml.load(p.config_yaml) as typeof c) ?? {}; } catch { /* malformed yaml */ }
+
+  // Resolve the linked provider record (preferred) or fall back to the legacy enum.
+  const rec = c.provider_id ? providersById.get(c.provider_id) : undefined;
+  const effectiveModel = c.model || rec?.default_model || '';
+
+  // Determine kind + endpoint from the record, else from the legacy enum + global config.
+  let kind: string;
+  let baseUrl = '';
+  let apiKey = '';
+  let providerLabel: string;
+  if (rec) {
+    kind = rec.kind;
+    providerLabel = rec.name;
+    baseUrl = resolveEnvVars(rec.base_url || '');
+    apiKey = resolveEnvVars(rec.api_key || '');
+  } else {
+    const legacy = c.provider ?? 'unknown';
+    providerLabel = legacy;
+    if (legacy === 'openrouter') { kind = 'openai_compat'; baseUrl = 'https://openrouter.ai/api/v1'; apiKey = resolveEnvVars(config.models.openrouter.api_key || ''); }
+    else if (legacy === 'local' || legacy === 'ollama') { kind = 'openai_compat'; baseUrl = config.models.local.base_url || ''; apiKey = resolveEnvVars(config.models.local.api_key || ''); }
+    else { kind = legacy; }
   }
 
   let status: AgentStatus = 'ready';
   let latencyMs: number | undefined;
   let detail: string | undefined;
 
-  switch (provider) {
-    case 'local':
-    case 'ollama': {
-      const r = await probeLocalModels(config.models.local.base_url);
-      status = r.status;
-      latencyMs = r.latencyMs;
-      detail = config.models.local.base_url || 'no base_url';
-      break;
-    }
-    case 'openrouter':
-      status = config.models.openrouter.api_key ? 'ready' : 'offline';
-      detail = config.models.openrouter.api_key ? 'api key set' : 'no api key';
-      break;
-    case 'claude_code':
-    case 'codex':
-      status = 'ready';
-      detail = 'CLI · adapter pending';
-      break;
-    default:
-      status = model ? 'ready' : 'offline';
+  if (kind === 'openai_compat') {
+    const r = await probeLocalModels(baseUrl, apiKey);
+    status = r.status;
+    latencyMs = r.latencyMs;
+    detail = baseUrl || 'no base_url';
+  } else if (kind === 'claude_code' || kind === 'codex') {
+    status = 'ready';
+    detail = 'CLI';
+  } else {
+    status = effectiveModel ? 'ready' : 'offline';
   }
 
-  return { slug: p.slug, name: p.name, provider, model, status, latencyMs, detail };
+  return { slug: p.slug, name: p.name, provider: providerLabel, model: effectiveModel, status, latencyMs, detail };
 }
 
 export async function registerStatusRoutes(fastify: FastifyInstance) {
@@ -111,11 +116,14 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
       nextRun: sched.nextRun ?? null,
     };
 
-    // Agent roster with per-provider health.
+    // Agent roster with per-provider health (resolving each persona's provider record).
+    const providersById = new Map<string, Provider>(
+      (db.prepare('SELECT id, name, kind, base_url, api_key, default_model, created_at FROM providers').all() as Provider[]).map(p => [p.id, p]),
+    );
     const personas = db
       .prepare('SELECT id, name, slug, config_yaml FROM personas')
       .all() as PersonaRow[];
-    const agents = await Promise.all(personas.map(p => probeAgent(p, config)));
+    const agents = await Promise.all(personas.map(p => probeAgent(p, config, providersById)));
 
     // Recent activity across all projects.
     const running = db
