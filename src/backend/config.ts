@@ -34,7 +34,10 @@ const DEFAULT_CONFIG: NexusConfig = {
     },
   },
   obsidian: {
-    vault_path: path.join(os.homedir(), '.nexus', 'obsidian'),
+    // Visible location so the vault shows up in Obsidian's "Open folder as
+    // vault" picker. A dot-prefixed path like ~/.nexus/obsidian is hidden and
+    // unselectable there. App state (config.yaml, db, logs) stays in ~/.nexus.
+    vault_path: path.join(os.homedir(), 'Obsidian', 'Nexus'),
     sync_interval_seconds: 30,
   },
   scheduler: {
@@ -56,18 +59,37 @@ const DEFAULT_CONFIG: NexusConfig = {
   },
 };
 
+/** Expand a leading ~ to the user's home dir; paths are stored absolute. */
+export function expandHome(p: string): string {
+  if (!p) return p;
+  if (p === '~') return os.homedir();
+  if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
+  return p;
+}
+
 export function ensureNexusDir(): void {
   const dirs = [
     NEXUS_DIR,
     path.join(NEXUS_DIR, 'personas'),
     path.join(NEXUS_DIR, 'workspaces'),
-    path.join(NEXUS_DIR, 'obsidian'),
-    path.join(NEXUS_DIR, 'obsidian', 'Projects'),
-    path.join(NEXUS_DIR, 'obsidian', 'Memories'),
-    path.join(NEXUS_DIR, 'obsidian', 'Templates'),
     path.join(NEXUS_DIR, 'logs'),
   ];
   for (const dir of dirs) {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+}
+
+/**
+ * Create the Obsidian vault tree at the configured (possibly relocated) path,
+ * rather than assuming it lives under ~/.nexus. Called once the config is
+ * resolved so the override in config.yaml is honored.
+ */
+export function ensureVaultDir(vaultPath: string): void {
+  const root = expandHome(vaultPath);
+  for (const sub of ['', 'Projects', 'Memories', 'Templates']) {
+    const dir = sub ? path.join(root, sub) : root;
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
@@ -153,6 +175,7 @@ export function loadConfig(): NexusConfig {
 
   if (!fs.existsSync(CONFIG_PATH)) {
     saveConfig(DEFAULT_CONFIG);
+    ensureVaultDir(DEFAULT_CONFIG.obsidian.vault_path);
     return DEFAULT_CONFIG;
   }
 
@@ -161,7 +184,12 @@ export function loadConfig(): NexusConfig {
   // Deep-merge over defaults so configs written by older versions (missing
   // nested keys like models.local) still load with sane fallbacks rather than
   // producing `undefined` and crashing at access time.
-  return deepMerge(DEFAULT_CONFIG, parsed) as NexusConfig;
+  const config = deepMerge(DEFAULT_CONFIG, parsed) as NexusConfig;
+  // Existing installs keep whatever vault_path their config.yaml already
+  // persisted (e.g. the legacy ~/.nexus/obsidian); only fresh installs get the
+  // new visible default above.
+  ensureVaultDir(config.obsidian.vault_path);
+  return config;
 }
 
 /** Recursively merge `source` over `base`. Arrays and primitives are replaced. */

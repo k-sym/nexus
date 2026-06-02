@@ -98,7 +98,7 @@ Reads `~/.nexus/config.yaml` if present (shared with Nexus), else uses defaults.
 ```yaml
 memory:
   port: 4100
-  vault_path: "~/.nexus/obsidian"   # TBD — pending the vault-root decision
+  vault_path: "~/Obsidian/Nexus"    # visible so it's selectable in Obsidian's vault picker
   models:
     gen_url:    "http://127.0.0.1:4001/v1"
     embed_url:  "http://127.0.0.1:4002/v1"

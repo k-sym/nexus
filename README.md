@@ -222,7 +222,7 @@ memory:
     token_budget: 1000         # hard cap on injected memory tokens
   # --- daemon's own settings (optional; defaults shown) ---
   port: 4100
-  vault_path: "~/.nexus/obsidian"      # canonical markdown vault (source of truth)
+  vault_path: "~/Obsidian/Nexus"       # canonical markdown vault (visible to Obsidian's vault picker)
   models:                              # local llama stack, loopback only
     gen_url:    "http://127.0.0.1:4001/v1"   # 9B — HyDE + KG triple extraction
     embed_url:  "http://127.0.0.1:4002/v1"   # nomic-embed-text-v1.5 (768-dim)

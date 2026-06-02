@@ -71,9 +71,11 @@ export function loadConfig(): DaemonConfig {
   const num = (v: unknown, fallback: number): number => (typeof v === "number" ? v : fallback);
   const bool = (v: unknown, fallback: boolean): boolean => (typeof v === "boolean" ? v : fallback);
 
-  // Vault root is TBD pending Keith's brain dump; default to the README location.
+  // Default to a visible location (~/Obsidian/Nexus) so the vault is selectable
+  // in Obsidian's "Open folder as vault" picker; ~/.nexus is hidden. Existing
+  // installs override this via vault_path in config.yaml.
   const vaultPath = expandHome(
-    str(pick(raw, "memory.vault_path") ?? pick(raw, "obsidian.vault_path"), join(nexusHome, "obsidian")),
+    str(pick(raw, "memory.vault_path") ?? pick(raw, "obsidian.vault_path"), join(homedir(), "Obsidian", "Nexus")),
   );
 
   return {
