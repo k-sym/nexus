@@ -26,6 +26,7 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
   const [slug, setSlug] = useState(initial?.slug ?? '');
   const [providerId, setProviderId] = useState(initial?.provider_id ?? '');
   const [model, setModel] = useState(initial?.model ?? '');
+  const [customModel, setCustomModel] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState(initial?.system_prompt ?? '');
   const [selectedTools, setSelectedTools] = useState<string[]>(initial?.tools ?? ['read_file', 'write_file']);
   const [workspace, setWorkspace] = useState(initial?.workspace ?? '~/Projects/{project}');
@@ -48,7 +49,7 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
         );
         return match?.id || list[0]?.id || '';
       });
-      setModel(prev => prev || list[0]?.default_model || '');
+      // Leave model blank for new personas → "use provider default" (no snapshot).
     }).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -62,7 +63,7 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
 
   // Don't copy the provider's model into the persona — leaving the model blank
   // means "use the provider's model", so later provider edits propagate live.
-  const onProviderChange = (id: string) => setProviderId(id);
+  const onProviderChange = (id: string) => { setProviderId(id); setModel(''); setCustomModel(false); };
   const selectedProvider = providers.find(p => p.id === providerId);
 
   const toggleTool = (tool: string) =>
@@ -136,14 +137,26 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
             </div>
             <div>
               <label className="block text-xs text-zinc-500 mb-1">Model</label>
-              <input
-                type="text"
-                value={model}
-                onChange={e => setModel(e.target.value)}
-                placeholder={selectedProvider?.default_model ? `${selectedProvider.default_model} (provider default)` : 'model id'}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600/40 focus:outline-none focus:border-indigo-500/50"
-              />
-              <p className="text-[10px] text-zinc-600 mt-1">Leave blank to use the provider's model (so editing the provider updates this persona).</p>
+              {customModel || (selectedProvider?.models?.length ?? 0) === 0 ? (
+                <input
+                  type="text"
+                  value={model}
+                  onChange={e => setModel(e.target.value)}
+                  placeholder={selectedProvider?.default_model ? `${selectedProvider.default_model} (provider default)` : 'model id'}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600/40 focus:outline-none focus:border-indigo-500/50"
+                />
+              ) : (
+                <select
+                  value={model}
+                  onChange={e => { if (e.target.value === '__custom__') { setCustomModel(true); setModel(''); } else setModel(e.target.value); }}
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
+                >
+                  <option value="">Provider default{selectedProvider?.default_model ? ` (${selectedProvider.default_model})` : ''}</option>
+                  {selectedProvider!.models.map(m => <option key={m} value={m}>{m}</option>)}
+                  <option value="__custom__">Custom…</option>
+                </select>
+              )}
+              <p className="text-[10px] text-zinc-600 mt-1">Leave on “Provider default” to track the provider's model live.</p>
             </div>
           </div>
 
