@@ -1,7 +1,7 @@
 import { ReactNode } from 'react';
 import { Persona } from '@nexus/shared';
 import { AgentHealth } from '../api';
-import { Kanban, ChatCircle, Brain, Clock, ChartBar, UsersThree, Gear, type Icon } from '@phosphor-icons/react';
+import { Kanban, ChatCircle, Brain, Clock, ChartBar, UsersThree, Gear, Stack, type Icon } from '@phosphor-icons/react';
 
 interface SidebarProps {
   personas: Persona[];
@@ -106,6 +106,9 @@ export default function Sidebar({ personas, view, hasProject, agentStatus, onSel
       <GroupLabel>Self</GroupLabel>
       <NavItem active={view === 'personas'} onClick={() => onSelectView('personas')} icon={<UsersThree size={16} />}>
         Personas
+      </NavItem>
+      <NavItem active={view === 'opencode-models'} onClick={() => onSelectView('opencode-models')} icon={<Stack size={16} />}>
+        OpenCode Models
       </NavItem>
       <NavItem active={view === 'settings'} onClick={() => onSelectView('settings')} icon={<Gear size={16} />}>
         Settings
