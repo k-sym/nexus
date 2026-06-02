@@ -31,6 +31,12 @@ function rowToProvider(row: any): Provider {
   };
 }
 
+/** Load a provider by id with all columns parsed (models/args included). */
+export function getProviderById(db: Database.Database, id: string): Provider | undefined {
+  const row = db.prepare(`SELECT ${COLS} FROM providers WHERE id = ?`).get(id);
+  return row ? rowToProvider(row) : undefined;
+}
+
 /**
  * Seed default providers, and backfill ones added in later versions.
  *
