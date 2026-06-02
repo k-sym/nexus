@@ -1,4 +1,4 @@
-import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket, Provider } from '@nexus/shared';
+import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket, Provider, Reply } from '@nexus/shared';
 
 export interface ProviderTestResult { ok: boolean; detail: string; latencyMs?: number }
 
@@ -73,6 +73,9 @@ export const api = {
     // Posts the user's turn; the backend runs the thread's agent and returns the assistant reply.
     sendMessage: (threadId: string, content: string, attachments?: string) =>
       fetchJson<ChatMessage>(`${API}/threads/${threadId}/messages`, { method: 'POST', body: JSON.stringify({ content, attachments }) }),
+    // Submits the user's selection for a question card; backend runs the continuation turn.
+    answer: (threadId: string, questionMessageId: string, replies: Reply[]) =>
+      fetchJson<ChatMessage>(`${API}/threads/${threadId}/answer`, { method: 'POST', body: JSON.stringify({ question_message_id: questionMessageId, replies }) }),
     archive: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}/archive`, { method: 'POST' }),
     deleteThread: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}`, { method: 'DELETE' }),
   },
