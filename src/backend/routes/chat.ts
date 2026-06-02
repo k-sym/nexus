@@ -145,6 +145,30 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     return respond(threadId, body.content);
   });
 
+  /**
+   * Record the user's answer to a question card, then run the continuation turn.
+   * The answer is stored both human-readably (content) and structured
+   * (structured_json), and fed back to the agent as the next user turn.
+   */
+  fastify.post('/api/threads/:threadId/answer', async (request) => {
+    const { threadId } = request.params as { threadId: string };
+    const body = request.body as { question_message_id: string; replies: Reply[] };
+
+    const qRow = db.prepare('SELECT structured_json FROM chat_messages WHERE id = ?').get(body.question_message_id) as { structured_json: string | null } | undefined;
+    if (!qRow || !qRow.structured_json) {
+      return insertMessage(threadId, 'assistant', '[Error] Question not found.');
+    }
+    const ask = JSON.parse(qRow.structured_json) as Ask;
+    const summary = buildAnswerSummary(ask, body.replies);
+
+    // Persist the user's answer turn (human-readable summary + structured replies).
+    const answerSet: AnswerSet = { replies: body.replies };
+    insertMessage(threadId, 'user', summary, '[]', 'answer', JSON.stringify(answerSet));
+
+    // Continuation turn — same path as a normal message.
+    return respond(threadId, summary);
+  });
+
   fastify.post('/api/threads/:threadId/archive', async (request) => {
     const { threadId } = request.params as { threadId: string };
     const now = new Date().toISOString();
