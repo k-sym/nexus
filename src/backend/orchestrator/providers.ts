@@ -41,6 +41,11 @@ export function splitArgs(s: string | null | undefined): string[] {
   return (s ?? '').trim().split(/\s+/).filter(Boolean);
 }
 
+/** Derive Hermes' /health URL from its OpenAI-compatible base (…/v1 → …/health). */
+export function hermesHealthUrl(baseUrl: string): string {
+  return baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '') + '/health';
+}
+
 /** Build argv for `opencode run`: model flag (if any), then extra args, then the prompt. */
 export function buildOpenCodeArgs(
   model: string | null | undefined,
@@ -325,7 +330,8 @@ export function runPersona(
         return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, model);
       case 'opencode':
         return runOpenCode(workspace, withSystem, onOutput, model, provider.args);
-      case 'openai_compat': {
+      case 'openai_compat':
+      case 'hermes': {
         const baseUrl = resolveEnvVars(provider.base_url || '');
         const apiKey = resolveEnvVars(provider.api_key || '');
         const headers = /openrouter\.ai/.test(baseUrl) ? { 'HTTP-Referer': 'https://nexus.local', 'X-Title': 'NEXUS' } : undefined;
