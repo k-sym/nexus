@@ -128,6 +128,9 @@ then opens your browser to http://localhost:5173.
   the window tears the services down.)
 - The daemon runs without file-watch here; if you're editing daemon code and want auto-reload, run
   it separately with `npm --prefix src/memory-daemon run dev`.
+- The **Hermes** agent (a remote OpenAI-compatible agent over Tailscale) reads its API key from the
+  `HERMES_API_KEY` environment variable — `export HERMES_API_KEY=…` in the backend's environment
+  before launching, or it'll report offline / fail to dispatch. The key is never stored in git.
 
 ### Run in dev (manual, three terminals)
 
