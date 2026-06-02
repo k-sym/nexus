@@ -1,53 +1,83 @@
-import { useState } from 'react';
-import { PersonaConfig, Persona } from '@nexus/shared';
+import { useState, useEffect } from 'react';
+import { PersonaConfig, Persona, Provider } from '@nexus/shared';
 import { api } from '../api';
 
 interface PersonaEditorProps {
   onClose: () => void;
   onCreated: (persona: Persona) => void;
+  /** when set, the editor edits this persona instead of creating a new one */
+  initial?: PersonaConfig;
 }
-
-const PROVIDERS: { value: PersonaConfig['provider']; label: string }[] = [
-  { value: 'claude_code', label: 'Claude Code (CLI)' },
-  { value: 'codex', label: 'Codex (CLI)' },
-  { value: 'openrouter', label: 'OpenRouter (API)' },
-  { value: 'local', label: 'Local (omlx / OpenAI-compatible)' },
-];
 
 const ALL_TOOLS = ['read_file', 'write_file', 'run_command', 'list_files', 'search', 'web_fetch'];
 
-export default function PersonaEditor({ onClose, onCreated }: PersonaEditorProps) {
-  const [name, setName] = useState('');
-  const [slug, setSlug] = useState('');
-  const [provider, setProvider] = useState<PersonaConfig['provider']>('openrouter');
-  const [model, setModel] = useState('openrouter/anthropic/claude-sonnet-4');
-  const [systemPrompt, setSystemPrompt] = useState('');
-  const [selectedTools, setSelectedTools] = useState<string[]>(['read_file', 'write_file']);
-  const [workspace, setWorkspace] = useState('~/Projects/{project}');
-  const [startupScripts, setStartupScripts] = useState('');
-  const [tokenBudget, setTokenBudget] = useState('4000');
+/** Best-effort legacy provider enum from a Provider record (back-compat fallback). */
+function legacyEnum(p?: Provider): PersonaConfig['provider'] {
+  if (!p) return 'openrouter';
+  if (p.kind === 'claude_code') return 'claude_code';
+  if (p.kind === 'codex') return 'codex';
+  return /openrouter\.ai/.test(p.base_url || '') ? 'openrouter' : 'local';
+}
+
+export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEditorProps) {
+  const editing = !!initial;
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [name, setName] = useState(initial?.name ?? '');
+  const [slug, setSlug] = useState(initial?.slug ?? '');
+  const [providerId, setProviderId] = useState(initial?.provider_id ?? '');
+  const [model, setModel] = useState(initial?.model ?? '');
+  const [systemPrompt, setSystemPrompt] = useState(initial?.system_prompt ?? '');
+  const [selectedTools, setSelectedTools] = useState<string[]>(initial?.tools ?? ['read_file', 'write_file']);
+  const [workspace, setWorkspace] = useState(initial?.workspace ?? '~/Projects/{project}');
+  const [startupScripts, setStartupScripts] = useState((initial?.startup_scripts ?? []).join('\n'));
+  const [tokenBudget, setTokenBudget] = useState(String(initial?.token_budget ?? 4000));
+
+  useEffect(() => {
+    api.providers.list().then(list => {
+      setProviders(list);
+      setProviderId(prev => {
+        if (prev) return prev;
+        // No provider_id (legacy persona) — match its old enum to a provider.
+        const legacy = initial?.provider;
+        const match = list.find(p =>
+          legacy === 'claude_code' ? p.kind === 'claude_code'
+          : legacy === 'codex' ? p.kind === 'codex'
+          : legacy === 'openrouter' ? p.kind === 'openai_compat' && /openrouter\.ai/.test(p.base_url || '')
+          : (legacy === 'local' || legacy === 'ollama') ? p.kind === 'openai_compat' && !/openrouter\.ai/.test(p.base_url || '')
+          : false,
+        );
+        return match?.id || list[0]?.id || '';
+      });
+      setModel(prev => prev || list[0]?.default_model || '');
+    }).catch(console.error);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleNameChange = (value: string) => {
     setName(value);
-    if (!slug || slug === name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')) {
+    if (!editing && (!slug || slug === name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''))) {
       setSlug(value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
     }
   };
 
-  const toggleTool = (tool: string) => {
-    setSelectedTools(prev =>
-      prev.includes(tool) ? prev.filter(t => t !== tool) : [...prev, tool]
-    );
+  const onProviderChange = (id: string) => {
+    setProviderId(id);
+    const p = providers.find(x => x.id === id);
+    if (p?.default_model) setModel(p.default_model);
   };
+
+  const toggleTool = (tool: string) =>
+    setSelectedTools(prev => (prev.includes(tool) ? prev.filter(t => t !== tool) : [...prev, tool]));
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !slug.trim()) return;
-
+    const selected = providers.find(p => p.id === providerId);
     const config: PersonaConfig = {
       name: name.trim(),
       slug: slug.trim(),
-      provider,
+      provider: legacyEnum(selected),
+      provider_id: providerId || undefined,
       model: model.trim(),
       system_prompt: systemPrompt.trim(),
       tools: selectedTools,
@@ -55,19 +85,17 @@ export default function PersonaEditor({ onClose, onCreated }: PersonaEditorProps
       startup_scripts: startupScripts.split('\n').map(s => s.trim()).filter(Boolean),
       token_budget: parseInt(tokenBudget, 10) || 4000,
     };
-
     try {
-      const persona = await api.personas.create(config);
-      onCreated(persona);
+      onCreated(await api.personas.create(config));
     } catch (err) {
-      console.error('Failed to create persona:', err);
+      console.error('Failed to save persona:', err);
     }
   };
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl w-full max-w-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold mb-4">New Persona</h2>
+        <h2 className="text-lg font-semibold mb-4">{editing ? `Edit Persona — ${initial!.name}` : 'New Persona'}</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -81,13 +109,14 @@ export default function PersonaEditor({ onClose, onCreated }: PersonaEditorProps
               />
             </div>
             <div>
-              <label className="block text-xs text-zinc-500 mb-1">Slug</label>
+              <label className="block text-xs text-zinc-500 mb-1">Slug{editing ? ' (fixed)' : ''}</label>
               <input
                 type="text"
                 value={slug}
                 onChange={e => setSlug(e.target.value)}
+                disabled={editing}
                 placeholder="reviewer"
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600/40 focus:outline-none focus:border-indigo-500/50"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600/40 focus:outline-none focus:border-indigo-500/50 disabled:opacity-50"
               />
             </div>
           </div>
@@ -96,18 +125,13 @@ export default function PersonaEditor({ onClose, onCreated }: PersonaEditorProps
             <div>
               <label className="block text-xs text-zinc-500 mb-1">Provider</label>
               <select
-                value={provider}
-                onChange={e => {
-                  setProvider(e.target.value as PersonaConfig['provider']);
-                  if (e.target.value === 'claude_code') setModel('claude-sonnet-4');
-                  else if (e.target.value === 'codex') setModel('codex-default');
-                  else if (e.target.value === 'openrouter') setModel('openrouter/anthropic/claude-sonnet-4');
-                  else if (e.target.value === 'local') setModel('qwen2.5:14b');
-                }}
+                value={providerId}
+                onChange={e => onProviderChange(e.target.value)}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
               >
-                {PROVIDERS.map(p => (
-                  <option key={p.value} value={p.value}>{p.label}</option>
+                {providers.length === 0 && <option value="">No providers — add one in Settings</option>}
+                {providers.map(p => (
+                  <option key={p.id} value={p.id}>{p.name} ({p.kind})</option>
                 ))}
               </select>
             </div>
@@ -117,7 +141,7 @@ export default function PersonaEditor({ onClose, onCreated }: PersonaEditorProps
                 type="text"
                 value={model}
                 onChange={e => setModel(e.target.value)}
-                placeholder="anthropic/claude-sonnet-4"
+                placeholder="leave blank for provider default"
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600/40 focus:outline-none focus:border-indigo-500/50"
               />
             </div>
@@ -186,8 +210,8 @@ export default function PersonaEditor({ onClose, onCreated }: PersonaEditorProps
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-200 transition-colors">
               Cancel
             </button>
-            <button type="submit" disabled={!name.trim() || !slug.trim()} className="px-4 py-2 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              Create Persona
+            <button type="submit" disabled={!name.trim() || !slug.trim()} className="px-4 py-2 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+              {editing ? 'Save Persona' : 'Create Persona'}
             </button>
           </div>
         </form>

@@ -178,6 +178,11 @@ export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
     }
   };
 
+  const activeThread = threads.find(t => t.id === activeThreadId);
+  const activeAgentName = activeThread
+    ? personas.find(p => p.slug === activeThread.agent_id)?.name ?? activeThread.agent_id
+    : '';
+
   return (
     <div className="flex h-full">
       {/* Thread list sidebar */}
@@ -221,19 +226,26 @@ export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
       <div className="flex-1 flex flex-col min-w-0">
         {activeThreadId ? (
           <>
-            {/* Agent selector (hidden in single-agent control-room mode) */}
+            {/* Who you're talking to + (in multi-agent view) the new-chat agent picker */}
             {!agentSlug && (
-              <div className="px-4 py-2 border-b border-zinc-800 flex items-center gap-3">
-                <span className="text-xs text-zinc-500">New chats use:</span>
-                <select
-                  value={selectedAgent}
-                  onChange={(e) => setSelectedAgent(e.target.value)}
-                  className="bg-zinc-950 border border-zinc-800 text-sm rounded px-2 py-1 text-zinc-200"
-                >
-                  {personas.map(p => (
-                    <option key={p.slug} value={p.slug}>{p.name}</option>
-                  ))}
-                </select>
+              <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between gap-3">
+                <span className="text-sm text-zinc-200 flex items-center gap-2 min-w-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                  <span className="truncate">{activeAgentName}</span>
+                  {activeThread && <span className="text-[10px] text-zinc-600 shrink-0">{activeThread.agent_id}</span>}
+                </span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-zinc-500">New chats use:</span>
+                  <select
+                    value={selectedAgent}
+                    onChange={(e) => setSelectedAgent(e.target.value)}
+                    className="bg-zinc-950 border border-zinc-800 text-sm rounded px-2 py-1 text-zinc-200"
+                  >
+                    {personas.map(p => (
+                      <option key={p.slug} value={p.slug}>{p.name}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
             )}
 

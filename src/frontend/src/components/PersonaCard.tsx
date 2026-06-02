@@ -5,6 +5,7 @@ import { api } from '../api';
 interface PersonaCardProps {
   persona: Persona;
   onDelete: (slug: string) => void;
+  onEdit: (slug: string) => void;
   onRefresh: () => void;
 }
 
@@ -16,7 +17,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   ollama: 'Local (legacy)',
 };
 
-export default function PersonaCard({ persona, onDelete, onRefresh }: PersonaCardProps) {
+export default function PersonaCard({ persona, onDelete, onEdit, onRefresh }: PersonaCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [config, setConfig] = useState<PersonaConfig | null>(null);
   const [loading, setLoading] = useState(false);
@@ -51,6 +52,12 @@ export default function PersonaCard({ persona, onDelete, onRefresh }: PersonaCar
         </div>
         <div className="flex items-center gap-2">
           {loading && <span className="text-xs text-zinc-500">Loading...</span>}
+          <button
+            onClick={(e) => { e.stopPropagation(); onEdit(persona.slug); }}
+            className="text-zinc-500/50 hover:text-zinc-200 text-xs transition-colors"
+          >
+            Edit
+          </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(persona.slug); }}
             className="text-zinc-500/30 hover:text-red-400 text-xs transition-colors"
