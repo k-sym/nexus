@@ -6,9 +6,12 @@
   "main": "electron/dist/main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:electron\"",
+    "dev:daemon": "npm --prefix src/memory-daemon run start",
     "dev:backend": "npm run --workspace=src/backend dev",
     "dev:frontend": "npm run --workspace=src/frontend dev",
     "dev:electron": "wait-on http://localhost:5173 && npm run --workspace=electron dev",
+    "web": "concurrently -n daemon,backend,frontend,browser -c blue,green,magenta,gray \"npm run dev:daemon\" \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run open:web\"",
+    "open:web": "wait-on -t 60000 http-get://localhost:5173 http-get://127.0.0.1:4173/api/health && open http://localhost:5173",
     "build": "npm run --workspace=src/shared build && npm run --workspace=src/backend build && npm run --workspace=src/frontend build && npm run --workspace=electron build && npm run build:daemon",
     "build:daemon": "npm --prefix src/memory-daemon run build",
     "typecheck": "npm run --workspace=src/shared typecheck && npm run --workspace=src/backend typecheck && npm run --workspace=src/frontend typecheck"

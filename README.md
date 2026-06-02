@@ -112,7 +112,24 @@ export OPENROUTER_API_KEY="sk-or-..."   # for OpenRouter agents + chat
 export OMLX_API_KEY="..."               # for the local model server (if it requires auth, e.g. omlx)
 ```
 
-### Run in dev
+### Run in dev (one command)
+
+```bash
+npm run web
+```
+
+Boots all three services — memory daemon (`:4100`), backend (`:4173`), frontend (`:5173`) —
+concurrently (color-prefixed per service), waits until the frontend **and** backend health are up,
+then opens your browser to http://localhost:5173.
+
+- **Stop:** `Ctrl-C` in the terminal stops all three cleanly (ports freed, no orphaned processes).
+- **Closing the browser does _not_ stop the services** — the script isn't tied to the browser tab,
+  so the servers keep running until you `Ctrl-C`. (This differs from the Electron app, where closing
+  the window tears the services down.)
+- The daemon runs without file-watch here; if you're editing daemon code and want auto-reload, run
+  it separately with `npm --prefix src/memory-daemon run dev`.
+
+### Run in dev (manual, three terminals)
 
 ```bash
 # Terminal 1 — memory daemon (vault + index + retrieval, HTTP :4100).
@@ -131,16 +148,24 @@ Open http://localhost:5173
 
 ### Run as Electron app
 
+The Electron app is **self-contained**: it brings up the required services itself behind a startup
+splash that shows each service's status, then opens the main UI. It probes each port first and
+**reuses** anything already running (e.g. a daemon under LaunchD), so it won't double-spawn. If the
+local model stack (`4001/4002/4003`) isn't reachable, it shows a non-blocking warning and continues
+in degraded (FTS-only) mode. Closing the window stops the services it started.
+
 ```bash
-# Build everything (shared, backend, frontend, electron)
+# Build everything (shared, backend, frontend, electron, memory daemon)
 npm run build
 
-# Launch Electron in production mode: it boots the compiled backend and loads
-# the built frontend (no separate dev servers needed).
+# Production mode: spawns the compiled backend + daemon (under system Node) and
+# loads the built frontend from disk — no separate dev servers needed.
 NEXUS_ELECTRON_PROD=1 npm run --workspace=electron dev
 ```
 
-Without `NEXUS_ELECTRON_PROD=1`, an unpackaged Electron launch runs in dev mode and expects the Vite dev server on `:5173` and the backend already running (see "Run in dev" above).
+Without `NEXUS_ELECTRON_PROD=1`, an unpackaged Electron launch runs in **dev mode**: it spawns the
+Vite dev server, backend, and daemon as dev processes (or reuses them if already up) and loads
+`localhost:5173`.
 
 On first run, NEXUS creates `~/.nexus/` with default config, four starter personas, an Obsidian vault, and the SQLite database.
 
