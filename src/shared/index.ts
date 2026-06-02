@@ -47,6 +47,20 @@ export interface Schedule {
   created_at: string;
 }
 
+/** A Jira ticket mirrored into Nexus (Jira stays canonical). */
+export interface Ticket {
+  key: string;
+  summary: string;
+  status: string;
+  priority: string;
+  assignee: string | null;
+  created: string | null;
+  updated: string | null;
+  url: string | null;
+  source: string | null;
+  synced_at: string;
+}
+
 export interface ChatThread {
   id: string;
   project_id: string;

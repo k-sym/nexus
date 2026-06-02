@@ -1,6 +1,32 @@
-import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig } from '@nexus/shared';
+import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket } from '@nexus/shared';
 
 const API = '/api';
+
+export type AgentHealth = 'online' | 'ready' | 'offline';
+
+export interface AgentStatus {
+  slug: string;
+  name: string;
+  provider: string;
+  model: string;
+  status: AgentHealth;
+  latencyMs?: number;
+  detail?: string;
+}
+
+export interface MissionStatus {
+  memory: {
+    ok: boolean;
+    status?: string;
+    memories?: number;
+    jobs?: { pending: number; dead: number };
+    models?: { gen: boolean; embed: boolean; rerank: boolean };
+    error?: string;
+  };
+  scheduler: { enabled: boolean; intervalSeconds: number; schedules: number; lastRun: string | null; nextRun: string | null };
+  agents: AgentStatus[];
+  activity: { running: any[]; recent: any[] };
+}
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -55,6 +81,12 @@ export const api = {
   settings: {
     get: () => fetchJson<any>(`${API}/settings`),
     update: (config: any) => fetchJson<any>(`${API}/settings`, { method: 'PUT', body: JSON.stringify(config) }),
+  },
+  missionControl: {
+    get: () => fetchJson<MissionStatus>(`${API}/mission-control`),
+  },
+  tickets: {
+    list: () => fetchJson<Ticket[]>(`${API}/tickets`),
   },
   memory: {
     search: (projectId: string, query: string) => fetchJson<string[]>(`${API}/projects/${projectId}/memories?q=${encodeURIComponent(query)}`),

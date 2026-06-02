@@ -4,8 +4,9 @@
  * Opens ~/.nexus/nexus.db, enables WAL + foreign keys, and runs idempotent
  * CREATE TABLE statements plus guarded ALTER TABLE migrations for columns
  * added after a table's original creation. Tables: projects, tasks, personas,
- * schedules, chat_threads, chat_messages, agent_runs. (Memory lives in the
- * standalone @nexus/memory-daemon, not here.)
+ * schedules, chat_threads, chat_messages, agent_runs, tickets (a disposable
+ * mirror of Jira tickets assigned to the user; Jira stays canonical). (Memory
+ * lives in the standalone @nexus/memory-daemon, not here.)
  */
 import Database from 'better-sqlite3';
 
@@ -100,12 +101,26 @@ function runMigrations(db: Database.Database) {
       completed_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS tickets (
+      key TEXT PRIMARY KEY,
+      summary TEXT NOT NULL DEFAULT '',
+      status TEXT DEFAULT '',
+      priority TEXT DEFAULT '',
+      assignee TEXT,
+      created TEXT,
+      updated TEXT,
+      url TEXT,
+      source TEXT,
+      synced_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_chat_threads_project ON chat_threads(project_id);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
+    CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
   `);
 
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
