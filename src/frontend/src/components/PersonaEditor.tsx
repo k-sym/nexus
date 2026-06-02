@@ -60,11 +60,10 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
     }
   };
 
-  const onProviderChange = (id: string) => {
-    setProviderId(id);
-    const p = providers.find(x => x.id === id);
-    if (p?.default_model) setModel(p.default_model);
-  };
+  // Don't copy the provider's model into the persona — leaving the model blank
+  // means "use the provider's model", so later provider edits propagate live.
+  const onProviderChange = (id: string) => setProviderId(id);
+  const selectedProvider = providers.find(p => p.id === providerId);
 
   const toggleTool = (tool: string) =>
     setSelectedTools(prev => (prev.includes(tool) ? prev.filter(t => t !== tool) : [...prev, tool]));
@@ -141,9 +140,10 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
                 type="text"
                 value={model}
                 onChange={e => setModel(e.target.value)}
-                placeholder="leave blank for provider default"
+                placeholder={selectedProvider?.default_model ? `${selectedProvider.default_model} (provider default)` : 'model id'}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600/40 focus:outline-none focus:border-indigo-500/50"
               />
+              <p className="text-[10px] text-zinc-600 mt-1">Leave blank to use the provider's model (so editing the provider updates this persona).</p>
             </div>
           </div>
 

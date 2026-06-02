@@ -1,16 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Trash } from '@phosphor-icons/react';
 import { ChatThread, ChatMessage, FileAttachment, Persona } from '@nexus/shared';
-import { api } from '../api';
+import { api, AgentStatus } from '../api';
 
 interface ChatPanelProps {
   projectId: string;
   /** When set, the panel is scoped to one agent: threads are filtered to it,
    *  new threads use it, and the agent selector is hidden (control-room mode). */
   agentSlug?: string;
+  /** resolved agent status (provider + model), used to label the active thread's agent */
+  agents?: AgentStatus[];
 }
 
-export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
+export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelProps) {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -182,6 +184,7 @@ export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
   const activeAgentName = activeThread
     ? personas.find(p => p.slug === activeThread.agent_id)?.name ?? activeThread.agent_id
     : '';
+  const activeAgent = activeThread ? agents?.find(a => a.slug === activeThread.agent_id) : undefined;
 
   return (
     <div className="flex h-full">
@@ -232,7 +235,11 @@ export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
                 <span className="text-sm text-zinc-200 flex items-center gap-2 min-w-0">
                   <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
                   <span className="truncate">{activeAgentName}</span>
-                  {activeThread && <span className="text-[10px] text-zinc-600 shrink-0">{activeThread.agent_id}</span>}
+                  {activeAgent && (
+                    <span className="text-[10px] text-zinc-500 shrink-0 truncate">
+                      {activeAgent.provider} · {activeAgent.model || 'provider default'}
+                    </span>
+                  )}
                 </span>
                 <div className="flex items-center gap-2 shrink-0">
                   <span className="text-xs text-zinc-500">New chats use:</span>

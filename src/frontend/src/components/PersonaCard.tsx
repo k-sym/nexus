@@ -1,5 +1,5 @@
-import { Persona, PersonaConfig } from '@nexus/shared';
-import { useState } from 'react';
+import { Persona, PersonaConfig, Provider } from '@nexus/shared';
+import { useState, useEffect } from 'react';
 import { api } from '../api';
 
 interface PersonaCardProps {
@@ -20,7 +20,10 @@ const PROVIDER_LABELS: Record<string, string> = {
 export default function PersonaCard({ persona, onDelete, onEdit, onRefresh }: PersonaCardProps) {
   const [expanded, setExpanded] = useState(false);
   const [config, setConfig] = useState<PersonaConfig | null>(null);
+  const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => { api.providers.list().then(setProviders).catch(() => {}); }, []);
 
   const handleExpand = async () => {
     if (expanded) {
@@ -71,14 +74,23 @@ export default function PersonaCard({ persona, onDelete, onEdit, onRefresh }: Pe
       {expanded && config && (
         <div className="px-4 py-3 border-t border-zinc-800 space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500">Provider</label>
-              <div className="text-xs mt-0.5">{PROVIDER_LABELS[config.provider] || config.provider}</div>
-            </div>
-            <div>
-              <label className="text-[10px] uppercase tracking-wider text-zinc-500">Model</label>
-              <div className="text-xs mt-0.5 font-mono">{config.model}</div>
-            </div>
+            {(() => {
+              const rec = config.provider_id ? providers.find(p => p.id === config.provider_id) : undefined;
+              const providerLabel = rec ? rec.name : (PROVIDER_LABELS[config.provider] || config.provider);
+              const effectiveModel = config.model || rec?.default_model || '';
+              return (
+                <>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-zinc-500">Provider</label>
+                    <div className="text-xs mt-0.5">{providerLabel}</div>
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-zinc-500">Model</label>
+                    <div className="text-xs mt-0.5 font-mono">{effectiveModel || <span className="text-zinc-600">provider default</span>}</div>
+                  </div>
+                </>
+              );
+            })()}
             <div>
               <label className="text-[10px] uppercase tracking-wider text-zinc-500">Token Budget</label>
               <div className="text-xs mt-0.5">{config.token_budget}</div>
