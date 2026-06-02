@@ -1,4 +1,6 @@
-import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket } from '@nexus/shared';
+import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket, Provider } from '@nexus/shared';
+
+export interface ProviderTestResult { ok: boolean; detail: string; latencyMs?: number }
 
 const API = '/api';
 
@@ -92,6 +94,13 @@ export const api = {
   },
   tickets: {
     list: () => fetchJson<Ticket[]>(`${API}/tickets`),
+  },
+  providers: {
+    list: () => fetchJson<Provider[]>(`${API}/providers`),
+    create: (data: Partial<Provider>) => fetchJson<Provider>(`${API}/providers`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Partial<Provider>) => fetchJson<Provider>(`${API}/providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchJson<void>(`${API}/providers/${id}`, { method: 'DELETE' }),
+    test: (id: string) => fetchJson<ProviderTestResult>(`${API}/providers/${id}/test`, { method: 'POST' }),
   },
   memory: {
     search: (projectId: string, query: string) => fetchJson<string[]>(`${API}/projects/${projectId}/memories?q=${encodeURIComponent(query)}`),
