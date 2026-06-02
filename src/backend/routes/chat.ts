@@ -1,10 +1,12 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
+import yaml from 'js-yaml';
 import { ChatThread, ChatMessage, PersonaConfig } from '@nexus/shared';
-import { getRelevantMemories } from '../memory';
-import { loadConfig, resolveOpenRouterKey } from '../config';
-import fs from 'fs';
-import path from 'path';
+import { getRelevantMemories, addMemory } from '../memory';
+import { loadConfig } from '../config';
+import { runPersona } from '../orchestrator/providers';
+
+const MAX_HISTORY = 12;
 
 export async function registerChatRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -42,127 +44,87 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     return rows as ChatMessage[];
   });
 
-  fastify.post('/api/threads/:threadId/messages', async (request) => {
-    const { threadId } = request.params as { threadId: string };
-    const body = request.body as { role: 'user' | 'assistant' | 'system'; content: string; attachments?: string; model?: string };
-
-    const now = new Date().toISOString();
-    const userMsg: ChatMessage = {
+  function insertMessage(threadId: string, role: ChatMessage['role'], content: string, attachments = '[]'): ChatMessage {
+    const msg: ChatMessage = {
       id: uuid(),
       thread_id: threadId,
-      role: 'user',
-      content: body.content,
-      attachments_json: body.attachments || '[]',
-      created_at: now,
+      role,
+      content,
+      attachments_json: attachments,
+      created_at: new Date().toISOString(),
     };
-
     db.prepare('INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(userMsg.id, userMsg.thread_id, userMsg.role, userMsg.content, userMsg.attachments_json, userMsg.created_at);
-    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(now, threadId);
+      .run(msg.id, msg.thread_id, msg.role, msg.content, msg.attachments_json, msg.created_at);
+    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(msg.created_at, threadId);
+    return msg;
+  }
 
-    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread;
+  function resolvePersona(agentId: string): PersonaConfig | null {
+    const row = db.prepare('SELECT config_yaml FROM personas WHERE slug = ?').get(agentId) as { config_yaml: string } | undefined;
+    if (!row) return null;
+    try {
+      return yaml.load(row.config_yaml) as PersonaConfig;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Post a user message and get the assistant reply from the thread's agent.
+   * The thread's persona (agent_id) decides which harness runs: Claude Code /
+   * Codex subprocess, or an OpenAI-compatible HTTP model (OpenRouter / local).
+   * Synchronous v1: we await the full reply, then return it.
+   */
+  fastify.post('/api/threads/:threadId/messages', async (request) => {
+    const { threadId } = request.params as { threadId: string };
+    const body = request.body as { content: string; attachments?: string };
+    const config = loadConfig();
+
+    // 1. Persist the user's turn.
+    insertMessage(threadId, 'user', body.content, body.attachments || '[]');
+
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (!thread) return insertMessage(threadId, 'assistant', '[Error] Thread not found.');
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(thread.project_id) as any;
 
-    const model = body.model || 'openrouter/anthropic/claude-sonnet-4';
-    const apiKey = resolveOpenRouterKey(loadConfig());
-
-    let systemPrompt = 'You are a helpful assistant in NEXUS, an agent orchestration platform.';
-    let memoryContext = '';
-
-    if (project) {
-      memoryContext = (await getRelevantMemories(db, project.id, body.content)).map(m => `- ${m}`).join('\n');
-      const projectDocsDir = path.join(project.repo_path, 'project_docs');
-      const docsList: string[] = [];
-      for (const sub of ['specs', 'plans', 'uploads']) {
-        const dir = path.join(projectDocsDir, sub);
-        if (!fs.existsSync(dir)) continue;
-        fs.readdirSync(dir).filter(f => !f.startsWith('.')).forEach(f => docsList.push(`${sub}/${f}`));
-      }
-
-      systemPrompt = `You are a helpful assistant in the NEXUS project "${project.name}".\n\n`;
-      if (project.description) systemPrompt += `Project: ${project.description}\n`;
-      systemPrompt += `Working directory: ${project.repo_path}\n`;
-      if (docsList.length > 0) systemPrompt += `\nAvailable project documents:\n${docsList.map(d => `- ${d}`).join('\n')}\n`;
-      systemPrompt += `\nUse these documents for context. Do not make up information not present in the conversation or documents.`;
+    // 2. Resolve the thread's agent persona.
+    const persona = resolvePersona(thread.agent_id);
+    if (!persona) {
+      return insertMessage(threadId, 'assistant', `[No agent] No persona found for "${thread.agent_id}". Add one under Personas, or pick a different agent.`);
     }
 
-    if (!apiKey) {
-      const assistantMsg: ChatMessage = {
-        id: uuid(),
-        thread_id: threadId,
-        role: 'assistant',
-        content: `[Config needed] Set OPENROUTER_API_KEY env variable to enable AI responses.\n\n${memoryContext ? 'Found memories:\n' + memoryContext : 'No relevant memories found.'}`,
-        attachments_json: '[]',
-        created_at: new Date().toISOString(),
-      };
-      db.prepare('INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(assistantMsg.id, assistantMsg.thread_id, assistantMsg.role, assistantMsg.content, assistantMsg.attachments_json, assistantMsg.created_at);
-      db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(assistantMsg.created_at, threadId);
-      return assistantMsg;
+    // 3. Build the prompt body: relevant memories + recent thread history.
+    const memories = project ? await getRelevantMemories(db, project.id, body.content) : [];
+    const memoryBlock = memories.length ? `Relevant memories:\n${memories.map(m => `- ${m}`).join('\n')}\n\n` : '';
+    const history = db.prepare('SELECT role, content FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').all(threadId) as { role: string; content: string }[];
+    const historyBlock = history
+      .slice(-MAX_HISTORY)
+      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+      .join('\n');
+    const promptBody = `${memoryBlock}${historyBlock}\n\nAssistant:`;
+
+    const workspace = project?.repo_path || process.cwd();
+
+    // 4. Run the persona's provider (synchronous).
+    const result = await runPersona(persona, promptBody, workspace, config, () => {});
+    const content = result.ok
+      ? (result.output.trim() || '[empty response]')
+      : `[${persona.provider} error] ${result.error || 'unknown error'}`;
+
+    // 5. Persist the assistant turn + archive the exchange to memory.
+    const assistantMsg = insertMessage(threadId, 'assistant', content);
+
+    if (project && result.ok) {
+      addMemory(db, {
+        project_id: project.id,
+        agent_id: thread.agent_id,
+        category: 'chat',
+        content: `Q: ${body.content.slice(0, 200)} → A: ${content.slice(0, 200)}`,
+        metadata: { thread_id: threadId, source: 'chat', provider: persona.provider },
+      }).catch(() => { /* best-effort */ });
     }
 
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-          'HTTP-Referer': 'https://nexus.local',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            ...(systemPrompt ? [{ role: 'system' as const, content: systemPrompt }] : []),
-            ...(memoryContext ? [{ role: 'system' as const, content: `Relevant memories:\n${memoryContext}` }] : []),
-            { role: 'user', content: body.content },
-          ],
-          stream: false,
-        }),
-      });
-
-      const data = await response.json() as any;
-      const assistantContent = data.choices?.[0]?.message?.content || `[Error] ${data.error?.message || 'No response'}`;
-
-      const assistantMsg: ChatMessage = {
-        id: uuid(),
-        thread_id: threadId,
-        role: 'assistant',
-        content: assistantContent,
-        attachments_json: '[]',
-        created_at: new Date().toISOString(),
-      };
-
-      db.prepare('INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(assistantMsg.id, assistantMsg.thread_id, assistantMsg.role, assistantMsg.content, assistantMsg.attachments_json, assistantMsg.created_at);
-      db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(assistantMsg.created_at, threadId);
-
-      if (project) {
-        const { addMemory } = await import('../memory');
-        try {
-          await addMemory(db, {
-            project_id: project.id,
-            agent_id: thread.agent_id,
-            category: 'chat',
-            content: `Q: ${body.content.slice(0, 200)} → A: ${assistantContent.slice(0, 200)}`,
-            metadata: { thread_id: threadId, source: 'chat' },
-          });
-        } catch { /* ignore */ }
-      }
-
-      return assistantMsg;
-    } catch (err: any) {
-      const errorMsg: ChatMessage = {
-        id: uuid(),
-        thread_id: threadId,
-        role: 'assistant',
-        content: `[Error] ${err.message}`,
-        attachments_json: '[]',
-        created_at: new Date().toISOString(),
-      };
-      db.prepare('INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .run(errorMsg.id, errorMsg.thread_id, errorMsg.role, errorMsg.content, errorMsg.attachments_json, errorMsg.created_at);
-      return errorMsg;
-    }
+    return assistantMsg;
   });
 
   fastify.post('/api/threads/:threadId/archive', async (request) => {
