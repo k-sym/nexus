@@ -137,4 +137,11 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?').run(now, threadId);
     return { success: true };
   });
+
+  // Permanently delete a thread and its messages (chat_messages cascade on FK).
+  fastify.delete('/api/threads/:threadId', async (request) => {
+    const { threadId } = request.params as { threadId: string };
+    db.prepare('DELETE FROM chat_threads WHERE id = ?').run(threadId);
+    return { success: true };
+  });
 }

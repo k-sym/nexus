@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { Trash } from '@phosphor-icons/react';
 import { ChatThread, ChatMessage, FileAttachment, Persona } from '@nexus/shared';
 import { api } from '../api';
 
@@ -162,6 +163,21 @@ export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
     setAttachments(prev => prev.filter((_, i) => i !== index));
   };
 
+  const handleDeleteThread = async (e: React.MouseEvent, threadId: string) => {
+    e.stopPropagation();
+    if (!confirm('Delete this chat? This cannot be undone.')) return;
+    try {
+      await api.chat.deleteThread(threadId);
+      if (activeThreadId === threadId) {
+        setActiveThreadId(null);
+        setMessages([]);
+      }
+      await loadThreads();
+    } catch (err) {
+      console.error('Failed to delete thread:', err);
+    }
+  };
+
   return (
     <div className="flex h-full">
       {/* Thread list sidebar */}
@@ -176,13 +192,24 @@ export default function ChatPanel({ projectId, agentSlug }: ChatPanelProps) {
         </div>
         <div className="flex-1 overflow-y-auto">
           {threads.map(thread => (
-            <button
+            <div
               key={thread.id}
-              onClick={() => setActiveThreadId(thread.id)}
-              className={`w-full text-left px-3 py-2 text-sm truncate border-b border-zinc-800/50 transition-colors ${activeThreadId === thread.id ? 'bg-indigo-500/20 text-white' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/20'}`}
+              className={`group flex items-center border-b border-zinc-800/50 transition-colors ${activeThreadId === thread.id ? 'bg-indigo-500/20' : 'hover:bg-zinc-800/20'}`}
             >
-              {thread.title}
-            </button>
+              <button
+                onClick={() => setActiveThreadId(thread.id)}
+                className={`flex-1 min-w-0 text-left px-3 py-2 text-sm truncate ${activeThreadId === thread.id ? 'text-white' : 'text-zinc-500 group-hover:text-zinc-200'}`}
+              >
+                {thread.title}
+              </button>
+              <button
+                onClick={e => handleDeleteThread(e, thread.id)}
+                title="Delete chat"
+                className="shrink-0 px-2 py-2 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+              >
+                <Trash size={14} />
+              </button>
+            </div>
           ))}
           {threads.length === 0 && (
             <div className="px-3 py-4 text-xs text-zinc-500 text-center">No conversations</div>

@@ -28,11 +28,14 @@ export interface MissionStatus {
   activity: { running: any[]; recent: any[] };
 }
 
-async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json' },
-    ...options,
-  });
+async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+  // Only send a JSON content-type when there's actually a body — otherwise
+  // Fastify rejects no-body DELETE/POST requests with 400 ("body cannot be empty").
+  const headers: Record<string, string> = {
+    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.headers as Record<string, string> | undefined),
+  };
+  const res = await fetch(url, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as any).error || res.statusText);
@@ -67,6 +70,7 @@ export const api = {
     sendMessage: (threadId: string, content: string, attachments?: string) =>
       fetchJson<ChatMessage>(`${API}/threads/${threadId}/messages`, { method: 'POST', body: JSON.stringify({ content, attachments }) }),
     archive: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}/archive`, { method: 'POST' }),
+    deleteThread: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}`, { method: 'DELETE' }),
   },
   personas: {
     list: () => fetchJson<Persona[]>(`${API}/personas`),
