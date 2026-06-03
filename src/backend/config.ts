@@ -44,6 +44,13 @@ const DEFAULT_CONFIG: NexusConfig = {
     enabled: true,
     check_interval_seconds: 60,
   },
+  jira: {
+    enabled: false,
+    user: '',
+    instance: '',
+    project: 'SUP',
+    poll_minutes: 15,
+  },
   claude_code: {
     command: 'claude',
     args: [],
