@@ -4,6 +4,7 @@ import type { AppContext } from "../context.js";
 import { claim, complete, enqueue, fail, type Job } from "./queue.js";
 import { embedPending } from "../index/indexer.js";
 import { extractTriples } from "../kg/extract.js";
+import { ModelError } from "../models/client.js";
 
 const IDLE_POLL_MS = 250;
 
@@ -49,7 +50,10 @@ export function startWorker(ctx: AppContext): Worker {
         await handle(ctx, job);
         complete(ctx.db, job.id);
       } catch (err) {
-        const outcome = fail(ctx.db, job, (err as Error).message);
+        // Misconfiguration (e.g. a reasoning-only gen model) won't fix itself on
+        // retry — dead-letter it immediately with the actionable message.
+        const retryable = !(err instanceof ModelError && !err.retryable);
+        const outcome = fail(ctx.db, job, (err as Error).message, { retryable });
         if (outcome === "dead") console.error(`[worker] job ${job.id} (${job.type}) DEAD: ${(err as Error).message}`);
       }
     }
