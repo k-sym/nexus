@@ -2,17 +2,19 @@
  * Obsidian vault writers for task summaries and chat archives.
  *
  * Memory files and vault-watching are owned by @nexus/memory-daemon now; this module
- * only writes Tasks/ and Chats/ markdown under ~/.nexus/obsidian/Projects/<slug>/
+ * only writes Tasks/ and Chats/ markdown under <vault>/Projects/<slug>/
  * (which the daemon indexes alongside everything else in the shared vault).
  */
 import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { Project } from '@nexus/shared';
-import { getNexusDir } from '../config';
+import { expandHome, loadConfig } from '../config';
 
 export function getVaultPath(): string {
-  return path.join(getNexusDir(), 'obsidian');
+  // Honor the configured vault_path (shared with the daemon) rather than
+  // assuming the vault lives under ~/.nexus/obsidian.
+  return expandHome(loadConfig().obsidian.vault_path);
 }
 
 export function getProjectDir(projectSlug: string): string {
