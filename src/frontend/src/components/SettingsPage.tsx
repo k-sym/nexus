@@ -62,12 +62,12 @@ export default function SettingsPage() {
 
   return (
     <div className="p-6 max-w-2xl mx-auto overflow-y-auto h-full">
-      <div className="flex items-center justify-between mb-6">
-        <div>
+      <div className="flex items-center justify-between gap-4 mb-6">
+        <div className="min-w-0">
           <h1 className="text-lg font-semibold">Settings</h1>
           <p className="text-xs text-zinc-500 mt-0.5">Edit ~/.nexus/config.yaml. Some changes require a backend restart.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           {saved && <span className="text-xs text-green-400">Saved ✓</span>}
           <button
             onClick={handleSave}
