@@ -86,7 +86,7 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-indigo-500 text-white text-sm rounded-lg hover:bg-indigo-600 transition-colors"
+          className="px-4 py-2 bg-indigo-500 text-ink text-sm rounded-lg hover:bg-indigo-600 transition-colors"
         >
           {showForm ? 'Cancel' : '+ New Schedule'}
         </button>
@@ -168,7 +168,7 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
             <button
               type="submit"
               disabled={!name.trim() || !taskTemplate.trim()}
-              className="px-4 py-2 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+              className="px-4 py-2 text-sm bg-indigo-500 text-ink rounded-lg hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
             >
               Create Schedule
             </button>

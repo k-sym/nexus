@@ -58,7 +58,7 @@ export default function OpenCodeModelsView() {
             placeholder="openrouter/anthropic/claude-sonnet-4.5"
             className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
           />
-          <button onClick={add} className="flex items-center gap-1 px-3 py-2 text-sm bg-indigo-500 text-white rounded hover:bg-indigo-600"><Plus size={14} /> Add</button>
+          <button onClick={add} className="flex items-center gap-1 px-3 py-2 text-sm bg-indigo-500 text-ink rounded hover:bg-indigo-600"><Plus size={14} /> Add</button>
         </div>
 
         <div className="space-y-1.5">

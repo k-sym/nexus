@@ -57,7 +57,7 @@ export default function ProjectModal({ onClose, onSubmit }: ProjectModalProps) {
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-zinc-500 hover:text-zinc-200 transition-colors">
               Cancel
             </button>
-            <button type="submit" disabled={!name.trim() || !repoPath.trim()} className="px-4 py-2 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+            <button type="submit" disabled={!name.trim() || !repoPath.trim()} className="px-4 py-2 text-sm bg-indigo-500 text-ink rounded-lg hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               Create Project
             </button>
           </div>

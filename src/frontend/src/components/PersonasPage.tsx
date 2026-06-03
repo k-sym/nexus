@@ -53,7 +53,7 @@ export default function PersonasPage() {
         </div>
         <button
           onClick={openNew}
-          className="shrink-0 px-4 py-2 bg-indigo-500 text-white text-sm rounded-lg hover:bg-indigo-600 transition-colors"
+          className="shrink-0 px-4 py-2 bg-indigo-500 text-ink text-sm rounded-lg hover:bg-indigo-600 transition-colors"
         >
           + New Agent
         </button>

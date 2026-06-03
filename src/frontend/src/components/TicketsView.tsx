@@ -178,7 +178,7 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
                   <button
                     onClick={handleCreate}
                     disabled={creating}
-                    className="w-full px-3 py-2 text-sm bg-indigo-500 text-white rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors"
+                    className="w-full px-3 py-2 text-sm bg-indigo-500 text-ink rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors"
                   >
                     {creating ? 'Creating…' : 'Create task'}
                   </button>

@@ -20,7 +20,7 @@ function StatDot({ ok }: { ok: boolean }) {
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+    <div className="bg-zinc-900 rounded-xl p-4">
       <div className="text-[10px] uppercase tracking-wider text-zinc-500/70 font-medium mb-2">{title}</div>
       {children}
     </div>
