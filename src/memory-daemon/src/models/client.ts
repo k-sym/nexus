@@ -7,16 +7,20 @@
 // silently dead-lettering with a wrong "unreachable" message.
 import type { DaemonConfig } from "../config.js";
 
-/** A model-stack call failed. `kind` separates "the server is down" from "the
- *  server answered with an error" — the latter (e.g. a 501 from a llama-server
- *  launched without --embedding) used to be mislabelled as unreachable. */
+/** A model-stack call failed. `kind` separates "the server is down" (transport)
+ *  from "the server answered with an error" (http — e.g. a 501 from a llama-server
+ *  launched without --embedding) from "the server is misconfigured" (config — e.g.
+ *  a reasoning model that returned only hidden reasoning). `retryable` is false for
+ *  config errors: retrying won't help until the server is reconfigured, so the job
+ *  should dead-letter immediately rather than churn through its retry budget. */
 export class ModelError extends Error {
   constructor(
     message: string,
-    readonly kind: "transport" | "http",
+    readonly kind: "transport" | "http" | "config",
     readonly url: string,
     readonly status?: number,
     readonly bodySnippet?: string,
+    readonly retryable: boolean = true,
   ) {
     super(message);
     this.name = "ModelError";
@@ -96,13 +100,35 @@ export class ModelClient {
       ...(opts.system ? [{ role: "system", content: opts.system }] : []),
       { role: "user", content: prompt },
     ];
+    const url = `${this.cfg.genUrl}/chat/completions`;
     const json = await postJson(
-      `${this.cfg.genUrl}/chat/completions`,
+      url,
       { messages, temperature: opts.temperature ?? 0.2, max_tokens: opts.maxTokens ?? 512 },
       this.cfg.apiKey,
       opts.timeoutMs ?? 60_000,
     );
-    return json?.choices?.[0]?.message?.content ?? "";
+    const choice = json?.choices?.[0];
+    const content: string = choice?.message?.content ?? "";
+    // A reasoning/thinking model launched without thinking disabled can spend its
+    // whole token budget on hidden reasoning, returning empty content (the text
+    // lands in reasoning_content) with finish_reason "length". Fail loudly and
+    // non-retryably instead of letting callers choke on empty output.
+    if (!content.trim()) {
+      const reasoning = choice?.message?.reasoning_content;
+      const finish = choice?.finish_reason;
+      if (reasoning || finish === "length") {
+        throw new ModelError(
+          `${url} returned only reasoning (finish_reason=${finish ?? "?"}, empty content) — ` +
+            `disable thinking on the gen server (e.g. --reasoning off) or use a non-reasoning model`,
+          "config",
+          url,
+          undefined,
+          typeof reasoning === "string" ? reasoning.slice(0, 200) : undefined,
+          false,
+        );
+      }
+    }
+    return content;
   }
 
   /** Liveness check for a single endpoint via GET /models. */

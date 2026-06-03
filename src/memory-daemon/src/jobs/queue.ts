@@ -40,11 +40,13 @@ export function complete(db: DB, id: number): void {
   db.prepare("UPDATE jobs SET status = 'DONE', updated_at = ? WHERE id = ?").run(new Date().toISOString(), id);
 }
 
-/** Record a failure: retry with exponential backoff, or move to DEAD after max_attempts. */
-export function fail(db: DB, job: Job, err: string): "retry" | "dead" {
+/** Record a failure: retry with exponential backoff, or move to DEAD after
+ *  max_attempts. A non-retryable failure (e.g. a model misconfiguration that
+ *  won't fix itself) dead-letters immediately instead of churning the budget. */
+export function fail(db: DB, job: Job, err: string, opts: { retryable?: boolean } = {}): "retry" | "dead" {
   const attempts = job.attempts + 1;
   const now = Date.now();
-  if (attempts >= job.max_attempts) {
+  if (opts.retryable === false || attempts >= job.max_attempts) {
     db.prepare("UPDATE jobs SET status = 'DEAD', attempts = ?, last_error = ?, updated_at = ? WHERE id = ?").run(
       attempts,
       err,
