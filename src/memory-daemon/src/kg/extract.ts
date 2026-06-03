@@ -1,6 +1,9 @@
 // KG triple extraction via the local 9B (4001). Strict JSON, closed vocabulary, capped count.
-// Failure (model down / unparseable) THROWS so the job dead-letters — retrieval is unaffected
-// because the KG layer is purely additive.
+// A model/transport failure (ModelError from complete()) THROWS so the job dead-letters and
+// the real cause shows in jobs.last_error. But UNPARSEABLE output — the model returning prose
+// or no JSON array (e.g. a small gen model following an instruction embedded in the note) — is
+// treated as zero triples and skipped, not dead-lettered: the KG layer is purely additive, so a
+// memory with no extractable facts is a normal outcome, not a failure to retry five times.
 import type { AppContext } from "../context.js";
 import { oplog } from "../db/index.js";
 import { ENTITY_TYPES, RELATION_TYPES, MAX_TRIPLES_PER_MEMORY } from "./vocab.js";
@@ -22,14 +25,19 @@ const SYSTEM =
   "Use concise canonical entity names. Skip anything you are unsure about. Max " +
   `${MAX_TRIPLES_PER_MEMORY} triples.`;
 
-function parseJsonArray(text: string): RawTriple[] {
+/** Grab the first [...] block and parse it. Returns null (not throws) when the
+ *  output has no parseable JSON array — the caller treats that as zero triples. */
+function parseJsonArray(text: string): RawTriple[] | null {
   // Tolerate stray prose / code fences: grab the first [...] block.
   const start = text.indexOf("[");
   const end = text.lastIndexOf("]");
-  if (start === -1 || end === -1 || end < start) throw new Error("no JSON array in extraction output");
-  const parsed = JSON.parse(text.slice(start, end + 1));
-  if (!Array.isArray(parsed)) throw new Error("extraction output is not an array");
-  return parsed as RawTriple[];
+  if (start === -1 || end === -1 || end < start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    return Array.isArray(parsed) ? (parsed as RawTriple[]) : null;
+  } catch {
+    return null; // malformed JSON inside the brackets
+  }
 }
 
 const isType = (v: unknown, set: readonly string[]) => typeof v === "string" && set.includes(v);
@@ -45,8 +53,10 @@ export async function extractTriples(ctx: AppContext, memoryId: string): Promise
   // down or misconfigured — surfaces the real cause in jobs.last_error.
   const out = await ctx.models.complete(mem.body, { system: SYSTEM, temperature: 0, maxTokens: 700, timeoutMs: 60_000 });
 
-  const raw = parseJsonArray(out);
-  const valid = raw
+  // null = the model returned no parseable JSON array; treat as zero triples and skip
+  // (the transaction below still clears any stale facts, keeping re-index idempotent).
+  const parsed = parseJsonArray(out);
+  const valid = (parsed ?? [])
     .map((t) => ({
       subject: str(t.subject),
       subj_type: isType(t.subject_type, ENTITY_TYPES) ? (t.subject_type as string) : "other",
@@ -68,6 +78,9 @@ export async function extractTriples(ctx: AppContext, memoryId: string): Promise
   });
   tx();
 
-  oplog(ctx.db, "extract_kg", { memory_id: memoryId, detail: `${valid.length} triples` });
+  oplog(ctx.db, "extract_kg", {
+    memory_id: memoryId,
+    detail: parsed === null ? "skipped: no parseable JSON array in gen output" : `${valid.length} triples`,
+  });
   return valid.length;
 }
