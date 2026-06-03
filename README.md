@@ -195,18 +195,44 @@ are not optional**. A server can be listening on its port but still reject every
 started in the right mode. (Nexus currently reports such failures as "unreachable" even when the
 server is up — see Troubleshooting.)
 
-| Port | Role | Model (example) | Required launch flags |
+| Port | Role | Recommended model | Required mode flags |
 |---|---|---|---|
-| 4001 | generation (HyDE + KG extraction) | a small instruct model (e.g. Qwen3) | `--reasoning off` **if the model is a reasoning/"thinking" model** — otherwise it spends its whole token budget thinking and returns empty content |
-| 4002 | embeddings | `nomic-embed-text-v1.5` (768-dim) | `--embedding --pooling mean` |
-| 4003 | reranking | `qwen3-reranker-0.6b` | `--reranking` |
+| 4001 | generation (HyDE + KG extraction) | a small instruct model, e.g. `Qwen3-*-Instruct` (Q4_K_M) | `--reasoning off` **if the model is a reasoning/"thinking" model** — otherwise it spends its whole token budget thinking and returns empty content |
+| 4002 | embeddings | `nomic-embed-text-v1.5` (f16, 768-dim) | `--embedding --pooling mean` |
+| 4003 | reranking | `qwen3-reranker-0.6b` (q8_0) | `--reranking` |
 
-Example (embeddings server):
+`--reasoning off` (alias `-rea off`) requires a recent llama.cpp build; on older builds use
+`--reasoning-budget 0`. It only fully suppresses thinking on *hybrid* models (Qwen3, etc.); for
+always-on reasoning models (e.g. DeepSeek-R1) pick a non-reasoning gen model instead.
+
+Full launch commands (shared flags: `--host 127.0.0.1 --n-gpu-layers 99 --flash-attn on`):
 
 ```bash
+# 4001 — generation (HyDE + knowledge-graph extraction)
+llama-server --model ~/Models/Qwen3-Instruct-Q4_K_M.gguf \
+  --port 4001 --host 127.0.0.1 --n-gpu-layers 99 --ctx-size 8192 --flash-attn on \
+  --reasoning off
+
+# 4002 — embeddings (768-dim vectors for vector recall)
 llama-server --model ~/Models/nomic-embed-text-v1.5.f16.gguf \
-  --port 4002 --host 127.0.0.1 --n-gpu-layers 99 --ctx-size 8192 \
+  --port 4002 --host 127.0.0.1 --n-gpu-layers 99 --ctx-size 8192 --flash-attn on \
   --embedding --pooling mean
+
+# 4003 — reranking (cross-encoder reorder of recall candidates)
+llama-server --model ~/Models/qwen3-reranker-0.6b-q8_0.gguf \
+  --port 4003 --host 127.0.0.1 --n-gpu-layers 99 --ctx-size 8192 --flash-attn on \
+  --reranking
+```
+
+The gen model's context window only needs to cover one memory + a short prompt, so `8192` is ample —
+no need for 32k (a larger KV cache just competes for VRAM with the other two servers). Sanity-check
+each server after launch:
+
+```bash
+curl -s -X POST http://127.0.0.1:4002/v1/embeddings \
+  -d '{"model":"nomic-embed-text-v1.5","input":"hello"}' | head -c 80   # expect a 768-float vector
+curl -s -X POST http://127.0.0.1:4003/v1/rerank \
+  -d '{"model":"qwen3-reranker-0.6b","query":"q","documents":["a","b"]}' | head -c 80   # expect results[]
 ```
 
 If you'd rather run a single OpenAI-compatible server (omlx, LM Studio, …) for everything, point the
