@@ -45,10 +45,11 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
 | **Chat** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and 48-hour archival to Obsidian. |
 | **Scheduler** | Built-in cron for recurring tasks (daily digests, weekly reviews, etc.). |
-| **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical), pushed in via a sync endpoint. |
+| **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
+| **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira sync that changed tickets, or a sync failure. Backed by a `notifications` table the frontend polls. |
 | **Mission Control** | A single dashboard aggregating daemon health, the agent roster with per-provider health, scheduler status, and an activity feed. |
 | **Token usage** | Per-run token tracking (exact for API providers, estimated for CLI) with a project-scoped Usage view. |
-| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, scheduler toggle. |
+| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, scheduler toggle, Jira sync. |
 
 ---
 
@@ -169,18 +170,43 @@ splash that shows each service's status, then opens the main UI. It probes each 
 local model stack (`4001/4002/4003`) isn't reachable, it shows a non-blocking warning and continues
 in degraded (FTS-only) mode. Closing the window stops the services it started.
 
-```bash
-# Build everything (shared, backend, frontend, electron, memory daemon)
-npm run build
+The Electron main process is TypeScript — it's compiled to `electron/dist/main.js` with `tsc`
+(`electron/package.json` → `build`) before Electron can load it. The two run modes differ in what
+they compile and where they load the UI from.
 
-# Production mode: spawns the compiled backend + daemon (under system Node) and
-# loads the built frontend from disk — no separate dev servers needed.
+**1. Compile everything (required for production mode):**
+
+```bash
+# Builds, in order: shared → backend → frontend → electron (tsc) → memory daemon.
+# Production mode loads the frontend from src/frontend/dist and runs the compiled
+# backend/daemon, so a full build must run first.
+npm run build
+```
+
+**2. Run as a production Electron app:**
+
+```bash
+# Recompiles the Electron main (tsc) and launches `electron .`. With the PROD flag it
+# spawns the compiled backend + daemon (under system Node — see note) and loads the
+# built frontend from disk. No Vite/dev servers involved.
 NEXUS_ELECTRON_PROD=1 npm run --workspace=electron dev
 ```
 
-Without `NEXUS_ELECTRON_PROD=1`, an unpackaged Electron launch runs in **dev mode**: it spawns the
-Vite dev server, backend, and daemon as dev processes (or reuses them if already up) and loads
-`localhost:5173`.
+**Run in dev mode instead** (hot reload) — drop the flag:
+
+```bash
+# Spawns the Vite dev server, backend, and daemon as dev processes (or reuses any
+# already up) and loads localhost:5173 in the Electron window.
+npm run --workspace=electron dev
+```
+
+> The compiled backend/daemon are launched with `spawn('node', …)` (system Node), **not** Electron's
+> `fork()` — Electron's bundled Node has a different ABI and would break the `better-sqlite3` native
+> module. Ensure a system `node` (≥ 20) is on your `PATH`.
+
+> **Packaging:** there's no `.app`/`.dmg`/installer build wired up yet (no electron-builder/forge) —
+> the app launches **unpackaged** via the `electron` binary as above. Packaging into a distributable
+> is a future step.
 
 On first run, NEXUS creates `~/.nexus/` with default config, starter personas, a set of default
 providers, an Obsidian vault, and the SQLite database.
@@ -304,6 +330,13 @@ scheduler:
   enabled: true
   check_interval_seconds: 60
 
+jira:                            # native Jira ticket poll (Settings -> Jira). Token via JIRA_TOKEN env.
+  enabled: false                 # off by default; poll runs only while the backend is up
+  user: ""                       # Atlassian account email that owns the token
+  instance: ""                   # e.g. your-company.atlassian.net (https:// optional)
+  project: "SUP"                 # project key to sync
+  poll_minutes: 15               # cadence while Nexus is running
+
 claude_code:
   command: "claude"
   args: []                       # extra CLI flags; the prompt is passed via -p
@@ -318,7 +351,7 @@ chat:
   archive_path: "Projects/{project_slug}/Chats"
 ```
 
-Environment variables are interpolated with `${VAR}` syntax. The OpenRouter key is read from `OPENROUTER_API_KEY` (or `OPENROUTING_API_KEY`).
+Environment variables are interpolated with `${VAR}` syntax. Secrets are read from the environment, never written to `config.yaml`: the OpenRouter key from `OPENROUTER_API_KEY` (or `OPENROUTING_API_KEY`), the Jira API token from `JIRA_TOKEN`, and the Hermes key from `HERMES_API_KEY`.
 
 ---
 
@@ -368,6 +401,9 @@ OpenCode, and Hermes). Personas bind to a provider via `provider_id`; a legacy `
 
 Personas are agent personalities defined as YAML files in `~/.nexus/personas/`. Each binds a
 provider + model, a system prompt, allowed tools, a workspace path, and a token budget.
+
+> **In the UI these are labelled "Agents"** (the persona is what an agent *is* once created). The
+> underlying type, table, and `/api/personas` routes keep the `persona` name.
 
 ```yaml
 name: Code Reviewer
@@ -444,9 +480,24 @@ Example: *"Every weekday at 9 AM, generate a standup digest for this project."* 
 ### Tickets (Jira mirror)
 
 Nexus keeps a **disposable, read-only mirror** of Jira tickets assigned to you — Jira stays the source
-of truth. An external sync agent pushes the current set in via `POST /api/jira/sync`
-(`{ tickets, source, replaceAll }` → `{ inserted, updated, removed }`), and the Tickets view lists
-them. The mirror lives in the `tickets` table and can be rebuilt at any time by re-syncing.
+of truth. The mirror lives in the `tickets` table and can be rebuilt at any time. There are two ways
+it gets populated:
+
+- **Native poll (in-app).** When enabled in **Settings → Jira**, the backend fetches your open project
+  tickets directly from the Jira REST API on an interval (`poll_minutes`, default 15) — but only while
+  Nexus is running. This is for things you act on *when you're in front of the app*; it deliberately
+  isn't a 24/7 cron. The poll is gated on `jira.enabled` **and** the `JIRA_TOKEN` env var; the
+  non-secret config (account email, instance host, project key, interval) lives in `config.yaml`. On a
+  sync that changes tickets it raises an in-app notification (silent on a no-op, error toast on
+  failure). Config is read once at startup, so **changes apply on the next backend restart**.
+- **Push endpoint.** `POST /api/jira/sync` (`{ tickets, source, replaceAll }` → `{ inserted, updated, removed }`)
+  remains for an external sync agent (e.g. an OpenClaw cron) to push the current set in. Both paths share
+  the same upsert.
+
+> **`JIRA_TOKEN`** is your Jira API token; like all secrets it's read from the environment, never stored
+> in `config.yaml`. The **account email** must be the one that owns the token — with the wrong email the
+> Jira search endpoint returns an empty result (HTTP 200) rather than an auth error, so it just looks like
+> "no tickets." The instance host accepts either `your-company.atlassian.net` or a full `https://…` URL.
 
 ### Mission Control
 
@@ -546,7 +597,13 @@ Base URL: `http://127.0.0.1:4173`
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/tickets` | List mirrored Jira tickets |
-| POST | `/api/jira/sync` | Upsert the mirror (`{ tickets, source, replaceAll }`) |
+| POST | `/api/jira/sync` | Upsert the mirror (`{ tickets, source, replaceAll }`) — used by external push agents; the native poll shares the same upsert |
+
+### Notifications
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/notifications` | Unseen in-app notifications (most recent first) |
+| POST | `/api/notifications/seen` | Mark notifications seen (`{ ids }`) |
 
 ### Agents
 | Method | Path | Description |
@@ -597,6 +654,7 @@ nexus/
 │   │   │   ├── memory.ts
 │   │   │   ├── schedules.ts
 │   │   │   ├── tickets.ts       # Jira mirror + /jira/sync
+│   │   │   ├── notifications.ts # in-app notifications API
 │   │   │   ├── status.ts        # /mission-control
 │   │   │   └── orchestrator.ts  # /agents/*
 │   │   ├── orchestrator/
@@ -605,9 +663,16 @@ nexus/
 │   │   │   └── context.ts       # Prompt builder + memory injection
 │   │   ├── memory/
 │   │   │   └── client.ts        # thin HTTP client to @nexus/memory-daemon (:4100)
-│   │   └── scheduler/
-│   │       ├── index.ts         # Scheduler loop
-│   │       └── cron.ts          # Cron parser + next-run calc
+│   │   ├── scheduler/
+│   │   │   ├── index.ts         # Scheduler loop
+│   │   │   └── cron.ts          # Cron parser + next-run calc
+│   │   ├── jira/
+│   │   │   ├── client.ts        # Jira REST client (fetch + map)
+│   │   │   └── poll.ts          # native ticket poll (runs while the app is up)
+│   │   ├── notifications/
+│   │   │   └── index.ts         # notifications insert / list-unseen / mark-seen
+│   │   └── tickets/
+│   │       └── sync.ts          # shared ticket upsert (poll + push endpoint)
 │   ├── memory-daemon/           # Standalone memory daemon (own README)
 │   └── frontend/
 │       ├── index.html
@@ -669,6 +734,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 | Local model tasks fail | Confirm your local server is running and reachable at `models.local.base_url`, and that the persona's `model` matches a loaded model name (check `GET {base_url}/models`). |
 | Agent never picks up a task | The task must be in **In Progress**. Check `GET /api/agents/status` and the backend console logs. |
 | Hermes agent offline | Export `HERMES_API_KEY` in the backend's environment before launching; the key is never stored in git. |
+| Jira tickets don't appear | Check, in order: (1) **Settings → Jira** is *Enabled* and you **restarted the backend** afterwards (config is read once at startup); (2) `JIRA_TOKEN` is exported in the shell that launched the backend; (3) the **account email** is the one that owns the token — a wrong email returns an empty result, not an error, so it looks like "no tickets". The instance host accepts a bare host or a full `https://…` URL. |
 
 ---
 
