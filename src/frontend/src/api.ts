@@ -1,4 +1,4 @@
-import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket, Provider, Reply } from '@nexus/shared';
+import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket, Provider, Reply, FileAttachment } from '@nexus/shared';
 
 export interface ProviderTestResult { ok: boolean; detail: string; latencyMs?: number }
 
@@ -82,6 +82,9 @@ export const api = {
     deleteThread: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}`, { method: 'DELETE' }),
     // Opens a macOS Terminal in the project repo, resuming this thread's Claude session.
     openTerminal: (threadId: string) => fetchJson<{ ok: boolean }>(`${API}/threads/${threadId}/open-terminal`, { method: 'POST' }),
+    // Persists dropped files (base64) under the project's project_docs/uploads/; returns saved attachments.
+    upload: (threadId: string, files: { name: string; mime_type: string; data_base64: string }[]) =>
+      fetchJson<FileAttachment[]>(`${API}/threads/${threadId}/upload`, { method: 'POST', body: JSON.stringify({ files }) }),
   },
   personas: {
     list: () => fetchJson<Persona[]>(`${API}/personas`),

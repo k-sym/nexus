@@ -13,6 +13,16 @@ interface ChatPanelProps {
   agents?: AgentStatus[];
 }
 
+/** Read a File as base64 (without the data: URL prefix) for JSON upload. */
+function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelProps) {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -21,7 +31,7 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [selectedAgent, setSelectedAgent] = useState(agentSlug ?? '');
   const [isTyping, setIsTyping] = useState(false);
-  const [attachments, setAttachments] = useState<FileAttachment[]>([]);
+  const [attachments, setAttachments] = useState<File[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -118,19 +128,32 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
     }
 
     const content = input;
-    const attachmentsJson = attachments.length > 0 ? JSON.stringify(attachments) : '[]';
+    const files = attachments;
 
     setInput('');
     setAttachments([]);
     setIsTyping(true);
 
-    // Optimistically show the user's message while the agent runs.
+    // Optimistically show the user's message while the agent runs (attachments
+    // appear after the post-send refresh, once they're persisted).
     setMessages(prev => [
       ...prev,
-      { id: `tmp-${Date.now()}`, thread_id: threadId!, role: 'user', content, attachments_json: attachmentsJson, message_type: 'text', structured_json: null, created_at: new Date().toISOString() },
+      { id: `tmp-${Date.now()}`, thread_id: threadId!, role: 'user', content, attachments_json: '[]', message_type: 'text', structured_json: null, created_at: new Date().toISOString() },
     ]);
 
     try {
+      // Upload any queued files first (persists them under the project repo), then
+      // send the turn referencing the saved attachments.
+      let attachmentsJson = '[]';
+      if (files.length > 0) {
+        const payload = await Promise.all(files.map(async f => ({
+          name: f.name,
+          mime_type: f.type || 'application/octet-stream',
+          data_base64: await fileToBase64(f),
+        })));
+        const saved = await api.chat.upload(threadId, payload);
+        attachmentsJson = JSON.stringify(saved);
+      }
       // Backend persists the user turn, runs the thread's agent, and saves the reply.
       await api.chat.sendMessage(threadId, content, attachmentsJson);
       // Only refresh if the user is still viewing this thread — otherwise a slow
@@ -155,36 +178,18 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
     }
   };
 
-  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    for (const file of Array.from(files)) {
-      const filename = `${Date.now()}_${file.name}`;
-      const attachment: FileAttachment = {
-        filename,
-        original_name: file.name,
-        path: `/uploads/${filename}`,
-        mime_type: file.type,
-      };
-      setAttachments(prev => [...prev, attachment]);
-    }
+  // Queue the picked/dropped files; the actual upload happens at send-time (once
+  // we have a thread → project → repo path to save them under).
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    setAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
     e.target.value = '';
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setDragOver(false);
-    const files = e.dataTransfer.files;
-    for (const file of Array.from(files)) {
-      const filename = `${Date.now()}_${file.name}`;
-      const attachment: FileAttachment = {
-        filename,
-        original_name: file.name,
-        path: `/uploads/${filename}`,
-        mime_type: file.type || 'application/octet-stream',
-      };
-      setAttachments(prev => [...prev, attachment]);
-    }
+    setAttachments(prev => [...prev, ...Array.from(e.dataTransfer.files)]);
   };
 
   const removeAttachment = (index: number) => {
@@ -421,7 +426,7 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
                 <div className="flex flex-wrap gap-1">
                   {attachments.map((a, i) => (
                     <span key={i} className="flex items-center gap-1 text-xs bg-zinc-800/50 px-2 py-1 rounded text-zinc-200">
-                      📎 {a.original_name}
+                      📎 {a.name}
                       <button onClick={() => removeAttachment(i)} className="text-zinc-500 hover:text-red-400 ml-1">✕</button>
                     </span>
                   ))}
