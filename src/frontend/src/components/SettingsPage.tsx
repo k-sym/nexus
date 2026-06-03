@@ -182,6 +182,58 @@ export default function SettingsPage() {
           </Field>
         </Section>
 
+        {/* Jira */}
+        <Section title="Jira">
+          <Field label="Sync">
+            <button
+              onClick={() => update(['jira', 'enabled'], !config.jira.enabled)}
+              className={`px-3 py-1 text-xs rounded transition-colors ${config.jira.enabled ? 'bg-green-500/20 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}
+            >
+              {config.jira.enabled ? 'Enabled' : 'Disabled'}
+            </button>
+          </Field>
+          <Field label="Account email">
+            <input
+              type="text"
+              value={config.jira.user}
+              onChange={e => update(['jira', 'user'], e.target.value)}
+              placeholder="you@example.com"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
+            />
+          </Field>
+          <Field label="Instance host">
+            <input
+              type="text"
+              value={config.jira.instance}
+              onChange={e => update(['jira', 'instance'], e.target.value)}
+              placeholder="your-company.atlassian.net"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
+            />
+          </Field>
+          <Field label="Project key">
+            <input
+              type="text"
+              value={config.jira.project}
+              onChange={e => update(['jira', 'project'], e.target.value)}
+              placeholder="SUP"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
+            />
+          </Field>
+          <Field label="Poll interval (minutes)">
+            <input
+              type="number"
+              min={1}
+              value={config.jira.poll_minutes}
+              onChange={e => update(['jira', 'poll_minutes'], parseInt(e.target.value, 10) || 15)}
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
+            />
+          </Field>
+          <p className="text-xs text-zinc-500">
+            The API token is read from the <span className="font-mono text-zinc-400">JIRA_TOKEN</span> environment
+            variable, never stored here. Changes apply on the next backend restart.
+          </p>
+        </Section>
+
         {/* CLI commands */}
         <Section title="CLI Providers">
           <Field label="Claude Code command">
