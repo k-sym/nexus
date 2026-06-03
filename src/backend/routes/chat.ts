@@ -4,10 +4,11 @@ import path from 'path';
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import yaml from 'js-yaml';
-import { ChatThread, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet, FileAttachment } from '@nexus/shared';
+import { ChatThread, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet, FileAttachment, ChatStreamEvent } from '@nexus/shared';
 import { getRelevantMemories, addMemory } from '../memory';
 import { loadConfig } from '../config';
 import { runPersona, ClaudeSession } from '../orchestrator/providers';
+import { adapterFor, providerKindOf } from '../orchestrator/stream-adapters';
 import { getProviderById } from './providers';
 import { parseAskBlock, buildAnswerSummary } from '../chat/ask';
 
@@ -99,7 +100,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
    * an ask block) or a plain text message. `triggerText` is the user input that
    * caused this turn (used for memory relevance + archival).
    */
-  async function respond(threadId: string, triggerText: string, attachments: FileAttachment[] = []): Promise<ChatMessage> {
+  async function respond(threadId: string, triggerText: string, attachments: FileAttachment[] = [], onEvent?: (ev: ChatStreamEvent) => void): Promise<ChatMessage> {
     const config = loadConfig();
 
     const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
@@ -157,7 +158,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     const idleTimeoutMs = (config.claude_code.idle_timeout_seconds ?? 600) * 1000;
     console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}${claudeSession ? (claudeSession.isResume ? ` (resume ${claudeSession.id})` : ` (new session ${claudeSession.id})`) : ''}`);
-    const result = await runPersona(persona, promptBody, workspace, config, () => {}, provider, claudeSession, idleTimeoutMs);
+
+    // When streaming, normalize the provider's raw output into delta/session events
+    // for a live preview. The authoritative reply is still result.output below.
+    const adapter = adapterFor(providerKindOf(provider, persona.provider));
+    const onOutput = onEvent
+      ? (chunk: string) => { for (const ev of adapter.push(chunk)) onEvent(ev); }
+      : () => {};
+    const result = await runPersona(persona, promptBody, workspace, config, onOutput, provider, claudeSession, idleTimeoutMs);
     if (!result.ok) {
       console.error(`[chat] ${persona.provider} (${persona.model}) failed in ${workspace}: ${result.error}`);
     }
@@ -214,6 +222,38 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     // Persist the user's turn, then run the agent.
     insertMessage(threadId, 'user', body.content, body.attachments || '[]');
     return respond(threadId, body.content, attachments);
+  });
+
+  /**
+   * Streaming variant of the message endpoint: persists the user turn, runs the
+   * agent, and streams NDJSON `ChatStreamEvent`s (delta/session/done/error) over a
+   * hijacked response as the turn progresses. The final `done` carries the
+   * persisted assistant message (authoritative — deltas are a best-effort preview).
+   */
+  fastify.post('/api/threads/:threadId/messages/stream', async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    const body = request.body as { content: string; attachments?: string };
+    let attachments: FileAttachment[] = [];
+    try { attachments = body.attachments ? JSON.parse(body.attachments) as FileAttachment[] : []; } catch { /* ignore malformed */ }
+    insertMessage(threadId, 'user', body.content, body.attachments || '[]');
+
+    reply.hijack();
+    reply.raw.writeHead(200, {
+      'Content-Type': 'application/x-ndjson; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+    });
+    const write = (ev: ChatStreamEvent) => {
+      try { reply.raw.write(JSON.stringify(ev) + '\n'); } catch { /* client gone */ }
+    };
+    try {
+      const msg = await respond(threadId, body.content, attachments, write);
+      write({ kind: 'done', message: msg });
+    } catch (err: any) {
+      write({ kind: 'error', error: err?.message || 'Streaming failed' });
+    } finally {
+      reply.raw.end();
+    }
   });
 
   /**

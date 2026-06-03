@@ -233,6 +233,9 @@ export async function runCodex(
   const outFile = path.join(os.tmpdir(), `nexus-codex-${process.pid}-${Date.now()}.txt`);
   const args = [
     'exec',
+    // `--json` streams JSONL events (parsed for the live preview); the authoritative
+    // final reply still comes from `--output-last-message`.
+    '--json',
     '--skip-git-repo-check',
     '--sandbox', 'workspace-write',
     ...(config?.args ?? []),
@@ -243,18 +246,46 @@ export async function runCodex(
 
   const result = await runCli(command, args, workspace, prompt, onOutput);
 
-  // Prefer the clean final message file over the verbose stdout transcript.
+  // Prefer the clean final message file; with --json, stdout is JSONL (not the
+  // reply), so fall back to the last agent_message in the stream, not raw stdout.
+  let last = '';
   try {
-    const last = fs.readFileSync(outFile, 'utf8').trim();
+    last = fs.readFileSync(outFile, 'utf8').trim();
     fs.unlinkSync(outFile);
-    if (last) return { ...result, output: last };
-  } catch {
-    /* file missing (early failure) — fall back to whatever stdout we captured */
-  }
-  return result;
+  } catch { /* file missing (early failure) */ }
+  if (!last) last = assembleCliFinal('codex', result.output);
+  return last ? { ...result, output: last } : result;
 }
 
-export function runOpenCode(
+/**
+ * Assemble the final reply text from a CLI's raw NDJSON stream, as a fallback when
+ * the clean output isn't otherwise available. Uses the stream adapters' delta
+ * extraction; for OpenCode, dedups re-emitted parts by id (latest wins).
+ */
+function assembleCliFinal(kind: 'codex' | 'opencode', raw: string): string {
+  if (kind === 'opencode') {
+    const parts = new Map<string, string>();
+    const order: string[] = [];
+    for (const line of raw.split('\n')) {
+      let ev: any; try { ev = JSON.parse(line.trim()); } catch { continue; }
+      if (ev?.type === 'text' && ev.part?.text) {
+        const id = ev.part.id ?? String(order.length);
+        if (!parts.has(id)) order.push(id);
+        parts.set(id, ev.part.text);
+      }
+    }
+    return order.map(id => parts.get(id) ?? '').join('');
+  }
+  // codex: concatenate agent_message item texts (usually a single final message).
+  const out: string[] = [];
+  for (const line of raw.split('\n')) {
+    let ev: any; try { ev = JSON.parse(line.trim()); } catch { continue; }
+    if (ev?.type === 'item.completed' && ev.item?.type === 'agent_message' && ev.item.text) out.push(ev.item.text);
+  }
+  return out.join('');
+}
+
+export async function runOpenCode(
   workspace: string,
   prompt: string,
   onOutput: StreamCallback,
@@ -263,8 +294,13 @@ export function runOpenCode(
 ): Promise<ProviderResult> {
   // A bare `opencode` opens the interactive TUI; `run` is required for headless one-shot.
   // OpenCode uses its OWN provider credentials (e.g. OpenRouter) — Nexus just invokes the CLI.
+  // `--format json` streams JSON events (parsed for the live preview); the final
+  // reply is assembled from the text parts since stdout is no longer plain text.
   const args = buildOpenCodeArgs(model, extraArgs, prompt);
-  return runCli('opencode', args, workspace, prompt, onOutput);
+  args.splice(1, 0, '--format', 'json'); // after 'run', before model/args/prompt
+  const result = await runCli('opencode', args, workspace, prompt, onOutput);
+  const final = assembleCliFinal('opencode', result.output);
+  return final ? { ...result, output: final } : result;
 }
 
 export interface OpenAICompatibleOptions {
@@ -306,7 +342,10 @@ export async function runOpenAICompatible(
           { role: 'user', content: prompt },
         ],
         max_tokens: persona.token_budget,
-        stream: false,
+        stream: true,
+        // Ask for usage in the terminal SSE chunk; servers that don't support it
+        // just omit it and we fall back to an estimate.
+        stream_options: { include_usage: true },
       }),
     });
 
@@ -314,19 +353,42 @@ export async function runOpenAICompatible(
       const body = await response.text();
       throw new Error(`API error ${response.status}: ${body}`);
     }
+    if (!response.body) throw new Error('No response body from streaming endpoint');
 
-    const data = await response.json() as any;
-    if (data.error) throw new Error(data.error.message || String(data.error));
-
-    const content = data.choices?.[0]?.message?.content || '';
-    onOutput(content);
+    // Parse the OpenAI SSE stream: `data: {json}` lines, terminated by `data: [DONE]`.
+    // Each delta's content is forwarded to onOutput for the live preview; we also
+    // accumulate the full text and capture usage from the final chunk if present.
+    let content = '';
+    let usageRaw: any = null;
+    const reader = (response.body as any).getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (payload === '[DONE]') continue;
+        let json: any;
+        try { json = JSON.parse(payload); } catch { continue; }
+        if (json.error) throw new Error(json.error.message || String(json.error));
+        const delta = json.choices?.[0]?.delta?.content;
+        if (delta) { content += delta; onOutput(delta); }
+        if (json.usage) usageRaw = json.usage;
+      }
+    }
 
     // Prefer real usage from the API; fall back to an estimate if absent.
-    const usage: TokenUsage = data.usage
+    const usage: TokenUsage = usageRaw
       ? {
-          prompt: data.usage.prompt_tokens ?? 0,
-          completion: data.usage.completion_tokens ?? 0,
-          total: data.usage.total_tokens ?? 0,
+          prompt: usageRaw.prompt_tokens ?? 0,
+          completion: usageRaw.completion_tokens ?? 0,
+          total: usageRaw.total_tokens ?? 0,
         }
       : estimateUsage(`${persona.system_prompt}\n${prompt}`, content);
 
