@@ -46,15 +46,15 @@ export default function PersonaCard({ persona, onDelete, onEdit, onRefresh }: Pe
   return (
     <div className="bg-zinc-950 border border-zinc-800 rounded-lg overflow-hidden">
       <div
-        className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-zinc-900/50 transition-colors"
+        className="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer hover:bg-zinc-900/50 transition-colors"
         onClick={handleExpand}
       >
-        <div className="flex items-center gap-3">
-          <div className="w-2 h-2 rounded-full bg-indigo-500" />
-          <span className="text-sm font-medium">{persona.name}</span>
-          <span className="text-[10px] bg-zinc-800/50 text-zinc-500 px-2 py-0.5 rounded">{persona.slug}</span>
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="w-2 h-2 rounded-full bg-indigo-500 shrink-0" />
+          <span className="text-sm font-medium truncate">{persona.name}</span>
+          <span className="text-[10px] bg-zinc-800/50 text-zinc-500 px-2 py-0.5 rounded shrink-0">{persona.slug}</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {loading && <span className="text-xs text-zinc-500">Loading...</span>}
           <button
             onClick={(e) => { e.stopPropagation(); onEdit(persona.slug); }}
