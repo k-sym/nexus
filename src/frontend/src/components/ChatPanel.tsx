@@ -30,6 +30,11 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
+  // Mirrors activeThreadId for async handlers: lets an in-flight send check it's
+  // still on the same thread before writing results (guards against bleed when
+  // the user switches threads mid-reply).
+  const activeThreadIdRef = useRef<string | null>(null);
+  useEffect(() => { activeThreadIdRef.current = activeThreadId; }, [activeThreadId]);
 
   const loadThreads = useCallback(async () => {
     try {
@@ -119,10 +124,14 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
     try {
       // Backend persists the user turn, runs the thread's agent, and saves the reply.
       await api.chat.sendMessage(threadId, content, attachmentsJson);
-      await loadMessages(threadId);
-      // Refresh threads so the captured Claude session id (set server-side this
-      // turn) shows in the resume chip.
-      await loadThreads();
+      // Only refresh if the user is still viewing this thread — otherwise a slow
+      // reply would overwrite whatever thread/project they navigated to.
+      if (activeThreadIdRef.current === threadId) {
+        await loadMessages(threadId);
+        // Refresh threads so the captured Claude session id (set server-side this
+        // turn) shows in the resume chip.
+        await loadThreads();
+      }
     } catch (err) {
       console.error('Failed to send message:', err);
     } finally {

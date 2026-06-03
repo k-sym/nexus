@@ -53,7 +53,7 @@ export default function AgentRoom({ projectId, slug, name, agent, runningTasks }
       )}
 
       <div className="flex-1 min-h-0">
-        <ChatPanel projectId={projectId} agentSlug={slug} />
+        <ChatPanel key={`${projectId}:${slug}`} projectId={projectId} agentSlug={slug} />
       </div>
     </div>
   );
