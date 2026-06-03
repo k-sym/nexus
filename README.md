@@ -43,7 +43,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Personas** | YAML-defined agent personalities that bind a provider + model + system prompt + tools. Assign different ones to coding, review, deploy, etc. |
 | **Multi-provider agents** | Spawns Claude Code / Codex / OpenCode as CLI subprocesses; calls OpenRouter and any local OpenAI-compatible server (omlx, LM Studio, llama.cpp, …) over HTTP. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
-| **Chat** | Per-project conversational interface with file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and 48-hour archival to Obsidian. |
+| **Chat** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and 48-hour archival to Obsidian. |
 | **Scheduler** | Built-in cron for recurring tasks (daily digests, weekly reviews, etc.). |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical), pushed in via a sync endpoint. |
 | **Mission Control** | A single dashboard aggregating daemon health, the agent roster with per-provider health, scheduler status, and an activity feed. |
@@ -307,6 +307,7 @@ scheduler:
 claude_code:
   command: "claude"
   args: []                       # extra CLI flags; the prompt is passed via -p
+  idle_timeout_seconds: 600      # kill a turn only after this long with NO streamed activity
 
 codex:
   command: "codex"
@@ -425,7 +426,8 @@ Each project has a chat interface:
 - Drag-and-drop files onto the composer — they land in `project_docs/uploads/` and are referenced in context.
 - Relevant memories are recalled and injected into the prompt; each Q&A is archived to memory (best-effort).
 - **Question cards**: when an agent emits an ` ```ask ``` ` block, it renders as a structured question card (single/multi/custom answers); your reply is fed back as the next turn (`POST /api/threads/:threadId/answer`).
-- **Claude session capture & resume**: Claude Code turns run with `--output-format json`, so Nexus captures the resumable `session_id` per thread. A chip under the chat header lets you **copy** `claude --resume <id>` or **open a macOS Terminal** already resumed into that session — useful if a turn stalls. In-app turns also continue the same session (`--resume`), so the thread is one continuous conversation shared with the terminal. (One writer at a time — hand off, don't drive both at once.)
+- **Live streaming**: replies stream in token-by-token (`POST /api/threads/:threadId/messages/stream`, NDJSON). This is provider-agnostic — Claude (`stream-json`), Codex (`--json`), OpenCode (`--format json`), and HTTP providers (OpenAI SSE) each go through a normalizing adapter, so you see the agent working rather than a blank wait. The non-streaming `POST .../messages` remains for non-UI callers. Claude Code turns are bounded by an **idle** timeout (no streamed activity), not a wall-clock cap — see `claude_code.idle_timeout_seconds`.
+- **Claude session capture & resume**: Claude Code turns run with `--output-format stream-json` under a self-assigned `--session-id`, so Nexus captures the resumable session id per thread (surfaced live the moment a turn starts). A chip under the chat header lets you **copy** `claude --resume <id>` or **open a macOS Terminal** already resumed into that session — useful if a turn stalls. In-app turns also continue the same session (`--resume`), so the thread is one continuous conversation shared with the terminal. (One writer at a time — hand off, don't drive both at once.)
 - Conversations older than **48 hours** are auto-archived as markdown to the Obsidian vault, then purged from the hot SQLite store.
 
 ### Scheduler
@@ -517,6 +519,7 @@ Base URL: `http://127.0.0.1:4173`
 | POST | `/api/projects/:projectId/threads` | Create a thread |
 | GET | `/api/threads/:threadId/messages` | List messages |
 | POST | `/api/threads/:threadId/messages` | Send a message (gets AI reply with memory context) |
+| POST | `/api/threads/:threadId/messages/stream` | Send a message; streams the turn as NDJSON (`delta`/`session`/`done`/`error`) |
 | POST | `/api/threads/:threadId/answer` | Submit a reply to a question card |
 | PATCH | `/api/threads/:threadId` | Rename a thread |
 | POST | `/api/threads/:threadId/archive` | Archive a thread |
