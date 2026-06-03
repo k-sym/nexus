@@ -1,3 +1,4 @@
+import { spawn } from 'child_process';
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import yaml from 'js-yaml';
@@ -9,6 +10,16 @@ import { getProviderById } from './providers';
 import { parseAskBlock, buildAnswerSummary } from '../chat/ask';
 
 const MAX_HISTORY = 12;
+
+/** Single-quote a string for a POSIX shell (wrap in '...', escape embedded quotes). */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
+/** Quote a string as an AppleScript string literal (escape backslashes + quotes). */
+function appleScriptQuote(s: string): string {
+  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
 
 export async function registerChatRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -98,21 +109,40 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       return insertMessage(threadId, 'assistant', `[No agent] No persona found for "${thread.agent_id}". Add one under Personas, or pick a different agent.`);
     }
 
+    const provider: Provider | undefined = persona.provider_id ? getProviderById(db, persona.provider_id) : undefined;
+    const isClaude = provider ? provider.kind === 'claude_code' : persona.provider === 'claude_code';
+    // Resume the thread's existing Claude session so the whole chat is one
+    // continuous conversation (shared with the terminal button). Only for Claude
+    // Code, and only once a session id has been captured from a prior turn.
+    const resumeId = isClaude && thread.agent_session_id ? thread.agent_session_id : undefined;
+
     const memories = project ? await getRelevantMemories(db, project.id, triggerText) : [];
     const memoryBlock = memories.length ? `Relevant memories:\n${memories.map(m => `- ${m}`).join('\n')}\n\n` : '';
-    const history = db.prepare('SELECT role, content FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').all(threadId) as { role: string; content: string }[];
-    const historyBlock = history
-      .slice(-MAX_HISTORY)
-      .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n');
-    const promptBody = `${memoryBlock}${historyBlock}\n\nAssistant:`;
     const workspace = project?.repo_path || process.cwd();
 
-    const provider: Provider | undefined = persona.provider_id ? getProviderById(db, persona.provider_id) : undefined;
-    console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}`);
-    const result = await runPersona(persona, promptBody, workspace, config, () => {}, provider);
+    let promptBody: string;
+    if (resumeId) {
+      // The session already holds the system prompt + full history — send only
+      // this turn, plus any memories freshly recalled for it.
+      promptBody = `${memoryBlock}${triggerText}`;
+    } else {
+      const history = db.prepare('SELECT role, content FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').all(threadId) as { role: string; content: string }[];
+      const historyBlock = history
+        .slice(-MAX_HISTORY)
+        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
+        .join('\n');
+      promptBody = `${memoryBlock}${historyBlock}\n\nAssistant:`;
+    }
+
+    console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}${resumeId ? ` (resume ${resumeId})` : ''}`);
+    const result = await runPersona(persona, promptBody, workspace, config, () => {}, provider, resumeId);
     if (!result.ok) {
       console.error(`[chat] ${persona.provider} (${persona.model}) failed in ${workspace}: ${result.error}`);
+    }
+    // Capture the resumable session id (Claude Code) even on an empty/errored
+    // turn, so a stuck conversation can be picked up from a terminal.
+    if (result.sessionId) {
+      db.prepare('UPDATE chat_threads SET agent_session_id = ? WHERE id = ?').run(result.sessionId, threadId);
     }
     const content = result.ok
       ? (result.output.trim() || '[empty response]')
@@ -169,11 +199,63 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     return respond(threadId, summary);
   });
 
+  /**
+   * Open a macOS Terminal window in the project's repo, resuming this thread's
+   * Claude session (`claude --resume <id>`). Lets you grab a stalled conversation
+   * and keep going by hand. Sessions are stored per-cwd, so we must launch from
+   * the original repo path.
+   */
+  fastify.post('/api/threads/:threadId/open-terminal', async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    if (process.platform !== 'darwin') {
+      reply.code(400);
+      return { error: 'Opening a terminal is only supported on macOS.' };
+    }
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (!thread) {
+      reply.code(404);
+      return { error: 'Thread not found.' };
+    }
+    const sessionId = thread.agent_session_id;
+    if (!sessionId || !/^[A-Za-z0-9._-]+$/.test(sessionId)) {
+      reply.code(400);
+      return { error: 'No Claude session captured for this thread yet — send a message first.' };
+    }
+    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as { repo_path: string } | undefined;
+    const cwd = project?.repo_path || process.cwd();
+    const shellCmd = `cd ${shellQuote(cwd)} && claude --resume ${sessionId}`;
+    const appleScript = `tell application "Terminal" to do script ${appleScriptQuote(shellCmd)}`;
+    try {
+      const child = spawn('osascript', ['-e', appleScript, '-e', 'tell application "Terminal" to activate'], {
+        stdio: 'ignore',
+        detached: true,
+      });
+      child.unref();
+      return { ok: true };
+    } catch (err: any) {
+      reply.code(500);
+      return { error: err?.message || 'Failed to open Terminal.' };
+    }
+  });
+
   fastify.post('/api/threads/:threadId/archive', async (request) => {
     const { threadId } = request.params as { threadId: string };
     const now = new Date().toISOString();
     db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?').run(now, threadId);
     return { success: true };
+  });
+
+  fastify.patch('/api/threads/:threadId', async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    const { title } = request.body as { title?: string };
+    const trimmed = title?.trim();
+    if (!trimmed) {
+      reply.code(400);
+      return { error: 'Title cannot be empty' };
+    }
+    const now = new Date().toISOString();
+    db.prepare('UPDATE chat_threads SET title = ?, updated_at = ? WHERE id = ?').run(trimmed, now, threadId);
+    return db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread;
   });
 
   // Permanently delete a thread and its messages (chat_messages cascade on FK).

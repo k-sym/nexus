@@ -190,6 +190,13 @@ function runMigrations(db: Database.Database) {
     }
   }
 
+  // Chat thread session-capture migration: store the resumable Claude Code
+  // session id so a hung/empty turn can be picked back up from a terminal.
+  const threadCols = db.pragma('table_info(chat_threads)') as { name: string }[];
+  if (!threadCols.some(c => c.name === 'agent_session_id')) {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN agent_session_id TEXT');
+  }
+
   // Chat message structured-question migrations (DBs created before this feature).
   const msgCols = db.pragma('table_info(chat_messages)') as { name: string }[];
   const msgColNames = new Set(msgCols.map(c => c.name));
