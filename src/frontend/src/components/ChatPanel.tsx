@@ -81,6 +81,15 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // While a turn is running, poll threads so the Claude session id (stored at
+  // dispatch) shows up in the resume chip mid-run — letting you shell out before
+  // the turn even finishes.
+  useEffect(() => {
+    if (!isTyping) return;
+    const iv = setInterval(() => { loadThreads(); }, 3000);
+    return () => clearInterval(iv);
+  }, [isTyping, loadThreads]);
+
   const handleNewThread = async () => {
     const agent = selectedAgent || agentSlug;
     if (!agent) return;

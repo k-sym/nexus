@@ -5,7 +5,7 @@ import yaml from 'js-yaml';
 import { ChatThread, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet } from '@nexus/shared';
 import { getRelevantMemories, addMemory } from '../memory';
 import { loadConfig } from '../config';
-import { runPersona } from '../orchestrator/providers';
+import { runPersona, ClaudeSession } from '../orchestrator/providers';
 import { getProviderById } from './providers';
 import { parseAskBlock, buildAnswerSummary } from '../chat/ask';
 
@@ -111,17 +111,29 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     const provider: Provider | undefined = persona.provider_id ? getProviderById(db, persona.provider_id) : undefined;
     const isClaude = provider ? provider.kind === 'claude_code' : persona.provider === 'claude_code';
-    // Resume the thread's existing Claude session so the whole chat is one
-    // continuous conversation (shared with the terminal button). Only for Claude
-    // Code, and only once a session id has been captured from a prior turn.
-    const resumeId = isClaude && thread.agent_session_id ? thread.agent_session_id : undefined;
+
+    // Claude Code session handling. Resume the thread's stored session if it has
+    // one (so the whole chat is one continuous conversation, shared with the
+    // terminal). Otherwise mint a new id UP FRONT and store it immediately — so
+    // the resume chip / terminal hand-off is available while this turn is still
+    // running (or if it stalls), not only after it completes.
+    let claudeSession: ClaudeSession | undefined;
+    if (isClaude) {
+      if (thread.agent_session_id) {
+        claudeSession = { id: thread.agent_session_id, isResume: true };
+      } else {
+        const newId = uuid();
+        db.prepare('UPDATE chat_threads SET agent_session_id = ? WHERE id = ?').run(newId, threadId);
+        claudeSession = { id: newId, isResume: false };
+      }
+    }
 
     const memories = project ? await getRelevantMemories(db, project.id, triggerText) : [];
     const memoryBlock = memories.length ? `Relevant memories:\n${memories.map(m => `- ${m}`).join('\n')}\n\n` : '';
     const workspace = project?.repo_path || process.cwd();
 
     let promptBody: string;
-    if (resumeId) {
+    if (claudeSession?.isResume) {
       // The session already holds the system prompt + full history — send only
       // this turn, plus any memories freshly recalled for it.
       promptBody = `${memoryBlock}${triggerText}`;
@@ -134,8 +146,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       promptBody = `${memoryBlock}${historyBlock}\n\nAssistant:`;
     }
 
-    console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}${resumeId ? ` (resume ${resumeId})` : ''}`);
-    const result = await runPersona(persona, promptBody, workspace, config, () => {}, provider, resumeId);
+    const idleTimeoutMs = (config.claude_code.idle_timeout_seconds ?? 600) * 1000;
+    console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}${claudeSession ? (claudeSession.isResume ? ` (resume ${claudeSession.id})` : ` (new session ${claudeSession.id})`) : ''}`);
+    const result = await runPersona(persona, promptBody, workspace, config, () => {}, provider, claudeSession, idleTimeoutMs);
     if (!result.ok) {
       console.error(`[chat] ${persona.provider} (${persona.model}) failed in ${workspace}: ${result.error}`);
     }
