@@ -94,6 +94,17 @@ export interface FileAttachment {
   mime_type: string;
 }
 
+/**
+ * One event in a streamed chat turn (NDJSON over the streaming endpoint).
+ * `delta` is a best-effort live preview; the authoritative reply arrives in
+ * `done.message`. `session` carries the captured Claude/Codex/OpenCode session id.
+ */
+export type ChatStreamEvent =
+  | { kind: 'delta'; text: string }
+  | { kind: 'session'; session_id: string }
+  | { kind: 'done'; message: ChatMessage }
+  | { kind: 'error'; error: string };
+
 /** One selectable option in a question. */
 export interface QuestionOption {
   label: string;
