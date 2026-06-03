@@ -13,8 +13,14 @@ export async function rerankSentences(
     .prepare(`SELECT id, text FROM sentences WHERE id IN (${placeholders})`)
     .all(...sentenceIds) as Array<{ id: number; text: string }>;
 
-  const scores = await ctx.models.rerank(query, rows.map((r) => r.text));
-  if (!scores) return null;
+  let scores: number[];
+  try {
+    scores = await ctx.models.rerank(query, rows.map((r) => r.text));
+  } catch (err) {
+    // Reranker unavailable — caller degrades to fusion order.
+    console.warn(`[rerank] failed, degrading to fusion order: ${(err as Error).message}`);
+    return null;
+  }
 
   const out = new Map<number, number>();
   rows.forEach((r, i) => out.set(r.id, scores[i] ?? 0));

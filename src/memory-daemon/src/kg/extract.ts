@@ -41,8 +41,9 @@ export async function extractTriples(ctx: AppContext, memoryId: string): Promise
     | undefined;
   if (!mem) return 0; // memory deleted before the job ran — nothing to do
 
+  // Throws ModelError (transport vs HTTP, with status/body) if the gen server is
+  // down or misconfigured — surfaces the real cause in jobs.last_error.
   const out = await ctx.models.complete(mem.body, { system: SYSTEM, temperature: 0, maxTokens: 700, timeoutMs: 60_000 });
-  if (out === null) throw new Error("extractor (4001) unreachable");
 
   const raw = parseJsonArray(out);
   const valid = raw

@@ -1,9 +1,29 @@
 // Thin OpenAI-compatible clients for the local llama stack (loopback only).
-// All calls fail soft: on timeout/unreachable they return null/empty so retrieval
-// and indexing degrade gracefully rather than throwing.
+// Calls THROW a ModelError on failure, distinguishing a transport failure
+// (connection refused / DNS / timeout) from an HTTP error status (4xx/5xx),
+// and carry the status code + a body snippet so the real cause is visible in
+// jobs.last_error. Retrieval callers catch this to degrade gracefully; indexing
+// jobs let it propagate so a misconfigured stack fails loudly instead of
+// silently dead-lettering with a wrong "unreachable" message.
 import type { DaemonConfig } from "../config.js";
 
-async function postJson(url: string, body: unknown, apiKey: string | undefined, timeoutMs: number): Promise<any | null> {
+/** A model-stack call failed. `kind` separates "the server is down" from "the
+ *  server answered with an error" — the latter (e.g. a 501 from a llama-server
+ *  launched without --embedding) used to be mislabelled as unreachable. */
+export class ModelError extends Error {
+  constructor(
+    message: string,
+    readonly kind: "transport" | "http",
+    readonly url: string,
+    readonly status?: number,
+    readonly bodySnippet?: string,
+  ) {
+    super(message);
+    this.name = "ModelError";
+  }
+}
+
+async function postJson(url: string, body: unknown, apiKey: string | undefined, timeoutMs: number): Promise<any> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -17,13 +37,23 @@ async function postJson(url: string, body: unknown, apiKey: string | undefined, 
       signal: ctrl.signal,
     });
     if (!res.ok) {
-      console.warn(`[models] ${url} -> ${res.status}`);
-      return null;
+      const snippet = (await res.text().catch(() => "")).trim().replace(/\s+/g, " ").slice(0, 300);
+      console.warn(`[models] ${url} -> HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`);
+      throw new ModelError(
+        `${url} -> HTTP ${res.status}${snippet ? `: ${snippet}` : ""}`,
+        "http",
+        url,
+        res.status,
+        snippet || undefined,
+      );
     }
     return await res.json();
   } catch (err) {
-    console.warn(`[models] ${url} unreachable: ${(err as Error).message}`);
-    return null;
+    if (err instanceof ModelError) throw err;
+    const e = err as Error;
+    const reason = e.name === "AbortError" ? `timed out after ${timeoutMs}ms` : e.message;
+    console.warn(`[models] ${url} unreachable: ${reason}`);
+    throw new ModelError(`${url} unreachable (${reason})`, "transport", url);
   } finally {
     clearTimeout(timer);
   }
@@ -35,41 +65,33 @@ export class ModelClient {
 
   constructor(private cfg: DaemonConfig["models"]) {}
 
-  /** Embed one or many strings -> 768-dim vectors (order preserved). null on failure. */
-  async embed(input: string | string[], timeoutMs = 30_000): Promise<number[][] | null> {
+  /** Embed one or many strings -> 768-dim vectors (order preserved). Throws ModelError on failure. */
+  async embed(input: string | string[], timeoutMs = 30_000): Promise<number[][]> {
     this.embedCalls++;
-    const json = await postJson(
-      `${this.cfg.embedUrl}/embeddings`,
-      { model: this.cfg.embedModel, input },
-      this.cfg.apiKey,
-      timeoutMs,
-    );
-    if (!json?.data) return null;
-    return (json.data as Array<{ embedding: number[] }>).map((d) => d.embedding);
+    const url = `${this.cfg.embedUrl}/embeddings`;
+    const json = await postJson(url, { model: this.cfg.embedModel, input }, this.cfg.apiKey, timeoutMs);
+    const data = json?.data as Array<{ embedding: number[] }> | undefined;
+    if (!data) throw new ModelError(`${url} returned no embedding data`, "http", url, undefined, JSON.stringify(json).slice(0, 300));
+    return data.map((d) => d.embedding);
   }
 
-  /** Rerank documents against a query -> relevance scores aligned to input order. */
-  async rerank(query: string, documents: string[], timeoutMs = 30_000): Promise<number[] | null> {
+  /** Rerank documents against a query -> relevance scores aligned to input order. Throws ModelError on failure. */
+  async rerank(query: string, documents: string[], timeoutMs = 30_000): Promise<number[]> {
     if (documents.length === 0) return [];
-    const json = await postJson(
-      `${this.cfg.rerankUrl}/rerank`,
-      { model: this.cfg.rerankModel, query, documents },
-      this.cfg.apiKey,
-      timeoutMs,
-    );
-    if (!json?.results) return null;
+    const url = `${this.cfg.rerankUrl}/rerank`;
+    const json = await postJson(url, { model: this.cfg.rerankModel, query, documents }, this.cfg.apiKey, timeoutMs);
+    const results = json?.results as Array<{ index: number; relevance_score: number }> | undefined;
+    if (!results) throw new ModelError(`${url} returned no rerank results`, "http", url, undefined, JSON.stringify(json).slice(0, 300));
     const scores = new Array<number>(documents.length).fill(0);
-    for (const r of json.results as Array<{ index: number; relevance_score: number }>) {
-      scores[r.index] = r.relevance_score;
-    }
+    for (const r of results) scores[r.index] = r.relevance_score;
     return scores;
   }
 
-  /** One-shot chat completion (HyDE / KG extraction). null on failure. */
+  /** One-shot chat completion (HyDE / KG extraction). Throws ModelError on failure. */
   async complete(
     prompt: string,
     opts: { system?: string; temperature?: number; maxTokens?: number; timeoutMs?: number } = {},
-  ): Promise<string | null> {
+  ): Promise<string> {
     const messages = [
       ...(opts.system ? [{ role: "system", content: opts.system }] : []),
       { role: "user", content: prompt },
@@ -80,7 +102,7 @@ export class ModelClient {
       this.cfg.apiKey,
       opts.timeoutMs ?? 60_000,
     );
-    return json?.choices?.[0]?.message?.content ?? null;
+    return json?.choices?.[0]?.message?.content ?? "";
   }
 
   /** Liveness check for a single endpoint via GET /models. */
@@ -100,11 +122,30 @@ export class ModelClient {
     }
   }
 
+  /** Capability probe: actually exercise an endpoint with a tiny payload so a
+   *  reachable-but-misconfigured server (e.g. 501 Not Implemented) reads as
+   *  unhealthy. Uses postJson directly to avoid perturbing embedCalls. */
+  private async probe(url: string, body: unknown, ok: (json: any) => boolean): Promise<boolean> {
+    try {
+      return ok(await postJson(url, body, this.cfg.apiKey, 3000));
+    } catch {
+      return false;
+    }
+  }
+
   async health(): Promise<{ gen: boolean; embed: boolean; rerank: boolean }> {
     const [gen, embed, rerank] = await Promise.all([
-      this.ping(this.cfg.genUrl),
-      this.ping(this.cfg.embedUrl),
-      this.ping(this.cfg.rerankUrl),
+      this.ping(this.cfg.genUrl), // gen capability is exercised by extract_kg (#27); a liveness ping suffices here
+      this.probe(
+        `${this.cfg.embedUrl}/embeddings`,
+        { model: this.cfg.embedModel, input: "ok" },
+        (j) => Array.isArray(j?.data) && j.data.length > 0,
+      ),
+      this.probe(
+        `${this.cfg.rerankUrl}/rerank`,
+        { model: this.cfg.rerankModel, query: "ok", documents: ["ok"] },
+        (j) => Array.isArray(j?.results),
+      ),
     ]);
     return { gen, embed, rerank };
   }
