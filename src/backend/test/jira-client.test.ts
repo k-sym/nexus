@@ -1,6 +1,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mapIssues, fetchJiraTickets, JiraError } from '../jira/client';
+import { mapIssues, fetchJiraTickets, JiraError, normalizeInstance } from '../jira/client';
+
+test('normalizeInstance strips scheme, trailing slash, and whitespace', () => {
+  assert.equal(normalizeInstance('https://safety-services.atlassian.net'), 'safety-services.atlassian.net');
+  assert.equal(normalizeInstance('http://host/'), 'host');
+  assert.equal(normalizeInstance('  safety-services.atlassian.net/  '), 'safety-services.atlassian.net');
+  assert.equal(normalizeInstance('host.atlassian.net'), 'host.atlassian.net');
+});
+
+test('fetchJiraTickets builds a clean URL from an instance pasted with https://', async () => {
+  let calledUrl = '';
+  const fakeFetch = async (url: string) => {
+    calledUrl = url;
+    return new Response(JSON.stringify({ issues: [] }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  await fetchJiraTickets({ user: 'u', instance: 'https://h.atlassian.net/', project: 'SUP' }, 'tok', fakeFetch as any);
+  assert.equal(calledUrl, 'https://h.atlassian.net/rest/api/3/search/jql');
+});
 
 const ISSUE = {
   key: 'SUP-42',

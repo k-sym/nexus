@@ -30,6 +30,13 @@ export interface JiraQueryConfig {
   project: string;
 }
 
+/** Normalise a configured instance to a bare host: tolerate a pasted
+ *  `https://host`, a trailing slash, or surrounding whitespace so the request
+ *  URL never becomes `https://https://…`. */
+export function normalizeInstance(raw: string): string {
+  return raw.trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+}
+
 /** Pure mapping: Jira issues → ticket rows. */
 export function mapIssues(issues: JiraIssue[], instance: string): IncomingTicket[] {
   return issues.map((issue) => {
@@ -56,7 +63,8 @@ export async function fetchJiraTickets(
   token: string,
   fetchImpl: typeof fetch = fetch,
 ): Promise<IncomingTicket[]> {
-  const url = `https://${cfg.instance}/rest/api/3/search/jql`;
+  const instance = normalizeInstance(cfg.instance);
+  const url = `https://${instance}/rest/api/3/search/jql`;
   const jql = `project=${cfg.project} AND statusCategory != Done AND assignee = currentUser() ORDER BY created DESC`;
   const auth = Buffer.from(`${cfg.user}:${token}`).toString('base64');
 
@@ -85,5 +93,5 @@ export async function fetchJiraTickets(
   }
 
   const json = (await res.json()) as { issues?: JiraIssue[] };
-  return mapIssues(json.issues ?? [], cfg.instance);
+  return mapIssues(json.issues ?? [], instance);
 }
