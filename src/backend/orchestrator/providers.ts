@@ -27,6 +27,8 @@ export interface ProviderResult {
   error?: string;
   durationMs: number;
   usage: TokenUsage;
+  /** Resumable CLI session id, when the provider exposes one (Claude Code). */
+  sessionId?: string;
 }
 
 type StreamCallback = (chunk: string) => void;
@@ -126,16 +128,46 @@ function runCli(
   });
 }
 
-export function runClaudeCode(
+export async function runClaudeCode(
   workspace: string,
   prompt: string,
   onOutput: StreamCallback,
   config?: CliConfig,
   model?: string,
+  resumeSessionId?: string,
 ): Promise<ProviderResult> {
   const command = config?.command || 'claude';
-  const args = [...(config?.args ?? []), ...(model ? ['--model', model] : []), '-p', prompt];
-  return runCli(command, args, workspace, prompt, onOutput);
+  // `--output-format json` makes stdout a single JSON envelope carrying both the
+  // assistant's text (`result`) and the resumable `session_id`. We capture the
+  // session id so a hung/empty turn can be resumed from a terminal, and prefer
+  // the structured `result` over scraping raw text. `--resume <id>` continues an
+  // existing session so a chat thread is one continuous Claude conversation
+  // (shared with the terminal) rather than a fresh session per turn.
+  const args = [
+    ...(config?.args ?? []),
+    ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
+    ...(model ? ['--model', model] : []),
+    '--output-format', 'json',
+    '-p', prompt,
+  ];
+  const result = await runCli(command, args, workspace, prompt, onOutput);
+
+  try {
+    const env = JSON.parse(result.output) as { result?: string; session_id?: string; is_error?: boolean };
+    if (env && typeof env === 'object') {
+      const text = typeof env.result === 'string' ? env.result : result.output;
+      return {
+        ...result,
+        ok: result.ok && env.is_error !== true,
+        output: text,
+        sessionId: typeof env.session_id === 'string' ? env.session_id : undefined,
+        error: env.is_error ? (text || result.error || 'Claude Code reported an error') : result.error,
+      };
+    }
+  } catch {
+    // Not JSON (older CLI / unexpected shape) — fall back to raw output, no session id.
+  }
+  return result;
 }
 
 export async function runCodex(
@@ -314,12 +346,18 @@ export function runPersona(
   config: NexusConfig,
   onOutput: StreamCallback,
   provider?: Provider,
+  resumeSessionId?: string,
 ): Promise<ProviderResult> {
   const sys = persona.system_prompt
     ? `${persona.system_prompt}\n\n${ASK_CONVENTION}`
     : ASK_CONVENTION;
   const withSystem = `${sys}\n\n${prompt}`;
   const personaWithSys: PersonaConfig = { ...persona, system_prompt: sys };
+
+  // When resuming a Claude Code session, the system prompt + conversation are
+  // already in the session — send only the new turn (the caller passes just the
+  // latest message), so we don't re-inject the persona prompt every turn.
+  const claudePrompt = resumeSessionId ? prompt : withSystem;
 
   // Provider-first: a persona that references a Provider record dispatches by the
   // provider's kind + endpoint. (Legacy `provider` enum below is the fallback.)
@@ -329,7 +367,7 @@ export function runPersona(
       case 'claude_code': {
         const allowed = mapToolsToClaude(persona.tools);
         const args = [...(config.claude_code.args ?? []), ...(allowed.length ? ['--allowedTools', allowed.join(',')] : [])];
-        return runClaudeCode(workspace, withSystem, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(model));
+        return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(model), resumeSessionId);
       }
       case 'codex':
         return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, model);
@@ -354,7 +392,7 @@ export function runPersona(
         ...(config.claude_code.args ?? []),
         ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
       ];
-      return runClaudeCode(workspace, withSystem, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(persona.model));
+      return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(persona.model), resumeSessionId);
     }
     case 'codex':
       return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, persona.model);

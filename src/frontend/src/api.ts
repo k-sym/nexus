@@ -76,8 +76,12 @@ export const api = {
     // Submits the user's selection for a question card; backend runs the continuation turn.
     answer: (threadId: string, questionMessageId: string, replies: Reply[]) =>
       fetchJson<ChatMessage>(`${API}/threads/${threadId}/answer`, { method: 'POST', body: JSON.stringify({ question_message_id: questionMessageId, replies }) }),
+    renameThread: (threadId: string, title: string) =>
+      fetchJson<ChatThread>(`${API}/threads/${threadId}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
     archive: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}/archive`, { method: 'POST' }),
     deleteThread: (threadId: string) => fetchJson<void>(`${API}/threads/${threadId}`, { method: 'DELETE' }),
+    // Opens a macOS Terminal in the project repo, resuming this thread's Claude session.
+    openTerminal: (threadId: string) => fetchJson<{ ok: boolean }>(`${API}/threads/${threadId}/open-terminal`, { method: 'POST' }),
   },
   personas: {
     list: () => fetchJson<Persona[]>(`${API}/personas`),

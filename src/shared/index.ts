@@ -69,6 +69,9 @@ export interface ChatThread {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  /** Latest Claude Code CLI session id for this thread, captured per turn so the
+   *  conversation can be resumed from a terminal with `claude --resume <id>`. */
+  agent_session_id?: string | null;
 }
 
 export interface ChatMessage {

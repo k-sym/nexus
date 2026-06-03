@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Trash } from '@phosphor-icons/react';
+import { Trash, PencilSimple } from '@phosphor-icons/react';
 import { ChatThread, ChatMessage, FileAttachment, Persona, Ask, AnswerSet } from '@nexus/shared';
 import { api, AgentStatus } from '../api';
 import QuestionCard from './QuestionCard';
@@ -23,9 +23,13 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
   const [isTyping, setIsTyping] = useState(false);
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
+  const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [sessionCopied, setSessionCopied] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
 
   const loadThreads = useCallback(async () => {
     try {
@@ -116,6 +120,9 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
       // Backend persists the user turn, runs the thread's agent, and saves the reply.
       await api.chat.sendMessage(threadId, content, attachmentsJson);
       await loadMessages(threadId);
+      // Refresh threads so the captured Claude session id (set server-side this
+      // turn) shows in the resume chip.
+      await loadThreads();
     } catch (err) {
       console.error('Failed to send message:', err);
     } finally {
@@ -181,6 +188,30 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
     }
   };
 
+  const handleRenameStart = (e: React.MouseEvent, thread: ChatThread) => {
+    e.stopPropagation();
+    setRenamingThreadId(thread.id);
+    setRenameValue(thread.title);
+    setTimeout(() => { renameInputRef.current?.select(); }, 0);
+  };
+
+  const handleRenameSave = async (threadId: string) => {
+    const trimmed = renameValue.trim();
+    setRenamingThreadId(null);
+    if (!trimmed) return;
+    try {
+      const updated = await api.chat.renameThread(threadId, trimmed);
+      setThreads(prev => prev.map(t => t.id === threadId ? { ...t, title: updated.title } : t));
+    } catch (err) {
+      console.error('Failed to rename thread:', err);
+    }
+  };
+
+  const handleRenameKeyDown = (e: React.KeyboardEvent, threadId: string) => {
+    if (e.key === 'Enter') { e.preventDefault(); handleRenameSave(threadId); }
+    else if (e.key === 'Escape') { setRenamingThreadId(null); }
+  };
+
   const activeThread = threads.find(t => t.id === activeThreadId);
   const activeAgentName = activeThread
     ? personas.find(p => p.slug === activeThread.agent_id)?.name ?? activeThread.agent_id
@@ -205,19 +236,40 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
               key={thread.id}
               className={`group flex items-center border-b border-zinc-800/50 transition-colors ${activeThreadId === thread.id ? 'bg-indigo-500/20' : 'hover:bg-zinc-800/20'}`}
             >
-              <button
-                onClick={() => setActiveThreadId(thread.id)}
-                className={`flex-1 min-w-0 text-left px-3 py-2 text-sm truncate ${activeThreadId === thread.id ? 'text-white' : 'text-zinc-500 group-hover:text-zinc-200'}`}
-              >
-                {thread.title}
-              </button>
-              <button
-                onClick={e => handleDeleteThread(e, thread.id)}
-                title="Delete chat"
-                className="shrink-0 px-2 py-2 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
-              >
-                <Trash size={14} />
-              </button>
+              {renamingThreadId === thread.id ? (
+                <input
+                  ref={renameInputRef}
+                  value={renameValue}
+                  onChange={e => setRenameValue(e.target.value)}
+                  onKeyDown={e => handleRenameKeyDown(e, thread.id)}
+                  onBlur={() => handleRenameSave(thread.id)}
+                  className="flex-1 min-w-0 px-3 py-2 text-sm bg-transparent text-white outline-none"
+                  autoFocus
+                />
+              ) : (
+                <>
+                  <button
+                    onClick={() => setActiveThreadId(thread.id)}
+                    className={`flex-1 min-w-0 text-left px-3 py-2 text-sm truncate ${activeThreadId === thread.id ? 'text-white' : 'text-zinc-500 group-hover:text-zinc-200'}`}
+                  >
+                    {thread.title}
+                  </button>
+                  <button
+                    onClick={e => handleRenameStart(e, thread)}
+                    title="Rename chat"
+                    className="shrink-0 px-1 py-2 text-zinc-600 hover:text-zinc-200 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <PencilSimple size={14} />
+                  </button>
+                  <button
+                    onClick={e => handleDeleteThread(e, thread.id)}
+                    title="Delete chat"
+                    className="shrink-0 px-2 py-2 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                  >
+                    <Trash size={14} />
+                  </button>
+                </>
+              )}
             </div>
           ))}
           {threads.length === 0 && (
@@ -254,6 +306,42 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
                     ))}
                   </select>
                 </div>
+              </div>
+            )}
+
+            {/* Resume chip: the latest Claude Code session id for this thread.
+                Copy gives the exact `claude --resume <id>` command to pick the
+                conversation back up in a terminal if a turn stalls. */}
+            {activeThread?.agent_session_id && (
+              <div className="px-4 py-1.5 border-b border-zinc-800/50 flex items-center gap-2 text-[11px] text-zinc-500">
+                <span className="shrink-0">Claude session</span>
+                <code className="text-zinc-400 truncate font-mono" title={activeThread.agent_session_id}>
+                  {activeThread.agent_session_id}
+                </code>
+                <button
+                  onClick={async () => {
+                    try {
+                      await api.chat.openTerminal(activeThreadId!);
+                    } catch (err) {
+                      console.error('Failed to open terminal:', err);
+                    }
+                  }}
+                  className="ml-auto shrink-0 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
+                  title="Open a Terminal in this project resuming the session"
+                >
+                  {'>_'} Open terminal
+                </button>
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(`claude --resume ${activeThread.agent_session_id}`);
+                    setSessionCopied(true);
+                    setTimeout(() => setSessionCopied(false), 1500);
+                  }}
+                  className="shrink-0 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
+                  title="Copy `claude --resume <id>` to run in a terminal"
+                >
+                  {sessionCopied ? 'Copied ✓' : 'Copy resume'}
+                </button>
               </div>
             )}
 
