@@ -48,7 +48,7 @@ export default function OpenCodeModelsView() {
           <h1 className="text-base font-semibold text-zinc-100">OpenCode Models</h1>
           {saved && <span className="text-[11px] text-emerald-400">saved</span>}
         </div>
-        <p className="text-xs text-zinc-500 mb-4">Curated OpenCode model strings (e.g. <span className="font-mono text-zinc-400">openrouter/anthropic/claude-sonnet-4.5</span>). Selectable when a persona uses the OpenCode provider.</p>
+        <p className="text-xs text-zinc-500 mb-4">Curated OpenCode model strings (e.g. <span className="font-mono text-zinc-400">openrouter/anthropic/claude-sonnet-4.5</span>). Selectable when an agent uses the OpenCode provider.</p>
 
         <div className="flex gap-2 mb-3">
           <input

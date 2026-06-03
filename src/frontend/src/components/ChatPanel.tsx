@@ -401,6 +401,9 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
                     </div>
                   );
                 }
+                // 'answer' messages are already shown highlighted within the
+                // preceding QuestionCard's read-only state — skip the echoed bubble.
+                if (msg.message_type === 'answer') return null;
                 return (
                   <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[75%] rounded-lg px-4 py-2 text-sm ${msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-200'}`}>

@@ -109,7 +109,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     const persona = resolvePersona(thread.agent_id);
     if (!persona) {
-      return insertMessage(threadId, 'assistant', `[No agent] No persona found for "${thread.agent_id}". Add one under Personas, or pick a different agent.`);
+      return insertMessage(threadId, 'assistant', `[No agent] No agent found for "${thread.agent_id}". Add one under Agents, or pick a different agent.`);
     }
 
     const provider: Provider | undefined = persona.provider_id ? getProviderById(db, persona.provider_id) : undefined;

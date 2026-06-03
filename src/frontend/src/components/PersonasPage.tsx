@@ -48,14 +48,14 @@ export default function PersonasPage() {
     <div className="p-6 max-w-3xl mx-auto">
       <div className="flex items-center justify-between gap-4 mb-6">
         <div className="min-w-0">
-          <h1 className="text-lg font-semibold">Personas</h1>
+          <h1 className="text-lg font-semibold">Agents</h1>
           <p className="text-xs text-zinc-500 mt-0.5">Define agent personalities that can be assigned to tasks and conversations</p>
         </div>
         <button
           onClick={openNew}
           className="shrink-0 px-4 py-2 bg-indigo-500 text-white text-sm rounded-lg hover:bg-indigo-600 transition-colors"
         >
-          + New Persona
+          + New Agent
         </button>
       </div>
 
@@ -72,12 +72,12 @@ export default function PersonasPage() {
 
         {personas.length === 0 && (
           <div className="text-center py-12">
-            <p className="text-zinc-500 text-sm mb-2">No personas defined</p>
+            <p className="text-zinc-500 text-sm mb-2">No agents defined</p>
             <button
               onClick={openNew}
               className="text-indigo-500 text-sm hover:underline"
             >
-              Create your first persona
+              Create your first agent
             </button>
           </div>
         )}
