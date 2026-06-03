@@ -206,7 +206,7 @@ export default function SettingsPage() {
               type="text"
               value={config.jira.instance}
               onChange={e => update(['jira', 'instance'], e.target.value)}
-              placeholder="your-company.atlassian.net"
+              placeholder="your-company.atlassian.net (https:// optional)"
               className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
             />
           </Field>
