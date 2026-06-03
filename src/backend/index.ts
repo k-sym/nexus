@@ -30,6 +30,7 @@ import { registerProviderRoutes, seedProviders } from './routes/providers';
 import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
+import { startJiraSync } from './jira/poll';
 
 async function main() {
   const config = loadConfig();
@@ -42,6 +43,7 @@ async function main() {
   if (config.scheduler.enabled) {
     startScheduler(db);
   }
+  startJiraSync(db);
 
   const app = Fastify({ logger: false });
 
