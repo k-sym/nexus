@@ -91,14 +91,6 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // While a turn is running, poll threads so the Claude session id (stored at
-  // dispatch) shows up in the resume chip mid-run — letting you shell out before
-  // the turn even finishes.
-  useEffect(() => {
-    if (!isTyping) return;
-    const iv = setInterval(() => { loadThreads(); }, 3000);
-    return () => clearInterval(iv);
-  }, [isTyping, loadThreads]);
 
   const handleNewThread = async () => {
     const agent = selectedAgent || agentSlug;
@@ -154,14 +146,30 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
         const saved = await api.chat.upload(threadId, payload);
         attachmentsJson = JSON.stringify(saved);
       }
-      // Backend persists the user turn, runs the thread's agent, and saves the reply.
-      await api.chat.sendMessage(threadId, content, attachmentsJson);
-      // Only refresh if the user is still viewing this thread — otherwise a slow
-      // reply would overwrite whatever thread/project they navigated to.
+      // Provisional assistant bubble that fills in as deltas stream.
+      const provisionalId = `streaming-${Date.now()}`;
+      setMessages(prev => [
+        ...prev,
+        { id: provisionalId, thread_id: threadId!, role: 'assistant', content: '', attachments_json: '[]', message_type: 'text', structured_json: null, created_at: new Date().toISOString() },
+      ]);
+      let acc = '';
+      await api.chat.sendMessageStream(threadId, content, attachmentsJson, ev => {
+        if (activeThreadIdRef.current !== threadId) return; // user navigated away — drop
+        if (ev.kind === 'delta') {
+          acc += ev.text;
+          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, content: acc } : m)));
+        } else if (ev.kind === 'session') {
+          // Surface the captured session id in the resume chip immediately.
+          setThreads(prev => prev.map(t => (t.id === threadId ? { ...t, agent_session_id: ev.session_id } : t)));
+        } else if (ev.kind === 'error') {
+          acc = `[error] ${ev.error}`;
+          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, content: acc } : m)));
+        }
+        // 'done' → finalize from the DB below (renders question cards, attachments, etc.)
+      });
+      // Replace the optimistic/provisional messages with the authoritative DB state.
       if (activeThreadIdRef.current === threadId) {
         await loadMessages(threadId);
-        // Refresh threads so the captured Claude session id (set server-side this
-        // turn) shows in the resume chip.
         await loadThreads();
       }
     } catch (err) {

@@ -1,4 +1,4 @@
-import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket, Provider, Reply, FileAttachment } from '@nexus/shared';
+import { Project, Task, ChatThread, ChatMessage, Persona, PersonaConfig, Ticket, Provider, Reply, FileAttachment, ChatStreamEvent } from '@nexus/shared';
 
 export interface ProviderTestResult { ok: boolean; detail: string; latencyMs?: number }
 
@@ -85,6 +85,35 @@ export const api = {
     // Persists dropped files (base64) under the project's project_docs/uploads/; returns saved attachments.
     upload: (threadId: string, files: { name: string; mime_type: string; data_base64: string }[]) =>
       fetchJson<FileAttachment[]>(`${API}/threads/${threadId}/upload`, { method: 'POST', body: JSON.stringify({ files }) }),
+    // Sends a message and streams the turn: calls onEvent for each delta/session/done/error.
+    sendMessageStream: async (
+      threadId: string,
+      content: string,
+      attachments: string,
+      onEvent: (ev: ChatStreamEvent) => void,
+    ): Promise<void> => {
+      const res = await fetch(`${API}/threads/${threadId}/messages/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, attachments }),
+      });
+      if (!res.ok || !res.body) throw new Error(`Stream failed: ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try { onEvent(JSON.parse(line) as ChatStreamEvent); } catch { /* skip partial/garbage */ }
+        }
+      }
+    },
   },
   personas: {
     list: () => fetchJson<Persona[]>(`${API}/personas`),
