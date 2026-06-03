@@ -186,6 +186,23 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       }).catch(() => { /* best-effort */ });
     }
 
+    // Record token usage for this chat turn so the Usage view reflects chat
+    // activity (not just orchestrator task runs). task_id is NULL; project_id
+    // scopes it.
+    if (project) {
+      const ts = new Date().toISOString();
+      db.prepare(
+        `INSERT INTO agent_runs (id, task_id, project_id, source, status, provider, model, prompt_tokens, completion_tokens, total_tokens, duration_ms, started_at, completed_at)
+         VALUES (?, NULL, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        uuid(), project.id, result.ok ? 'completed' : 'failed',
+        provider ? provider.name : persona.provider,
+        persona.model || provider?.default_model || '',
+        result.usage.prompt, result.usage.completion, result.usage.total,
+        result.durationMs, ts, ts,
+      );
+    }
+
     return assistantMsg;
   }
 

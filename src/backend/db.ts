@@ -89,7 +89,9 @@ function runMigrations(db: Database.Database) {
 
     CREATE TABLE IF NOT EXISTS agent_runs (
       id TEXT PRIMARY KEY,
-      task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+      project_id TEXT,
+      source TEXT NOT NULL DEFAULT 'task',
       status TEXT NOT NULL,
       output TEXT DEFAULT '',
       error TEXT,
@@ -176,6 +178,46 @@ function runMigrations(db: Database.Database) {
       db.exec(sql);
     }
   }
+
+  // agent_runs: allow chat-turn usage rows (task_id nullable) + project_id/source
+  // for scoping. SQLite can't drop NOT NULL in place, so recreate when the new
+  // `source` column is absent. Existing task rows keep their task_id and get
+  // project_id backfilled from their task.
+  if (!runColNames.has('source')) {
+    db.pragma('foreign_keys = OFF');
+    db.transaction(() => {
+      db.exec(`
+        CREATE TABLE agent_runs_new (
+          id TEXT PRIMARY KEY,
+          task_id TEXT REFERENCES tasks(id) ON DELETE CASCADE,
+          project_id TEXT,
+          source TEXT NOT NULL DEFAULT 'task',
+          status TEXT NOT NULL,
+          output TEXT DEFAULT '',
+          error TEXT,
+          provider TEXT,
+          model TEXT,
+          prompt_tokens INTEGER DEFAULT 0,
+          completion_tokens INTEGER DEFAULT 0,
+          total_tokens INTEGER DEFAULT 0,
+          duration_ms INTEGER DEFAULT 0,
+          started_at TEXT NOT NULL,
+          completed_at TEXT
+        );
+        INSERT INTO agent_runs_new (id, task_id, status, output, error, provider, model, prompt_tokens, completion_tokens, total_tokens, duration_ms, started_at, completed_at)
+          SELECT id, task_id, status, output, error, provider, model, prompt_tokens, completion_tokens, total_tokens, duration_ms, started_at, completed_at FROM agent_runs;
+        DROP TABLE agent_runs;
+        ALTER TABLE agent_runs_new RENAME TO agent_runs;
+        UPDATE agent_runs SET project_id = (SELECT project_id FROM tasks WHERE tasks.id = agent_runs.task_id) WHERE task_id IS NOT NULL;
+      `);
+    })();
+    db.pragma('foreign_keys = ON');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status)');
+  }
+  // project_id index for both fresh DBs (table created with the column) and
+  // recreated ones. Runs after the table is guaranteed to have the column.
+  db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project_id)');
 
   // Provider curated-models + args migrations (for DBs created before this feature).
   const provCols = db.pragma('table_info(providers)') as { name: string }[];
