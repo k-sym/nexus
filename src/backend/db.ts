@@ -82,6 +82,8 @@ function runMigrations(db: Database.Database) {
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
       content TEXT NOT NULL,
       attachments_json TEXT DEFAULT '[]',
+      message_type TEXT NOT NULL DEFAULT 'text',
+      structured_json TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -184,6 +186,19 @@ function runMigrations(db: Database.Database) {
   ];
   for (const [col, sql] of provMigrations) {
     if (!provColNames.has(col)) {
+      db.exec(sql);
+    }
+  }
+
+  // Chat message structured-question migrations (DBs created before this feature).
+  const msgCols = db.pragma('table_info(chat_messages)') as { name: string }[];
+  const msgColNames = new Set(msgCols.map(c => c.name));
+  const msgMigrations: Array<[string, string]> = [
+    ['message_type', "ALTER TABLE chat_messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text'"],
+    ['structured_json', 'ALTER TABLE chat_messages ADD COLUMN structured_json TEXT'],
+  ];
+  for (const [col, sql] of msgMigrations) {
+    if (!msgColNames.has(col)) {
       db.exec(sql);
     }
   }

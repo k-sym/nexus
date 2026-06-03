@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Trash } from '@phosphor-icons/react';
-import { ChatThread, ChatMessage, FileAttachment, Persona } from '@nexus/shared';
+import { ChatThread, ChatMessage, FileAttachment, Persona, Ask, AnswerSet } from '@nexus/shared';
 import { api, AgentStatus } from '../api';
+import QuestionCard from './QuestionCard';
 
 interface ChatPanelProps {
   projectId: string;
@@ -108,7 +109,7 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
     // Optimistically show the user's message while the agent runs.
     setMessages(prev => [
       ...prev,
-      { id: `tmp-${Date.now()}`, thread_id: threadId!, role: 'user', content, attachments_json: attachmentsJson, created_at: new Date().toISOString() },
+      { id: `tmp-${Date.now()}`, thread_id: threadId!, role: 'user', content, attachments_json: attachmentsJson, message_type: 'text', structured_json: null, created_at: new Date().toISOString() },
     ]);
 
     try {
@@ -258,22 +259,46 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
 
             {/* Messages */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
-              {messages.map(msg => (
-                <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[75%] rounded-lg px-4 py-2 text-sm ${msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-200'}`}>
-                    {msg.attachments_json && msg.attachments_json !== '[]' && (
-                      <div className="flex flex-wrap gap-1 mb-2">
-                        {JSON.parse(msg.attachments_json).map((a: FileAttachment, i: number) => (
-                          <span key={i} className="text-xs bg-white/10 px-2 py-0.5 rounded truncate max-w-[200px]">
-                            📎 {a.original_name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
+              {messages.map((msg, idx) => {
+                if (msg.message_type === 'question' && msg.structured_json) {
+                  const ask = JSON.parse(msg.structured_json) as Ask;
+                  // A question is open only while it is the last message in the thread.
+                  const isLast = idx === messages.length - 1;
+                  const nextMsg = messages[idx + 1];
+                  const answeredReplies = nextMsg && nextMsg.message_type === 'answer' && nextMsg.structured_json
+                    ? (JSON.parse(nextMsg.structured_json) as AnswerSet).replies
+                    : undefined;
+                  return (
+                    <div key={msg.id} className="flex justify-start">
+                      <QuestionCard
+                        ask={ask}
+                        preamble={msg.content}
+                        threadId={activeThreadId!}
+                        questionMessageId={msg.id}
+                        answered={!isLast}
+                        answeredReplies={answeredReplies}
+                        onAnswered={() => loadMessages(activeThreadId!)}
+                      />
+                    </div>
+                  );
+                }
+                return (
+                  <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[75%] rounded-lg px-4 py-2 text-sm ${msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-200'}`}>
+                      {msg.attachments_json && msg.attachments_json !== '[]' && (
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {JSON.parse(msg.attachments_json).map((a: FileAttachment, i: number) => (
+                            <span key={i} className="text-xs bg-white/10 px-2 py-0.5 rounded truncate max-w-[200px]">
+                              📎 {a.original_name}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {isTyping && (
                 <div className="flex justify-start">
                   <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2 text-sm text-zinc-500">

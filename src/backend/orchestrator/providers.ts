@@ -13,6 +13,7 @@ import os from 'os';
 import path from 'path';
 import { NexusConfig, PersonaConfig, Provider } from '@nexus/shared';
 import { resolveEnvVars, resolveOpenRouterKey } from '../config';
+import { ASK_CONVENTION } from '../chat/ask';
 
 export interface TokenUsage {
   prompt: number;
@@ -314,7 +315,11 @@ export function runPersona(
   onOutput: StreamCallback,
   provider?: Provider,
 ): Promise<ProviderResult> {
-  const withSystem = persona.system_prompt ? `${persona.system_prompt}\n\n${prompt}` : prompt;
+  const sys = persona.system_prompt
+    ? `${persona.system_prompt}\n\n${ASK_CONVENTION}`
+    : ASK_CONVENTION;
+  const withSystem = `${sys}\n\n${prompt}`;
+  const personaWithSys: PersonaConfig = { ...persona, system_prompt: sys };
 
   // Provider-first: a persona that references a Provider record dispatches by the
   // provider's kind + endpoint. (Legacy `provider` enum below is the fallback.)
@@ -335,7 +340,7 @@ export function runPersona(
         const baseUrl = resolveEnvVars(provider.base_url || '');
         const apiKey = resolveEnvVars(provider.api_key || '');
         const headers = /openrouter\.ai/.test(baseUrl) ? { 'HTTP-Referer': 'https://nexus.local', 'X-Title': 'NEXUS' } : undefined;
-        return runOpenAICompatible({ ...persona, model }, prompt, { baseUrl, apiKey, headers }, onOutput);
+        return runOpenAICompatible({ ...personaWithSys, model }, prompt, { baseUrl, apiKey, headers }, onOutput);
       }
     }
   }
@@ -355,14 +360,14 @@ export function runPersona(
       return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, persona.model);
     case 'openrouter':
       return runOpenAICompatible(
-        persona,
+        personaWithSys,
         prompt,
         { baseUrl: OPENROUTER_BASE, apiKey: resolveOpenRouterKey(config), headers: { 'HTTP-Referer': 'https://nexus.local', 'X-Title': 'NEXUS' } },
         onOutput,
       );
     case 'local':
     case 'ollama':
-      return runOpenAICompatible(persona, prompt, { baseUrl: config.models.local.base_url, apiKey: config.models.local.api_key }, onOutput);
+      return runOpenAICompatible(personaWithSys, prompt, { baseUrl: config.models.local.base_url, apiKey: config.models.local.api_key }, onOutput);
     default:
       return Promise.resolve({
         ok: false,

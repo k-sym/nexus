@@ -77,6 +77,10 @@ export interface ChatMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
   attachments_json: string;
+  /** 'text' (default), 'question' (assistant asks), or 'answer' (user's selection). */
+  message_type: 'text' | 'question' | 'answer';
+  /** For 'question': a serialized Ask. For 'answer': a serialized AnswerSet. Else null. */
+  structured_json: string | null;
   created_at: string;
 }
 
@@ -85,6 +89,45 @@ export interface FileAttachment {
   original_name: string;
   path: string;
   mime_type: string;
+}
+
+/** One selectable option in a question. */
+export interface QuestionOption {
+  label: string;
+  description: string;
+}
+
+/** A single question an agent asks the user. Normalized: multiple/custom always set. */
+export interface Question {
+  /** Short label, ≤30 chars. */
+  header: string;
+  /** The full question text. */
+  question: string;
+  options: QuestionOption[];
+  /** Allow selecting more than one option. */
+  multiple: boolean;
+  /** Allow a free-text ("Type your own answer") response. */
+  custom: boolean;
+}
+
+/** The payload an agent emits in a fenced ```ask``` block. */
+export interface Ask {
+  questions: Question[];
+}
+
+/** The user's answer to one question (index-aligned with Ask.questions). */
+export interface Reply {
+  /** Carried for display only — not a join key (headers may collide). */
+  header: string;
+  /** Selected option labels. */
+  selected: string[];
+  /** Free-text answer, when the user used "Type your own answer". */
+  custom?: string;
+}
+
+/** The full set of replies stored on an 'answer' message. */
+export interface AnswerSet {
+  replies: Reply[];
 }
 
 /** A configured, testable provider instance (a harness endpoint the app can use). */
