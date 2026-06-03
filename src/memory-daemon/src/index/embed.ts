@@ -34,8 +34,9 @@ export async function embedSegments(ctx: AppContext, target: VecTarget, segments
   const missHashes = [...new Set(segments.filter((s) => !cache.has(s.seg_hash)).map((s) => s.seg_hash))];
   const missText = missHashes.map((h) => segments.find((s) => s.seg_hash === h)!.text);
   if (missHashes.length > 0) {
+    // Throws ModelError (transport vs HTTP, with status/body) so a misconfigured
+    // embedder surfaces the real cause in jobs.last_error instead of "unreachable".
     const vectors = await ctx.models.embed(missText);
-    if (!vectors) throw new Error("embedder unreachable");
     const now = new Date().toISOString();
     const insCache = ctx.db.prepare("INSERT OR IGNORE INTO embed_cache (seg_hash, vec, created_at) VALUES (?, ?, ?)");
     missHashes.forEach((h, i) => {

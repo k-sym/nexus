@@ -20,7 +20,13 @@ export async function recall(
 
   const hyde = await generateHyde(ctx, query);
   const texts = hyde ? [query, hyde] : [query];
-  const embedded = await ctx.models.embed(texts);
+  let embedded: number[][] | null = null;
+  try {
+    embedded = await ctx.models.embed(texts);
+  } catch (err) {
+    // Embedder down or misconfigured — degrade to FTS-only rather than failing recall.
+    console.warn(`[recall] embed failed, degrading to FTS-only: ${(err as Error).message}`);
+  }
   const queryVecs = embedded ?? [];
   if (!embedded) degraded = true;
 
