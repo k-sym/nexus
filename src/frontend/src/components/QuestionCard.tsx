@@ -121,7 +121,7 @@ export default function QuestionCard({ ask, preamble, threadId, questionMessageI
       <button
         onClick={submit}
         disabled={!complete || submitting}
-        className="bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm rounded px-3 py-1.5"
+        className="bg-indigo-500 hover:bg-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed text-ink text-sm rounded px-3 py-1.5"
       >
         {submitting ? 'Submitting…' : 'Submit'}
       </button>

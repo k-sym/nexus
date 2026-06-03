@@ -15,7 +15,7 @@ interface TopBarProps {
 
 const base = 'shrink-0 px-3 py-1 text-sm rounded-md transition-colors whitespace-nowrap';
 const pin = (active: boolean) =>
-  `${base} ${active ? 'bg-indigo-500 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'}`;
+  `${base} ${active ? 'bg-indigo-500 text-ink' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'}`;
 const tab = (active: boolean) =>
   `${base} ${active ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/30'}`;
 
@@ -33,7 +33,7 @@ export default function TopBar({
     <header className="h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-zinc-800 bg-zinc-900">
       {/* Brand */}
       <div className="flex items-center gap-2 pr-1">
-        <div className="w-6 h-6 rounded bg-indigo-500 flex items-center justify-center text-white text-[11px] font-bold">N</div>
+        <div className="w-6 h-6 rounded bg-indigo-500 flex items-center justify-center text-ink text-[11px] font-bold">N</div>
         <span className="font-semibold text-sm tracking-wide hidden md:inline">NEXUS</span>
       </div>
 

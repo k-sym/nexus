@@ -96,7 +96,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
           <button
             onClick={handleSearch}
             disabled={searching}
-            className="px-4 py-2 text-sm bg-indigo-500 text-white rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors"
+            className="px-4 py-2 text-sm bg-indigo-500 text-ink rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors"
           >
             {searching ? 'Searching…' : 'Search'}
           </button>
@@ -183,7 +183,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
           <button
             onClick={handleAdd}
             disabled={adding || !newMemory.trim()}
-            className="px-4 py-2 text-sm bg-indigo-500 text-white rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors"
+            className="px-4 py-2 text-sm bg-indigo-500 text-ink rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors"
           >
             {adding ? 'Adding…' : 'Add Memory'}
           </button>

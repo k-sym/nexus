@@ -72,7 +72,7 @@ export default function SettingsPage() {
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-4 py-2 bg-indigo-500 text-white text-sm rounded-lg hover:bg-indigo-600 disabled:opacity-40 transition-colors"
+            className="px-4 py-2 bg-indigo-500 text-ink text-sm rounded-lg hover:bg-indigo-600 disabled:opacity-40 transition-colors"
           >
             {saving ? 'Saving…' : 'Save Changes'}
           </button>

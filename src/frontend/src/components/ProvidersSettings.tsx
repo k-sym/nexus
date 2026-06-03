@@ -149,7 +149,7 @@ export default function ProvidersSettings() {
             </>
           )}
           <div className="flex gap-2">
-            <button onClick={save} className="px-3 py-1.5 text-sm bg-indigo-500 text-white rounded hover:bg-indigo-600">Save provider</button>
+            <button onClick={save} className="px-3 py-1.5 text-sm bg-indigo-500 text-ink rounded hover:bg-indigo-600">Save provider</button>
             <button onClick={() => setEditing(null)} className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100">Cancel</button>
           </div>
         </div>

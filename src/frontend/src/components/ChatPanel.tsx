@@ -256,7 +256,7 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
         <div className="p-3 border-b border-zinc-800">
           <button
             onClick={handleNewThread}
-            className="w-full px-3 py-1.5 bg-indigo-500 text-white text-sm rounded-md hover:bg-indigo-500 transition-colors"
+            className="w-full px-3 py-1.5 bg-indigo-500 text-ink text-sm rounded-md hover:bg-indigo-500 transition-colors"
           >
             + New Chat
           </button>
@@ -406,7 +406,7 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
                 if (msg.message_type === 'answer') return null;
                 return (
                   <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[75%] rounded-lg px-4 py-2 text-sm ${msg.role === 'user' ? 'bg-indigo-500 text-white' : 'bg-zinc-900 border border-zinc-800 text-zinc-200'}`}>
+                    <div className={`max-w-[72%] rounded-2xl px-4 py-2 text-sm ${msg.role === 'user' ? 'bg-indigo-500 text-ink' : 'bg-zinc-900 border border-zinc-800 text-zinc-200'}`}>
                       {msg.attachments_json && msg.attachments_json !== '[]' && (
                         <div className="flex flex-wrap gap-1 mb-2">
                           {JSON.parse(msg.attachments_json).map((a: FileAttachment, i: number) => (
@@ -468,7 +468,7 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
                 <button
                   onClick={handleSend}
                   disabled={!input.trim() && attachments.length === 0}
-                  className="px-4 bg-indigo-500 text-white rounded-lg hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors self-end"
+                  className="px-4 bg-indigo-500 text-ink rounded-lg hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors self-end"
                 >
                   Send
                 </button>
@@ -481,7 +481,7 @@ export default function ChatPanel({ projectId, agentSlug, agents }: ChatPanelPro
               <p className="text-zinc-500 text-sm mb-3">Select or start a conversation</p>
               <button
                 onClick={handleNewThread}
-                className="px-4 py-2 bg-indigo-500 text-white text-sm rounded-lg hover:bg-indigo-500 transition-colors"
+                className="px-4 py-2 bg-indigo-500 text-ink text-sm rounded-lg hover:bg-indigo-500 transition-colors"
               >
                 Start Chat
               </button>
