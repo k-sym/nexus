@@ -82,12 +82,18 @@ function runCli(
   workspace: string,
   prompt: string,
   onOutput: StreamCallback,
+  // When set, kill the process only after this long with NO output (an *idle*
+  // timeout — long-but-active tasks keep running). When unset, fall back to the
+  // wall-clock TIMEOUT_MS cap. Callers that stream (Claude Code's stream-json)
+  // pass an idle timeout; one-shot callers keep the wall-clock cap.
+  idleTimeoutMs?: number,
 ): Promise<ProviderResult> {
   return new Promise(resolve => {
     const startTime = Date.now();
     const stdoutChunks: string[] = [];
     const stderrChunks: string[] = [];
     let settled = false;
+    let timer: NodeJS.Timeout;
 
     // stdin: 'ignore' so the CLI sees EOF immediately (the prompt is passed via
     // args, not stdin) — otherwise it waits ~3s and warns about missing stdin.
@@ -108,24 +114,44 @@ function runCli(
       resolve({ ok, output, error, durationMs: Date.now() - startTime, usage: estimateUsage(prompt, output) });
     };
 
+    // Arm/re-arm the watchdog. Idle mode re-arms on every chunk (below); wall-clock
+    // mode arms once and is never reset.
+    const armTimer = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        finish(false, idleTimeoutMs
+          ? `No activity for ${Math.round(idleTimeoutMs / 1000)}s — killed (possible hang)`
+          : 'Timed out after 5 minutes');
+      }, idleTimeoutMs ?? TIMEOUT_MS);
+    };
+
     child.stdout!.on('data', (data: Buffer) => {
       const text = data.toString();
       stdoutChunks.push(text);
       onOutput(text);
+      if (idleTimeoutMs) armTimer();
     });
 
     child.stderr!.on('data', (data: Buffer) => {
       stderrChunks.push(data.toString());
+      if (idleTimeoutMs) armTimer();
     });
 
     child.on('close', (code: number | null) => finish(code === 0, code === 0 ? undefined : `Exited with code ${code}`));
     child.on('error', (err: Error) => finish(false, err.message));
 
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      finish(false, 'Timed out after 5 minutes');
-    }, TIMEOUT_MS);
+    armTimer();
   });
+}
+
+export interface ClaudeSession {
+  /** The session UUID to use. For a NEW session it's one we generate and pass via
+   *  `--session-id` (so we know/store it before the turn runs); for an existing
+   *  thread it's the stored id, resumed via `--resume`. */
+  id: string;
+  /** true → `--resume <id>` (continue), false → `--session-id <id>` (create). */
+  isResume: boolean;
 }
 
 export async function runClaudeCode(
@@ -134,40 +160,62 @@ export async function runClaudeCode(
   onOutput: StreamCallback,
   config?: CliConfig,
   model?: string,
-  resumeSessionId?: string,
+  session?: ClaudeSession,
+  idleTimeoutMs?: number,
 ): Promise<ProviderResult> {
   const command = config?.command || 'claude';
-  // `--output-format json` makes stdout a single JSON envelope carrying both the
-  // assistant's text (`result`) and the resumable `session_id`. We capture the
-  // session id so a hung/empty turn can be resumed from a terminal, and prefer
-  // the structured `result` over scraping raw text. `--resume <id>` continues an
-  // existing session so a chat thread is one continuous Claude conversation
-  // (shared with the terminal) rather than a fresh session per turn.
+  // `--output-format stream-json --verbose` streams the turn as newline-delimited
+  // JSON events. We use it for three things: (1) a liveness signal so the watchdog
+  // can be an *idle* timeout instead of a wall-clock cap, (2) the session id is in
+  // every event (incl. the first), and (3) the terminal `result` event carries the
+  // final text + is_error. `--session-id` creates a session with an id we already
+  // know (so it can be stored/surfaced before the turn finishes); `--resume`
+  // continues an existing one so a thread is one continuous conversation.
+  const sessionArgs = session
+    ? (session.isResume ? ['--resume', session.id] : ['--session-id', session.id])
+    : [];
   const args = [
     ...(config?.args ?? []),
-    ...(resumeSessionId ? ['--resume', resumeSessionId] : []),
+    ...sessionArgs,
     ...(model ? ['--model', model] : []),
-    '--output-format', 'json',
+    '--output-format', 'stream-json', '--verbose',
     '-p', prompt,
   ];
-  const result = await runCli(command, args, workspace, prompt, onOutput);
+  const result = await runCli(command, args, workspace, prompt, onOutput, idleTimeoutMs);
 
-  try {
-    const env = JSON.parse(result.output) as { result?: string; session_id?: string; is_error?: boolean };
-    if (env && typeof env === 'object') {
-      const text = typeof env.result === 'string' ? env.result : result.output;
-      return {
-        ...result,
-        ok: result.ok && env.is_error !== true,
-        output: text,
-        sessionId: typeof env.session_id === 'string' ? env.session_id : undefined,
-        error: env.is_error ? (text || result.error || 'Claude Code reported an error') : result.error,
-      };
+  // Parse the NDJSON event stream: capture the session id and the terminal result.
+  let text: string | undefined;
+  let isError = false;
+  let sessionId = session?.id;
+  let sawResult = false;
+  for (const line of result.output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const ev = JSON.parse(trimmed) as { type?: string; session_id?: string; result?: string; is_error?: boolean };
+      if (typeof ev.session_id === 'string') sessionId = ev.session_id;
+      if (ev.type === 'result') {
+        sawResult = true;
+        if (typeof ev.result === 'string') text = ev.result;
+        isError = ev.is_error === true;
+      }
+    } catch {
+      // Skip non-JSON noise (the stream is normally pure NDJSON).
     }
-  } catch {
-    // Not JSON (older CLI / unexpected shape) — fall back to raw output, no session id.
   }
-  return result;
+
+  if (sawResult) {
+    return {
+      ...result,
+      ok: result.ok && !isError,
+      output: text ?? '',
+      sessionId,
+      error: isError ? (text || result.error || 'Claude Code reported an error') : result.error,
+    };
+  }
+  // No terminal result (e.g. killed by the idle watchdog mid-turn): keep runCli's
+  // ok/error, but still surface the session id so the turn can be resumed.
+  return { ...result, sessionId };
 }
 
 export async function runCodex(
@@ -346,7 +394,8 @@ export function runPersona(
   config: NexusConfig,
   onOutput: StreamCallback,
   provider?: Provider,
-  resumeSessionId?: string,
+  claudeSession?: ClaudeSession,
+  idleTimeoutMs?: number,
 ): Promise<ProviderResult> {
   const sys = persona.system_prompt
     ? `${persona.system_prompt}\n\n${ASK_CONVENTION}`
@@ -354,10 +403,11 @@ export function runPersona(
   const withSystem = `${sys}\n\n${prompt}`;
   const personaWithSys: PersonaConfig = { ...persona, system_prompt: sys };
 
-  // When resuming a Claude Code session, the system prompt + conversation are
+  // When *resuming* a Claude Code session, the system prompt + conversation are
   // already in the session — send only the new turn (the caller passes just the
-  // latest message), so we don't re-inject the persona prompt every turn.
-  const claudePrompt = resumeSessionId ? prompt : withSystem;
+  // latest message), so we don't re-inject the persona prompt every turn. A new
+  // session (`--session-id`) still gets the full system prompt.
+  const claudePrompt = claudeSession?.isResume ? prompt : withSystem;
 
   // Provider-first: a persona that references a Provider record dispatches by the
   // provider's kind + endpoint. (Legacy `provider` enum below is the fallback.)
@@ -367,7 +417,7 @@ export function runPersona(
       case 'claude_code': {
         const allowed = mapToolsToClaude(persona.tools);
         const args = [...(config.claude_code.args ?? []), ...(allowed.length ? ['--allowedTools', allowed.join(',')] : [])];
-        return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(model), resumeSessionId);
+        return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(model), claudeSession, idleTimeoutMs);
       }
       case 'codex':
         return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, model);
@@ -392,7 +442,7 @@ export function runPersona(
         ...(config.claude_code.args ?? []),
         ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
       ];
-      return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(persona.model), resumeSessionId);
+      return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(persona.model), claudeSession, idleTimeoutMs);
     }
     case 'codex':
       return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, persona.model);

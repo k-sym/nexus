@@ -47,6 +47,7 @@ const DEFAULT_CONFIG: NexusConfig = {
   claude_code: {
     command: 'claude',
     args: [],
+    idle_timeout_seconds: 600,
   },
   codex: {
     command: 'codex',

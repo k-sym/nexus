@@ -204,6 +204,10 @@ export interface NexusConfig {
   claude_code: {
     command: string;
     args: string[];
+    /** Inactivity timeout (seconds) for a Claude Code turn — the process is killed
+     *  only after this long with NO streamed activity, not on wall-clock time, so
+     *  long-but-active tasks aren't cut off. Defaults to 600 if unset. */
+    idle_timeout_seconds?: number;
   };
   codex: {
     command: string;
