@@ -193,7 +193,7 @@ export default function App() {
     personas.forEach(p => cmds.push({ id: `agent-${p.slug}`, label: p.name, hint: 'Agent', keywords: `chat ${p.slug}`, run: () => goToView(`agent:${p.slug}`) }));
     cmds.push({ id: 'act-new-project', label: 'New project…', hint: 'Action', run: () => setShowProjectModal(true) });
     if (activeProjectId) cmds.push({ id: 'act-new-task', label: 'New task (Triage)…', hint: 'Action', keywords: 'kanban', run: () => setTaskModalColumn('triage') });
-    cmds.push({ id: 'act-personas', label: 'Personas', hint: 'Action', keywords: 'agents', run: () => setView('personas') });
+    cmds.push({ id: 'act-personas', label: 'Agents', hint: 'Action', keywords: 'personas agents', run: () => setView('personas') });
     cmds.push({ id: 'act-settings', label: 'Settings', hint: 'Action', run: () => setView('settings') });
     cmds.push({ id: 'act-opencode-models', label: 'OpenCode Models', hint: 'Action', keywords: 'opencode openrouter models', run: () => setView('opencode-models') });
     cmds.push({ id: 'act-refresh', label: 'Refresh status', hint: 'Action', run: () => loadStatus() });

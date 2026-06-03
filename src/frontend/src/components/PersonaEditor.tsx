@@ -95,7 +95,7 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl w-full max-w-2xl p-6 shadow-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold mb-4">{editing ? `Edit Persona — ${initial!.name}` : 'New Persona'}</h2>
+        <h2 className="text-lg font-semibold mb-4">{editing ? `Edit Agent — ${initial!.name}` : 'New Agent'}</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -224,7 +224,7 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
               Cancel
             </button>
             <button type="submit" disabled={!name.trim() || !slug.trim()} className="px-4 py-2 text-sm bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              {editing ? 'Save Persona' : 'Create Persona'}
+              {editing ? 'Save Agent' : 'Create Agent'}
             </button>
           </div>
         </form>

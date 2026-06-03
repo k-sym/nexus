@@ -64,7 +64,7 @@ export default function PersonaCard({ persona, onDelete, onEdit, onRefresh }: Pe
           </button>
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(persona.slug); }}
-            title="Remove persona"
+            title="Remove agent"
             className="text-zinc-600 hover:text-red-400 transition-colors"
           >
             <Trash size={15} />
