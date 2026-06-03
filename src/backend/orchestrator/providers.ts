@@ -254,7 +254,10 @@ export async function runCodex(
     fs.unlinkSync(outFile);
   } catch { /* file missing (early failure) */ }
   if (!last) last = assembleCliFinal('codex', result.output);
-  return last ? { ...result, output: last } : result;
+  if (last) return { ...result, output: last };
+  const errMsg = extractCliError(result.output);
+  if (errMsg) return { ...result, ok: false, output: '', error: `Codex: ${errMsg}` };
+  return result;
 }
 
 /**
@@ -285,6 +288,22 @@ function assembleCliFinal(kind: 'codex' | 'opencode', raw: string): string {
   return out.join('');
 }
 
+/**
+ * Pull a clean human-readable message out of a CLI's `type:error` JSON events
+ * (OpenCode/Codex), so chat shows e.g. "Model not found: …" instead of a raw
+ * JSON blob + exit code. Returns the first error message found, if any.
+ */
+function extractCliError(raw: string): string | undefined {
+  for (const line of raw.split('\n')) {
+    let ev: any; try { ev = JSON.parse(line.trim()); } catch { continue; }
+    if (ev?.type === 'error') {
+      const msg = ev.error?.data?.message ?? ev.error?.message ?? ev.message;
+      if (msg) return String(msg);
+    }
+  }
+  return undefined;
+}
+
 export async function runOpenCode(
   workspace: string,
   prompt: string,
@@ -300,7 +319,12 @@ export async function runOpenCode(
   args.splice(1, 0, '--format', 'json'); // after 'run', before model/args/prompt
   const result = await runCli('opencode', args, workspace, prompt, onOutput);
   const final = assembleCliFinal('opencode', result.output);
-  return final ? { ...result, output: final } : result;
+  if (final) return { ...result, output: final };
+  // No assistant text — surface a clean error if OpenCode emitted one (e.g. the
+  // model was momentarily unavailable) instead of the raw JSON-error stdout.
+  const errMsg = extractCliError(result.output);
+  if (errMsg) return { ...result, ok: false, output: '', error: `OpenCode: ${errMsg}` };
+  return result;
 }
 
 export interface OpenAICompatibleOptions {
