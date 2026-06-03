@@ -32,6 +32,14 @@ export interface MissionStatus {
   activity: { running: any[]; recent: any[] };
 }
 
+export interface NotificationItem {
+  id: string;
+  level: 'info' | 'error';
+  title: string;
+  message: string;
+  created_at: string;
+}
+
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
   // Only send a JSON content-type when there's actually a body — otherwise
   // Fastify rejects no-body DELETE/POST requests with 400 ("body cannot be empty").
@@ -135,6 +143,11 @@ export const api = {
   },
   tickets: {
     list: () => fetchJson<Ticket[]>(`${API}/tickets`),
+  },
+  notifications: {
+    list: () => fetchJson<NotificationItem[]>(`${API}/notifications`),
+    seen: (ids: string[]) =>
+      fetchJson<{ ok: boolean }>(`${API}/notifications/seen`, { method: 'POST', body: JSON.stringify({ ids }) }),
   },
   providers: {
     list: () => fetchJson<Provider[]>(`${API}/providers`),

@@ -43,6 +43,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const merged: NexusConfig = {
       ...current,
       ...incoming,
+      jira: incoming.jira ?? current.jira,
       models: {
         openrouter: { api_key: apiKey },
         local: {

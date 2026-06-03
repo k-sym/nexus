@@ -212,6 +212,18 @@ export interface NexusConfig {
     enabled: boolean;
     check_interval_seconds: number;
   };
+  jira: {
+    /** When false (default) the poll loop stays dormant. */
+    enabled: boolean;
+    /** Atlassian account email used for basic auth (paired with JIRA_TOKEN). */
+    user: string;
+    /** Jira Cloud host, e.g. "safety-services.atlassian.net". */
+    instance: string;
+    /** Project key to sync, e.g. "SUP". */
+    project: string;
+    /** Poll cadence in minutes while Nexus is running. */
+    poll_minutes: number;
+  };
   claude_code: {
     command: string;
     args: string[];

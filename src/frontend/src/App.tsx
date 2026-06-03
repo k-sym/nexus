@@ -7,6 +7,7 @@ import Sidebar from './components/Sidebar';
 import MissionControl from './components/MissionControl';
 import TicketsView from './components/TicketsView';
 import DaemonToasts from './components/DaemonToasts';
+import NotificationToasts from './components/NotificationToasts';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import AgentRoom from './components/AgentRoom';
@@ -334,6 +335,7 @@ export default function App() {
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
 
       <DaemonToasts status={status} />
+      <NotificationToasts />
 
       {showProjectModal && (
         <ProjectModal onClose={() => setShowProjectModal(false)} onSubmit={handleCreateProject} />

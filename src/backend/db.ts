@@ -130,6 +130,15 @@ function runMigrations(db: Database.Database) {
       synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      level TEXT NOT NULL DEFAULT 'info',
+      title TEXT NOT NULL DEFAULT '',
+      message TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      seen_at TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_chat_threads_project ON chat_threads(project_id);
@@ -137,6 +146,7 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+    CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
   `);
 
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
