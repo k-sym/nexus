@@ -174,11 +174,25 @@ export interface PersonaConfig {
   provider_id?: string;
   model: string;
   system_prompt: string;
+  /** Phosphor icon name from PERSONA_ICON_NAMES; identifies the persona at a glance. */
+  icon?: string;
+  /** Accent colour (hex, e.g. "#f59e0b") for the icon and thread-row tint. */
+  color?: string;
   tools: string[];
   workspace: string;
   startup_scripts: string[];
   token_budget: number;
 }
+
+/** Curated Phosphor icon names offered for personas (name→component map lives in the frontend). */
+export const PERSONA_ICON_NAMES = [
+  'Wrench', 'Code', 'MagnifyingGlass', 'Compass', 'PaintBrush',
+  'Brain', 'Lightning', 'Robot', 'Detective', 'Sparkle',
+] as const;
+export type PersonaIconName = typeof PERSONA_ICON_NAMES[number];
+
+/** Default accent when a persona has no colour set. */
+export const DEFAULT_PERSONA_COLOR = '#a1a1aa'; // zinc-400
 
 export interface NexusConfig {
   server: { port: number };
