@@ -1,118 +1,133 @@
-import { ReactNode } from 'react';
-import { Persona } from '@nexus/shared';
-import { AgentHealth } from '../api';
-import { Kanban, ChatCircle, Brain, Clock, ChartBar, UsersThree, Gear, Stack, type Icon } from '@phosphor-icons/react';
+import { useState, useEffect } from 'react';
+import { Project, ChatThread } from '@nexus/shared';
+import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus } from '@phosphor-icons/react';
+import { PersonaIcon } from '../personaIcons';
+
+export type SubView = 'kanban' | 'memory' | 'chat';
+
+export interface ThreadMeta {
+  thread: ChatThread;
+  icon?: string;
+  color: string;
+}
 
 interface SidebarProps {
-  personas: Persona[];
-  view: string;
-  /** whether a project is currently active (project-scoped views need one) */
-  hasProject: boolean;
-  /** live per-agent health from Mission Control, keyed by persona slug */
-  agentStatus: Record<string, AgentHealth>;
-  onSelectView: (v: string) => void;
-  onSelectAgent: (slug: string) => void;
+  projects: Project[];
+  activeProjectId: string | null;
+  subView: SubView;
+  activeThreadId: string | null;
+  /** threads for the active project, keyed for the open Chat accordion (with persona visuals resolved) */
+  threads: ThreadMeta[];
+  onSelectProject: (id: string) => void;
+  onSelectSubView: (projectId: string, sub: SubView) => void;
+  onSelectThread: (projectId: string, threadId: string) => void;
+  onNewChat: (projectId: string, anchor: HTMLElement) => void;
+  onNewProject: () => void;
 }
 
-const DOT_COLOR: Record<AgentHealth, string> = {
-  online: 'bg-emerald-500',
-  ready: 'bg-amber-500',
-  offline: 'bg-zinc-600',
-};
-
-const VIEWS: { id: string; label: string; Icon: Icon }[] = [
-  { id: 'kanban', label: 'Kanban', Icon: Kanban },
-  { id: 'chat', label: 'Chat', Icon: ChatCircle },
-  { id: 'memory', label: 'Memory', Icon: Brain },
-  { id: 'scheduler', label: 'Scheduler', Icon: Clock },
-  { id: 'usage', label: 'Usage', Icon: ChartBar },
-];
-
-function GroupLabel({ children }: { children: string }) {
-  return (
-    <div className="px-3 pt-4 pb-1">
-      <span className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium">{children}</span>
-    </div>
-  );
-}
-
-function NavItem({
-  active,
-  dimmed,
-  onClick,
-  icon,
-  dotColor,
-  dotTitle,
-  children,
-}: {
-  active: boolean;
-  dimmed?: boolean;
-  onClick: () => void;
-  icon?: ReactNode;
-  dotColor?: string;
-  dotTitle?: string;
-  children: string;
+function Row({ active, depth, onClick, icon, children, tintColor, trailing }: {
+  active: boolean; depth: number; onClick: () => void; icon?: React.ReactNode;
+  children: React.ReactNode; tintColor?: string; trailing?: React.ReactNode;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-2 px-3 py-1.5 mx-1 rounded-md text-sm transition-colors ${
-        active ? 'bg-indigo-500/20 text-white' : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/30'
-      } ${dimmed ? 'opacity-50' : ''}`}
+      style={{ paddingLeft: 8 + depth * 14, borderLeft: tintColor ? `2px solid ${tintColor}` : '2px solid transparent' }}
+      className={`group w-full flex items-center gap-2 pr-2 py-1.5 text-sm transition-colors ${
+        active ? 'bg-indigo-500/20 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/30'
+      }`}
     >
-      {dotColor && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`} title={dotTitle} />}
-      {icon && <span className="shrink-0 flex items-center justify-center w-4">{icon}</span>}
-      <span className="truncate">{children}</span>
+      {icon && <span className="shrink-0 flex items-center w-4">{icon}</span>}
+      <span className="truncate flex-1 text-left">{children}</span>
+      {trailing}
     </button>
   );
 }
 
-export default function Sidebar({ personas, view, hasProject, agentStatus, onSelectView, onSelectAgent }: SidebarProps) {
-  return (
-    <aside className="w-52 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
-      <GroupLabel>Views</GroupLabel>
-      {VIEWS.map(({ id, label, Icon }) => (
-        <NavItem
-          key={id}
-          active={view === id}
-          dimmed={!hasProject}
-          onClick={() => onSelectView(id)}
-          icon={<Icon size={16} />}
-        >
-          {label}
-        </NavItem>
-      ))}
+export default function Sidebar({
+  projects, activeProjectId, subView, activeThreadId, threads,
+  onSelectProject, onSelectSubView, onSelectThread, onNewChat, onNewProject,
+}: SidebarProps) {
+  // Single-open accordion: expanding one project collapses the others.
+  const [openProjectId, setOpenProjectId] = useState<string | null>(activeProjectId);
+  const [chatOpen, setChatOpen] = useState<Record<string, boolean>>({});
+  // Keep the open project in sync when it changes elsewhere (palette, thread select).
+  useEffect(() => { if (activeProjectId) setOpenProjectId(activeProjectId); }, [activeProjectId]);
 
-      <GroupLabel>Agents</GroupLabel>
-      {personas.map(p => {
-        const st = agentStatus[p.slug] ?? 'offline';
+  return (
+    <aside className="w-60 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
+      <div className="flex items-center justify-between px-3 pt-3 pb-1">
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium">Projects</span>
+        <button onClick={onNewProject} title="New project" className="text-zinc-500 hover:text-zinc-200"><Plus size={14} /></button>
+      </div>
+
+      {projects.map(project => {
+        const open = openProjectId === project.id;
+        const isActiveProject = project.id === activeProjectId;
+        const chatExpanded = chatOpen[project.id] ?? false;
         return (
-          <NavItem
-            key={p.slug}
-            active={view === `agent:${p.slug}`}
-            dimmed={!hasProject}
-            onClick={() => onSelectAgent(p.slug)}
-            dotColor={DOT_COLOR[st]}
-            dotTitle={st}
-          >
-            {p.name}
-          </NavItem>
+          <div key={project.id}>
+            <Row
+              active={isActiveProject && false}
+              depth={0}
+              onClick={() => { setOpenProjectId(open ? null : project.id); onSelectProject(project.id); }}
+              icon={open ? <CaretDown size={14} /> : <CaretRight size={14} />}
+            >
+              <span className="font-medium text-zinc-200 truncate">{project.name}</span>
+            </Row>
+
+            {open && (
+              <>
+                <Row active={isActiveProject && subView === 'kanban'} depth={1} onClick={() => onSelectSubView(project.id, 'kanban')} icon={<Kanban size={15} />}>Kanban</Row>
+                <Row active={isActiveProject && subView === 'memory'} depth={1} onClick={() => onSelectSubView(project.id, 'memory')} icon={<Brain size={15} />}>Memory</Row>
+                <Row
+                  active={isActiveProject && subView === 'chat' && !activeThreadId}
+                  depth={1}
+                  onClick={() => { setChatOpen(c => ({ ...c, [project.id]: !chatExpanded })); onSelectSubView(project.id, 'chat'); }}
+                  icon={<ChatCircle size={15} />}
+                  trailing={chatExpanded ? <CaretDown size={12} className="text-zinc-600" /> : <CaretRight size={12} className="text-zinc-600" />}
+                >
+                  Chat
+                </Row>
+
+                {chatExpanded && (
+                  <>
+                    <Row
+                      active={false}
+                      depth={2}
+                      onClick={(() => {}) as never}
+                      icon={<Plus size={14} />}
+                    >
+                      <span
+                        onClick={ev => { ev.stopPropagation(); onNewChat(project.id, ev.currentTarget.parentElement as HTMLElement); }}
+                        className="text-indigo-400"
+                      >
+                        New
+                      </span>
+                    </Row>
+                    {isActiveProject && threads.map(({ thread, icon, color }) => (
+                      <Row
+                        key={thread.id}
+                        active={activeThreadId === thread.id}
+                        depth={2}
+                        tintColor={color}
+                        onClick={() => onSelectThread(project.id, thread.id)}
+                        icon={<PersonaIcon icon={icon} color={color} size={14} />}
+                      >
+                        {thread.title}
+                      </Row>
+                    ))}
+                    {isActiveProject && threads.length === 0 && (
+                      <div className="pl-12 py-1.5 text-xs text-zinc-600">No conversations</div>
+                    )}
+                  </>
+                )}
+              </>
+            )}
+          </div>
         );
       })}
-      {personas.length === 0 && (
-        <div className="px-3 py-2 text-xs text-zinc-600">No agents yet</div>
-      )}
-
-      <GroupLabel>Self</GroupLabel>
-      <NavItem active={view === 'personas'} onClick={() => onSelectView('personas')} icon={<UsersThree size={16} />}>
-        Agents
-      </NavItem>
-      <NavItem active={view === 'opencode-models'} onClick={() => onSelectView('opencode-models')} icon={<Stack size={16} />}>
-        OpenCode Models
-      </NavItem>
-      <NavItem active={view === 'settings'} onClick={() => onSelectView('settings')} icon={<Gear size={16} />}>
-        Settings
-      </NavItem>
+      {projects.length === 0 && <div className="px-3 py-2 text-xs text-zinc-600">No projects yet</div>}
 
       <div className="mt-auto px-3 py-3 border-t border-zinc-800">
         <div className="text-[10px] text-zinc-600/50">v0.1.0 · Personal</div>

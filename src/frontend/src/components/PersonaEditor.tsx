@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
-import { PersonaConfig, Persona, Provider } from '@nexus/shared';
+import { PersonaConfig, Persona, Provider, DEFAULT_PERSONA_COLOR } from '@nexus/shared';
 import { api } from '../api';
+import { PERSONA_ICON_CHOICES, PersonaIcon } from '../personaIcons';
 
 interface PersonaEditorProps {
   onClose: () => void;
@@ -32,6 +33,8 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
   const [workspace, setWorkspace] = useState(initial?.workspace ?? '~/Projects/{project}');
   const [startupScripts, setStartupScripts] = useState((initial?.startup_scripts ?? []).join('\n'));
   const [tokenBudget, setTokenBudget] = useState(String(initial?.token_budget ?? 4000));
+  const [icon, setIcon] = useState(initial?.icon ?? '');
+  const [color, setColor] = useState(initial?.color ?? DEFAULT_PERSONA_COLOR);
 
   useEffect(() => {
     api.providers.list().then(list => {
@@ -84,6 +87,8 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
       workspace,
       startup_scripts: startupScripts.split('\n').map(s => s.trim()).filter(Boolean),
       token_budget: parseInt(tokenBudget, 10) || 4000,
+      icon: icon || undefined,
+      color: color || undefined,
     };
     try {
       onCreated(await api.personas.create(config));
@@ -169,6 +174,33 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
               rows={4}
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600/40 resize-none focus:outline-none focus:border-indigo-500/50 font-mono"
             />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-xs uppercase tracking-wider text-zinc-500">Icon</label>
+            <div className="flex flex-wrap gap-1.5">
+              {PERSONA_ICON_CHOICES.map(({ name, Icon }) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => setIcon(name)}
+                  className={`p-2 rounded-md border transition-colors ${icon === name ? 'border-indigo-500 bg-indigo-500/10' : 'border-zinc-800 hover:border-zinc-600'}`}
+                  title={name}
+                >
+                  <Icon size={18} weight="fill" color={color || DEFAULT_PERSONA_COLOR} />
+                </button>
+              ))}
+            </div>
+            <label className="text-xs uppercase tracking-wider text-zinc-500">Accent colour</label>
+            <input
+              type="color"
+              value={color || DEFAULT_PERSONA_COLOR}
+              onChange={e => setColor(e.target.value)}
+              className="h-8 w-16 bg-transparent border border-zinc-800 rounded"
+            />
+            <div className="flex items-center gap-2 text-sm text-zinc-400">
+              Preview: <PersonaIcon icon={icon} color={color} size={20} /> {name || 'Persona'}
+            </div>
           </div>
 
           <div>

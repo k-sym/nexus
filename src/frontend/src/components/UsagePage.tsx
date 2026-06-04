@@ -2,7 +2,8 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 
 interface UsagePageProps {
-  projectId: string;
+  /** Optional: scope usage to one project. Omitted from the top bar → aggregates across all projects. */
+  projectId?: string;
 }
 
 function fmtTokens(n: number): string {
@@ -56,7 +57,7 @@ export default function UsagePage({ projectId }: UsagePageProps) {
       <div className="mb-6">
         <h1 className="text-lg font-semibold">Token Usage</h1>
         <p className="text-xs text-zinc-500 mt-0.5">
-          Estimated for CLI agents; exact for API providers. Project-scoped.
+          Estimated for CLI agents; exact for API providers. {projectId ? 'Project-scoped.' : 'Across all projects.'}
         </p>
       </div>
 

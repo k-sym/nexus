@@ -5,6 +5,7 @@ import path from 'path';
 import yaml from 'js-yaml';
 import { Persona, PersonaConfig } from '@nexus/shared';
 import { getNexusDir } from '../config';
+import { parsePersonaVisual } from '../persona-visual';
 
 export async function registerPersonaRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -23,8 +24,8 @@ export async function registerPersonaRoutes(fastify: FastifyInstance) {
   }
 
   fastify.get('/api/personas', async () => {
-    const rows = db.prepare('SELECT * FROM personas ORDER BY name ASC').all();
-    return rows as Persona[];
+    const rows = db.prepare('SELECT * FROM personas ORDER BY name ASC').all() as Persona[];
+    return rows.map(p => ({ ...p, ...parsePersonaVisual(p.config_yaml) }));
   });
 
   fastify.get('/api/personas/:slug', async (request) => {

@@ -12,6 +12,7 @@ import { NexusConfig, Provider } from '@nexus/shared';
 import { loadConfig, resolveEnvVars } from '../config';
 import { daemon } from '../memory/client';
 import { hermesHealthUrl } from '../orchestrator/providers';
+import { parsePersonaVisual } from '../persona-visual';
 
 type AgentStatus = 'online' | 'ready' | 'offline';
 
@@ -108,7 +109,8 @@ async function probeAgent(p: PersonaRow, config: NexusConfig, providersById: Map
     status = effectiveModel ? 'ready' : 'offline';
   }
 
-  return { slug: p.slug, name: p.name, provider: providerLabel, model: effectiveModel, status, latencyMs, detail };
+  const visual = parsePersonaVisual(p.config_yaml);
+  return { slug: p.slug, name: p.name, provider: providerLabel, model: effectiveModel, status, latencyMs, detail, icon: visual.icon, color: visual.color };
 }
 
 export async function registerStatusRoutes(fastify: FastifyInstance) {

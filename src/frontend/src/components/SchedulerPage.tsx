@@ -3,7 +3,10 @@ import { Persona } from '@nexus/shared';
 import { api } from '../api';
 
 interface SchedulerPageProps {
-  projectId: string;
+  /** Optional: schedules are project-scoped (no global list endpoint), so when
+   *  opened globally from the top bar without a focused project we prompt the
+   *  user to pick one rather than failing the build. */
+  projectId?: string;
 }
 
 const CRON_PRESETS = [
@@ -28,6 +31,7 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
   const [agentId, setAgentId] = useState('cron-runner');
 
   const loadSchedules = useCallback(async () => {
+    if (!projectId) { setSchedules([]); return; }
     try {
       setSchedules(await api.schedules.list(projectId));
     } catch (err) {
@@ -42,7 +46,7 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !taskTemplate.trim()) return;
+    if (!name.trim() || !taskTemplate.trim() || !projectId) return;
     try {
       await api.schedules.create(projectId, {
         name: name.trim(),
@@ -86,13 +90,20 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
         </div>
         <button
           onClick={() => setShowForm(!showForm)}
-          className="px-4 py-2 bg-indigo-500 text-ink text-sm rounded-lg hover:bg-indigo-600 transition-colors"
+          disabled={!projectId}
+          className="px-4 py-2 bg-indigo-500 text-ink text-sm rounded-lg hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {showForm ? 'Cancel' : '+ New Schedule'}
         </button>
       </div>
 
-      {showForm && (
+      {!projectId && (
+        <div className="text-center py-12 text-sm text-zinc-500">
+          Schedules are scoped to a project. Pick a project in the tree to view or create its schedules.
+        </div>
+      )}
+
+      {showForm && projectId && (
         <form onSubmit={handleCreate} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-6 space-y-3">
           <div>
             <label className="block text-xs text-zinc-500 mb-1">Schedule Name</label>
@@ -212,7 +223,7 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
           </div>
         ))}
 
-        {schedules.length === 0 && !showForm && (
+        {projectId && schedules.length === 0 && !showForm && (
           <div className="text-center py-12">
             <p className="text-zinc-500 text-sm mb-2">No schedules yet</p>
             <button onClick={() => setShowForm(true)} className="text-indigo-500 text-sm hover:underline">
