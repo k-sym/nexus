@@ -6,6 +6,15 @@ export interface ProviderTestResult { ok: boolean; detail: string; latencyMs?: n
 // exposes an absolute base via __NEXUS_API__ so cross-origin /api calls resolve.
 const API = (globalThis as unknown as { __NEXUS_API__?: string }).__NEXUS_API__ ?? '/api';
 
+/** Build the ws:// URL for a thread's PTY, derived from the API base. */
+export function ptyWsUrl(threadId: string): string {
+  const httpBase = API.startsWith('http')
+    ? API
+    : `${window.location.origin}${API.startsWith('/') ? API : `/${API}`}`;
+  const wsBase = httpBase.replace(/^http/, 'ws');
+  return `${wsBase}/threads/${threadId}/pty`;
+}
+
 export type AgentHealth = 'online' | 'ready' | 'offline';
 
 export interface AgentStatus {
