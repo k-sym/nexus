@@ -13,7 +13,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://127.0.0.1:4173',
+      // Object form with ws:true so the PTY WebSocket (/api/threads/:id/pty)
+      // upgrade is proxied to the backend, not just plain HTTP requests.
+      '/api': {
+        target: 'http://127.0.0.1:4173',
+        changeOrigin: true,
+        ws: true,
+      },
     },
   },
   resolve: {
