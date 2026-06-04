@@ -10,14 +10,16 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@nexus/shared": "0.1.0",
-    "better-sqlite3": "^12.10.0",
-    "chokidar": "^4.0.3",
     "@fastify/cors": "^10.0.2",
     "@fastify/error": "^4.1.0",
     "@fastify/sensible": "^6.0.0",
+    "@fastify/websocket": "^11.2.0",
+    "@nexus/shared": "0.1.0",
+    "better-sqlite3": "^12.10.0",
+    "chokidar": "^4.0.3",
     "fastify": "^5.2.1",
     "js-yaml": "^4.1.0",
+    "node-pty": "^1.1.0",
     "uuid": "^11.0.0"
   },
   "devDependencies": {
