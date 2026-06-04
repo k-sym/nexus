@@ -5,6 +5,7 @@
   "description": "Personal agent orchestration platform",
   "main": "electron/dist/main.js",
   "scripts": {
+    "postinstall": "node scripts/fix-node-pty-permissions.cjs",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\" \"npm run dev:electron\"",
     "dev:daemon": "npm --prefix src/memory-daemon run start",
     "dev:backend": "npm run --workspace=src/backend dev",
