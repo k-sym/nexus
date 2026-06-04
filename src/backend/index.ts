@@ -9,6 +9,7 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
+import websocket from '@fastify/websocket';
 import Database from 'better-sqlite3';
 import yaml from 'js-yaml';
 import fs from 'fs';
@@ -27,6 +28,7 @@ import { registerStatusRoutes } from './routes/status';
 import { registerTicketRoutes } from './routes/tickets';
 import { registerNotificationRoutes } from './routes/notifications';
 import { registerProviderRoutes, seedProviders } from './routes/providers';
+import { registerPtyRoutes } from './routes/pty';
 import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
@@ -49,6 +51,7 @@ async function main() {
 
   await app.register(cors, { origin: true });
   await app.register(sensible);
+  await app.register(websocket);
 
   app.decorate('db', db);
 
@@ -63,6 +66,7 @@ async function main() {
   app.register(registerTicketRoutes);
   app.register(registerNotificationRoutes);
   app.register(registerProviderRoutes);
+  app.register(registerPtyRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
