@@ -16,6 +16,14 @@ export interface AgentStatus {
   status: AgentHealth;
   latencyMs?: number;
   detail?: string;
+  icon?: string;
+  color: string;
+}
+
+/** A persona row enriched with its parsed visual identity (icon/color) by the backend. */
+export interface PersonaWithVisual extends Persona {
+  icon?: string;
+  color: string;
 }
 
 export interface MissionStatus {
@@ -124,7 +132,7 @@ export const api = {
     },
   },
   personas: {
-    list: () => fetchJson<Persona[]>(`${API}/personas`),
+    list: () => fetchJson<PersonaWithVisual[]>(`${API}/personas`),
     get: (slug: string) => fetchJson<PersonaConfig>(`${API}/personas/${slug}`),
     create: (data: PersonaConfig) => fetchJson<Persona>(`${API}/personas`, { method: 'POST', body: JSON.stringify(data) }),
     delete: (slug: string) => fetchJson<void>(`${API}/personas/${slug}`, { method: 'DELETE' }),
