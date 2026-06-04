@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
 import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus } from '@phosphor-icons/react';
 import { PersonaIcon } from '../personaIcons';
@@ -48,9 +48,11 @@ export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads,
   onSelectProject, onSelectSubView, onSelectThread, onNewChat, onNewProject,
 }: SidebarProps) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  // Single-open accordion: expanding one project collapses the others.
+  const [openProjectId, setOpenProjectId] = useState<string | null>(activeProjectId);
   const [chatOpen, setChatOpen] = useState<Record<string, boolean>>({});
-  const isExpanded = (id: string) => expanded[id] ?? (id === activeProjectId);
+  // Keep the open project in sync when it changes elsewhere (palette, thread select).
+  useEffect(() => { if (activeProjectId) setOpenProjectId(activeProjectId); }, [activeProjectId]);
 
   return (
     <aside className="w-60 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
@@ -60,7 +62,7 @@ export default function Sidebar({
       </div>
 
       {projects.map(project => {
-        const open = isExpanded(project.id);
+        const open = openProjectId === project.id;
         const isActiveProject = project.id === activeProjectId;
         const chatExpanded = chatOpen[project.id] ?? false;
         return (
@@ -68,7 +70,7 @@ export default function Sidebar({
             <Row
               active={isActiveProject && false}
               depth={0}
-              onClick={() => { setExpanded(e => ({ ...e, [project.id]: !open })); onSelectProject(project.id); }}
+              onClick={() => { setOpenProjectId(open ? null : project.id); onSelectProject(project.id); }}
               icon={open ? <CaretDown size={14} /> : <CaretRight size={14} />}
             >
               <span className="font-medium text-zinc-200 truncate">{project.name}</span>
