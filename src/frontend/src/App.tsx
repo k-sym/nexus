@@ -20,6 +20,7 @@ import TaskModal from './components/TaskModal';
 import ColumnAgentMapping from './components/ColumnAgentMapping';
 import OpenCodeModelsView from './components/OpenCodeModelsView';
 import NewChatPicker from './components/NewChatPicker';
+import TerminalPane from './components/TerminalPane';
 
 // Top-bar destinations: cross-project globals + the management group. `null`
 // means a project is focused (project-scoped `subView` drives the main area).
@@ -195,9 +196,9 @@ export default function App() {
     setActiveThreadId(threadId);
   };
 
-  const startNewChat = async (slug: string) => {
+  const startNewChat = async (slug: string, mode: 'chat' | 'terminal') => {
     if (!newChat) return;
-    const thread = await api.chat.createThread(newChat.projectId, slug);
+    const thread = await api.chat.createThread(newChat.projectId, slug, mode);
     setNewChat(null);
     await loadThreads(newChat.projectId);
     selectThread(newChat.projectId, thread.id);
@@ -285,14 +286,20 @@ export default function App() {
               onDeleteTask={handleDeleteTask}
             />
           ) : subView === 'chat' ? (
-            <ChatPanel
-              key={activeProject.id}
-              projectId={activeProject.id}
-              threadId={activeThreadId}
-              agents={status?.agents}
-              agentSlug={activeThreadAgentSlug}
-              onThreadsChanged={() => loadThreads(activeProject.id)}
-            />
+            (() => {
+              const active = threads.find(t => t.id === activeThreadId);
+              if (active?.mode === 'terminal') return <TerminalPane key={active.id} threadId={active.id} />;
+              return (
+                <ChatPanel
+                  key={activeProject.id}
+                  projectId={activeProject.id}
+                  threadId={activeThreadId}
+                  agents={status?.agents}
+                  agentSlug={activeThreadAgentSlug}
+                  onThreadsChanged={() => loadThreads(activeProject.id)}
+                />
+              );
+            })()
           ) : subView === 'memory' ? (
             <MemoryView projectId={activeProject.id} />
           ) : null}

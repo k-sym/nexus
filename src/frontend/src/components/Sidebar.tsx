@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
-import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus } from '@phosphor-icons/react';
+import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, Terminal } from '@phosphor-icons/react';
 import { PersonaIcon } from '../personaIcons';
 
 export type SubView = 'kanban' | 'memory' | 'chat';
@@ -113,6 +113,7 @@ export default function Sidebar({
                         tintColor={color}
                         onClick={() => onSelectThread(project.id, thread.id)}
                         icon={<PersonaIcon icon={icon} color={color} size={14} />}
+                        trailing={thread.mode === 'terminal' ? <Terminal size={12} className="text-zinc-500" /> : undefined}
                       >
                         {thread.title}
                       </Row>
