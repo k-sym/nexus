@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "main": "dist/index.js",
   "scripts": {
+    "predev": "node ../../scripts/ensure-sqlite-abi.cjs backend",
     "dev": "tsx watch index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",

@@ -203,6 +203,17 @@ npm run --workspace=electron dev
 > The compiled backend/daemon are launched with `spawn('node', …)` (system Node), **not** Electron's
 > `fork()` — Electron's bundled Node has a different ABI and would break the `better-sqlite3` native
 > module. Ensure a system `node` (≥ 20) is on your `PATH`.
+>
+> **Native ABI guard.** Because the backend and daemon always run under system Node, `better-sqlite3`
+> must be compiled for system Node's ABI — never Electron's. If something rebuilds it for Electron
+> (a stray `electron-rebuild`, an Electron packaging step), the service dies at boot with
+> `ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION mismatch`. To self-heal, `scripts/ensure-sqlite-abi.cjs`
+> runs as a `predev`/`prestart` hook for both the backend and the daemon: it verifies the module loads
+> under the current Node and, if not, rebuilds the owning install before the process starts. The
+> backend (root `node_modules`) and the daemon (its own `node_modules`, outside the workspaces) are
+> two separate installs, so both are guarded independently. Note: the hooks fire for `npm run …` start
+> paths (dev/web); a future *packaged* Electron build that spawns `node dist/…` directly would need the
+> guard wired into `electron/main.ts` as well.
 
 > **Packaging:** there's no `.app`/`.dmg`/installer build wired up yet (no electron-builder/forge) —
 > the app launches **unpackaged** via the `electron` binary as above. Packaging into a distributable
@@ -727,6 +738,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 |---|---|
 | Chat replies "Config needed" | Set `OPENROUTER_API_KEY` in your environment and restart the backend. |
 | `no such column` SQLite error | An old DB predates a schema change. Migrations handle most cases; if needed, delete `~/.nexus/nexus.db*` and restart. |
+| `ERR_DLOPEN_FAILED` / `better_sqlite3.node was compiled against a different Node.js version (NODE_MODULE_VERSION)` at backend/daemon boot | `better-sqlite3` was rebuilt for the wrong ABI (usually Electron's instead of system Node's). The `predev`/`prestart` guard (`scripts/ensure-sqlite-abi.cjs`) auto-rebuilds it on the next `npm run web`/`dev`. To fix by hand: `npm rebuild better-sqlite3` (backend) and `npm rebuild better-sqlite3 --prefix src/memory-daemon` (daemon). |
 | Claude Code task fails instantly | Ensure the `claude` CLI is installed and on your `PATH`. Check `~/.nexus/workspaces/<slug>/outputs/<task-id>.log`. |
 | `N memory job(s) failed (dead-lettered)` / `embedder unreachable` | Almost always the local model stack is misconfigured, **not** down. A `llama-server` can be listening but return `501` for `/v1/embeddings` or `/v1/rerank` if it wasn't started with the right flags. Launch embeddings with `--embedding --pooling mean` (:4002) and rerank with `--reranking` (:4003). Confirm with `curl -s -X POST http://127.0.0.1:4002/v1/embeddings -d '{"input":"hi","model":"..."}'` returns 200. Dead jobs do **not** auto-retry — requeue them once the stack is fixed. |
 | KG extraction dead-letters / gen returns empty content | Your generation model (:4001) is a reasoning/"thinking" model burning its whole token budget on hidden reasoning. Relaunch it with `--reasoning off`, or use a non-reasoning model. |

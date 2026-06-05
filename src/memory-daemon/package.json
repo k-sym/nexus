@@ -9,7 +9,9 @@
     "nexus-memory-mcp": "./dist/src/mcp/stdio.js"
   },
   "scripts": {
+    "predev": "node ../../scripts/ensure-sqlite-abi.cjs daemon",
     "dev": "tsx watch src/index.ts",
+    "prestart": "node ../../scripts/ensure-sqlite-abi.cjs daemon",
     "start": "tsx src/index.ts",
     "build": "tsc && cp src/db/schema.sql dist/src/db/schema.sql",
     "typecheck": "tsc --noEmit",
