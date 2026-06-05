@@ -251,6 +251,9 @@ function runMigrations(db: Database.Database) {
   if (!threadCols.some(c => c.name === 'mode')) {
     db.exec("ALTER TABLE chat_threads ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'");
   }
+  if (!threadCols.some(c => c.name === 'launch_command')) {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN launch_command TEXT');
+  }
 
   // Chat message structured-question migrations (DBs created before this feature).
   const msgCols = db.pragma('table_info(chat_messages)') as { name: string }[];

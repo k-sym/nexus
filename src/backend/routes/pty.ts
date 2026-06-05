@@ -24,7 +24,12 @@ export async function registerPtyRoutes(fastify: FastifyInstance) {
 
     const persona = db.prepare('SELECT config_yaml FROM personas WHERE slug = ?').get(thread.agent_id) as { config_yaml: string } | undefined;
     const launch = persona ? parsePersonaLaunch(persona.config_yaml) : { provider: '', systemPrompt: '' };
-    const launchCommand = buildLaunchCommand({ provider: launch.provider, systemPrompt: launch.systemPrompt, sessionId: thread.agent_session_id ?? undefined });
+    const stored = (thread.launch_command ?? '').trim();
+    const computed = buildLaunchCommand({ provider: launch.provider, systemPrompt: launch.systemPrompt, sessionId: thread.agent_session_id ?? undefined });
+    const baseCommand = stored || computed;
+    // Auto-run: append a carriage return so the command executes on first spawn.
+    // Empty => plain shell, no auto-run.
+    const launchCommand = baseCommand ? `${baseCommand}\r` : '';
 
     manager.open(threadId, { cwd, cols: 80, rows: 24, launchCommand });
 

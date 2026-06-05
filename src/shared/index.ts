@@ -77,6 +77,8 @@ export interface ChatThread {
   agent_session_id?: string | null;
   /** 'chat' (bubble UI) or 'terminal' (embedded PTY). Defaults to 'chat'. */
   mode?: ChatMode;
+  /** The editable command pre-typed/run in a terminal thread; null for chat threads. */
+  launch_command?: string | null;
 }
 
 export interface ChatMessage {

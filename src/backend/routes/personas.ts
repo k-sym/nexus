@@ -6,6 +6,8 @@ import yaml from 'js-yaml';
 import { Persona, PersonaConfig } from '@nexus/shared';
 import { getNexusDir } from '../config';
 import { parsePersonaVisual } from '../persona-visual';
+import { parsePersonaLaunch } from '../persona-launch';
+import { buildLaunchCommand } from '../pty/launch-command';
 
 export async function registerPersonaRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -33,6 +35,15 @@ export async function registerPersonaRoutes(fastify: FastifyInstance) {
     const config = loadPersonaFromDisk(slug);
     if (!config) { const err = new Error('Persona not found') as any; err.statusCode = 404; throw err; }
     return config;
+  });
+
+  fastify.get('/api/personas/:slug/launch-command', async (request) => {
+    const { slug } = request.params as { slug: string };
+    const row = db.prepare('SELECT config_yaml FROM personas WHERE slug = ?').get(slug) as { config_yaml: string } | undefined;
+    if (!row) return { command: '' };
+    const { provider, systemPrompt } = parsePersonaLaunch(row.config_yaml);
+    const command = buildLaunchCommand({ provider, systemPrompt });
+    return { command };
   });
 
   fastify.post('/api/personas', async (request) => {
