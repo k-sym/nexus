@@ -2,8 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { ChatThread } from '@nexus/shared';
 import { PtyManager } from '../pty/manager';
 import { spawnNodePty } from '../pty/node-pty-adapter';
-import { buildLaunchCommand } from '../pty/launch-command';
-import { parsePersonaLaunch } from '../persona-launch';
+import { resolveLaunchCommand } from '../pty/resolve-launch';
 
 const manager = new PtyManager({ spawn: spawnNodePty });
 const REAP_INTERVAL_MS = 60_000;
@@ -23,9 +22,8 @@ export async function registerPtyRoutes(fastify: FastifyInstance) {
     const cwd = project?.repo_path || process.cwd();
 
     const persona = db.prepare('SELECT config_yaml FROM personas WHERE slug = ?').get(thread.agent_id) as { config_yaml: string } | undefined;
-    const launch = persona ? parsePersonaLaunch(persona.config_yaml) : { provider: '', systemPrompt: '' };
     const stored = (thread.launch_command ?? '').trim();
-    const computed = buildLaunchCommand({ provider: launch.provider, systemPrompt: launch.systemPrompt, sessionId: thread.agent_session_id ?? undefined });
+    const computed = persona ? resolveLaunchCommand(db, persona.config_yaml, thread.agent_session_id ?? undefined) : '';
     const baseCommand = stored || computed;
     // Auto-run: append a carriage return so the command executes on first spawn.
     // Empty => plain shell, no auto-run.
