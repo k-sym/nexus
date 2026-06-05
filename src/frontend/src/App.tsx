@@ -21,6 +21,7 @@ import ColumnAgentMapping from './components/ColumnAgentMapping';
 import OpenCodeModelsView from './components/OpenCodeModelsView';
 import NewChatPicker from './components/NewChatPicker';
 import TerminalPane from './components/TerminalPane';
+import MemoryRail from './components/MemoryRail';
 
 // Top-bar destinations: cross-project globals + the management group. `null`
 // means a project is focused (project-scoped `subView` drives the main area).
@@ -299,16 +300,23 @@ export default function App() {
           ) : subView === 'chat' ? (
             (() => {
               const active = threads.find(t => t.id === activeThreadId);
-              if (active?.mode === 'terminal') return <TerminalPane key={active.id} threadId={active.id} />;
+              const content = active?.mode === 'terminal'
+                ? <TerminalPane key={active.id} threadId={active.id} />
+                : (
+                  <ChatPanel
+                    key={activeProject.id}
+                    projectId={activeProject.id}
+                    threadId={activeThreadId}
+                    agents={status?.agents}
+                    agentSlug={activeThreadAgentSlug}
+                    onThreadsChanged={() => loadThreads(activeProject.id)}
+                  />
+                );
               return (
-                <ChatPanel
-                  key={activeProject.id}
-                  projectId={activeProject.id}
-                  threadId={activeThreadId}
-                  agents={status?.agents}
-                  agentSlug={activeThreadAgentSlug}
-                  onThreadsChanged={() => loadThreads(activeProject.id)}
-                />
+                <div className="flex h-full min-h-0">
+                  <div className="flex-1 min-w-0">{content}</div>
+                  <MemoryRail projectId={activeProject.id} onOpenFull={() => selectSubView(activeProject.id, 'memory')} />
+                </div>
               );
             })()
           ) : subView === 'memory' ? (
