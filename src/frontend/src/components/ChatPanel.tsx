@@ -183,26 +183,17 @@ export default function ChatPanel({ projectId, threadId, agents, agentSlug, onTh
               <code className="text-zinc-400 truncate font-mono" title={sessionId}>
                 {sessionId}
               </code>
-              <button
-                onClick={async () => {
-                  try {
-                    await api.chat.openTerminal(activeThreadId);
-                  } catch (err) {
-                    console.error('Failed to open terminal:', err);
-                  }
-                }}
-                className="ml-auto shrink-0 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
-                title="Open a Terminal in this project resuming the session"
-              >
-                {'>_'} Open terminal
-              </button>
+              {/* Note: the osascript "Open terminal" button was removed now that
+                  Nexus has in-app terminal threads. The backend route
+                  (/api/threads/:id/open-terminal) and api.chat.openTerminal binding
+                  are intentionally retained in case we re-surface this affordance. */}
               <button
                 onClick={() => {
                   navigator.clipboard.writeText(`claude --resume ${sessionId}`);
                   setSessionCopied(true);
                   setTimeout(() => setSessionCopied(false), 1500);
                 }}
-                className="shrink-0 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
+                className="ml-auto shrink-0 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
                 title="Copy `claude --resume <id>` to run in a terminal"
               >
                 {sessionCopied ? 'Copied ✓' : 'Copy resume'}
