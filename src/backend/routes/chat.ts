@@ -4,7 +4,7 @@ import path from 'path';
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import yaml from 'js-yaml';
-import { ChatThread, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet, FileAttachment, ChatStreamEvent } from '@nexus/shared';
+import { ChatThread, ChatMode, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet, FileAttachment, ChatStreamEvent } from '@nexus/shared';
 import { getRelevantMemories, addMemory } from '../memory';
 import { loadConfig } from '../config';
 import { runPersona, ClaudeSession } from '../orchestrator/providers';
@@ -35,7 +35,8 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
   fastify.post('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
-    const body = request.body as { agent_id: string };
+    const body = request.body as { agent_id: string; mode?: ChatMode; launch_command?: string | null };
+    const mode: ChatMode = body.mode === 'terminal' ? 'terminal' : 'chat';
 
     const now = new Date().toISOString();
     const thread: ChatThread = {
@@ -46,10 +47,12 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       created_at: now,
       updated_at: now,
       archived_at: null,
+      mode,
+      launch_command: body.launch_command ?? null,
     };
 
-    db.prepare('INSERT INTO chat_threads (id, project_id, agent_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .run(thread.id, thread.project_id, thread.agent_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at);
+    db.prepare('INSERT INTO chat_threads (id, project_id, agent_id, title, created_at, updated_at, archived_at, mode, launch_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(thread.id, thread.project_id, thread.agent_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at, thread.mode, thread.launch_command);
 
     return thread;
   });

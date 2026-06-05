@@ -6,6 +6,15 @@ export interface ProviderTestResult { ok: boolean; detail: string; latencyMs?: n
 // exposes an absolute base via __NEXUS_API__ so cross-origin /api calls resolve.
 const API = (globalThis as unknown as { __NEXUS_API__?: string }).__NEXUS_API__ ?? '/api';
 
+/** Build the ws:// URL for a thread's PTY, derived from the API base. */
+export function ptyWsUrl(threadId: string): string {
+  const httpBase = API.startsWith('http')
+    ? API
+    : `${window.location.origin}${API.startsWith('/') ? API : `/${API}`}`;
+  const wsBase = httpBase.replace(/^http/, 'ws');
+  return `${wsBase}/threads/${threadId}/pty`;
+}
+
 export type AgentHealth = 'online' | 'ready' | 'offline';
 
 export interface AgentStatus {
@@ -83,8 +92,8 @@ export const api = {
   },
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`${API}/projects/${projectId}/threads`),
-    createThread: (projectId: string, agentId: string) =>
-      fetchJson<ChatThread>(`${API}/projects/${projectId}/threads`, { method: 'POST', body: JSON.stringify({ agent_id: agentId }) }),
+    createThread: (projectId: string, agentId: string, mode: 'chat' | 'terminal' = 'chat', launchCommand?: string | null) =>
+      fetchJson<ChatThread>(`${API}/projects/${projectId}/threads`, { method: 'POST', body: JSON.stringify({ agent_id: agentId, mode, launch_command: launchCommand ?? null }) }),
     messages: (threadId: string) => fetchJson<ChatMessage[]>(`${API}/threads/${threadId}/messages`),
     // Posts the user's turn; the backend runs the thread's agent and returns the assistant reply.
     sendMessage: (threadId: string, content: string, attachments?: string) =>
@@ -134,6 +143,7 @@ export const api = {
   personas: {
     list: () => fetchJson<PersonaWithVisual[]>(`${API}/personas`),
     get: (slug: string) => fetchJson<PersonaConfig>(`${API}/personas/${slug}`),
+    launchCommand: (slug: string) => fetchJson<{ command: string }>(`${API}/personas/${slug}/launch-command`),
     create: (data: PersonaConfig) => fetchJson<Persona>(`${API}/personas`, { method: 'POST', body: JSON.stringify(data) }),
     delete: (slug: string) => fetchJson<void>(`${API}/personas/${slug}`, { method: 'DELETE' }),
   },

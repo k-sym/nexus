@@ -61,6 +61,9 @@ export interface Ticket {
   synced_at: string;
 }
 
+/** A chat thread is either a bubble conversation or an embedded terminal session. */
+export type ChatMode = 'chat' | 'terminal';
+
 export interface ChatThread {
   id: string;
   project_id: string;
@@ -72,6 +75,10 @@ export interface ChatThread {
   /** Latest Claude Code CLI session id for this thread, captured per turn so the
    *  conversation can be resumed from a terminal with `claude --resume <id>`. */
   agent_session_id?: string | null;
+  /** 'chat' (bubble UI) or 'terminal' (embedded PTY). Defaults to 'chat'. */
+  mode?: ChatMode;
+  /** The editable command pre-typed/run in a terminal thread; null for chat threads. */
+  launch_command?: string | null;
 }
 
 export interface ChatMessage {
