@@ -92,8 +92,8 @@ export const api = {
   },
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`${API}/projects/${projectId}/threads`),
-    createThread: (projectId: string, agentId: string, mode: 'chat' | 'terminal' = 'chat') =>
-      fetchJson<ChatThread>(`${API}/projects/${projectId}/threads`, { method: 'POST', body: JSON.stringify({ agent_id: agentId, mode }) }),
+    createThread: (projectId: string, agentId: string, mode: 'chat' | 'terminal' = 'chat', launchCommand?: string | null) =>
+      fetchJson<ChatThread>(`${API}/projects/${projectId}/threads`, { method: 'POST', body: JSON.stringify({ agent_id: agentId, mode, launch_command: launchCommand ?? null }) }),
     messages: (threadId: string) => fetchJson<ChatMessage[]>(`${API}/threads/${threadId}/messages`),
     // Posts the user's turn; the backend runs the thread's agent and returns the assistant reply.
     sendMessage: (threadId: string, content: string, attachments?: string) =>
@@ -143,6 +143,7 @@ export const api = {
   personas: {
     list: () => fetchJson<PersonaWithVisual[]>(`${API}/personas`),
     get: (slug: string) => fetchJson<PersonaConfig>(`${API}/personas/${slug}`),
+    launchCommand: (slug: string) => fetchJson<{ command: string }>(`${API}/personas/${slug}/launch-command`),
     create: (data: PersonaConfig) => fetchJson<Persona>(`${API}/personas`, { method: 'POST', body: JSON.stringify(data) }),
     delete: (slug: string) => fetchJson<void>(`${API}/personas/${slug}`, { method: 'DELETE' }),
   },

@@ -207,9 +207,9 @@ export default function App() {
     if (activeProjectId) await loadThreads(activeProjectId);
   };
 
-  const startNewChat = async (slug: string, mode: 'chat' | 'terminal') => {
+  const startNewChat = async (slug: string, mode: 'chat' | 'terminal', launchCommand?: string) => {
     if (!newChat) return;
-    const thread = await api.chat.createThread(newChat.projectId, slug, mode);
+    const thread = await api.chat.createThread(newChat.projectId, slug, mode, launchCommand);
     setNewChat(null);
     await loadThreads(newChat.projectId);
     selectThread(newChat.projectId, thread.id);
