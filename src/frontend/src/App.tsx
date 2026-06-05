@@ -196,6 +196,17 @@ export default function App() {
     setActiveThreadId(threadId);
   };
 
+  const handleRenameThread = async (threadId: string, title: string) => {
+    await api.chat.renameThread(threadId, title);
+    if (activeProjectId) await loadThreads(activeProjectId);
+  };
+
+  const handleDeleteThread = async (threadId: string) => {
+    await api.chat.deleteThread(threadId);
+    if (threadId === activeThreadId) setActiveThreadId(null);
+    if (activeProjectId) await loadThreads(activeProjectId);
+  };
+
   const startNewChat = async (slug: string, mode: 'chat' | 'terminal') => {
     if (!newChat) return;
     const thread = await api.chat.createThread(newChat.projectId, slug, mode);
@@ -340,6 +351,8 @@ export default function App() {
           onSelectProject={focusProject}
           onSelectSubView={selectSubView}
           onSelectThread={selectThread}
+          onRenameThread={handleRenameThread}
+          onDeleteThread={handleDeleteThread}
           onNewChat={(projectId) => setNewChat({ projectId })}
           onNewProject={() => setShowProjectModal(true)}
         />

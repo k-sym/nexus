@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
-import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, Terminal } from '@phosphor-icons/react';
+import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, Terminal, PencilSimple, Trash } from '@phosphor-icons/react';
 import { PersonaIcon } from '../personaIcons';
 
 export type SubView = 'kanban' | 'memory' | 'chat';
@@ -21,6 +21,8 @@ interface SidebarProps {
   onSelectProject: (id: string) => void;
   onSelectSubView: (projectId: string, sub: SubView) => void;
   onSelectThread: (projectId: string, threadId: string) => void;
+  onRenameThread: (threadId: string, title: string) => void;
+  onDeleteThread: (threadId: string) => void;
   onNewChat: (projectId: string, anchor: HTMLElement) => void;
   onNewProject: () => void;
 }
@@ -46,13 +48,24 @@ function Row({ active, depth, onClick, icon, children, tintColor, trailing }: {
 
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads,
-  onSelectProject, onSelectSubView, onSelectThread, onNewChat, onNewProject,
+  onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onDeleteThread, onNewChat, onNewProject,
 }: SidebarProps) {
   // Single-open accordion: expanding one project collapses the others.
   const [openProjectId, setOpenProjectId] = useState<string | null>(activeProjectId);
   const [chatOpen, setChatOpen] = useState<Record<string, boolean>>({});
+  // Inline rename: which thread is being edited + its draft title.
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
   // Keep the open project in sync when it changes elsewhere (palette, thread select).
   useEffect(() => { if (activeProjectId) setOpenProjectId(activeProjectId); }, [activeProjectId]);
+
+  const startRename = (id: string, current: string) => { setRenamingId(id); setRenameDraft(current); };
+  const cancelRename = () => { setRenamingId(null); setRenameDraft(''); };
+  const commitRename = (id: string) => {
+    const trimmed = renameDraft.trim();
+    if (trimmed) onRenameThread(id, trimmed);
+    cancelRename();
+  };
 
   return (
     <aside className="w-60 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
@@ -105,19 +118,64 @@ export default function Sidebar({
                         New
                       </span>
                     </Row>
-                    {isActiveProject && threads.map(({ thread, icon, color }) => (
-                      <Row
-                        key={thread.id}
-                        active={activeThreadId === thread.id}
-                        depth={2}
-                        tintColor={color}
-                        onClick={() => onSelectThread(project.id, thread.id)}
-                        icon={<PersonaIcon icon={icon} color={color} size={14} />}
-                        trailing={thread.mode === 'terminal' ? <Terminal size={12} className="text-zinc-500" /> : undefined}
-                      >
-                        {thread.title}
-                      </Row>
-                    ))}
+                    {isActiveProject && threads.map(({ thread, icon, color }) => {
+                      const isRenaming = renamingId === thread.id;
+                      return (
+                        <Row
+                          key={thread.id}
+                          active={activeThreadId === thread.id}
+                          depth={2}
+                          tintColor={color}
+                          onClick={() => { if (!isRenaming) onSelectThread(project.id, thread.id); }}
+                          icon={<PersonaIcon icon={icon} color={color} size={14} />}
+                          trailing={
+                            <span className="flex items-center gap-1 shrink-0">
+                              {thread.mode === 'terminal' && (
+                                <Terminal size={12} className="text-zinc-500 group-hover:hidden" />
+                              )}
+                              <span className="hidden group-hover:flex items-center gap-1">
+                                <span
+                                  role="button"
+                                  title="Rename"
+                                  className="text-zinc-500 hover:text-zinc-200"
+                                  onClick={ev => { ev.stopPropagation(); startRename(thread.id, thread.title); }}
+                                >
+                                  <PencilSimple size={13} />
+                                </span>
+                                <span
+                                  role="button"
+                                  title="Delete"
+                                  className="text-zinc-500 hover:text-red-400"
+                                  onClick={ev => {
+                                    ev.stopPropagation();
+                                    if (window.confirm('Delete this chat? This cannot be undone.')) onDeleteThread(thread.id);
+                                  }}
+                                >
+                                  <Trash size={13} />
+                                </span>
+                              </span>
+                            </span>
+                          }
+                        >
+                          {isRenaming ? (
+                            <input
+                              autoFocus
+                              value={renameDraft}
+                              onClick={ev => ev.stopPropagation()}
+                              onChange={ev => setRenameDraft(ev.target.value)}
+                              onBlur={() => commitRename(thread.id)}
+                              onKeyDown={ev => {
+                                if (ev.key === 'Enter') { ev.preventDefault(); commitRename(thread.id); }
+                                else if (ev.key === 'Escape') { ev.preventDefault(); cancelRename(); }
+                              }}
+                              className="w-full bg-zinc-800 text-zinc-100 text-sm px-1 py-0.5 rounded outline-none ring-1 ring-indigo-500"
+                            />
+                          ) : (
+                            thread.title
+                          )}
+                        </Row>
+                      );
+                    })}
                     {isActiveProject && threads.length === 0 && (
                       <div className="pl-12 py-1.5 text-xs text-zinc-600">No conversations</div>
                     )}
