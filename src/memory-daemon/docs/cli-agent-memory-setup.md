@@ -12,10 +12,21 @@ The MCP server reads two env vars:
 Nexus terminal threads set both automatically (scoped to the thread's project). For an external CLI
 session, set them yourself, e.g. `export NEXUS_MEMORY_PROJECT=baker-internal NEXUS_MEMORY_READONLY=1`.
 
+This works with a single **global** registration because the CLI passes its own environment through to
+the MCP server subprocess it spawns — so the per-thread (or per-shell) env is what scopes recall, not
+the registration. If a CLI is found *not* to propagate env to MCP servers, register with an explicit
+env instead (e.g. Claude Code's `--env NEXUS_MEMORY_READONLY=1`). Confirm scoping in the smoke test.
+
 ## Register the MCP server (one-time, per CLI)
 Replace `<ABS>` with the absolute repo path.
 
-- **Claude Code:** `claude mcp add nexus-memory -- node <ABS>/src/memory-daemon/dist/src/mcp/stdio.js`
+> **Two separate mechanisms — don't conflate them.** Registering the MCP server (below) is a
+> **user-level config entry** per CLI; installing the behaviour skill (next section) is **symlinks**
+> into each CLI's skill dir. "Global" means *user-scoped config*, **not** running from your home dir
+> — the command/edit can be run from anywhere.
+
+- **Claude Code (global):** `claude mcp add nexus-memory --scope user -- node <ABS>/src/memory-daemon/dist/src/mcp/stdio.js`
+  — `--scope user` is what makes it global; the default scope is local/project (cwd-dependent).
 - **OpenCode** (`~/.config/opencode/opencode.json`):
   ```json
   { "mcp": { "nexus-memory": { "type": "local", "command": ["node", "<ABS>/src/memory-daemon/dist/src/mcp/stdio.js"] } } }
