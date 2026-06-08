@@ -3,6 +3,7 @@ import { ChatThread } from '@nexus/shared';
 import { PtyManager } from '../pty/manager';
 import { spawnNodePty } from '../pty/node-pty-adapter';
 import { resolveLaunchCommand } from '../pty/resolve-launch';
+import { projectSlug } from '../memory';
 
 const manager = new PtyManager({ spawn: spawnNodePty });
 const REAP_INTERVAL_MS = 60_000;
@@ -29,7 +30,14 @@ export async function registerPtyRoutes(fastify: FastifyInstance) {
     // Empty => plain shell, no auto-run.
     const launchCommand = baseCommand ? `${baseCommand}\r` : '';
 
-    manager.open(threadId, { cwd, cols: 80, rows: 24, launchCommand });
+    const slug = projectSlug(db, thread.project_id);
+    const memoryEnv: Record<string, string> = {};
+    if (slug) {
+      memoryEnv.NEXUS_MEMORY_PROJECT = slug;
+      memoryEnv.NEXUS_MEMORY_READONLY = '1';
+    }
+
+    manager.open(threadId, { cwd, cols: 80, rows: 24, launchCommand, env: memoryEnv });
 
     const send = (data: string) => { if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: 'output', data })); };
     manager.attach(threadId, send);

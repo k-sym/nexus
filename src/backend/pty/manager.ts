@@ -13,6 +13,8 @@ export interface SpawnCtx {
   cols: number;
   rows: number;
   launchCommand: string;
+  /** Extra env vars merged over the sanitized base env at spawn (e.g. NEXUS_MEMORY_*). */
+  env?: Record<string, string>;
 }
 
 export type SpawnFn = (ctx: SpawnCtx) => PtyLike;
