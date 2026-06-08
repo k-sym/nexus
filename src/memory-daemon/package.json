@@ -15,6 +15,7 @@
     "start": "tsx src/index.ts",
     "build": "tsc && cp src/db/schema.sql dist/src/db/schema.sql",
     "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
     "probe": "tsx scripts/probe-native.ts"
   },
   "dependencies": {
