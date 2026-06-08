@@ -6,14 +6,18 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { loadConfig } from "../config.js";
 import { MemoryClient } from "../client.js";
 import { buildMcpServer } from "./server.js";
+import { mcpEnvDefaults } from "./scope.js";
 
 async function main() {
   const cfg = loadConfig();
   const baseUrl = process.env.MEMORY_DAEMON_URL ?? `http://${cfg.host}:${cfg.port}`;
   const client = new MemoryClient(baseUrl);
-  const server = buildMcpServer(client);
+  const defaults = mcpEnvDefaults(process.env);
+  const server = buildMcpServer(client, { defaults });
   await server.connect(new StdioServerTransport());
-  console.error(`[nexus-memory-mcp] connected; daemon=${baseUrl}`);
+  console.error(
+    `[nexus-memory-mcp] connected; daemon=${baseUrl}; project=${defaults.project ?? "(all)"}; readonly=${defaults.readonly}`,
+  );
 }
 
 main().catch((err) => {
