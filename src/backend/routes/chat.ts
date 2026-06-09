@@ -108,16 +108,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     }
 
     let session;
-    let isNewSession = false;
     try {
-      isNewSession = !pi.hasSession(threadId, cwd);
       session = await pi.sessionFor(threadId, cwd);
     } catch (err: any) {
       reply.code(500);
       return { error: err?.message || 'failed to create session' };
     }
 
-    if (body.modelKey && isNewSession) {
+    if (body.modelKey) {
       const sep = body.modelKey.indexOf('/');
       if (sep > 0) {
         const provider = body.modelKey.slice(0, sep);

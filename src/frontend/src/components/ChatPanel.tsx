@@ -31,7 +31,7 @@ interface ChatPanelProps {
 
 export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged }: ChatPanelProps) {
   const { models, activeModelId, setModel } = useModels();
-  const { state, startStream, abortStream } = usePiStream();
+  const { state, startStream, abortStream, dispatch } = usePiStream();
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
@@ -44,6 +44,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   useEffect(() => {
     activeThreadIdRef.current = threadId;
   }, [threadId]);
+
+  // Reset stream state when switching threads to prevent message bleed.
+  useEffect(() => {
+    dispatch({ type: 'RESET' });
+    setError(null);
+    setPendingConfirm(null);
+  }, [threadId, dispatch]);
 
   // Load persisted messages whenever the active thread changes.
   useEffect(() => {
