@@ -157,6 +157,21 @@ export const api = {
     status: () => fetchJson<any>(`${API}/agents/status`),
     runs: (taskId: string) => fetchJson<any[]>(`${API}/agents/runs/${taskId}`),
     usage: (projectId?: string) => fetchJson<any>(`${API}/agents/usage${projectId ? `?projectId=${projectId}` : ''}`),
+    // Sets a model on a task and moves it to in_progress; the orchestrator
+    // picks it up on the next poll tick and dispatches headlessly.
+    startTask: (taskId: string, modelKey: string) =>
+      fetchJson<{ ok: boolean }>(`${API}/orchestrator/tasks/${taskId}/start`, {
+        method: 'POST',
+        body: JSON.stringify({ modelKey }),
+      }),
+  },
+  models: {
+    list: () => fetchJson<{ models: any[] }>(`${API}/models`),
+    setActive: (provider: string, model: string) =>
+      fetchJson<{ ok: boolean }>(`${API}/models/active`, {
+        method: 'POST',
+        body: JSON.stringify({ provider, model }),
+      }),
   },
   settings: {
     get: () => fetchJson<any>(`${API}/settings`),
