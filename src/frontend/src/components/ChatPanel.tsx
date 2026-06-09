@@ -57,7 +57,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     try {
       const res = await fetch(`/api/threads/${id}`);
       if (!res.ok) throw new Error(`GET /api/threads/${id} ${res.status}`);
-      const data = (await res.json()) as { messages: any[] };
+      const data = (await res.json()) as { messages: any[]; thread?: any };
+      if (data.thread?.last_model_key) {
+        setModel(
+          data.thread.last_model_key.slice(0, data.thread.last_model_key.indexOf('/')),
+          data.thread.last_model_key.slice(data.thread.last_model_key.indexOf('/') + 1),
+        );
+      }
       return (data.messages ?? []).map((m: any) => ({
         ...m,
         toolCalls: m.tool_calls ?? m.toolCalls ?? undefined,
@@ -66,7 +72,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       console.error('Failed to load thread messages', err);
       return [];
     }
-  }, []);
+  }, [setModel]);
 
   // Load persisted messages whenever the active thread changes.
   useEffect(() => {
@@ -112,6 +118,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       try {
         await startStream(threadId, text, { ...opts, modelKey: activeModelId });
         onThreadsChanged?.();
+        dispatch({ type: 'RESET' });
         const msgs = await loadThreadMessages(threadId);
         setLoadedMessages(msgs);
       } catch (err) {

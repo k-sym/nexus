@@ -138,7 +138,11 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const stream = new SessionEventStream();
     activeStreams.set(threadId, { threadId, stream, projectId: thread.project_id });
     concurrency.set(thread.project_id, threadId, thread.title);
-    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), threadId);
+    db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(
+      new Date().toISOString(),
+      body.modelKey || null,
+      threadId,
+    );
 
     reply.hijack();
     reply.raw.writeHead(200, {

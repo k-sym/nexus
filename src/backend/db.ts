@@ -242,4 +242,11 @@ function runMigrations(db: Database.Database) {
   if (!taskCols.some((c) => c.name === 'model_key')) {
     db.exec('ALTER TABLE tasks ADD COLUMN model_key TEXT');
   }
+
+  // Chat thread model persistence — remember which model was last used
+  // per thread so the UI can restore it when switching back.
+  const threadCols = db.pragma('table_info(chat_threads)') as { name: string }[];
+  if (!threadCols.some((c) => c.name === 'last_model_key')) {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN last_model_key TEXT');
+  }
 }
