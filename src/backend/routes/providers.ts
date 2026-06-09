@@ -122,8 +122,9 @@ export function seedProviders(db: Database.Database): void {
  * a fresh curated list if they're still on the original seed values.
  */
 function refreshStaleModelLists(db: Database.Database): void {
-  const up = db.prepare('UPDATE providers SET models = ? WHERE id = ? AND models = ?');
-  const changes = [
+  // Refresh seeded providers whose model list is empty (old broken seed) OR
+  // matches the original stale list. User-customized lists are preserved.
+  const refresh: Array<{ id: string; current: string; next: string }> = [
     {
       id: 'seed-claude-code',
       current: JSON.stringify(['opus', 'sonnet', 'haiku']),
@@ -135,12 +136,20 @@ function refreshStaleModelLists(db: Database.Database): void {
       next: JSON.stringify(['gpt-5', 'gpt-5-codex', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.2', 'gpt-5.2-codex', 'o3', 'o3-mini', 'o4-mini']),
     },
   ];
-  for (const { id, current, next } of changes) {
-    const r = up.run(next, id, current);
-    if (r.changes > 0) {
-      console.log(`[providers] refreshed model list for ${id}`);
-    }
+  for (const { id, current, next } of refresh) {
+    const updated = db.prepare('UPDATE providers SET models = ? WHERE id = ? AND models = ?').run(next, id, current);
+    if (updated.changes > 0) console.log(`[providers] refreshed model list for ${id}`);
   }
+  // One-time fix: if Claude/Codex CLI providers have empty model lists
+  // (e.g. the seed was `[]` on early installs), populate with the latest
+  // curated list. Safe to run repeatedly — only updates empty lists.
+  const empty = (id: string, next: string[]) => {
+    const r = db.prepare('UPDATE providers SET models = ? WHERE id = ? AND (models IS NULL OR models = ? OR models = "[]")')
+      .run(JSON.stringify(next), id, JSON.stringify([]));
+    if (r.changes > 0) console.log(`[providers] populated empty model list for ${id}`);
+  };
+  empty('seed-claude-code', ['opus', 'sonnet', 'haiku', 'opus-4.5', 'sonnet-4.5', 'haiku-4']);
+  empty('seed-codex', ['gpt-5', 'gpt-5-codex', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.2', 'gpt-5.2-codex', 'o3', 'o3-mini', 'o4-mini']);
 }
 
 /** Test connectivity: ping /models for HTTP providers, or run `--version` for CLIs. */
