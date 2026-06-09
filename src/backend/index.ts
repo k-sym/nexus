@@ -35,6 +35,7 @@ import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
 import { startJiraSync } from './jira/poll';
 import { PiRuntime } from './pi/runtime';
+import { ConcurrencyTracker } from './pi/concurrency';
 
 async function main() {
   const config = loadConfig();
@@ -57,6 +58,7 @@ async function main() {
 
   app.decorate('db', db);
   app.decorate('pi', new PiRuntime());
+  app.decorate('chatConcurrency', new ConcurrencyTracker());
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);

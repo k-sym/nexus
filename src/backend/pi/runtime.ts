@@ -140,4 +140,30 @@ export class PiRuntime {
       maxTokens: m.maxTokens,
     };
   }
+
+  /**
+   * List session metadata for a cwd, in last-modified-first order.
+   * Returns the pi SessionInfo shape: { id, name, path, messageCount, ... }.
+   */
+  async listSessions(cwd: string): Promise<unknown[]> {
+    const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+    const sessionDir = this.sessionDirFor(cwd);
+    const infos = await SessionManager.list(cwd, sessionDir);
+    return infos;
+  }
+
+  /**
+   * Read the messages of a thread's session from disk. The session is opened
+   * read-only — no in-memory session is created in the runtime, so this is
+   * safe to call for threads that haven't been prompted yet (returns []).
+   */
+  async readMessages(threadId: string, cwd: string): Promise<unknown[]> {
+    const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+    const sessionDir = this.sessionDirFor(cwd);
+    const infos = await SessionManager.list(cwd, sessionDir);
+    const match = infos.find((s) => s.id === threadId);
+    if (!match) return [];
+    const sm = SessionManager.open(match.path, sessionDir, cwd);
+    return sm.getEntries().filter((e) => e.type === 'message');
+  }
 }
