@@ -144,8 +144,9 @@ function refreshStaleModelLists(db: Database.Database): void {
   // (e.g. the seed was `[]` on early installs), populate with the latest
   // curated list. Safe to run repeatedly — only updates empty lists.
   const empty = (id: string, next: string[]) => {
-    const r = db.prepare('UPDATE providers SET models = ? WHERE id = ? AND (models IS NULL OR models = ? OR models = "[]")')
-      .run(JSON.stringify(next), id, JSON.stringify([]));
+    const emptyList = JSON.stringify([]);
+    const r = db.prepare('UPDATE providers SET models = ? WHERE id = ? AND (models IS NULL OR models = ?)')
+      .run(JSON.stringify(next), id, emptyList);
     if (r.changes > 0) console.log(`[providers] populated empty model list for ${id}`);
   };
   empty('seed-claude-code', ['opus', 'sonnet', 'haiku', 'opus-4.5', 'sonnet-4.5', 'haiku-4']);
