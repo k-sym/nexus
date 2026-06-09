@@ -9,7 +9,7 @@
     "dev": "tsx watch index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test test/*.test.ts"
+    "test": "tsx --test test/*.test.ts test/integration/*.test.ts"
   },
   "dependencies": {
     "@earendil-works/pi-agent-core": "0.79.0",
