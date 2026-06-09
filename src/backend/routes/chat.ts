@@ -116,16 +116,20 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     }
 
     if (body.modelKey) {
-      const sep = body.modelKey.indexOf('/');
-      if (sep > 0) {
-        const provider = body.modelKey.slice(0, sep);
-        const modelId = body.modelKey.slice(sep + 1);
-        const model = pi.models.find(provider, modelId);
-        if (model) {
-          try {
-            await session.setModel(model);
-          } catch (err: any) {
-            console.error(`[chat] setModel failed for ${body.modelKey}:`, err?.message);
+      const currentModel = pi.getSessionModel(threadId, cwd);
+      if (currentModel !== body.modelKey) {
+        const sep = body.modelKey.indexOf('/');
+        if (sep > 0) {
+          const provider = body.modelKey.slice(0, sep);
+          const modelId = body.modelKey.slice(sep + 1);
+          const model = pi.models.find(provider, modelId);
+          if (model) {
+            try {
+              await session.setModel(model);
+              pi.setSessionModel(threadId, cwd, body.modelKey);
+            } catch (err: any) {
+              console.error(`[chat] setModel failed for ${body.modelKey}:`, err?.message);
+            }
           }
         }
       }

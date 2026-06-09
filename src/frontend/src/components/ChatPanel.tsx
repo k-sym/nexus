@@ -19,6 +19,7 @@ import { usePiStream, ChatBusyError, type StreamMessage } from '../hooks/usePiSt
 import { useModels } from '../hooks/useModels';
 import { ModelSelector } from './ModelSelector';
 import { ToolCallTimeline } from './ToolCallTimeline';
+import { ThinkingBlock } from './ThinkingBlock';
 
 interface ChatPanelProps {
   projectId: string;
@@ -52,6 +53,21 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setPendingConfirm(null);
   }, [threadId, dispatch]);
 
+  const loadThreadMessages = useCallback(async (id: string) => {
+    try {
+      const res = await fetch(`/api/threads/${id}`);
+      if (!res.ok) throw new Error(`GET /api/threads/${id} ${res.status}`);
+      const data = (await res.json()) as { messages: any[] };
+      return (data.messages ?? []).map((m: any) => ({
+        ...m,
+        toolCalls: m.tool_calls ?? m.toolCalls ?? undefined,
+      })) as StreamMessage[];
+    } catch (err) {
+      console.error('Failed to load thread messages', err);
+      return [];
+    }
+  }, []);
+
   // Load persisted messages whenever the active thread changes.
   useEffect(() => {
     if (!threadId) {
@@ -60,22 +76,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     }
     let cancelled = false;
     (async () => {
-      try {
-        const res = await fetch(`/api/threads/${threadId}`);
-        if (!res.ok) throw new Error(`GET /api/threads/${threadId} ${res.status}`);
-        const data = (await res.json()) as { messages: StreamMessage[] };
-        if (!cancelled) setLoadedMessages(data.messages ?? []);
-      } catch (err) {
-        if (!cancelled) {
-          console.error('Failed to load thread messages', err);
-          setLoadedMessages([]);
-        }
-      }
+      const msgs = await loadThreadMessages(threadId);
+      if (!cancelled) setLoadedMessages(msgs);
     })();
     return () => {
       cancelled = true;
     };
-  }, [threadId]);
+  }, [threadId, loadThreadMessages]);
 
   // Ctrl+O toggles the details-expanded view (tool timeline, full thinking).
   useEffect(() => {
@@ -105,6 +112,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       try {
         await startStream(threadId, text, { ...opts, modelKey: activeModelId });
         onThreadsChanged?.();
+        const msgs = await loadThreadMessages(threadId);
+        setLoadedMessages(msgs);
       } catch (err) {
         if (err instanceof ChatBusyError) {
           setPendingConfirm({
@@ -118,7 +127,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId],
+    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, loadThreadMessages],
   );
 
   const handleSend = useCallback(() => {
@@ -262,6 +271,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsExpanded: boolean }) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'toolResult';
+  const isThinking = msg.isStreaming === true && !msg.content && !!msg.thinking;
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
@@ -273,11 +283,12 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
               : 'bg-zinc-900 border border-zinc-800 text-zinc-200'
         }`}
       >
-        {msg.thinking && (detailsExpanded || msg === undefined) && (
-          <details className="mb-2 text-xs text-zinc-400" open={detailsExpanded}>
-            <summary className="cursor-pointer text-zinc-500">Thinking</summary>
-            <pre className="mt-1 whitespace-pre-wrap font-sans">{msg.thinking}</pre>
-          </details>
+        {!isUser && msg.thinking && (
+          <ThinkingBlock
+            thinking={msg.thinking}
+            isThinking={isThinking}
+            expanded={detailsExpanded}
+          />
         )}
         {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
           <div className="mb-2">

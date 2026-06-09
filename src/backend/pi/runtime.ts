@@ -60,6 +60,7 @@ export class PiRuntime {
   readonly paths: PiRuntimePaths;
   private readonly sessions = new Map<string, AgentSession>();
   private readonly sessionPromises = new Map<string, Promise<AgentSession>>();
+  private readonly sessionModels = new Map<string, string>();
 
   constructor(paths: PiRuntimePaths = defaultPiRuntimePaths()) {
     this.paths = paths;
@@ -82,6 +83,20 @@ export class PiRuntime {
    */
   hasSession(threadId: string, cwd: string): boolean {
     return this.sessions.has(`${threadId}::${cwd}`);
+  }
+
+  /**
+   * Get the model key currently set for a session.
+   */
+  getSessionModel(threadId: string, cwd: string): string | undefined {
+    return this.sessionModels.get(`${threadId}::${cwd}`);
+  }
+
+  /**
+   * Record the model key set for a session.
+   */
+  setSessionModel(threadId: string, cwd: string, modelKey: string): void {
+    this.sessionModels.set(`${threadId}::${cwd}`, modelKey);
   }
 
   /**
@@ -141,8 +156,10 @@ export class PiRuntime {
    * missing files are fine (an empty session was never flushed).
    */
   dropSession(threadId: string, cwd: string): void {
-    this.sessions.delete(`${threadId}::${cwd}`);
-    this.sessionPromises.delete(`${threadId}::${cwd}`);
+    const key = `${threadId}::${cwd}`;
+    this.sessions.delete(key);
+    this.sessionPromises.delete(key);
+    this.sessionModels.delete(key);
     const sessionDir = this.sessionDirFor(cwd);
     try {
       for (const name of readdirSync(sessionDir)) {
