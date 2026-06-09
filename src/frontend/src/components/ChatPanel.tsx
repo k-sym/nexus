@@ -32,7 +32,7 @@ interface ChatPanelProps {
 
 export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged }: ChatPanelProps) {
   const { models, activeModelId, setModel, setThread } = useModels();
-  const { state, startStream, abortStream, dispatch } = usePiStream();
+  const { state, startStream, abortStream, dispatch, setActiveThread } = usePiStream();
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
@@ -47,18 +47,24 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     activeThreadIdRef.current = threadId;
   }, [threadId]);
 
+  // Update the active thread in usePiStream to filter events correctly
+  useEffect(() => {
+    setActiveThread(threadId);
+  }, [threadId, setActiveThread]);
+
   // Tell useModels which thread is active (for per-thread model tracking)
   useEffect(() => {
     setThread(threadId);
   }, [threadId, setThread]);
 
-  // Reset stream state and input when switching threads to prevent bleed.
+  // Reset stream state, abort any active stream, and clear input when switching threads.
   useEffect(() => {
+    abortStream();
     dispatch({ type: 'RESET' });
     setError(null);
     setPendingConfirm(null);
     setInput('');
-  }, [threadId, dispatch]);
+  }, [threadId, dispatch, abortStream]);
 
   // Check if the selected model is busy in another thread (poll every 2 seconds)
   useEffect(() => {

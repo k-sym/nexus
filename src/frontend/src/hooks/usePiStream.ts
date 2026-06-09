@@ -227,6 +227,10 @@ export function usePiStream() {
   const abortRef = useRef<AbortController | null>(null);
   const activeThreadRef = useRef<string | null>(null);
 
+  const setActiveThread = useCallback((threadId: string | null) => {
+    activeThreadRef.current = threadId;
+  }, []);
+
   const routeEvent = useCallback((ev: any, threadId: string) => {
     // Only dispatch events if they belong to the active thread
     if (activeThreadRef.current !== threadId) {
@@ -370,5 +374,5 @@ export function usePiStream() {
     dispatch({ type: 'ABORT_STREAM' });
   }, []);
 
-  return { state, startStream, abortStream, dispatch };
+  return { state, startStream, abortStream, dispatch, setActiveThread };
 }
