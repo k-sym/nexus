@@ -60,7 +60,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setInput('');
   }, [threadId, dispatch]);
 
-  // Check if the selected model is busy in another thread
+  // Check if the selected model is busy in another thread (poll every 2 seconds)
   useEffect(() => {
     if (!projectId || !activeModelId) {
       setModelBusy(null);
@@ -68,9 +68,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     }
 
     let cancelled = false;
-    (async () => {
+    const checkStatus = async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/models/${encodeURIComponent(activeModelId)}/status`);
+        const res = await fetch(`/api/projects/${projectId}/model-status?modelKey=${encodeURIComponent(activeModelId)}`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) {
@@ -83,10 +83,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       } catch (err) {
         console.error('Failed to check model status:', err);
       }
-    })();
+    };
+
+    checkStatus();
+    const interval = setInterval(checkStatus, 2000);
 
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [projectId, activeModelId, threadId]);
 

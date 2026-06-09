@@ -259,8 +259,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
   });
 
   // Check if a model is currently streaming in a project
-  fastify.get('/api/projects/:projectId/models/:modelKey/status', async (request) => {
-    const { projectId, modelKey } = request.params as { projectId: string; modelKey: string };
+  fastify.get('/api/projects/:projectId/model-status', async (request) => {
+    const { projectId } = request.params as { projectId: string };
+    const { modelKey } = request.query as { modelKey?: string };
+    
+    if (!modelKey) {
+      return { busy: false };
+    }
+    
     const busy = concurrency.get(projectId, modelKey);
     if (busy) {
       return {
