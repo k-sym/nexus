@@ -257,6 +257,20 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?').run(now, threadId);
     return { success: true };
   });
+
+  // Check if a model is currently streaming in a project
+  fastify.get('/api/projects/:projectId/models/:modelKey/status', async (request) => {
+    const { projectId, modelKey } = request.params as { projectId: string; modelKey: string };
+    const busy = concurrency.get(projectId, modelKey);
+    if (busy) {
+      return {
+        busy: true,
+        activeThreadId: busy.threadId,
+        activeTitle: busy.title,
+      };
+    }
+    return { busy: false };
+  });
 }
 
 /**

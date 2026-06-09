@@ -38,6 +38,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ activeThreadId: string; activeTitle: string; pendingText: string } | null>(null);
+  const [modelBusy, setModelBusy] = useState<{ threadId: string; title: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Track the active thread id inside async handlers so a late-arriving
   // event after a thread switch is dropped (guards against bleed).
@@ -58,6 +59,36 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setPendingConfirm(null);
     setInput('');
   }, [threadId, dispatch]);
+
+  // Check if the selected model is busy in another thread
+  useEffect(() => {
+    if (!projectId || !activeModelId) {
+      setModelBusy(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/projects/${projectId}/models/${encodeURIComponent(activeModelId)}/status`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) {
+          if (data.busy && data.activeThreadId !== threadId) {
+            setModelBusy({ threadId: data.activeThreadId, title: data.activeTitle });
+          } else {
+            setModelBusy(null);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to check model status:', err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, activeModelId, threadId]);
 
   // Helper to fetch thread messages (without setting model)
   const fetchThreadMessages = useCallback(async (id: string) => {
@@ -233,6 +264,17 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           </span>
         )}
       </header>
+
+      {modelBusy && (
+        <div className="px-4 py-2 border-b border-amber-800/50 bg-amber-950/30 text-xs text-amber-200">
+          <span className="flex items-center gap-2">
+            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            <span>
+              This model is currently streaming in "{modelBusy.title}". Wait for it to finish or choose a different model.
+            </span>
+          </span>
+        </div>
+      )}
 
       {pendingConfirm && (
         <div className="px-4 py-2 border-b border-amber-800/50 bg-amber-950/30 text-xs text-amber-200 flex items-center gap-3">
