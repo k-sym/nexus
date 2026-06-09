@@ -1,7 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChatThread, ChatMessage, FileAttachment, Ask, AnswerSet } from '@nexus/shared';
+import { ChatThread, ChatMessage, FileAttachment, Ask, AnswerSet, ToolCallInfo } from '@nexus/shared';
 import { api, AgentStatus } from '../api';
 import QuestionCard from './QuestionCard';
+import { ThinkingBlock } from './ThinkingBlock';
+import { ActivityBlock } from './ActivityBlock';
+import { ToolCallTimeline } from './ToolCallTimeline';
+import { Stop } from '@phosphor-icons/react';
 
 interface ChatPanelProps {
   projectId: string;
@@ -32,6 +36,7 @@ export default function ChatPanel({ projectId, threadId, agents, agentSlug, onTh
   const [dragOver, setDragOver] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionCopied, setSessionCopied] = useState(false);
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dropZoneRef = useRef<HTMLDivElement>(null);
@@ -41,6 +46,18 @@ export default function ChatPanel({ projectId, threadId, agents, agentSlug, onTh
   const activeThreadId = threadId;
   const activeThreadIdRef = useRef<string | null>(null);
   useEffect(() => { activeThreadIdRef.current = activeThreadId; }, [activeThreadId]);
+
+  // Ctrl+O toggles the details-expanded view (tool timeline, full thinking)
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+        e.preventDefault();
+        setDetailsExpanded(v => !v);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const loadMessages = useCallback(async (id: string) => {
     try {
@@ -94,18 +111,32 @@ export default function ChatPanel({ projectId, threadId, agents, agentSlug, onTh
       }
       // Provisional assistant bubble that fills in as deltas stream.
       const provisionalId = `streaming-${Date.now()}`;
-      setMessages(prev => [
-        ...prev,
-        { id: provisionalId, thread_id: threadId, role: 'assistant', content: '', attachments_json: '[]', message_type: 'text', structured_json: null, created_at: new Date().toISOString() },
-      ]);
+      const baseMsg = { id: provisionalId, thread_id: threadId, role: 'assistant' as const, content: '', attachments_json: '[]', message_type: 'text' as const, structured_json: null, thinking: '', tool_calls: [] as ToolCallInfo[], created_at: new Date().toISOString() };
+      setMessages(prev => [...prev, baseMsg]);
       let acc = '';
+      let thinkingAcc = '';
+      const toolCallsMap = new Map<string, ToolCallInfo>();
       await api.chat.sendMessageStream(threadId, content, attachmentsJson, ev => {
         if (activeThreadIdRef.current !== threadId) return; // user navigated away — drop
         if (ev.kind === 'delta') {
           acc += ev.text;
           setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, content: acc } : m)));
+        } else if (ev.kind === 'thinking') {
+          thinkingAcc += ev.text;
+          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, thinking: thinkingAcc } : m)));
+        } else if (ev.kind === 'tool_start') {
+          toolCallsMap.set(ev.tool.id, { ...ev.tool });
+          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, tool_calls: Array.from(toolCallsMap.values()) } : m)));
+        } else if (ev.kind === 'tool_end') {
+          toolCallsMap.set(ev.tool.id, { ...ev.tool });
+          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, tool_calls: Array.from(toolCallsMap.values()) } : m)));
+        } else if (ev.kind === 'tool_update') {
+          const existing = toolCallsMap.get(ev.id);
+          if (existing) {
+            Object.assign(existing, ev.patch);
+            setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, tool_calls: Array.from(toolCallsMap.values()) } : m)));
+          }
         } else if (ev.kind === 'session') {
-          // Surface the captured session id in the resume chip immediately.
           setSessionId(ev.session_id);
         } else if (ev.kind === 'error') {
           acc = `[error] ${ev.error}`;
@@ -290,9 +321,21 @@ export default function ChatPanel({ projectId, threadId, agents, agentSlug, onTh
                 rows={2}
                 className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600/50 resize-none focus:outline-none focus:border-indigo-500/50"
               />
+              {isTyping && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try { await api.chat.abort(threadId); } catch { /* ignore */ }
+                  }}
+                  className="px-3 bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors self-end"
+                  title="Stop the current generation"
+                >
+                  <Stop className="w-5 h-5" weight="fill" />
+                </button>
+              )}
               <button
                 onClick={handleSend}
-                disabled={!input.trim() && attachments.length === 0}
+                disabled={(!input.trim() && attachments.length === 0) || isTyping}
                 className="px-4 bg-indigo-500 text-ink rounded-lg hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors self-end"
               >
                 Send

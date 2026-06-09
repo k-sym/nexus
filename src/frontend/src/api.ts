@@ -110,6 +110,9 @@ export const api = {
     // Persists dropped files (base64) under the project's project_docs/uploads/; returns saved attachments.
     upload: (threadId: string, files: { name: string; mime_type: string; data_base64: string }[]) =>
       fetchJson<FileAttachment[]>(`${API}/threads/${threadId}/upload`, { method: 'POST', body: JSON.stringify({ files }) }),
+    // Aborts a running generation for this thread (Phase 2: executor registry).
+    abort: (threadId: string) =>
+      fetchJson<{ ok: boolean }>(`${API}/threads/${threadId}/abort`, { method: 'POST' }),
     // Sends a message and streams the turn: calls onEvent for each delta/session/done/error.
     sendMessageStream: async (
       threadId: string,
