@@ -16,8 +16,17 @@ const item = (active: boolean) =>
   }`;
 
 export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPalette }: TopBarProps) {
+  // The Electron window hides the native title bar (titleBarStyle: hiddenInset),
+  // so the TopBar doubles as the drag handle; on macOS it also has to clear the
+  // traffic-light buttons drawn over the top-left. Browser ("web") mode has
+  // neither, so gate on the Electron user-agent.
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const isElectron = /Electron/i.test(ua);
+  const isMac = /Mac/i.test(ua);
+  const chrome = `${isElectron ? ' titlebar-drag' : ''}${isElectron && isMac ? ' mac-traffic-lights' : ''}`;
+
   return (
-    <header className="h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-zinc-800 bg-zinc-900">
+    <header className={`h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-zinc-800 bg-zinc-900${chrome}`}>
       <div className="flex items-center gap-2 pr-1">
         <div className="w-6 h-6 rounded bg-indigo-500 flex items-center justify-center text-ink text-[11px] font-bold">N</div>
         <span className="font-semibold text-sm tracking-wide hidden md:inline">NEXUS</span>
