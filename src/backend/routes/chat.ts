@@ -11,6 +11,7 @@ import { runPersona, ClaudeSession } from '../orchestrator/providers';
 import { adapterFor, providerKindOf } from '../orchestrator/stream-adapters';
 import { getProviderById } from './providers';
 import { parseAskBlock, buildAnswerSummary } from '../chat/ask';
+import { exportThread } from '../sessions/export';
 import { register, get, unregister, abort } from '../chat/executor';
 
 const MAX_HISTORY = 12;
@@ -315,6 +316,29 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const ok = abort(threadId);
     if (!ok) return { ok: false, reason: 'no_run' };
     return { ok: true };
+  });
+
+  /**
+   * Export a chat thread as a JSONL file (portable session format).
+   * The file is written to ~/.nexus/sessions/{projectSlug}/{threadId}.jsonl.
+   */
+  fastify.post('/api/threads/:threadId/export', async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (!thread) { reply.code(404); return { error: 'Thread not found.' }; }
+    const project = db.prepare('SELECT slug, repo_path FROM projects WHERE id = ?').get(thread.project_id) as { slug: string; repo_path: string } | undefined;
+    const messages = db.prepare('SELECT role, content, thinking, tool_calls, created_at FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').all(threadId) as Array<{ role: string; content: string; thinking: string | null; tool_calls: string | null; created_at: string }>;
+    const persona = resolvePersona(thread.agent_id);
+    const file = exportThread({
+      threadId,
+      title: thread.title,
+      agentSlug: thread.agent_id,
+      model: persona?.model || undefined,
+      provider: persona?.provider || undefined,
+      projectSlug: project?.slug || 'unknown',
+      messages,
+    });
+    return { ok: true, path: file };
   });
 
   /**

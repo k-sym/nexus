@@ -340,6 +340,23 @@ export default function ChatPanel({ projectId, threadId, agents, agentSlug, onTh
               >
                 Send
               </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const res = await api.chat.export(threadId);
+                    if (res.ok) {
+                      alert(`Exported to ${res.path}`);
+                    }
+                  } catch (err) {
+                    console.error('Export failed:', err);
+                  }
+                }}
+                className="px-3 bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors self-end"
+                title="Export thread as JSONL"
+              >
+                Export
+              </button>
             </div>
           </div>
         </>
