@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Provider, ProviderKind } from '@nexus/shared';
 import { api, ProviderTestResult } from '../api';
-import { Plus, Trash, PencilSimple, Plugs } from '@phosphor-icons/react';
+import { Plus, Trash, PencilSimple, Plugs, SignIn, CheckCircle, XCircle, Spinner } from '@phosphor-icons/react';
 
 const KINDS: { value: ProviderKind; label: string }[] = [
   { value: 'openai_compat', label: 'OpenAI-compatible (OpenRouter / local / omlx)' },
@@ -48,8 +48,109 @@ export default function ProvidersSettings() {
     try { await api.providers.delete(id); await load(); } catch (e) { console.error(e); }
   };
 
+  // ── OAuth flow state ──
+  interface AuthProvider {
+    id: string; name: string; oauthSupported: boolean; loggedIn: boolean;
+    hasCredential: boolean; credentialType: string | null;
+  }
+  const [authProviders, setAuthProviders] = useState<AuthProvider[]>([]);
+  const [oauthFlow, setOauthFlow] = useState<{ providerId: string; status: 'starting' | 'waiting' | 'complete' | 'error' | 'cancelled'; message?: string; url?: string } | null>(null);
+
+  const loadAuth = useCallback(async () => {
+    try { const r = await api.auth.status(); setAuthProviders(r.providers); } catch (e) { console.error(e); }
+  }, []);
+  useEffect(() => { loadAuth(); }, [loadAuth]);
+
+  const startOAuth = async (providerId: string) => {
+    setOauthFlow({ providerId, status: 'starting' });
+    try {
+      await api.auth.startOAuth(providerId, (ev) => {
+        if (ev.kind === 'auth_url') {
+          setOauthFlow({ providerId, status: 'waiting', url: (ev as any).url, message: (ev as any).instructions });
+          // Open the browser (Electron shell or web popup)
+          const url = (ev as any).url as string;
+          if (typeof window !== 'undefined' && (window as any).__TAURI__?.shell?.open) {
+            (window as any).__TAURI__.shell.open(url);
+          } else {
+            window.open(url, '_blank');
+          }
+        } else if (ev.kind === 'progress') {
+          setOauthFlow({ providerId, status: 'waiting', message: (ev as any).message });
+        } else if (ev.kind === 'complete') {
+          setOauthFlow({ providerId, status: 'complete' });
+          setTimeout(() => setOauthFlow(null), 2000);
+          loadAuth();
+        } else if (ev.kind === 'cancelled') {
+          setOauthFlow({ providerId, status: 'cancelled' });
+          setTimeout(() => setOauthFlow(null), 2000);
+        } else if (ev.kind === 'error') {
+          setOauthFlow({ providerId, status: 'error', message: (ev as any).error });
+        }
+      });
+    } catch (e: any) {
+      setOauthFlow({ providerId, status: 'error', message: e.message });
+    }
+  };
+
+  const cancelOAuth = async () => {
+    try { await api.auth.cancelOAuth(); } catch {}
+    setOauthFlow((f) => f ? { ...f, status: 'cancelled' } : null);
+    setTimeout(() => setOauthFlow(null), 2000);
+  };
+
+  const logout = async (providerId: string) => {
+    if (!confirm(`Sign out of ${providerId}?`)) return;
+    try { await api.auth.logout(providerId); loadAuth(); } catch (e) { console.error(e); }
+  };
+
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      {/* OAuth sign-in section */}
+      <div className="mb-4">
+        <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">OAuth Sign-in</h2>
+        <div className="space-y-2">
+          {authProviders.filter(p => p.oauthSupported).map(p => {
+            const flow = oauthFlow?.providerId === p.id ? oauthFlow : null;
+            return (
+              <div key={p.id} className="flex items-center gap-3 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-zinc-200">{p.name}</span>
+                    {p.loggedIn && (
+                      <span className="flex items-center gap-1 text-[10px] text-emerald-400">
+                        <CheckCircle size={12} weight="fill" /> Signed in
+                      </span>
+                    )}
+                  </div>
+                  {flow && (
+                    <div className="text-[11px] text-zinc-400 mt-0.5">
+                      {flow.status === 'starting' && <><Spinner size={10} className="inline animate-spin mr-1" />Starting…</>}
+                      {flow.status === 'waiting' && (flow.message || 'Waiting for browser…')}
+                      {flow.status === 'complete' && <span className="text-emerald-400">✓ Signed in!</span>}
+                      {flow.status === 'cancelled' && <span className="text-zinc-500">Cancelled</span>}
+                      {flow.status === 'error' && <span className="text-red-400">✗ {flow.message}</span>}
+                    </div>
+                  )}
+                </div>
+                {flow?.status === 'waiting' ? (
+                  <button onClick={cancelOAuth} className="text-xs text-zinc-400 hover:text-zinc-200">Cancel</button>
+                ) : p.loggedIn ? (
+                  <button onClick={() => logout(p.id)} className="text-xs text-zinc-400 hover:text-zinc-200">Sign out</button>
+                ) : (
+                  <button
+                    onClick={() => startOAuth(p.id)}
+                    disabled={flow?.status === 'starting' || flow?.status === 'complete'}
+                    className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 disabled:opacity-40"
+                  >
+                    <SignIn size={12} /> Sign in
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       <div className="flex items-center justify-between mb-3">
         <h2 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Providers</h2>
         {!editing && (

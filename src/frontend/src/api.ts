@@ -180,6 +180,42 @@ export const api = {
     delete: (id: string) => fetchJson<void>(`${API}/providers/${id}`, { method: 'DELETE' }),
     test: (id: string) => fetchJson<ProviderTestResult>(`${API}/providers/${id}/test`, { method: 'POST' }),
   },
+  auth: {
+    status: () => fetchJson<{
+      providers: Array<{ id: string; name: string; oauthSupported: boolean; loggedIn: boolean; hasCredential: boolean; credentialType: string | null }>;
+      inFlight: string | null;
+    }>(`${API}/auth/status`),
+    // Starts an OAuth flow; returns the response. Events stream as NDJSON — use
+    // the raw fetch + reader for streaming rather than fetchJson.
+    startOAuth: async (
+      providerId: string,
+      onEvent: (ev: { kind: string; [k: string]: unknown }) => void,
+    ): Promise<void> => {
+      const res = await fetch(`${API}/auth/oauth/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ providerId }),
+      });
+      if (!res.ok || !res.body) throw new Error(`OAuth start failed: ${res.status}`);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try { onEvent(JSON.parse(line)); } catch { /* skip */ }
+        }
+      }
+    },
+    cancelOAuth: () => fetchJson<{ ok: boolean }>(`${API}/auth/oauth/cancel`, { method: 'POST' }),
+    logout: (providerId: string) => fetchJson<{ ok: boolean }>(`${API}/auth/logout`, { method: 'POST', body: JSON.stringify({ providerId }) }),
+  },
   memory: {
     search: (projectId: string, query: string) => fetchJson<string[]>(`${API}/projects/${projectId}/memories?q=${encodeURIComponent(query)}`),
     list: (projectId: string) => fetchJson<any[]>(`${API}/projects/${projectId}/memories`),
