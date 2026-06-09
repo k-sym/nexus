@@ -1,27 +1,17 @@
 /**
- * Build the launch command for a persona's provider.
+ * STUB — kept temporarily so the build stays green.
  *
- * Maps a `provider` enum to a concrete shell command. Used by the persona
- * editor to pre-fill the launch_command field for terminal-mode threads.
- *
- * Note: Slated for deletion in Phase 3 when terminal-mode threads are gone.
- * Until then, `routes/personas.ts` imports `resolveLaunchCommand` from here.
+ * The legacy `routes/personas.ts` (which imported `resolveLaunchCommand`)
+ * was deleted in Phase 3. Nothing imports from here now; this file will be
+ * removed in a follow-up commit once we're sure no test or import path
+ * references it.
  */
-import { getProviderById } from '../routes/providers';
-import type Database from 'better-sqlite3';
-
 export interface LaunchContext {
   repoPath: string;
   agentName?: string;
   systemPrompt?: string;
 }
 
-export function resolveLaunchCommand(
-  db: Database.Database,
-  providerId: string,
-  ctx: LaunchContext,
-): string {
-  const provider = getProviderById(db, providerId);
-  const base = provider?.name?.toLowerCase() ?? 'claude';
-  return `${base} --cwd ${ctx.repoPath}`;
+export function resolveLaunchCommand(_db: unknown, _providerId: string, _ctx: LaunchContext): string {
+  return '';
 }

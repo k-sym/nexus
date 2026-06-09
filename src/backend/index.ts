@@ -3,20 +3,14 @@
  *
  * Boots a single Fastify process that hosts the HTTP API and starts three
  * background loops: the orchestrator (agent dispatch), the scheduler (cron),
- * and the Obsidian vault watcher. On first run it seeds default personas and
- * creates the ~/.nexus directory structure.
+ * and the Obsidian vault watcher.
  */
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import websocket from '@fastify/websocket';
-import Database from 'better-sqlite3';
-import yaml from 'js-yaml';
-import fs from 'fs';
-import path from 'path';
-import { v4 as uuid } from 'uuid';
 import { getDb } from './db';
-import { loadConfig, getDbPath, getNexusDir } from './config';
+import { loadConfig, getDbPath } from './config';
 import { registerProjectRoutes } from './routes/projects';
 import { registerChatRoutes } from './routes/chat';
 import { registerOrchestratorRoutes } from './routes/orchestrator';
@@ -39,7 +33,6 @@ async function main() {
 
   const db = getDb(getDbPath());
   const pi = new PiRuntime();
-  seedPersonas(db);
   await initMemorySystem(db);
   startOrchestrator(db, pi);
   if (config.scheduler.enabled) {
@@ -83,31 +76,6 @@ async function main() {
   } catch (err) {
     app.log.error(err);
     process.exit(1);
-  }
-}
-
-function seedPersonas(db: Database.Database) {
-  const personasDir = path.join(getNexusDir(), 'personas');
-  if (!fs.existsSync(personasDir)) return;
-
-  const files = fs.readdirSync(personasDir).filter(f => f.endsWith('.yaml'));
-  const existingSlugs = new Set(
-    (db.prepare('SELECT slug FROM personas').all() as { slug: string }[]).map(r => r.slug)
-  );
-
-  for (const file of files) {
-    const slug = file.replace('.yaml', '');
-    if (existingSlugs.has(slug)) continue;
-
-    try {
-      const raw = fs.readFileSync(path.join(personasDir, file), 'utf-8');
-      const config = yaml.load(raw) as any;
-      const now = new Date().toISOString();
-      db.prepare('INSERT OR IGNORE INTO personas (id, name, slug, config_yaml, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(uuid(), config.name, slug, raw, now);
-    } catch (err) {
-      console.error(`Failed to seed persona ${slug}:`, err);
-    }
   }
 }
 

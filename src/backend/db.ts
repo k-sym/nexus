@@ -3,10 +3,14 @@
  *
  * Opens ~/.nexus/nexus.db, enables WAL + foreign keys, and runs idempotent
  * CREATE TABLE statements plus guarded ALTER TABLE migrations for columns
- * added after a table's original creation. Tables: projects, tasks, personas,
+ * added after a table's original creation. Tables: projects, tasks,
  * schedules, chat_threads, chat_messages, agent_runs, tickets (a disposable
- * mirror of Jira tickets assigned to the user; Jira stays canonical). (Memory
- * lives in the standalone @nexus/memory-daemon, not here.)
+ * mirror of Jira tickets assigned to the user; Jira stays canonical).
+ * (Memory lives in the standalone @nexus/memory-daemon, not here.)
+ *
+ * Note: the legacy `personas` and `providers` tables are still referenced
+ * by some routes for one more release; they get dropped in the Phase 5
+ * migration alongside `chat_messages`.
  */
 import Database from 'better-sqlite3';
 
