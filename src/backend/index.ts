@@ -38,9 +38,10 @@ async function main() {
   const config = loadConfig();
 
   const db = getDb(getDbPath());
+  const pi = new PiRuntime();
   seedPersonas(db);
   await initMemorySystem(db);
-  startOrchestrator(db);
+  startOrchestrator(db, pi);
   if (config.scheduler.enabled) {
     startScheduler(db);
   }
@@ -53,7 +54,7 @@ async function main() {
   await app.register(websocket);
 
   app.decorate('db', db);
-  app.decorate('pi', new PiRuntime());
+  app.decorate('pi', pi);
   app.decorate('chatConcurrency', new ConcurrencyTracker());
 
   app.register(registerProjectRoutes);

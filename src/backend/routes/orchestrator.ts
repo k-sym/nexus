@@ -34,6 +34,35 @@ export async function registerOrchestratorRoutes(fastify: FastifyInstance) {
     return runs;
   });
 
+  fastify.post('/api/orchestrator/tasks/:taskId/start', async (request, reply) => {
+    const { taskId } = request.params as { taskId: string };
+    const { modelKey } = request.body as { modelKey?: string };
+    if (!modelKey) {
+      reply.code(400);
+      return { error: 'modelKey required' };
+    }
+    if (!modelKey.includes('/')) {
+      reply.code(400);
+      return { error: 'modelKey must be in `provider/id` form' };
+    }
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId);
+    if (!task) {
+      reply.code(404);
+      return { error: 'Task not found' };
+    }
+    // The model picker only sets the key; the orchestrator poll will
+    // dispatch on the next tick. Move the task to in_progress here so
+    // the UI immediately reflects the change.
+    const now = new Date().toISOString();
+    db.prepare('UPDATE tasks SET model_key = ?, status = ?, updated_at = ? WHERE id = ?').run(
+      modelKey,
+      'in_progress',
+      now,
+      taskId,
+    );
+    return { ok: true };
+  });
+
   // Aggregate token usage stats, optionally scoped to a project.
   fastify.get('/api/agents/usage', async (request) => {
     const { projectId } = request.query as { projectId?: string };

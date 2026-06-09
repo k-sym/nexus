@@ -278,4 +278,12 @@ function runMigrations(db: Database.Database) {
   if (!msgColNames2.has('tool_calls')) {
     db.exec('ALTER TABLE chat_messages ADD COLUMN tool_calls TEXT');
   }
+
+  // Task model picker — user-picked `provider/id` set by the orchestrator's
+  // "In Progress" model-picker flow. Tasks without a model_key sit idle
+  // until the picker runs.
+  const taskCols = db.pragma('table_info(tasks)') as { name: string }[];
+  if (!taskCols.some((c) => c.name === 'model_key')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN model_key TEXT');
+  }
 }

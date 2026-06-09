@@ -52,7 +52,8 @@ export function cwdSlug(repoPath: string): string {
 export class PiRuntime {
   readonly auth: AuthStorage;
   readonly models: ModelRegistry;
-  private readonly paths: PiRuntimePaths;
+  /** Internal path config. Exposed read-only for the orchestrator's headless sessions. */
+  readonly paths: PiRuntimePaths;
   private readonly sessions = new Map<string, AgentSession>();
   private readonly sessionPromises = new Map<string, Promise<AgentSession>>();
 
