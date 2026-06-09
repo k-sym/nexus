@@ -225,8 +225,14 @@ export class ChatBusyError extends Error {
 export function usePiStream() {
   const [state, dispatch] = useReducer(streamReducer, INITIAL_STATE);
   const abortRef = useRef<AbortController | null>(null);
+  const activeThreadRef = useRef<string | null>(null);
 
-  const routeEvent = useCallback((ev: any) => {
+  const routeEvent = useCallback((ev: any, threadId: string) => {
+    // Only dispatch events if they belong to the active thread
+    if (activeThreadRef.current !== threadId) {
+      return;
+    }
+    
     const type = ev?.type;
     if (type === 'message_start') {
       // start a fresh assistant sub-bubble; reducer is single-bubble for now
@@ -278,6 +284,7 @@ export function usePiStream() {
 
   const startStream = useCallback(
     async (threadId: string, text: string, opts: { confirmCancel?: boolean; modelKey?: string } = {}) => {
+      activeThreadRef.current = threadId;
       dispatch({ type: 'START_STREAM', prompt: text });
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -340,7 +347,7 @@ export function usePiStream() {
               return;
             }
             const inner = parsed?.event ?? parsed;
-            routeEvent(inner);
+            routeEvent(inner, threadId);
           }
         }
       } catch (err) {
