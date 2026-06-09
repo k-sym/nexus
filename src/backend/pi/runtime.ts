@@ -12,7 +12,10 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import {
   AuthStorage,
+  DefaultResourceLoader,
   ModelRegistry,
+  SessionManager,
+  SettingsManager,
   type AgentSession,
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
@@ -97,7 +100,6 @@ export class PiRuntime {
   }
 
   private async createSession(threadId: string, cwd: string): Promise<AgentSession> {
-    const { SessionManager, SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
     const sessionManager = SessionManager.create(cwd, this.sessionDirFor(cwd), { id: threadId });
     const settingsManager = SettingsManager.inMemory();
     const resourceLoader = new DefaultResourceLoader({
