@@ -1,13 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
-import ProvidersSettings from './ProvidersSettings';
+import { ZosmaAuthSection } from './ZosmaAuthSection';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -39,14 +38,8 @@ export default function SettingsPage() {
     setSaving(true);
     setSaved(false);
     try {
-      const payload = structuredClone(config);
-      // Only send a new API key if the user typed one; otherwise leave masked.
-      if (apiKeyInput.trim()) {
-        payload.models.openrouter.api_key = apiKeyInput.trim();
-      }
-      const updated = await api.settings.update(payload);
+      const updated = await api.settings.update(config);
       setConfig(updated);
-      setApiKeyInput('');
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err: any) {
@@ -80,28 +73,20 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-6">
-        {/* Providers — first-class, addable, testable */}
-        <ProvidersSettings />
+        {/* Zosma auth — provider API keys. The new "where the keys live"
+            is ~/.nexus/auth.json, managed by the pi runtime. */}
+        <Section title="Zosma">
+          <ZosmaAuthSection />
+        </Section>
 
-        {/* Models (memory daemon + legacy fallback config) */}
-        <Section title="Models">
-          <Field label="OpenRouter API Key">
-            <input
-              type="password"
-              value={apiKeyInput}
-              onChange={e => setApiKeyInput(e.target.value)}
-              placeholder={config.models.openrouter.api_key || 'sk-or-...'}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
-            />
-            <p className="text-[10px] text-zinc-600 mt-1">
-              Current: <span className="font-mono">{config.models.openrouter.api_key || '(unset)'}</span>. Leave blank to keep unchanged.
-            </p>
-          </Field>
-          <Field label="Local Server Base URL">
+        {/* Local server config — kept here because it's an env-style
+            detail that doesn't fit a per-provider API key. */}
+        <Section title="Local Model Server">
+          <Field label="Base URL">
             <input
               type="text"
               value={config.models.local?.base_url ?? ''}
-              onChange={e => update(['models', 'local', 'base_url'], e.target.value)}
+              onChange={(e) => update(['models', 'local', 'base_url'], e.target.value)}
               placeholder="http://localhost:8000/v1"
               className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
             />
@@ -109,35 +94,17 @@ export default function SettingsPage() {
               OpenAI-compatible endpoint (omlx, LM Studio, llama.cpp…). Include the /v1 suffix.
             </p>
           </Field>
-          <Field label="Local Server API Key">
+          <Field label="API key (env)">
             <input
               type="text"
               value={config.models.local?.api_key ?? ''}
-              onChange={e => update(['models', 'local', 'api_key'], e.target.value)}
+              onChange={(e) => update(['models', 'local', 'api_key'], e.target.value)}
               placeholder="${OMLX_API_KEY} or paste a key"
               className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
             />
             <p className="text-[10px] text-zinc-600 mt-1">
               omlx requires this. Supports <span className="font-mono">{'${ENV_VAR}'}</span> interpolation.
             </p>
-          </Field>
-          <Field label="Embedding Model (optional)">
-            <input
-              type="text"
-              value={config.models.local?.embedding_model ?? ''}
-              onChange={e => update(['models', 'local', 'embedding_model'], e.target.value)}
-              placeholder="leave blank to use lexical search"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
-            />
-          </Field>
-          <Field label="Reranker Model (optional)">
-            <input
-              type="text"
-              value={config.models.local?.rerank_model ?? ''}
-              onChange={e => update(['models', 'local', 'rerank_model'], e.target.value)}
-              placeholder="leave blank to disable reranking"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
-            />
           </Field>
         </Section>
 
@@ -155,7 +122,7 @@ export default function SettingsPage() {
             <input
               type="number"
               value={config.memory.auto_inject.max_memories}
-              onChange={e => update(['memory', 'auto_inject', 'max_memories'], parseInt(e.target.value, 10) || 5)}
+              onChange={(e) => update(['memory', 'auto_inject', 'max_memories'], parseInt(e.target.value, 10) || 5)}
               className="w-32 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
             />
           </Field>
@@ -163,7 +130,7 @@ export default function SettingsPage() {
             <input
               type="number"
               value={config.memory.auto_inject.token_budget}
-              onChange={e => update(['memory', 'auto_inject', 'token_budget'], parseInt(e.target.value, 10) || 1000)}
+              onChange={(e) => update(['memory', 'auto_inject', 'token_budget'], parseInt(e.target.value, 10) || 1000)}
               className="w-32 bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/50"
             />
           </Field>
@@ -196,7 +163,7 @@ export default function SettingsPage() {
             <input
               type="text"
               value={config.jira.user}
-              onChange={e => update(['jira', 'user'], e.target.value)}
+              onChange={(e) => update(['jira', 'user'], e.target.value)}
               placeholder="you@example.com"
               className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
             />
@@ -205,7 +172,7 @@ export default function SettingsPage() {
             <input
               type="text"
               value={config.jira.instance}
-              onChange={e => update(['jira', 'instance'], e.target.value)}
+              onChange={(e) => update(['jira', 'instance'], e.target.value)}
               placeholder="your-company.atlassian.net (https:// optional)"
               className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
             />
@@ -214,7 +181,7 @@ export default function SettingsPage() {
             <input
               type="text"
               value={config.jira.project}
-              onChange={e => update(['jira', 'project'], e.target.value)}
+              onChange={(e) => update(['jira', 'project'], e.target.value)}
               placeholder="SUP"
               className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
             />
@@ -224,7 +191,7 @@ export default function SettingsPage() {
               type="number"
               min={1}
               value={config.jira.poll_minutes}
-              onChange={e => update(['jira', 'poll_minutes'], parseInt(e.target.value, 10) || 15)}
+              onChange={(e) => update(['jira', 'poll_minutes'], parseInt(e.target.value, 10) || 15)}
               className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-sm text-zinc-200"
             />
           </Field>
@@ -232,26 +199,6 @@ export default function SettingsPage() {
             The API token is read from the <span className="font-mono text-zinc-400">JIRA_TOKEN</span> environment
             variable, never stored here. Changes apply on the next backend restart.
           </p>
-        </Section>
-
-        {/* CLI commands */}
-        <Section title="CLI Providers">
-          <Field label="Claude Code command">
-            <input
-              type="text"
-              value={config.claude_code.command}
-              onChange={e => update(['claude_code', 'command'], e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 focus:outline-none focus:border-indigo-500/50"
-            />
-          </Field>
-          <Field label="Codex command">
-            <input
-              type="text"
-              value={config.codex.command}
-              onChange={e => update(['codex', 'command'], e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 focus:outline-none focus:border-indigo-500/50"
-            />
-          </Field>
         </Section>
       </div>
     </div>
