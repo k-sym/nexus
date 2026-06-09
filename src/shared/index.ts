@@ -66,7 +66,7 @@ export interface Ticket {
   synced_at: string;
 }
 
-/** A chat thread — one Zosma Cowork–style conversation per row. */
+/** A chat thread — one conversation per row, linked to a project. */
 export interface ChatThread {
   id: string;
   project_id: string;

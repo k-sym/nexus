@@ -3,10 +3,9 @@
  * stream (NDJSON over HTTP), folds the events into a renderable
  * `state`, and supports a 409 + X-Confirm-Cancel conflict path.
  *
- * The reducer is ported from Zosma Cowork's usePiStream. The transport
- * is the Nexus variant: a regular fetch + ReadableStream consumer
- * (no Tauri Channel), since we go through the Fastify backend rather
- * than a Rust sidecar relay.
+ * The reducer handles Pi's streaming events: thinking deltas, text
+ * deltas, tool calls, and message completion. The transport is a
+ * regular fetch + ReadableStream consumer.
  */
 import { useCallback, useReducer, useRef } from 'react';
 
@@ -274,7 +273,7 @@ export function usePiStream() {
   }, []);
 
   const startStream = useCallback(
-    async (threadId: string, text: string, opts: { confirmCancel?: boolean } = {}) => {
+    async (threadId: string, text: string, opts: { confirmCancel?: boolean; modelKey?: string } = {}) => {
       dispatch({ type: 'START_STREAM', prompt: text });
       const ctrl = new AbortController();
       abortRef.current = ctrl;
@@ -286,7 +285,7 @@ export function usePiStream() {
             'Content-Type': 'application/json',
             ...(opts.confirmCancel ? { 'X-Confirm-Cancel': 'true' } : {}),
           },
-          body: JSON.stringify({ content: text }),
+          body: JSON.stringify({ content: text, modelKey: opts.modelKey }),
           signal: ctrl.signal,
         });
       } catch (err) {

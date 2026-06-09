@@ -9,11 +9,8 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import websocket from '@fastify/websocket';
-import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { getDb } from './db';
-import { loadConfig, getDbPath } from './config';
+import { loadConfig, getDbPath, resolveOpenRouterKey } from './config';
 import { registerProjectRoutes } from './routes/projects';
 import { registerChatRoutes } from './routes/chat';
 import { registerOrchestratorRoutes } from './routes/orchestrator';
@@ -32,34 +29,17 @@ import { startJiraSync } from './jira/poll';
 import { PiRuntime } from './pi/runtime';
 import { ConcurrencyTracker } from './pi/concurrency';
 
-/**
- * Run the one-shot migration to the new pi tree-format sessions.
- * Idempotent (exits 0 immediately on user_version >= 100). A failure
- * here is fatal — we don't want to boot on a half-migrated DB.
- *
- * The script lives in the repo root's `scripts/` dir; the backend
- * workspace is at `<repo>/src/backend/`, so the script is at
- * `<repo>/scripts/migrate-chats-to-zosma.cjs` (3 levels up from cwd).
- */
-function maybeMigrate(): void {
-  const dbPath = getDbPath();
-  if (!existsSync(dbPath)) return; // fresh install
-  const result = spawnSync(
-    'node',
-    [join(process.cwd(), '..', '..', 'scripts', 'migrate-chats-to-zosma.cjs')],
-    { stdio: 'inherit' },
-  );
-  if (result.status !== 0) {
-    throw new Error('chat → pi session migration failed — see output above');
-  }
-}
-
 async function main() {
   const config = loadConfig();
-  maybeMigrate();
 
   const db = getDb(getDbPath());
   const pi = new PiRuntime();
+
+  const openRouterKey = resolveOpenRouterKey(config);
+  if (openRouterKey) {
+    pi.auth.setRuntimeApiKey('openrouter', openRouterKey);
+  }
+
   await initMemorySystem(db);
   startOrchestrator(db, pi);
   if (config.scheduler.enabled) {

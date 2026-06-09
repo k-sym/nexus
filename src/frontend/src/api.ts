@@ -66,11 +66,9 @@ export const api = {
   },
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`/api/projects/${projectId}/threads`),
-    // Creates a thread. The legacy agent_id / mode / launch_command body
-    // fields are gone — threads don't bind to a persona any more, and
-    // there's no terminal mode. The optional `title` sets the initial
-    // title (defaults to "New Chat").
-    createThread: (projectId: string, _agentId: string, title?: string) =>
+    // Creates a thread. Threads don't bind to a persona any more.
+    // The optional `title` sets the initial title (defaults to "New Chat").
+    createThread: (projectId: string, title?: string) =>
       fetchJson<ChatThread>(`/api/projects/${projectId}/threads`, {
         method: 'POST',
         body: JSON.stringify(title ? { title } : {}),

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
-import { ZosmaAuthSection } from './ZosmaAuthSection';
+import { PiAuthSection } from './PiAuthSection';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<any>(null);
@@ -73,10 +73,8 @@ export default function SettingsPage() {
       </div>
 
       <div className="space-y-6">
-        {/* Zosma auth — provider API keys. The new "where the keys live"
-            is ~/.nexus/auth.json, managed by the pi runtime. */}
-        <Section title="Zosma">
-          <ZosmaAuthSection />
+        <Section title="Provider Auth">
+          <PiAuthSection />
         </Section>
 
         {/* Local server config — kept here because it's an env-style

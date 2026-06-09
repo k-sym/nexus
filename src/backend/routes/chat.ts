@@ -82,7 +82,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
   fastify.post('/api/threads/:threadId/messages/stream', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
-    const body = request.body as { content: string };
+    const body = request.body as { content: string; modelKey?: string };
     const confirmCancel = request.headers['x-confirm-cancel'] === 'true';
 
     const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
@@ -115,6 +115,22 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       return { error: err?.message || 'failed to create session' };
     }
 
+    if (body.modelKey) {
+      const sep = body.modelKey.indexOf('/');
+      if (sep > 0) {
+        const provider = body.modelKey.slice(0, sep);
+        const modelId = body.modelKey.slice(sep + 1);
+        const model = pi.models.find(provider, modelId);
+        if (model) {
+          try {
+            await session.setModel(model);
+          } catch (err: any) {
+            console.error(`[chat] setModel failed for ${body.modelKey}:`, err?.message);
+          }
+        }
+      }
+    }
+
     const stream = new SessionEventStream();
     activeStreams.set(threadId, { threadId, stream, projectId: thread.project_id });
     concurrency.set(thread.project_id, threadId, thread.title);
@@ -142,20 +158,22 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     try {
       const userMessageId = uuid();
       const userTs = new Date().toISOString();
-      // Persist the user turn in the legacy chat_messages table for backward
-      // compat with anything that still reads it. Phase 5 drops the table.
-      persistUserTurn.run(
-        userMessageId,
-        threadId,
-        'user',
-        body.content,
-        '[]',
-        'text',
-        null,
-        null,
-        null,
-        userTs,
-      );
+      try {
+        persistUserTurn.run(
+          userMessageId,
+          threadId,
+          'user',
+          body.content,
+          '[]',
+          'text',
+          null,
+          null,
+          null,
+          userTs,
+        );
+      } catch (err: any) {
+        console.error('[chat] persistUserTurn failed:', err?.message);
+      }
       const subscription = session.subscribe((ev) => write(ev));
       await session.prompt(body.content);
       subscription();

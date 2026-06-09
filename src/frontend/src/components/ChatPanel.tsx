@@ -96,7 +96,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       if (!threadId) return;
       setError(null);
       try {
-        await startStream(threadId, text, opts);
+        await startStream(threadId, text, { ...opts, modelKey: activeModelId });
         onThreadsChanged?.();
       } catch (err) {
         if (err instanceof ChatBusyError) {
@@ -111,7 +111,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [threadId, startStream, onBusyConflict, onThreadsChanged],
+    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId],
   );
 
   const handleSend = useCallback(() => {

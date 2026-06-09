@@ -226,7 +226,7 @@ export default function App() {
   };
 
   const startNewChat = async (projectId: string) => {
-    const thread = await api.chat.createThread(projectId, 'zosma');
+    const thread = await api.chat.createThread(projectId);
     await loadThreads(projectId);
     selectThread(projectId, thread.id);
   };

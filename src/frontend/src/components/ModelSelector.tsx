@@ -1,10 +1,9 @@
 /**
  * ModelSelector — a compact `provider/id` picker.
  *
- * Ported from Zosma Cowork's ModelSelector. Opens a small portal-mounted
- * dropdown above (or below, depending on viewport position) the trigger
- * button. The list is filtered by a free-text search; selection calls
- * back with `(provider, id)`.
+ * Opens a small portal-mounted dropdown above (or below, depending on
+ * viewport position) the trigger button. The list is filtered by a
+ * free-text search; selection calls back with `(provider, id)`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CaretUp, Check, MagnifyingGlass } from '@phosphor-icons/react';
