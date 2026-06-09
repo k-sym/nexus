@@ -19,7 +19,6 @@ import { getDb } from './db';
 import { loadConfig, getDbPath, getNexusDir } from './config';
 import { registerProjectRoutes } from './routes/projects';
 import { registerChatRoutes } from './routes/chat';
-import { registerPersonaRoutes } from './routes/personas';
 import { registerOrchestratorRoutes } from './routes/orchestrator';
 import { registerMemoryRoutes } from './routes/memory';
 import { registerScheduleRoutes } from './routes/schedules';
@@ -27,8 +26,6 @@ import { registerSettingsRoutes } from './routes/settings';
 import { registerStatusRoutes } from './routes/status';
 import { registerTicketRoutes } from './routes/tickets';
 import { registerNotificationRoutes } from './routes/notifications';
-import { registerProviderRoutes, seedProviders } from './routes/providers';
-import { registerPtyRoutes } from './routes/pty';
 import { registerAuthRoutes } from './routes/auth';
 import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
@@ -42,7 +39,6 @@ async function main() {
 
   const db = getDb(getDbPath());
   seedPersonas(db);
-  seedProviders(db);
   await initMemorySystem(db);
   startOrchestrator(db);
   if (config.scheduler.enabled) {
@@ -62,7 +58,6 @@ async function main() {
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
-  app.register(registerPersonaRoutes);
   app.register(registerOrchestratorRoutes);
   app.register(registerMemoryRoutes);
   app.register(registerScheduleRoutes);
@@ -70,8 +65,6 @@ async function main() {
   app.register(registerStatusRoutes);
   app.register(registerTicketRoutes);
   app.register(registerNotificationRoutes);
-  app.register(registerProviderRoutes);
-  app.register(registerPtyRoutes);
   app.register(registerAuthRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));

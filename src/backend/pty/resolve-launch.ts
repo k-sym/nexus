@@ -1,16 +1,27 @@
-import yaml from 'js-yaml';
-import Database from 'better-sqlite3';
-import { PersonaConfig } from '@nexus/shared';
+/**
+ * Build the launch command for a persona's provider.
+ *
+ * Maps a `provider` enum to a concrete shell command. Used by the persona
+ * editor to pre-fill the launch_command field for terminal-mode threads.
+ *
+ * Note: Slated for deletion in Phase 3 when terminal-mode threads are gone.
+ * Until then, `routes/personas.ts` imports `resolveLaunchCommand` from here.
+ */
 import { getProviderById } from '../routes/providers';
-import { buildLaunchCommand } from './launch-command';
+import type Database from 'better-sqlite3';
 
-/** Resolve the terminal launch command for a persona, mirroring chat's provider/model/args resolution. */
-export function resolveLaunchCommand(db: Database.Database, configYaml: string, sessionId?: string | null): string {
-  let cfg: Partial<PersonaConfig> = {};
-  try { cfg = (yaml.load(configYaml) as Partial<PersonaConfig>) ?? {}; } catch { /* defaults */ }
-  const provider = cfg.provider_id ? getProviderById(db, cfg.provider_id) : undefined;
-  const providerKind = provider?.kind ?? cfg.provider ?? '';
-  const model = cfg.model || provider?.default_model || '';
-  const args = provider?.args ?? null;
-  return buildLaunchCommand({ providerKind, model, args, systemPrompt: cfg.system_prompt, sessionId });
+export interface LaunchContext {
+  repoPath: string;
+  agentName?: string;
+  systemPrompt?: string;
+}
+
+export function resolveLaunchCommand(
+  db: Database.Database,
+  providerId: string,
+  ctx: LaunchContext,
+): string {
+  const provider = getProviderById(db, providerId);
+  const base = provider?.name?.toLowerCase() ?? 'claude';
+  return `${base} --cwd ${ctx.repoPath}`;
 }

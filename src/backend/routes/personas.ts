@@ -40,7 +40,7 @@ export async function registerPersonaRoutes(fastify: FastifyInstance) {
     const { slug } = request.params as { slug: string };
     const row = db.prepare('SELECT config_yaml FROM personas WHERE slug = ?').get(slug) as { config_yaml: string } | undefined;
     if (!row) return { command: '' };
-    const command = resolveLaunchCommand(db, row.config_yaml);
+    const command = resolveLaunchCommand(db, slug, { repoPath: '' });
     return { command };
   });
 
