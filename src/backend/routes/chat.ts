@@ -4,7 +4,7 @@ import path from 'path';
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import yaml from 'js-yaml';
-import { ChatThread, ChatMode, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet, FileAttachment, ChatStreamEvent } from '@nexus/shared';
+import { ChatThread, ChatMode, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet, FileAttachment, ChatStreamEvent, ToolCallInfo } from '@nexus/shared';
 import { getRelevantMemories, addMemory } from '../memory';
 import { loadConfig } from '../config';
 import { runPersona, ClaudeSession } from '../orchestrator/providers';
@@ -70,6 +70,8 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     attachments = '[]',
     messageType: ChatMessage['message_type'] = 'text',
     structuredJson: string | null = null,
+    thinking: string | null = null,
+    toolCalls: ToolCallInfo[] | null = null,
   ): ChatMessage {
     const msg: ChatMessage = {
       id: uuid(),
@@ -81,8 +83,8 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       structured_json: structuredJson,
       created_at: new Date().toISOString(),
     };
-    db.prepare('INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, message_type, structured_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(msg.id, msg.thread_id, msg.role, msg.content, msg.attachments_json, msg.message_type, msg.structured_json, msg.created_at);
+    db.prepare('INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, message_type, structured_json, thinking, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(msg.id, msg.thread_id, msg.role, msg.content, msg.attachments_json, msg.message_type, msg.structured_json, thinking, toolCalls ? JSON.stringify(toolCalls) : null, msg.created_at);
     db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(msg.created_at, threadId);
     return msg;
   }
@@ -165,8 +167,31 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     // When streaming, normalize the provider's raw output into delta/session events
     // for a live preview. The authoritative reply is still result.output below.
     const adapter = adapterFor(providerKindOf(provider, persona.provider));
+    let thinkingAccum = '';
+    const toolCalls: ToolCallInfo[] = [];
+    const toolCallMap = new Map<string, number>(); // id -> index in toolCalls
     const onOutput = onEvent
-      ? (chunk: string) => { for (const ev of adapter.push(chunk)) onEvent(ev); }
+      ? (chunk: string) => {
+          for (const ev of adapter.push(chunk)) {
+            if (ev.kind === 'thinking') {
+              thinkingAccum += ev.text;
+            } else if (ev.kind === 'tool_start') {
+              toolCallMap.set(ev.tool.id, toolCalls.length);
+              toolCalls.push(ev.tool);
+            } else if (ev.kind === 'tool_update') {
+              const idx = toolCallMap.get(ev.id);
+              if (idx !== undefined && ev.patch) {
+                Object.assign(toolCalls[idx], ev.patch);
+              }
+            } else if (ev.kind === 'tool_end') {
+              const idx = toolCallMap.get(ev.tool.id);
+              if (idx !== undefined) {
+                Object.assign(toolCalls[idx], ev.tool);
+              }
+            }
+            onEvent(ev);
+          }
+        }
       : () => {};
     const result = await runPersona(persona, promptBody, workspace, config, onOutput, provider, claudeSession, idleTimeoutMs);
     if (!result.ok) {
@@ -184,8 +209,8 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     // If the agent emitted an ask block, persist a structured question message.
     const parsed = result.ok ? parseAskBlock(result.output) : null;
     const assistantMsg = parsed
-      ? insertMessage(threadId, 'assistant', parsed.preamble, '[]', 'question', JSON.stringify(parsed.ask))
-      : insertMessage(threadId, 'assistant', content);
+      ? insertMessage(threadId, 'assistant', parsed.preamble, '[]', 'question', JSON.stringify(parsed.ask), thinkingAccum || null, toolCalls.length > 0 ? toolCalls : null)
+      : insertMessage(threadId, 'assistant', content, '[]', 'text', null, thinkingAccum || null, toolCalls.length > 0 ? toolCalls : null);
 
     if (project && result.ok) {
       addMemory(db, {

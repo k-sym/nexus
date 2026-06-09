@@ -84,6 +84,8 @@ function runMigrations(db: Database.Database) {
       attachments_json TEXT DEFAULT '[]',
       message_type TEXT NOT NULL DEFAULT 'text',
       structured_json TEXT,
+      thinking TEXT,
+      tool_calls TEXT,
       created_at TEXT NOT NULL
     );
 
@@ -266,5 +268,14 @@ function runMigrations(db: Database.Database) {
     if (!msgColNames.has(col)) {
       db.exec(sql);
     }
+  }
+
+  // Thinking + tool_calls migrations (for DBs created before Phase 1 chat UX).
+  const msgColNames2 = new Set((db.pragma('table_info(chat_messages)') as { name: string }[]).map(c => c.name));
+  if (!msgColNames2.has('thinking')) {
+    db.exec('ALTER TABLE chat_messages ADD COLUMN thinking TEXT');
+  }
+  if (!msgColNames2.has('tool_calls')) {
+    db.exec('ALTER TABLE chat_messages ADD COLUMN tool_calls TEXT');
   }
 }

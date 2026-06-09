@@ -81,6 +81,17 @@ export interface ChatThread {
   launch_command?: string | null;
 }
 
+export interface ToolCallInfo {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  status: 'running' | 'completed' | 'error';
+  result?: string;
+  is_error?: boolean;
+  details?: Record<string, unknown>;
+  partial_output?: string;
+}
+
 export interface ChatMessage {
   id: string;
   thread_id: string;
@@ -91,6 +102,10 @@ export interface ChatMessage {
   message_type: 'text' | 'question' | 'answer';
   /** For 'question': a serialized Ask. For 'answer': a serialized AnswerSet. Else null. */
   structured_json: string | null;
+  /** Accumulated thinking text from the agent's reasoning stream. */
+  thinking?: string | null;
+  /** Tool calls executed during this turn, in order. */
+  tool_calls?: ToolCallInfo[] | null;
   created_at: string;
 }
 
@@ -108,6 +123,10 @@ export interface FileAttachment {
  */
 export type ChatStreamEvent =
   | { kind: 'delta'; text: string }
+  | { kind: 'thinking'; text: string }
+  | { kind: 'tool_start'; tool: ToolCallInfo }
+  | { kind: 'tool_update'; id: string; patch: Partial<ToolCallInfo> }
+  | { kind: 'tool_end'; tool: ToolCallInfo }
   | { kind: 'session'; session_id: string }
   | { kind: 'done'; message: ChatMessage }
   | { kind: 'error'; error: string };
