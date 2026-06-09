@@ -87,6 +87,7 @@ function runCli(
   // wall-clock TIMEOUT_MS cap. Callers that stream (Claude Code's stream-json)
   // pass an idle timeout; one-shot callers keep the wall-clock cap.
   idleTimeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<ProviderResult> {
   return new Promise(resolve => {
     const startTime = Date.now();
@@ -101,6 +102,18 @@ function runCli(
       cwd: workspace,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
+
+    // Abort signal handler: SIGTERM the child, then SIGKILL after 2s grace
+    if (signal) {
+      const onAbort = () => {
+        console.log(`[provider] abort signal received for ${command} pid=${child.pid}`);
+        child.kill('SIGTERM');
+        setTimeout(() => { try { if (!child.killed) child.kill('SIGKILL'); } catch { /* already dead */ } }, 2000);
+      };
+      if (signal.aborted) onAbort();
+      else signal.addEventListener('abort', onAbort, { once: true });
+      child.on('exit', () => signal.removeEventListener('abort', onAbort));
+    }
 
     const finish = (ok: boolean, errOverride?: string) => {
       if (settled) return;
@@ -162,6 +175,7 @@ export async function runClaudeCode(
   model?: string,
   session?: ClaudeSession,
   idleTimeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<ProviderResult> {
   const command = config?.command || 'claude';
   // `--output-format stream-json --verbose` streams the turn as newline-delimited
@@ -181,7 +195,7 @@ export async function runClaudeCode(
     '--output-format', 'stream-json', '--verbose',
     '-p', prompt,
   ];
-  const result = await runCli(command, args, workspace, prompt, onOutput, idleTimeoutMs);
+  const result = await runCli(command, args, workspace, prompt, onOutput, idleTimeoutMs, signal);
 
   // Parse the NDJSON event stream: capture the session id and the terminal result.
   let text: string | undefined;
@@ -482,6 +496,7 @@ export function runPersona(
   provider?: Provider,
   claudeSession?: ClaudeSession,
   idleTimeoutMs?: number,
+  signal?: AbortSignal,
 ): Promise<ProviderResult> {
   const sys = persona.system_prompt
     ? `${persona.system_prompt}\n\n${ASK_CONVENTION}`
@@ -503,7 +518,7 @@ export function runPersona(
       case 'claude_code': {
         const allowed = mapToolsToClaude(persona.tools);
         const args = [...(config.claude_code.args ?? []), ...(allowed.length ? ['--allowedTools', allowed.join(',')] : [])];
-        return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(model), claudeSession, idleTimeoutMs);
+        return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(model), claudeSession, idleTimeoutMs, signal);
       }
       case 'codex':
         return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, model);
@@ -528,7 +543,7 @@ export function runPersona(
         ...(config.claude_code.args ?? []),
         ...(allowed.length ? ['--allowedTools', allowed.join(',')] : []),
       ];
-      return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(persona.model), claudeSession, idleTimeoutMs);
+      return runClaudeCode(workspace, claudePrompt, onOutput, { command: config.claude_code.command, args }, claudeModelAlias(persona.model), claudeSession, idleTimeoutMs, signal);
     }
     case 'codex':
       return runCodex(workspace, withSystem, onOutput, { command: config.codex.command, args: config.codex.args }, persona.model);
