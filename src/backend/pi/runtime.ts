@@ -78,6 +78,13 @@ export class PiRuntime {
   }
 
   /**
+   * Check if a session already exists for the given thread and cwd.
+   */
+  hasSession(threadId: string, cwd: string): boolean {
+    return this.sessions.has(`${threadId}::${cwd}`);
+  }
+
+  /**
    * Get or create a session for a thread bound to a cwd.
    *
    * The session is created with `SessionManager.create(cwd, sessionDir, { id: threadId })`
