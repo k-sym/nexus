@@ -51,11 +51,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setThread(threadId);
   }, [threadId, setThread]);
 
-  // Reset stream state when switching threads to prevent message bleed.
+  // Reset stream state and input when switching threads to prevent bleed.
   useEffect(() => {
     dispatch({ type: 'RESET' });
     setError(null);
     setPendingConfirm(null);
+    setInput('');
   }, [threadId, dispatch]);
 
   // Helper to fetch thread messages (without setting model)
