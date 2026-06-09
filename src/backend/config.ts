@@ -51,20 +51,6 @@ const DEFAULT_CONFIG: NexusConfig = {
     project: 'SUP',
     poll_minutes: 15,
   },
-  claude_code: {
-    command: 'claude',
-    args: [],
-    idle_timeout_seconds: 600,
-  },
-  codex: {
-    command: 'codex',
-    args: [],
-  },
-  chat: {
-    model: 'openrouter/anthropic/claude-sonnet-4',
-    hot_storage_hours: 48,
-    archive_path: 'Projects/{project_slug}/Chats',
-  },
 };
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
@@ -78,7 +64,6 @@ export function expandHome(p: string): string {
 export function ensureNexusDir(): void {
   const dirs = [
     NEXUS_DIR,
-    path.join(NEXUS_DIR, 'personas'),
     path.join(NEXUS_DIR, 'workspaces'),
     path.join(NEXUS_DIR, 'logs'),
   ];
@@ -104,82 +89,8 @@ export function ensureVaultDir(vaultPath: string): void {
   }
 }
 
-function seedDefaultPersonas(): void {
-  const personasDir = path.join(NEXUS_DIR, 'personas');
-  const defaults = [
-    {
-      slug: 'developer',
-      yaml: {
-        name: 'Developer',
-        slug: 'developer',
-        provider: 'claude_code',
-        model: 'claude-sonnet-4',
-        system_prompt: 'You are an expert software developer. Write clean, well-tested code. Follow the project\'s existing conventions.',
-        tools: ['read_file', 'write_file', 'run_command', 'list_files'],
-        workspace: '~/Projects/{project}',
-        startup_scripts: ['git status'],
-        token_budget: 4000,
-      },
-    },
-    {
-      slug: 'reviewer',
-      yaml: {
-        name: 'Reviewer',
-        slug: 'reviewer',
-        provider: 'codex',
-        model: 'codex-default',
-        system_prompt: 'You are a senior code reviewer. Focus on correctness, security, maintainability, and adherence to project conventions.',
-        tools: ['read_file', 'list_files', 'run_command'],
-        workspace: '~/Projects/{project}',
-        startup_scripts: ['git fetch origin'],
-        token_budget: 3000,
-      },
-    },
-    {
-      slug: 'generalist',
-      yaml: {
-        name: 'Generalist',
-        slug: 'generalist',
-        provider: 'openrouter',
-        model: 'openrouter/anthropic/claude-sonnet-4',
-        system_prompt: 'You are a versatile assistant capable of handling diverse tasks including writing, analysis, planning, marketing, and general problem solving.',
-        tools: ['read_file', 'write_file', 'run_command', 'list_files'],
-        workspace: '~/Projects/{project}',
-        startup_scripts: [],
-        token_budget: 4000,
-      },
-    },
-    {
-      slug: 'cron-runner',
-      yaml: {
-        name: 'Cron Runner',
-        slug: 'cron-runner',
-        provider: 'local',
-        model: 'qwen2.5:14b',
-        system_prompt: 'You are a task automation assistant. Execute scheduled tasks efficiently and report results concisely.',
-        tools: ['read_file', 'write_file', 'run_command'],
-        workspace: '~/Projects/{project}',
-        startup_scripts: [],
-        token_budget: 2000,
-      },
-    },
-  ];
-
-  const indexPath = path.join(personasDir, '.seeded');
-  if (fs.existsSync(indexPath)) return;
-
-  for (const { slug, yaml: persona } of defaults) {
-    const filePath = path.join(personasDir, `${slug}.yaml`);
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, yaml.dump(persona, { lineWidth: 120, noRefs: true }), 'utf-8');
-    }
-  }
-  fs.writeFileSync(indexPath, new Date().toISOString(), 'utf-8');
-}
-
 export function loadConfig(): NexusConfig {
   ensureNexusDir();
-  seedDefaultPersonas();
 
   if (!fs.existsSync(CONFIG_PATH)) {
     saveConfig(DEFAULT_CONFIG);

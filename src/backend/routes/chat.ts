@@ -15,7 +15,6 @@ import { ChatThread } from '@nexus/shared';
 import { SessionEventStream } from '../pi/events';
 
 const ABORT_GRACE_MS = 200;
-const PLACEHOLDER_AGENT = 'zosma';
 
 interface ActiveStream {
   threadId: string;
@@ -45,17 +44,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const thread: ChatThread = {
       id: uuid(),
       project_id: projectId,
-      // agent_id is NOT NULL in the existing schema; placeholder until Phase 5
-      // drops the column. The new chat doesn't dispatch through a persona.
-      agent_id: PLACEHOLDER_AGENT,
       title: body.title?.trim() || 'New Chat',
       created_at: now,
       updated_at: now,
       archived_at: null,
     };
     db.prepare(
-      'INSERT INTO chat_threads (id, project_id, agent_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    ).run(thread.id, thread.project_id, thread.agent_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at);
+      'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(thread.id, thread.project_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at);
     return thread;
   });
 

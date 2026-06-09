@@ -1,3 +1,11 @@
+/**
+ * Shared types for the Nexus backend and frontend.
+ *
+ * The chat runtime is now the pi-coding-agent SDK; persona/provider/PTY
+ * surfaces are gone. Only the types the new code paths still need are
+ * exported.
+ */
+
 export type TaskStatus = 'triage' | 'todo' | 'in_progress' | 'review' | 'deploy';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
@@ -19,18 +27,15 @@ export interface Task {
   description: string;
   status: TaskStatus;
   priority: TaskPriority;
+  /** Persona slug from the legacy persona system. Retained on the row so
+   *  legacy data doesn't break; the new orchestrator doesn't read it. */
   assigned_agent: string | null;
   due_date: string | null;
   created_at: string;
   updated_at: string;
-}
-
-export interface Persona {
-  id: string;
-  name: string;
-  slug: string;
-  config_yaml: string;
-  created_at: string;
+  /** Set by the orchestrator's "In Progress" model picker; tasks without
+   *  a model_key sit idle until the picker runs. */
+  model_key: string | null;
 }
 
 export interface Schedule {
@@ -61,164 +66,15 @@ export interface Ticket {
   synced_at: string;
 }
 
-/** A chat thread is either a bubble conversation or an embedded terminal session. */
-export type ChatMode = 'chat' | 'terminal';
-
+/** A chat thread — one Zosma Cowork–style conversation per row. */
 export interface ChatThread {
   id: string;
   project_id: string;
-  agent_id: string;
   title: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
-  /** Latest Claude Code CLI session id for this thread, captured per turn so the
-   *  conversation can be resumed from a terminal with `claude --resume <id>`. */
-  agent_session_id?: string | null;
-  /** 'chat' (bubble UI) or 'terminal' (embedded PTY). Defaults to 'chat'. */
-  mode?: ChatMode;
-  /** The editable command pre-typed/run in a terminal thread; null for chat threads. */
-  launch_command?: string | null;
 }
-
-export interface ToolCallInfo {
-  id: string;
-  name: string;
-  args: Record<string, unknown>;
-  status: 'running' | 'completed' | 'error';
-  result?: string;
-  is_error?: boolean;
-  details?: Record<string, unknown>;
-  partial_output?: string;
-}
-
-export interface ChatMessage {
-  id: string;
-  thread_id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  attachments_json: string;
-  /** 'text' (default), 'question' (assistant asks), or 'answer' (user's selection). */
-  message_type: 'text' | 'question' | 'answer';
-  /** For 'question': a serialized Ask. For 'answer': a serialized AnswerSet. Else null. */
-  structured_json: string | null;
-  /** Accumulated thinking text from the agent's reasoning stream. */
-  thinking?: string | null;
-  /** Tool calls executed during this turn, in order. */
-  tool_calls?: ToolCallInfo[] | null;
-  created_at: string;
-}
-
-export interface FileAttachment {
-  filename: string;
-  original_name: string;
-  path: string;
-  mime_type: string;
-}
-
-/**
- * One event in a streamed chat turn (NDJSON over the streaming endpoint).
- * `delta` is a best-effort live preview; the authoritative reply arrives in
- * `done.message`. `session` carries the captured Claude/Codex/OpenCode session id.
- */
-export type ChatStreamEvent =
-  | { kind: 'delta'; text: string }
-  | { kind: 'thinking'; text: string }
-  | { kind: 'tool_start'; tool: ToolCallInfo }
-  | { kind: 'tool_update'; id: string; patch: Partial<ToolCallInfo> }
-  | { kind: 'tool_end'; tool: ToolCallInfo }
-  | { kind: 'session'; session_id: string }
-  | { kind: 'done'; message: ChatMessage }
-  | { kind: 'error'; error: string };
-
-/** One selectable option in a question. */
-export interface QuestionOption {
-  label: string;
-  description: string;
-}
-
-/** A single question an agent asks the user. Normalized: multiple/custom always set. */
-export interface Question {
-  /** Short label, ≤30 chars. */
-  header: string;
-  /** The full question text. */
-  question: string;
-  options: QuestionOption[];
-  /** Allow selecting more than one option. */
-  multiple: boolean;
-  /** Allow a free-text ("Type your own answer") response. */
-  custom: boolean;
-}
-
-/** The payload an agent emits in a fenced ```ask``` block. */
-export interface Ask {
-  questions: Question[];
-}
-
-/** The user's answer to one question (index-aligned with Ask.questions). */
-export interface Reply {
-  /** Carried for display only — not a join key (headers may collide). */
-  header: string;
-  /** Selected option labels. */
-  selected: string[];
-  /** Free-text answer, when the user used "Type your own answer". */
-  custom?: string;
-}
-
-/** The full set of replies stored on an 'answer' message. */
-export interface AnswerSet {
-  replies: Reply[];
-}
-
-/** A configured, testable provider instance (a harness endpoint the app can use). */
-export type ProviderKind = 'claude_code' | 'codex' | 'opencode' | 'hermes' | 'openai_compat';
-export interface Provider {
-  id: string;
-  name: string;
-  kind: ProviderKind;
-  /** openai_compat only — base URL incl. /v1 (OpenRouter, omlx, LM Studio, llama.cpp…). */
-  base_url: string | null;
-  /** openai_compat only — bearer token; supports ${ENV_VAR} interpolation. */
-  api_key: string | null;
-  /** optional default model for this provider. */
-  default_model: string | null;
-  /** curated list of model identifiers this provider offers (shown in the persona dropdown). */
-  models: string[];
-  /** optional free-form CLI launch flags — OpenCode only (e.g. "--agent build"). */
-  args: string | null;
-  created_at: string;
-}
-
-export interface PersonaConfig {
-  name: string;
-  slug: string;
-  // Legacy provider enum — kept as a fallback when provider_id is unset.
-  // 'local' = any OpenAI-compatible local server (omlx, LM Studio, llama.cpp…).
-  // 'ollama' is kept as a legacy alias, treated identically to 'local'.
-  provider: 'claude_code' | 'codex' | 'openrouter' | 'local' | 'ollama';
-  /** Preferred: references a first-class Provider record by id. */
-  provider_id?: string;
-  model: string;
-  system_prompt: string;
-  /** Phosphor icon name from PERSONA_ICON_NAMES; identifies the persona at a glance. */
-  icon?: string;
-  /** Accent colour (hex, e.g. "#f59e0b") for the icon and thread-row tint. */
-  color?: string;
-  tools: string[];
-  workspace: string;
-  startup_scripts: string[];
-  token_budget: number;
-}
-
-/** Curated Phosphor icon names offered for personas (name→component map lives in the frontend). */
-export const PERSONA_ICON_NAMES = [
-  'Wrench', 'Code', 'MagnifyingGlass', 'Compass', 'PaintBrush',
-  'Brain', 'Lightning', 'Robot', 'Detective', 'Sparkle',
-] as const;
-export type PersonaIconName = typeof PERSONA_ICON_NAMES[number];
-
-/** Default accent when a persona has no colour set. */
-export const DEFAULT_PERSONA_COLOR = '#a1a1aa'; // zinc-400
 
 export interface NexusConfig {
   server: { port: number };
@@ -263,23 +119,6 @@ export interface NexusConfig {
     project: string;
     /** Poll cadence in minutes while Nexus is running. */
     poll_minutes: number;
-  };
-  claude_code: {
-    command: string;
-    args: string[];
-    /** Inactivity timeout (seconds) for a Claude Code turn — the process is killed
-     *  only after this long with NO streamed activity, not on wall-clock time, so
-     *  long-but-active tasks aren't cut off. Defaults to 600 if unset. */
-    idle_timeout_seconds?: number;
-  };
-  codex: {
-    command: string;
-    args: string[];
-  };
-  chat: {
-    model: string;
-    hot_storage_hours: number;
-    archive_path: string;
   };
 }
 

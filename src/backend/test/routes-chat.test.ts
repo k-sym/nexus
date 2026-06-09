@@ -28,7 +28,6 @@ function makeApp() {
     CREATE TABLE chat_threads (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      agent_id TEXT NOT NULL,
       title TEXT NOT NULL DEFAULT 'New Chat',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -53,8 +52,8 @@ function makeApp() {
   ).run(projectId, 'demo', 'Demo', dir, new Date().toISOString(), new Date().toISOString());
   const threadId = 'thread-1';
   db.prepare(
-    'INSERT INTO chat_threads (id, project_id, agent_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(threadId, projectId, 'zosma', 'T1', new Date().toISOString(), new Date().toISOString());
+    'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run(threadId, projectId, 'T1', new Date().toISOString(), new Date().toISOString());
   const paths: PiRuntimePaths = {
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
@@ -122,8 +121,9 @@ test('POST /api/projects/:projectId/threads creates a thread row', async () => {
     assert.equal(thread.project_id, 'proj-1');
     assert.equal(thread.title, 'New chat');
     assert.ok(thread.id);
-    // The placeholder agent_id is set for now (Phase 5 drops the column).
-    assert.equal(thread.agent_id, 'zosma');
+    // Phase 5: agent_id is gone; threads no longer have a persona binding.
+    assert.equal(thread.title, 'New chat');
+    assert.equal(thread.id, thread.id);
   } finally {
     await app.close();
     db.close();

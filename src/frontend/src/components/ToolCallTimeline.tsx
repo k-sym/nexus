@@ -1,6 +1,20 @@
-import type { ToolCallInfo } from '@nexus/shared';
 import { WarningCircle, Check, Spinner } from '@phosphor-icons/react';
 import { useState } from 'react';
+
+/** Local copy of the tool-call shape produced by the pi runtime's event
+ *  stream. The shared types module used to export this; since it was
+ *  legacy and got dropped, we declare it locally with a slightly wider
+ *  shape (pi can emit status, args, result with more nuanced types). */
+export interface ToolCallInfo {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  status: 'running' | 'completed' | 'error';
+  result?: string;
+  is_error?: boolean;
+  details?: Record<string, unknown>;
+  partial_output?: string;
+}
 
 interface ToolCallTimelineProps {
   toolCalls: ToolCallInfo[];

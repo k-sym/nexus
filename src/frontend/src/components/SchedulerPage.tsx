@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Persona } from '@nexus/shared';
+import { Project, Schedule, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS } from '@nexus/shared';
 import { api } from '../api';
 
 interface SchedulerPageProps {
@@ -21,13 +21,16 @@ const CRON_PRESETS = [
 
 export default function SchedulerPage({ projectId }: SchedulerPageProps) {
   const [schedules, setSchedules] = useState<any[]>([]);
-  const [personas, setPersonas] = useState<Persona[]>([]);
   const [showForm, setShowForm] = useState(false);
 
   const [name, setName] = useState('');
   const [cronExpr, setCronExpr] = useState('0 9 * * *');
   const [taskTemplate, setTaskTemplate] = useState('');
   const [taskDescription, setTaskDescription] = useState('');
+  // The legacy `agent_id` column on schedules is preserved (no schema
+  // change here), but the new orchestrator no longer reads it — the
+  // model_key on the task is what matters. This field stays as a free-
+  // text identifier for legacy compatibility.
   const [agentId, setAgentId] = useState('cron-runner');
 
   const loadSchedules = useCallback(async () => {
@@ -41,7 +44,6 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
 
   useEffect(() => {
     loadSchedules();
-    api.personas.list().then(setPersonas).catch(console.error);
   }, [loadSchedules]);
 
   const handleCreate = async (e: React.FormEvent) => {
@@ -163,16 +165,19 @@ export default function SchedulerPage({ projectId }: SchedulerPageProps) {
           </div>
 
           <div>
-            <label className="block text-xs text-zinc-500 mb-1">Agent</label>
-            <select
+            <label className="block text-xs text-zinc-500 mb-1">Agent (legacy identifier — see notes)</label>
+            <input
+              type="text"
               value={agentId}
-              onChange={e => setAgentId(e.target.value)}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 focus:outline-none"
-            >
-              {personas.map(p => (
-                <option key={p.slug} value={p.slug}>{p.name}</option>
-              ))}
-            </select>
+              onChange={(e) => setAgentId(e.target.value)}
+              placeholder="cron-runner"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+            />
+            <p className="text-[10px] text-zinc-600 mt-1">
+              Retained on the schedule row for backwards compat. The new
+              orchestrator doesn't read it — set a model on each task via
+              the In Progress picker.
+            </p>
           </div>
 
           <div className="flex justify-end">
