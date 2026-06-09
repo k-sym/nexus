@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Provider, ProviderKind } from '@nexus/shared';
 import { api, ProviderTestResult } from '../api';
-import { Plus, Trash, PencilSimple, Plugs, SignIn, CheckCircle, XCircle, Spinner } from '@phosphor-icons/react';
+import { Plus, Trash, PencilSimple, Plugs, SignIn, CheckCircle, XCircle, Spinner, Stack, ArrowClockwise } from '@phosphor-icons/react';
 
 const KINDS: { value: ProviderKind; label: string }[] = [
   { value: 'openai_compat', label: 'OpenAI-compatible (OpenRouter / local / omlx)' },
@@ -101,6 +101,45 @@ export default function ProvidersSettings() {
   const logout = async (providerId: string) => {
     if (!confirm(`Sign out of ${providerId}?`)) return;
     try { await api.auth.logout(providerId); loadAuth(); } catch (e) { console.error(e); }
+  };
+
+  // ── Model editor (for CLI / HTTP providers) ──
+  const [modelDraft, setModelDraft] = useState('');
+  const [discovering, setDiscovering] = useState(false);
+  const [discoverError, setDiscoverError] = useState<string | null>(null);
+
+  const editingModels = (editing?.kind === 'claude_code' || editing?.kind === 'codex')
+    || editing?.kind === 'openai_compat' || editing?.kind === 'hermes';
+
+  const addModel = () => {
+    if (!editing) return;
+    const v = modelDraft.trim();
+    if (!v) return;
+    const list = editing.models ?? [];
+    if (list.includes(v)) { setModelDraft(''); return; }
+    setEditing({ ...editing, models: [...list, v] });
+    setModelDraft('');
+  };
+  const removeModel = (m: string) => {
+    if (!editing) return;
+    setEditing({ ...editing, models: (editing.models ?? []).filter(x => x !== m) });
+  };
+
+  const discoverModels = async () => {
+    if (!editing?.id) return;
+    setDiscovering(true);
+    setDiscoverError(null);
+    try {
+      const { models: discovered } = await api.providers.discoverModels(editing.id);
+      // Merge: keep existing, add new ones (dedup)
+      const existing = editing.models ?? [];
+      const merged = Array.from(new Set([...existing, ...discovered])).sort();
+      setEditing({ ...editing, models: merged });
+    } catch (err: any) {
+      setDiscoverError(err?.message || 'Discovery failed');
+    } finally {
+      setDiscovering(false);
+    }
   };
 
   return (
@@ -229,15 +268,54 @@ export default function ProvidersSettings() {
             placeholder="Default model (optional)"
             className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
           />
-          {(editing.kind === 'claude_code' || editing.kind === 'codex') && (
-            <textarea
-              value={(editing.models ?? []).join('\n')}
-              onChange={e => setEditing({ ...editing, models: e.target.value.split('\n').map(s => s.trim()).filter(Boolean) })}
-              placeholder={'Models (one per line)\nopus\nsonnet\nhaiku'}
-              rows={3}
-              className="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-sm font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50 resize-none"
-            />
+
+          {/* Models list editor — visible for CLI + HTTP providers */}
+          {editingModels && (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] uppercase tracking-wider text-zinc-500/70">Models</label>
+                {editing.id && (
+                  <button
+                    type="button"
+                    onClick={discoverModels}
+                    disabled={discovering}
+                    className="flex items-center gap-1 text-[10px] text-indigo-400 hover:text-indigo-300 disabled:opacity-40"
+                    title="Fetch latest models from the provider"
+                  >
+                    {discovering
+                      ? <Spinner size={10} className="animate-spin" />
+                      : <ArrowClockwise size={10} />}
+                    Discover
+                  </button>
+                )}
+              </div>
+              <div className="flex gap-1.5">
+                <input
+                  value={modelDraft}
+                  onChange={e => setModelDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addModel(); } }}
+                  placeholder="Add model id (e.g. opus, sonnet-4.5, gpt-5-codex)"
+                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1.5 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+                />
+                <button type="button" onClick={addModel} className="px-2 py-1.5 text-xs bg-zinc-800 text-zinc-200 rounded hover:bg-zinc-700">
+                  <Plus size={12} />
+                </button>
+              </div>
+              {discoverError && <div className="text-[10px] text-red-400">{discoverError}</div>}
+              <div className="space-y-1 max-h-32 overflow-y-auto">
+                {(editing.models ?? []).map(m => (
+                  <div key={m} className="flex items-center gap-2 bg-zinc-950 border border-zinc-800/50 rounded px-2 py-1">
+                    <span className="flex-1 text-[11px] font-mono text-zinc-300 truncate">{m}</span>
+                    <button type="button" onClick={() => removeModel(m)} className="text-zinc-600 hover:text-red-400"><Trash size={12} /></button>
+                  </div>
+                ))}
+                {(editing.models ?? []).length === 0 && (
+                  <div className="text-[10px] text-zinc-600">No models — add one above or click Discover.</div>
+                )}
+              </div>
+            </div>
           )}
+
           {editing.kind === 'opencode' && (
             <>
               <div className="text-[11px] text-zinc-500">Models for OpenCode are curated in the <span className="text-zinc-300">OpenCode Models</span> view.</div>

@@ -179,6 +179,8 @@ export const api = {
     update: (id: string, data: Partial<Provider>) => fetchJson<Provider>(`${API}/providers/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => fetchJson<void>(`${API}/providers/${id}`, { method: 'DELETE' }),
     test: (id: string) => fetchJson<ProviderTestResult>(`${API}/providers/${id}/test`, { method: 'POST' }),
+    // Discover available models for a provider (claude_code / codex / http).
+    discoverModels: (id: string) => fetchJson<{ models: string[] }>(`${API}/providers/${id}/discover-models`),
   },
   auth: {
     status: () => fetchJson<{

@@ -37,22 +37,26 @@ export default function PersonaEditor({ onClose, onCreated, initial }: PersonaEd
   const [color, setColor] = useState(initial?.color ?? DEFAULT_PERSONA_COLOR);
 
   useEffect(() => {
+    // Re-fetch on mount AND on every provider change so the model list stays
+    // current with any edits the user just made in Settings.
     api.providers.list().then(list => {
       setProviders(list);
-      setProviderId(prev => {
-        if (prev) return prev;
-        // No provider_id (legacy persona) — match its old enum to a provider.
-        const legacy = initial?.provider;
-        const match = list.find(p =>
-          legacy === 'claude_code' ? p.kind === 'claude_code'
-          : legacy === 'codex' ? p.kind === 'codex'
-          : legacy === 'openrouter' ? p.kind === 'openai_compat' && /openrouter\.ai/.test(p.base_url || '')
-          : (legacy === 'local' || legacy === 'ollama') ? p.kind === 'openai_compat' && !/openrouter\.ai/.test(p.base_url || '')
-          : false,
-        );
-        return match?.id || list[0]?.id || '';
-      });
-      // Leave model blank for new personas → "use provider default" (no snapshot).
+    }).catch(console.error);
+  }, [providerId]);
+
+  useEffect(() => {
+    // First-time provider auto-detection for new personas.
+    if (providerId) return;
+    api.providers.list().then(list => {
+      const legacy = initial?.provider;
+      const match = list.find(p =>
+        legacy === 'claude_code' ? p.kind === 'claude_code'
+        : legacy === 'codex' ? p.kind === 'codex'
+        : legacy === 'openrouter' ? p.kind === 'openai_compat' && /openrouter\.ai/.test(p.base_url || '')
+        : (legacy === 'local' || legacy === 'ollama') ? p.kind === 'openai_compat' && !/openrouter\.ai/.test(p.base_url || '')
+        : false,
+      );
+      setProviderId(match?.id || list[0]?.id || '');
     }).catch(console.error);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

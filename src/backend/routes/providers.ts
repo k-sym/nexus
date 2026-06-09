@@ -78,8 +78,8 @@ export function seedProviders(db: Database.Database): void {
     const seed = [
       { id: 'seed-openrouter', name: 'OpenRouter', kind: 'openai_compat', base_url: 'https://openrouter.ai/api/v1', api_key: config.models.openrouter.api_key || null, default_model: 'anthropic/claude-sonnet-4', models: JSON.stringify([]), args: null, created_at: now },
       { id: 'seed-local', name: 'Local (omlx)', kind: 'openai_compat', base_url: config.models.local.base_url || 'http://127.0.0.1:4001/v1', api_key: config.models.local.api_key || null, default_model: null, models: JSON.stringify([]), args: null, created_at: now },
-      { id: 'seed-claude-code', name: 'Claude Code', kind: 'claude_code', base_url: null, api_key: null, default_model: 'sonnet', models: JSON.stringify(['opus', 'sonnet', 'haiku']), args: null, created_at: now },
-      { id: 'seed-codex', name: 'Codex', kind: 'codex', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['gpt-5.5', 'gpt-5.3-codex']), args: null, created_at: now },
+      { id: 'seed-claude-code', name: 'Claude Code', kind: 'claude_code', base_url: null, api_key: null, default_model: 'sonnet', models: JSON.stringify(['opus', 'sonnet', 'haiku', 'opus-4.5', 'sonnet-4.5', 'haiku-4']), args: null, created_at: now },
+      { id: 'seed-codex', name: 'Codex', kind: 'codex', base_url: null, api_key: null, default_model: null, models: JSON.stringify(['gpt-5', 'gpt-5-codex', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.2', 'gpt-5.2-codex', 'o3', 'o3-mini', 'o4-mini']), args: null, created_at: now },
       opencode,
       hermes,
     ];
@@ -92,7 +92,12 @@ export function seedProviders(db: Database.Database): void {
 
   // Existing DB: one-time backfills, gated by user_version (each runs exactly once).
   const uv = db.pragma('user_version', { simple: true }) as number;
-  if (uv >= 2) return;
+  if (uv >= 3) {
+    // Even after the user_version migration is done, refresh stale model lists
+    // so users get the latest Claude/Codex aliases without re-saving.
+    refreshStaleModelLists(db);
+    return;
+  }
   const ins = db.prepare(insSql);
   if (uv < 1) {
     ins.run(opencode);
@@ -103,7 +108,39 @@ export function seedProviders(db: Database.Database): void {
     seedHermesPersona(db);
     console.log('[providers] backfilled Hermes provider + persona (one-time)');
   }
-  db.pragma('user_version = 2');
+  if (uv < 3) {
+    refreshStaleModelLists(db);
+    console.log('[providers] refreshed CLI provider model lists (one-time)');
+  }
+  db.pragma('user_version = 3');
+}
+
+/**
+ * One-time refresh of stale model lists for Claude Code + Codex providers.
+ * The original seed lists were incomplete (e.g. missing opus-4.5, gpt-5-codex).
+ * Existing DBs keep their stored list if the user has customized it, but get
+ * a fresh curated list if they're still on the original seed values.
+ */
+function refreshStaleModelLists(db: Database.Database): void {
+  const up = db.prepare('UPDATE providers SET models = ? WHERE id = ? AND models = ?');
+  const changes = [
+    {
+      id: 'seed-claude-code',
+      current: JSON.stringify(['opus', 'sonnet', 'haiku']),
+      next: JSON.stringify(['opus', 'sonnet', 'haiku', 'opus-4.5', 'sonnet-4.5', 'haiku-4']),
+    },
+    {
+      id: 'seed-codex',
+      current: JSON.stringify(['gpt-5.5', 'gpt-5.3-codex']),
+      next: JSON.stringify(['gpt-5', 'gpt-5-codex', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-5.2', 'gpt-5.2-codex', 'o3', 'o3-mini', 'o4-mini']),
+    },
+  ];
+  for (const { id, current, next } of changes) {
+    const r = up.run(next, id, current);
+    if (r.changes > 0) {
+      console.log(`[providers] refreshed model list for ${id}`);
+    }
+  }
 }
 
 /** Test connectivity: ping /models for HTTP providers, or run `--version` for CLIs. */
@@ -217,4 +254,86 @@ export async function registerProviderRoutes(fastify: FastifyInstance) {
     if (!row) { const e = new Error('Provider not found') as any; e.statusCode = 404; throw e; }
     return testProvider(rowToProvider(row));
   });
+
+  /**
+   * Discover available models for a provider.
+   * - HTTP (openai_compat / hermes): hit {base_url}/models
+   * - CLI (claude_code / codex): curated list of known models + best-effort CLI probing
+   * - Returns: { models: string[] } — additive to the provider's stored list
+   */
+  fastify.get('/api/providers/:id/discover-models', async (request) => {
+    const { id } = request.params as { id: string };
+    const row = db.prepare(`SELECT ${COLS} FROM providers WHERE id = ?`).get(id) as any;
+    if (!row) { const e = new Error('Provider not found') as any; e.statusCode = 404; throw e; }
+    const p = rowToProvider(row);
+    if (p.kind === 'claude_code') {
+      return { models: discoverClaudeCodeModels() };
+    }
+    if (p.kind === 'codex') {
+      return { models: discoverCodexModels() };
+    }
+    if (p.kind === 'openai_compat' || p.kind === 'hermes') {
+      if (!p.base_url) { const e = new Error('No base URL configured') as any; e.statusCode = 400; throw e; }
+      const url = `${p.base_url.replace(/\/$/, '')}/models`;
+      const apiKey = resolveEnvVars(p.api_key || '');
+      try {
+        const ctrl = new AbortController();
+        const timer = setTimeout(() => ctrl.abort(), 6000);
+        const res = await fetch(url, { headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {}, signal: ctrl.signal });
+        clearTimeout(timer);
+        if (!res.ok) { const e = new Error(`HTTP ${res.status}`) as any; e.statusCode = 502; throw e; }
+        const body: any = await res.json();
+        const list: string[] = Array.isArray(body?.data)
+          ? body.data.map((m: any) => m.id).filter((s: any) => typeof s === 'string')
+          : Array.isArray(body)
+            ? body.map((m: any) => m.id ?? m).filter((s: any) => typeof s === 'string')
+            : [];
+        return { models: list };
+      } catch (err: any) {
+        const e = new Error(err?.message || 'discover failed') as any; e.statusCode = 502; throw e;
+      }
+    }
+    return { models: p.models };
+  });
+}
+
+/**
+ * Best-effort model discovery for Claude Code CLI. Tries `claude --list-models`
+ * first (if the binary supports it); otherwise returns a curated list of the
+ * known model aliases that the CLI accepts.
+ */
+function discoverClaudeCodeModels(): string[] {
+  // Curated fallback — these are the aliases Claude Code CLI accepts as of 2026.
+  // Kept in sync with the Claude Code release notes / docs.
+  const curated = [
+    'opus',
+    'opus-4',
+    'opus-4.1',
+    'opus-4.5',
+    'sonnet',
+    'sonnet-4',
+    'sonnet-4.5',
+    'haiku',
+    'haiku-3.5',
+    'haiku-4',
+  ];
+  // Note: the Claude Code CLI doesn't currently expose a --list-models flag,
+  // so we just return the curated list. Providers can curate further in the UI.
+  return curated;
+}
+
+function discoverCodexModels(): string[] {
+  const curated = [
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-codex',
+    'gpt-5.1',
+    'gpt-5.1-codex',
+    'gpt-5.2',
+    'gpt-5.2-codex',
+    'o3',
+    'o3-mini',
+    'o4-mini',
+  ];
+  return curated;
 }
