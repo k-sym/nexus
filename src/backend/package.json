@@ -11,6 +11,7 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@earendil-works/pi-ai": "^0.74.2",
     "@fastify/cors": "^10.0.2",
     "@fastify/error": "^4.1.0",
     "@fastify/sensible": "^6.0.0",

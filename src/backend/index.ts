@@ -29,6 +29,7 @@ import { registerTicketRoutes } from './routes/tickets';
 import { registerNotificationRoutes } from './routes/notifications';
 import { registerProviderRoutes, seedProviders } from './routes/providers';
 import { registerPtyRoutes } from './routes/pty';
+import { registerAuthRoutes } from './routes/auth';
 import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
@@ -67,6 +68,7 @@ async function main() {
   app.register(registerNotificationRoutes);
   app.register(registerProviderRoutes);
   app.register(registerPtyRoutes);
+  app.register(registerAuthRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
