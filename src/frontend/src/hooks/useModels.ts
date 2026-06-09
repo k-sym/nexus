@@ -24,7 +24,9 @@ export function parseModelKey(key: string): { provider: string; id: string } | u
 
 export function useModels() {
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [activeModelId, setActiveModelId] = useState<string | undefined>();
+  // Store active model per thread: threadId -> modelKey
+  const [activeModels, setActiveModels] = useState<Record<string, string>>({});
+  const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -49,9 +51,29 @@ export function useModels() {
     };
   }, []);
 
+  const setThread = useCallback((threadId: string | null) => {
+    setCurrentThreadId(threadId);
+  }, []);
+
   const setModel = useCallback(async (provider: string, id: string) => {
+    if (!currentThreadId) return;
+    
+    // Allow clearing the model by passing empty strings
+    if (!provider || !id) {
+      setActiveModels(prev => {
+        const next = { ...prev };
+        delete next[currentThreadId];
+        return next;
+      });
+      return;
+    }
+    
     const key = modelKey(provider, id);
-    setActiveModelId(key);
+    setActiveModels(prev => ({
+      ...prev,
+      [currentThreadId]: key,
+    }));
+    
     try {
       await fetch('/api/models/active', {
         method: 'POST',
@@ -61,7 +83,9 @@ export function useModels() {
     } catch (err) {
       console.error('useModels: failed to set active model', err);
     }
-  }, []);
+  }, [currentThreadId]);
 
-  return { models, activeModelId, loading, setModel };
+  const activeModelId = currentThreadId ? activeModels[currentThreadId] : undefined;
+
+  return { models, activeModelId, loading, setModel, setThread };
 }
