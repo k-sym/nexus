@@ -2394,6 +2394,28 @@ All five phases complete. The spec is implemented; chat is on the pi runtime; de
 - **OAuth UI bridge** — Task 3.3 stubs `start-oauth` as `not_implemented`. Wiring the full PKCE loopback + SSE progress channel is a follow-up commit once the UI side wants it.
 - **Memory hook in chat** — the legacy orchestrator called `addMemory` after each turn. The route in Task 2.3 deliberately drops this to keep the diff small. Re-add as a `session.subscribe()` hook in a follow-up commit, gated on the memory-trim spec.
 
+## API adjustments (post-plan, verified against pi 0.79.0 type defs)
+
+After installing the SDK and reading the type defs in `node_modules/@earendil-works/pi-coding-agent/dist/core/*.d.ts`, the plan's runtime shape needed correcting. Listed here so the implementer doesn't relitigate:
+
+1. **`createAgentSessionRuntime` is single-session, not multi-session.** It wraps one `AgentSession` plus a `switchSession` / `newSession` / `fork` method set. The plan's "one runtime, many threads" mental model maps to many independent `createAgentSession` calls, each with its own `SessionManager`. `PiRuntime.sessionFor(threadId, cwd)` creates and caches these lazily.
+
+2. **`AuthStorage.list()` returns `string[]`**, not `{providers: [{id, type}]}`. To get the credential type per provider, iterate and call `auth.get(provider)` to read `credential.type`. The route in Task 3.3 normalizes to the frontend's expected shape.
+
+3. **`ModelRegistry` has no `setActive` method.** The "active model" is per-session, not global. `setModel` lives on `AgentSession` (`session.setModel(model)`), and the model is a `Model<Api>` object obtained from `ModelRegistry.find(provider, id)`. `/api/models/active` becomes "the model of the most recently used session" — for v1, just return the model of the first cached session, or the first available model.
+
+4. **Session file naming is `${timestamp}_${sessionId}.jsonl`** (where `timestamp` is the session's `created_at` with `:` and `.` replaced by `-`). The plan's bare `${threadId}.jsonl` is non-canonical. The migration script writes the canonical name. New sessions get whatever the SDK generates, and we record the path on the thread row.
+
+5. **Session header format is canonical pi:** `{type: "session", version: 1, id, timestamp, cwd, parentSession?}`. The plan's extended header (`title`, `createdAt`, `model`, `provider`, `messageCount`) is non-canonical and would survive migration but is unused. The migration script writes the canonical form; per-thread title lives on `chat_threads.title`, not in the session file.
+
+6. **Message entries are wrapped:** `{id, parentId, type: "message", message: {role, content, ...}, timestamp}`. The plan's flat `{id, parentId, role, content}` shape would not be recognized as a message by `SessionManager`. The migration script writes the wrapped form, calling the agent-core `AgentMessage` shape.
+
+7. **`AgentSession.prompt(text)` returns `Promise<void>`, not the assistant text.** The authoritative assistant reply is in the events (`agent_end` carries the final `AssistantMessage`). The route forwards events as NDJSON; the authoritative message arrives in the `done` event wrapper.
+
+8. **`AgentSession.subscribe(listener)` returns an unsubscribe function.** `session.abort()` is a separate method (not just an `abortController`).
+
+The corrected `PiRuntime`, route, and migration code in subsequent tasks reflect these.
+
 ## Self-review
 
 - Spec coverage: every spec section is addressed — backend (`pi/runtime.ts`, `routes/chat.ts`, `routes/auth.ts`, `orchestrator`), frontend (`ChatPanel`, `usePiStream`, `useModels`, `ModelSelector`, `ZosmaAuthSection`, `OrchestratorModelPicker`), data migration (Task 5.2), per-project concurrency (Task 2.1), auth (Task 3.3), open-code preservation (Task 4.6 lists `opencode-go`).
