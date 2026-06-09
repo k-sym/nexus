@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { PiRuntime, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
 
 test('cwdSlug encodes repo paths safely', () => {
-  assert.equal(cwdSlug('/Users/me/Projects/foo'), '_Users_me_Projects_foo');
+  assert.equal(cwdSlug('/Users/me/Projects/foo'), 'Users_me_Projects_foo');
   assert.equal(cwdSlug(''), 'default');
-  assert.equal(cwdSlug('/tmp'), '_tmp');
+  assert.equal(cwdSlug('/tmp'), 'tmp');
 });
 
 test('PiRuntime constructs and creates the auth/sessions dirs', () => {

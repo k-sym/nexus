@@ -44,9 +44,13 @@ export const defaultPiRuntimePaths = (): PiRuntimePaths => ({
   sessionsDir: join(homedir(), '.nexus', 'sessions'),
 });
 
-/** Encode a repo path as a directory-safe slug for per-cwd session dirs. */
+/** Encode a repo path as a directory-safe slug for per-cwd session dirs.
+ *  Absolute paths strip their leading slash so the dir tree doesn't
+ *  have a leading underscore for every project. */
 export function cwdSlug(repoPath: string): string {
-  return repoPath.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) || 'default';
+  if (!repoPath) return 'default';
+  const cleaned = repoPath.startsWith('/') || repoPath.startsWith('\\') ? repoPath.slice(1) : repoPath;
+  return cleaned.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) || 'default';
 }
 
 export class PiRuntime {
