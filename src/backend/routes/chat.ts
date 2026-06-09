@@ -95,16 +95,24 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | undefined;
     const cwd = project?.repo_path || process.cwd();
 
-    const busy = concurrency.get(thread.project_id);
+    // Check if this project+model combination is already streaming
+    const modelKey = body.modelKey || 'default';
+    const busy = concurrency.get(thread.project_id, modelKey);
     if (busy && busy.threadId !== threadId) {
-      reply.code(409);
-      return { kind: 'project_busy', activeThreadId: busy.threadId, activeTitle: busy.title };
-    }
-    if (busy && busy.threadId === threadId && confirmCancel) {
-      const existing = activeStreams.get(threadId);
-      existing?.stream.abort('user-confirmed-cancel');
-      await new Promise((r) => setTimeout(r, ABORT_GRACE_MS));
-      concurrency.clear(thread.project_id);
+      if (confirmCancel) {
+        const existing = activeStreams.get(busy.threadId);
+        existing?.stream.abort('user-confirmed-cancel');
+        await new Promise((r) => setTimeout(r, ABORT_GRACE_MS));
+        concurrency.clear(thread.project_id, modelKey);
+      } else {
+        reply.code(409);
+        return {
+          kind: 'model_busy',
+          activeThreadId: busy.threadId,
+          activeTitle: busy.title,
+          modelKey: busy.modelKey,
+        };
+      }
     }
 
     let session;
@@ -137,7 +145,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     const stream = new SessionEventStream();
     activeStreams.set(threadId, { threadId, stream, projectId: thread.project_id });
-    concurrency.set(thread.project_id, threadId, thread.title);
+    concurrency.set(thread.project_id, modelKey, threadId, thread.title);
     db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(
       new Date().toISOString(),
       body.modelKey || null,
@@ -190,7 +198,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       write({ kind: 'error', error: err?.message || 'prompt failed' });
     } finally {
       activeStreams.delete(threadId);
-      concurrency.clear(thread.project_id);
+      concurrency.clear(thread.project_id, modelKey);
       reply.raw.end();
     }
   });

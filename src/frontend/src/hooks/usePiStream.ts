@@ -212,7 +212,11 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
 }
 
 export class ChatBusyError extends Error {
-  constructor(public readonly activeThreadId: string, public readonly activeTitle: string) {
+  constructor(
+    public readonly activeThreadId: string,
+    public readonly activeTitle: string,
+    public readonly modelKey?: string,
+  ) {
     super(`Thread ${activeThreadId} is busy`);
     this.name = 'ChatBusyError';
   }
@@ -298,7 +302,11 @@ export function usePiStream() {
       }
       if (res.status === 409) {
         const body = await res.json().catch(() => ({}));
-        throw new ChatBusyError(body.activeThreadId ?? '', body.activeTitle ?? 'busy thread');
+        throw new ChatBusyError(
+          body.activeThreadId ?? '',
+          body.activeTitle ?? 'busy thread',
+          body.modelKey,
+        );
       }
       if (!res.ok || !res.body) {
         dispatch({ type: 'STREAM_ERROR', error: `HTTP ${res.status}` });

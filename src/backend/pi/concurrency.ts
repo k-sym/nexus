@@ -1,31 +1,38 @@
 /**
- * Per-project active-run tracker.
+ * Per-project-model active-run tracker.
  *
- * The pi runtime serializes prompts at the runtime level, but Nexus's UX
- * surfaces conflicts at the *project* level. This in-memory map records
- * which thread is mid-run for each project; routes check it before starting
- * a new prompt and return 409 if the project is busy.
+ * Allows multiple threads in the same project to stream simultaneously,
+ * but prevents two threads using the same model in the same project from
+ * streaming at the same time. This keeps history/log tracking clean:
+ * project + model = unique chat context.
+ *
+ * Key format: `${projectId}::${modelKey}`
  *
  * State is lost on backend restart — by design. A restart shouldn't keep
- * a project "permanently busy".
+ * a slot "permanently busy".
  */
 export interface ActiveRun {
   threadId: string;
   title: string;
+  modelKey: string;
 }
 
 export class ConcurrencyTracker {
   private readonly active = new Map<string, ActiveRun>();
 
-  set(projectId: string, threadId: string, title: string): void {
-    this.active.set(projectId, { threadId, title });
+  private key(projectId: string, modelKey: string): string {
+    return `${projectId}::${modelKey || 'default'}`;
   }
 
-  get(projectId: string): ActiveRun | undefined {
-    return this.active.get(projectId);
+  set(projectId: string, modelKey: string, threadId: string, title: string): void {
+    this.active.set(this.key(projectId, modelKey), { threadId, title, modelKey });
   }
 
-  clear(projectId: string): void {
-    this.active.delete(projectId);
+  get(projectId: string, modelKey: string): ActiveRun | undefined {
+    return this.active.get(this.key(projectId, modelKey));
+  }
+
+  clear(projectId: string, modelKey: string): void {
+    this.active.delete(this.key(projectId, modelKey));
   }
 }
