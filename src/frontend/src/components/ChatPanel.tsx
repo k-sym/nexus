@@ -83,7 +83,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       return;
     }
     
-    // Clear model immediately when switching threads
+    // Clear messages and model immediately when switching threads
+    setLoadedMessages([]);
     setModel('', '');
     
     let cancelled = false;
