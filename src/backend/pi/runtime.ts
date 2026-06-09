@@ -7,7 +7,7 @@
  * sessions" runtime; AgentSessionRuntime wraps a single session and we use
  * createAgentSession() per chat thread instead.
  */
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
@@ -126,10 +126,24 @@ export class PiRuntime {
     return session;
   }
 
-  /** Drop a session (e.g. on thread delete). */
+  /**
+   * Drop a session (e.g. on thread delete). Removes the in-memory cache
+   * AND the on-disk session file(s). Pi names files
+   * `${fileTimestamp}_${sessionId}.jsonl`, so we look for any file
+   * ending in `_${threadId}.jsonl` in the session dir. Best-effort —
+   * missing files are fine (an empty session was never flushed).
+   */
   dropSession(threadId: string, cwd: string): void {
     this.sessions.delete(`${threadId}::${cwd}`);
     this.sessionPromises.delete(`${threadId}::${cwd}`);
+    const sessionDir = this.sessionDirFor(cwd);
+    try {
+      for (const name of readdirSync(sessionDir)) {
+        if (name.endsWith(`_${threadId}.jsonl`)) {
+          try { unlinkSync(join(sessionDir, name)); } catch { /* already gone */ }
+        }
+      }
+    } catch { /* dir doesn't exist = nothing to drop */ }
   }
 
   /** Find a model by `provider/id` shape. Returns undefined if not available. */

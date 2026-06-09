@@ -88,19 +88,48 @@ test('PiRuntime.createSession configures a session file path under the per-cwd d
   try {
     const rt = new PiRuntime(paths);
     const session = await rt.sessionFor('thread-1', '/tmp/proj');
-    // The session's underlying SessionManager has a file path even if the
-    // file isn't flushed to disk yet (that happens on first assistant message).
-    // We can verify the path shape via the public AgentSession interface
-    // (session.subscribe is the contract) — the file path itself lives on
-    // the SessionManager which is not exposed on AgentSession. Verify the
-    // per-cwd session directory was created instead.
     const cwdDir = join(paths.sessionsDir, cwdSlug('/tmp/proj'));
     assert.ok(existsSync(cwdDir), 'per-cwd session dir created');
-    // Calling dropSession should not throw on a session that hasn't been used.
     rt.dropSession('thread-1', '/tmp/proj');
-    // And we can create a fresh session afterwards.
     const fresh = await rt.sessionFor('thread-1', '/tmp/proj');
     assert.notStrictEqual(fresh, session, 'fresh session after drop');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PiRuntime.dropSession removes the on-disk session file matching _${threadId}.jsonl', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = {
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  };
+  try {
+    const rt = new PiRuntime(paths);
+    const cwd = '/tmp/proj';
+    const cwdDir = join(paths.sessionsDir, cwdSlug(cwd));
+    const { writeFileSync, mkdirSync } = await import('node:fs');
+    mkdirSync(cwdDir, { recursive: true });
+    const fakeFile = join(cwdDir, '2025-06-09T12-00-00Z_thread-xyz.jsonl');
+    writeFileSync(fakeFile, '{"type":"session","version":1,"id":"thread-xyz"}\n');
+    assert.ok(existsSync(fakeFile), 'fake session file placed');
+    rt.dropSession('thread-xyz', cwd);
+    assert.ok(!existsSync(fakeFile), 'session file unlinked on drop');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PiRuntime.dropSession is a no-op for a thread that has no file on disk', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = {
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  };
+  try {
+    const rt = new PiRuntime(paths);
+    // No sessionFor, no file — should not throw.
+    rt.dropSession('never-existed', '/tmp/nowhere');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
