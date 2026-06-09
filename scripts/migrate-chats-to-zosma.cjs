@@ -13,11 +13,16 @@
  * Idempotent: re-runs overwrite session files and are a no-op for
  * already-migrated rows (gated by user_version >= 100).
  *
- * Schema changes (apply only when user_version < 100):
- *   - Add chat_threads.zosma_session_id (UNIQUE) and set it = id
- *   - Drop chat_messages table
- *   - Drop personas, providers tables
- *   - Bump user_version to 100
+ * Schema changes:
+ *   v100 (one-shot, run on user_version < 100):
+ *     - Add chat_threads.zosma_session_id (UNIQUE) and set it = id
+ *     - Drop chat_messages, personas, providers tables
+ *   v101 (run on user_version < 101, i.e. also on already-v100 DBs):
+ *     - Rebuild chat_threads without the legacy columns
+ *       (agent_id, agent_session_id, mode, launch_command). These
+ *       were dropped from the new code's INSERTs but the ALTERs
+ *       in db.ts never removed them from pre-existing tables, so
+ *       the new code's NOT-NULL-less INSERT failed on old DBs.
  */
 const Database = require('better-sqlite3');
 const fs = require('fs');
@@ -64,8 +69,8 @@ function main() {
   fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
   const uv = db.pragma('user_version', { simple: true });
-  if (uv >= 100) {
-    console.log('Migration already applied (user_version >= 100). Exiting.');
+  if (uv >= 101) {
+    console.log('Migration already applied (user_version >= 101). Exiting.');
     process.exit(0);
   }
 
@@ -82,6 +87,14 @@ function main() {
   const threads = db
     .prepare('SELECT * FROM chat_threads WHERE archived_at IS NULL')
     .all();
+  const hasMessages = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'")
+    .get();
+  const messagesStmt = hasMessages
+    ? db.prepare(
+        'SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC',
+      )
+    : null;
   let written = 0;
   let skipped = 0;
 
@@ -94,11 +107,7 @@ function main() {
       continue;
     }
     const cwd = project.repo_path;
-    const messages = db
-      .prepare(
-        'SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC',
-      )
-      .all(thread.id);
+    const messages = messagesStmt ? messagesStmt.all(thread.id) : [];
     const header = {
       type: 'session',
       version: 1,
@@ -135,20 +144,55 @@ function main() {
   // Schema changes. Wrapped in a transaction so partial state is never
   // persisted if anything throws.
   db.transaction(() => {
-    // 1) Add zosma_session_id column + unique index.
-    if (!threadCols.includes('zosma_session_id')) {
-      db.exec('ALTER TABLE chat_threads ADD COLUMN zosma_session_id TEXT');
-      db.exec('UPDATE chat_threads SET zosma_session_id = id');
-      db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_zosma_session ON chat_threads(zosma_session_id)');
+    // ── v100: original migration ──
+    if (uv < 100) {
+      // 1) Add zosma_session_id column + unique index.
+      if (!threadCols.includes('zosma_session_id')) {
+        db.exec('ALTER TABLE chat_threads ADD COLUMN zosma_session_id TEXT');
+        db.exec('UPDATE chat_threads SET zosma_session_id = id');
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_zosma_session ON chat_threads(zosma_session_id)');
+      }
+
+      // 2) Drop the legacy tables. SQLite can't drop NOT NULL cleanly, so
+      // we just drop the tables outright — no data to preserve.
+      db.exec('DROP TABLE IF EXISTS chat_messages');
+      db.exec('DROP TABLE IF EXISTS personas');
+      db.exec('DROP TABLE IF EXISTS providers');
+
+      db.pragma('user_version = 100');
     }
 
-    // 2) Drop the legacy tables. SQLite can't drop NOT NULL cleanly, so
-    // we just drop the tables outright — no data to preserve.
-    db.exec('DROP TABLE IF EXISTS chat_messages');
-    db.exec('DROP TABLE IF EXISTS personas');
-    db.exec('DROP TABLE IF EXISTS providers');
-
-    db.pragma('user_version = 100');
+    // ── v101: rebuild chat_threads without legacy columns ──
+    if (uv < 101) {
+      const currentCols = db.pragma('table_info(chat_threads)').map((c) => c.name);
+      const legacyCols = ['agent_id', 'agent_session_id', 'mode', 'launch_command'];
+      const hasLegacy = legacyCols.some((c) => currentCols.includes(c));
+      if (hasLegacy) {
+        // SQLite can't drop a column with a NOT NULL constraint cleanly
+        // (12.x supports DROP COLUMN, but NOT NULL with default-replacement
+        // is fragile), so the standard portable approach is the
+        // copy-into-new-table dance.
+        db.exec(`
+          CREATE TABLE chat_threads_new (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            title TEXT NOT NULL DEFAULT 'New Chat',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            archived_at TEXT,
+            zosma_session_id TEXT
+          );
+          INSERT INTO chat_threads_new (id, project_id, title, created_at, updated_at, archived_at, zosma_session_id)
+            SELECT id, project_id, title, created_at, updated_at, archived_at, zosma_session_id
+            FROM chat_threads;
+          DROP TABLE chat_threads;
+          ALTER TABLE chat_threads_new RENAME TO chat_threads;
+          CREATE INDEX IF NOT EXISTS idx_chat_threads_project ON chat_threads(project_id);
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_threads_zosma_session ON chat_threads(zosma_session_id);
+        `);
+      }
+      db.pragma('user_version = 101');
+    }
   })();
   db.pragma('foreign_keys = ON');
 

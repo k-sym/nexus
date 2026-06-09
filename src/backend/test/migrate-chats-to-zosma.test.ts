@@ -119,7 +119,16 @@ test('migrate-chats-to-zosma writes pi-format JSONL sessions and simplifies chat
   const db2 = new Database(dbPath);
   const cols = db2.pragma('table_info(chat_threads)').map((c) => c.name);
   assert.ok(cols.includes('zosma_session_id'), 'zosma_session_id column added');
-  assert.equal(db2.pragma('user_version', { simple: true }), 100, 'user_version bumped to 100');
+  assert.equal(db2.pragma('user_version', { simple: true }), 101, 'user_version bumped to 101');
+  // The new schema must not have the legacy chat_threads columns — those
+  // were the cause of the post-merge "NOT NULL constraint failed:
+  // chat_threads.agent_id" 500 in the chat route's INSERT.
+  for (const legacy of ['agent_id', 'agent_session_id', 'mode', 'launch_command']) {
+    assert.ok(
+      !cols.includes(legacy),
+      `legacy column ${legacy} should be removed; got: ${cols.join(', ')}`,
+    );
+  }
   assert.ok(
     !db2
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='chat_messages'")
@@ -151,7 +160,7 @@ test('migration is idempotent: second run is a no-op', () => {
 
   // Empty DB with the migration already applied.
   const db = new Database(dbPath);
-  db.pragma('user_version = 100');
+  db.pragma('user_version = 101');
   db.close();
 
   const result = spawnSync('node', [MIGRATION_SCRIPT], {
@@ -162,5 +171,70 @@ test('migration is idempotent: second run is a no-op', () => {
   assert.match(result.stdout, /already applied/);
   assert.equal(existsSync(sessionsDir), true, 'sessions dir is left in place');
 
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('v101 step rebuilds chat_threads on a v100 DB that still has legacy columns', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-migrate-test-'));
+  const dbPath = join(dir, 'test.db');
+  const sessionsDir = join(dir, 'sessions');
+  mkdirSync(sessionsDir, { recursive: true });
+
+  // Fixture: a v100 DB whose chat_threads still has the legacy columns
+  // (this is the user's exact situation post-merge).
+  const db = new Database(dbPath);
+  db.exec(`
+    CREATE TABLE projects (id TEXT PRIMARY KEY, slug TEXT, name TEXT, repo_path TEXT, config_json TEXT DEFAULT '{}', created_at TEXT, updated_at TEXT);
+    CREATE TABLE chat_threads (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT 'New Chat',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT,
+      agent_session_id TEXT,
+      mode TEXT NOT NULL DEFAULT 'chat',
+      launch_command TEXT,
+      zosma_session_id TEXT
+    );
+  `);
+  db.pragma('user_version = 100');
+  const now = '2026-06-09T13:00:00.000Z';
+  db.prepare('INSERT INTO projects VALUES (?, ?, ?, ?, ?, ?, ?)').run(
+    'p1', 'p1', 'P1', '/tmp/proj', '{}', now, now,
+  );
+  db.prepare(`INSERT INTO chat_threads (id, project_id, agent_id, title, created_at, updated_at, zosma_session_id)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    't1', 'p1', 'developer', 'Legacy', now, now, 't1',
+  );
+  db.close();
+
+  const result = spawnSync('node', [MIGRATION_SCRIPT], {
+    env: { ...process.env, NEXUS_DB: dbPath, HOME: dir },
+    encoding: 'utf8',
+  });
+  assert.equal(result.status, 0, `migration failed: ${result.stderr}`);
+
+  const db2 = new Database(dbPath);
+  const cols = db2.pragma('table_info(chat_threads)').map((c) => c.name);
+  for (const legacy of ['agent_id', 'agent_session_id', 'mode', 'launch_command']) {
+    assert.ok(!cols.includes(legacy), `legacy ${legacy} should be gone; got: ${cols.join(', ')}`);
+  }
+  assert.equal(db2.pragma('user_version', { simple: true }), 101);
+
+  // Row survived the rebuild.
+  const row = db2.prepare('SELECT id, project_id, title, zosma_session_id FROM chat_threads').get();
+  assert.equal(row.id, 't1');
+  assert.equal(row.title, 'Legacy');
+  assert.equal(row.zosma_session_id, 't1');
+
+  // And a fresh INSERT (matching the route's pattern, no agent_id) now works.
+  db2.prepare(
+    `INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
+  ).run('t2', 'p1', 'Fresh', now, now);
+  assert.ok(db2.prepare('SELECT * FROM chat_threads WHERE id = ?').get('t2'));
+
+  db2.close();
   rmSync(dir, { recursive: true, force: true });
 });
