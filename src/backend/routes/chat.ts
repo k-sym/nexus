@@ -11,6 +11,7 @@ import { runPersona, ClaudeSession } from '../orchestrator/providers';
 import { adapterFor, providerKindOf } from '../orchestrator/stream-adapters';
 import { getProviderById } from './providers';
 import { parseAskBlock, buildAnswerSummary } from '../chat/ask';
+import { register, get, unregister, abort } from '../chat/executor';
 
 const MAX_HISTORY = 12;
 
@@ -105,7 +106,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
    * an ask block) or a plain text message. `triggerText` is the user input that
    * caused this turn (used for memory relevance + archival).
    */
-  async function respond(threadId: string, triggerText: string, attachments: FileAttachment[] = [], onEvent?: (ev: ChatStreamEvent) => void): Promise<ChatMessage> {
+  async function respond(threadId: string, triggerText: string, attachments: FileAttachment[] = [], onEvent?: (ev: ChatStreamEvent) => void, signal?: AbortSignal): Promise<ChatMessage> {
     const config = loadConfig();
 
     const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
@@ -162,6 +163,20 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     }
 
     const idleTimeoutMs = (config.claude_code.idle_timeout_seconds ?? 600) * 1000;
+    // Hard cap: 2× idle timeout, managed by a local AbortController so we
+    // can trigger it from the timer. The outer signal (from the executor) is
+    // mirrored: if either fires, the run is aborted.
+    const hardCapCtrl = new AbortController();
+    const hardCapMs = idleTimeoutMs * 2;
+    const hardCapTimer = setTimeout(() => {
+      console.warn(`[chat] hard cap ${hardCapMs}ms reached for thread ${threadId}, aborting`);
+      hardCapCtrl.abort();
+    }, hardCapMs);
+
+    // If the outer signal fires, propagate to our controller
+    signal?.addEventListener('abort', () => hardCapCtrl.abort(), { once: true });
+    // Clean up the outer listener when our controller settles
+    hardCapCtrl.signal.addEventListener('abort', () => clearTimeout(hardCapTimer), { once: true });
     console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}${claudeSession ? (claudeSession.isResume ? ` (resume ${claudeSession.id})` : ` (new session ${claudeSession.id})`) : ''}`);
 
     // When streaming, normalize the provider's raw output into delta/session events
@@ -193,9 +208,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           }
         }
       : () => {};
-    const result = await runPersona(persona, promptBody, workspace, config, onOutput, provider, claudeSession, idleTimeoutMs);
+    const result = await runPersona(persona, promptBody, workspace, config, onOutput, provider, claudeSession, idleTimeoutMs, hardCapCtrl.signal);
+    clearTimeout(hardCapTimer);
     if (!result.ok) {
       console.error(`[chat] ${persona.provider} (${persona.model}) failed in ${workspace}: ${result.error}`);
+    }
+    // If aborted, persist a marker message
+    if (signal?.aborted) {
+      return insertMessage(threadId, 'assistant', '[Aborted by user]');
     }
     // Capture the resumable session id (Claude Code) even on an empty/errored
     // turn, so a stuck conversation can be picked up from a terminal.
@@ -265,6 +285,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     try { attachments = body.attachments ? JSON.parse(body.attachments) as FileAttachment[] : []; } catch { /* ignore malformed */ }
     insertMessage(threadId, 'user', body.content, body.attachments || '[]');
 
+    const run = register(threadId);
     reply.hijack();
     reply.raw.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -275,13 +296,25 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       try { reply.raw.write(JSON.stringify(ev) + '\n'); } catch { /* client gone */ }
     };
     try {
-      const msg = await respond(threadId, body.content, attachments, write);
+      const msg = await respond(threadId, body.content, attachments, write, run.abortController.signal);
       write({ kind: 'done', message: msg });
     } catch (err: any) {
       write({ kind: 'error', error: err?.message || 'Streaming failed' });
     } finally {
+      unregister(threadId);
       reply.raw.end();
     }
+  });
+
+  /**
+   * Abort a running generation for this thread. The executor registry holds the
+   * AbortController; aborting it will SIGTERM the CLI child process (Phase 2).
+   */
+  fastify.post('/api/threads/:threadId/abort', async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    const ok = abort(threadId);
+    if (!ok) return { ok: false, reason: 'no_run' };
+    return { ok: true };
   });
 
   /**
