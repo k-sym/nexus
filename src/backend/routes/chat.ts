@@ -1,447 +1,194 @@
-import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
+/**
+ * Chat routes — thin transport over the pi runtime.
+ *
+ * Per-thread AgentSession instances are created and cached by the runtime.
+ * NDJSON-over-HTTP streams the pi events to the frontend.
+ *
+ * Concurrency: per-project active run is tracked in `chatConcurrency`. A
+ * 409 with `{ kind: "project_busy", activeThreadId, activeTitle }` is
+ * returned if the project is already mid-run. The frontend retries with
+ * `X-Confirm-Cancel: true` to override.
+ */
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
-import yaml from 'js-yaml';
-import { ChatThread, ChatMode, ChatMessage, PersonaConfig, Provider, Ask, Reply, AnswerSet, FileAttachment, ChatStreamEvent, ToolCallInfo } from '@nexus/shared';
-import { getRelevantMemories, addMemory } from '../memory';
-import { loadConfig } from '../config';
-import { runPersona, ClaudeSession } from '../orchestrator/providers';
-import { adapterFor, providerKindOf } from '../orchestrator/stream-adapters';
-import { getProviderById } from './providers';
-import { parseAskBlock, buildAnswerSummary } from '../chat/ask';
-import { exportThread } from '../sessions/export';
-import { register, get, unregister, abort } from '../chat/executor';
+import { ChatThread } from '@nexus/shared';
+import { SessionEventStream } from '../pi/events';
 
-const MAX_HISTORY = 12;
+const ABORT_GRACE_MS = 200;
 
-/** Single-quote a string for a POSIX shell (wrap in '...', escape embedded quotes). */
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
+interface ActiveStream {
+  threadId: string;
+  stream: SessionEventStream;
+  projectId: string;
 }
 
-/** Quote a string as an AppleScript string literal (escape backslashes + quotes). */
-function appleScriptQuote(s: string): string {
-  return `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-}
+const activeStreams = new Map<string, ActiveStream>();
 
 export async function registerChatRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
+  const pi = fastify.pi;
+  const concurrency = fastify.chatConcurrency;
 
   fastify.get('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
-    const rows = db.prepare('SELECT * FROM chat_threads WHERE project_id = ? AND archived_at IS NULL ORDER BY updated_at DESC').all(projectId);
+    const rows = db
+      .prepare('SELECT * FROM chat_threads WHERE project_id = ? AND archived_at IS NULL ORDER BY updated_at DESC')
+      .all(projectId);
     return rows as ChatThread[];
   });
 
   fastify.post('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
-    const body = request.body as { agent_id: string; mode?: ChatMode; launch_command?: string | null };
-    const mode: ChatMode = body.mode === 'terminal' ? 'terminal' : 'chat';
-
+    const body = (request.body ?? {}) as { title?: string };
     const now = new Date().toISOString();
     const thread: ChatThread = {
       id: uuid(),
       project_id: projectId,
-      agent_id: body.agent_id,
-      title: 'New Chat',
+      title: body.title?.trim() || 'New Chat',
       created_at: now,
       updated_at: now,
       archived_at: null,
-      mode,
-      launch_command: body.launch_command ?? null,
     };
-
-    db.prepare('INSERT INTO chat_threads (id, project_id, agent_id, title, created_at, updated_at, archived_at, mode, launch_command) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(thread.id, thread.project_id, thread.agent_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at, thread.mode, thread.launch_command);
-
+    db.prepare(
+      'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(thread.id, thread.project_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at);
     return thread;
   });
 
+  fastify.get('/api/threads/:threadId', async (request) => {
+    const { threadId } = request.params as { threadId: string };
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (!thread) return { messages: [] };
+    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as
+      | { repo_path: string }
+      | undefined;
+    const cwd = project?.repo_path || process.cwd();
+    const entries = await pi.readMessages(threadId, cwd);
+    return { thread, cwd, messages: flattenEntries(entries) };
+  });
+
+  // Backwards-compat alias — the old route returned just the messages.
   fastify.get('/api/threads/:threadId/messages', async (request) => {
     const { threadId } = request.params as { threadId: string };
-    const rows = db.prepare('SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').all(threadId);
-    return rows as ChatMessage[];
-  });
-
-  function insertMessage(
-    threadId: string,
-    role: ChatMessage['role'],
-    content: string,
-    attachments = '[]',
-    messageType: ChatMessage['message_type'] = 'text',
-    structuredJson: string | null = null,
-    thinking: string | null = null,
-    toolCalls: ToolCallInfo[] | null = null,
-  ): ChatMessage {
-    const msg: ChatMessage = {
-      id: uuid(),
-      thread_id: threadId,
-      role,
-      content,
-      attachments_json: attachments,
-      message_type: messageType,
-      structured_json: structuredJson,
-      created_at: new Date().toISOString(),
-    };
-    db.prepare('INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, message_type, structured_json, thinking, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(msg.id, msg.thread_id, msg.role, msg.content, msg.attachments_json, msg.message_type, msg.structured_json, thinking, toolCalls ? JSON.stringify(toolCalls) : null, msg.created_at);
-    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(msg.created_at, threadId);
-    return msg;
-  }
-
-  function resolvePersona(agentId: string): PersonaConfig | null {
-    const row = db.prepare('SELECT config_yaml FROM personas WHERE slug = ?').get(agentId) as { config_yaml: string } | undefined;
-    if (!row) return null;
-    try {
-      return yaml.load(row.config_yaml) as PersonaConfig;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Run the thread's agent for one turn: build prompt (memories + history), call
-   * the provider, then persist either a `question` message (if the reply contains
-   * an ask block) or a plain text message. `triggerText` is the user input that
-   * caused this turn (used for memory relevance + archival).
-   */
-  async function respond(threadId: string, triggerText: string, attachments: FileAttachment[] = [], onEvent?: (ev: ChatStreamEvent) => void, signal?: AbortSignal): Promise<ChatMessage> {
-    const config = loadConfig();
-
     const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
-    if (!thread) return insertMessage(threadId, 'assistant', '[Error] Thread not found.');
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(thread.project_id) as any;
-
-    const persona = resolvePersona(thread.agent_id);
-    if (!persona) {
-      return insertMessage(threadId, 'assistant', `[No agent] No agent found for "${thread.agent_id}". Add one under Agents, or pick a different agent.`);
-    }
-
-    const provider: Provider | undefined = persona.provider_id ? getProviderById(db, persona.provider_id) : undefined;
-    const isClaude = provider ? provider.kind === 'claude_code' : persona.provider === 'claude_code';
-
-    // Claude Code session handling. Resume the thread's stored session if it has
-    // one (so the whole chat is one continuous conversation, shared with the
-    // terminal). Otherwise mint a new id UP FRONT and store it immediately — so
-    // the resume chip / terminal hand-off is available while this turn is still
-    // running (or if it stalls), not only after it completes.
-    let claudeSession: ClaudeSession | undefined;
-    if (isClaude) {
-      if (thread.agent_session_id) {
-        claudeSession = { id: thread.agent_session_id, isResume: true };
-      } else {
-        const newId = uuid();
-        db.prepare('UPDATE chat_threads SET agent_session_id = ? WHERE id = ?').run(newId, threadId);
-        claudeSession = { id: newId, isResume: false };
-      }
-    }
-
-    const memories = project ? await getRelevantMemories(db, project.id, triggerText) : [];
-    const memoryBlock = memories.length ? `Relevant memories:\n${memories.map(m => `- ${m}`).join('\n')}\n\n` : '';
-    const workspace = project?.repo_path || process.cwd();
-
-    let promptBody: string;
-    if (claudeSession?.isResume) {
-      // The session already holds the system prompt + full history — send only
-      // this turn, plus any memories freshly recalled for it.
-      promptBody = `${memoryBlock}${triggerText}`;
-    } else {
-      const history = db.prepare('SELECT role, content FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').all(threadId) as { role: string; content: string }[];
-      const historyBlock = history
-        .slice(-MAX_HISTORY)
-        .map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-        .join('\n');
-      promptBody = `${memoryBlock}${historyBlock}\n\nAssistant:`;
-    }
-
-    // Make the agent aware of any files the user attached this turn — they're
-    // saved under the project repo, so a tool-capable agent can read them.
-    if (attachments.length) {
-      const list = attachments.map(a => `- ${a.path} (${a.original_name})`).join('\n');
-      promptBody += `\n\n[The user attached these files this turn — read them with the Read tool if relevant:\n${list}\n]`;
-    }
-
-    const idleTimeoutMs = (config.claude_code.idle_timeout_seconds ?? 600) * 1000;
-    // Hard cap: 2× idle timeout, managed by a local AbortController so we
-    // can trigger it from the timer. The outer signal (from the executor) is
-    // mirrored: if either fires, the run is aborted.
-    const hardCapCtrl = new AbortController();
-    const hardCapMs = idleTimeoutMs * 2;
-    const hardCapTimer = setTimeout(() => {
-      console.warn(`[chat] hard cap ${hardCapMs}ms reached for thread ${threadId}, aborting`);
-      hardCapCtrl.abort();
-    }, hardCapMs);
-
-    // If the outer signal fires, propagate to our controller
-    signal?.addEventListener('abort', () => hardCapCtrl.abort(), { once: true });
-    // Clean up the outer listener when our controller settles
-    hardCapCtrl.signal.addEventListener('abort', () => clearTimeout(hardCapTimer), { once: true });
-    console.log(`[chat] running ${provider ? `${provider.name} (${provider.kind})` : persona.provider} model="${persona.model || provider?.default_model || ''}" for "${persona.slug}" in ${workspace}${claudeSession ? (claudeSession.isResume ? ` (resume ${claudeSession.id})` : ` (new session ${claudeSession.id})`) : ''}`);
-
-    // When streaming, normalize the provider's raw output into delta/session events
-    // for a live preview. The authoritative reply is still result.output below.
-    const adapter = adapterFor(providerKindOf(provider, persona.provider));
-    let thinkingAccum = '';
-    const toolCalls: ToolCallInfo[] = [];
-    const toolCallMap = new Map<string, number>(); // id -> index in toolCalls
-    const onOutput = onEvent
-      ? (chunk: string) => {
-          for (const ev of adapter.push(chunk)) {
-            if (ev.kind === 'thinking') {
-              thinkingAccum += ev.text;
-            } else if (ev.kind === 'tool_start') {
-              toolCallMap.set(ev.tool.id, toolCalls.length);
-              toolCalls.push(ev.tool);
-            } else if (ev.kind === 'tool_update') {
-              const idx = toolCallMap.get(ev.id);
-              if (idx !== undefined && ev.patch) {
-                Object.assign(toolCalls[idx], ev.patch);
-              }
-            } else if (ev.kind === 'tool_end') {
-              const idx = toolCallMap.get(ev.tool.id);
-              if (idx !== undefined) {
-                Object.assign(toolCalls[idx], ev.tool);
-              }
-            }
-            onEvent(ev);
-          }
-        }
-      : () => {};
-    const result = await runPersona(persona, promptBody, workspace, config, onOutput, provider, claudeSession, idleTimeoutMs, hardCapCtrl.signal);
-    clearTimeout(hardCapTimer);
-    if (!result.ok) {
-      console.error(`[chat] ${persona.provider} (${persona.model}) failed in ${workspace}: ${result.error}`);
-    }
-    // If aborted, persist a marker message
-    if (signal?.aborted) {
-      return insertMessage(threadId, 'assistant', '[Aborted by user]');
-    }
-    // Capture the resumable session id (Claude Code) even on an empty/errored
-    // turn, so a stuck conversation can be picked up from a terminal.
-    if (result.sessionId) {
-      db.prepare('UPDATE chat_threads SET agent_session_id = ? WHERE id = ?').run(result.sessionId, threadId);
-    }
-    const content = result.ok
-      ? (result.output.trim() || '[empty response]')
-      : `[${persona.provider} error] ${result.error || 'unknown error'}`;
-
-    // If the agent emitted an ask block, persist a structured question message.
-    const parsed = result.ok ? parseAskBlock(result.output) : null;
-    const assistantMsg = parsed
-      ? insertMessage(threadId, 'assistant', parsed.preamble, '[]', 'question', JSON.stringify(parsed.ask), thinkingAccum || null, toolCalls.length > 0 ? toolCalls : null)
-      : insertMessage(threadId, 'assistant', content, '[]', 'text', null, thinkingAccum || null, toolCalls.length > 0 ? toolCalls : null);
-
-    if (project && result.ok) {
-      addMemory(db, {
-        project_id: project.id,
-        agent_id: thread.agent_id,
-        category: 'chat',
-        content: `Q: ${triggerText.slice(0, 200)} → A: ${content.slice(0, 200)}`,
-        metadata: { thread_id: threadId, source: 'chat', provider: persona.provider },
-      }).catch(() => { /* best-effort */ });
-    }
-
-    // Record token usage for this chat turn so the Usage view reflects chat
-    // activity (not just orchestrator task runs). task_id is NULL; project_id
-    // scopes it.
-    if (project) {
-      const ts = new Date().toISOString();
-      db.prepare(
-        `INSERT INTO agent_runs (id, task_id, project_id, source, status, provider, model, prompt_tokens, completion_tokens, total_tokens, duration_ms, started_at, completed_at)
-         VALUES (?, NULL, ?, 'chat', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(
-        uuid(), project.id, result.ok ? 'completed' : 'failed',
-        provider ? provider.name : persona.provider,
-        persona.model || provider?.default_model || '',
-        result.usage.prompt, result.usage.completion, result.usage.total,
-        result.durationMs, ts, ts,
-      );
-    }
-
-    return assistantMsg;
-  }
-
-  fastify.post('/api/threads/:threadId/messages', async (request) => {
-    const { threadId } = request.params as { threadId: string };
-    const body = request.body as { content: string; attachments?: string };
-    let attachments: FileAttachment[] = [];
-    try { attachments = body.attachments ? JSON.parse(body.attachments) as FileAttachment[] : []; } catch { /* ignore malformed */ }
-    // Persist the user's turn, then run the agent.
-    insertMessage(threadId, 'user', body.content, body.attachments || '[]');
-    return respond(threadId, body.content, attachments);
+    if (!thread) return [];
+    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as
+      | { repo_path: string }
+      | undefined;
+    const cwd = project?.repo_path || process.cwd();
+    const entries = await pi.readMessages(threadId, cwd);
+    return flattenEntries(entries);
   });
 
-  /**
-   * Streaming variant of the message endpoint: persists the user turn, runs the
-   * agent, and streams NDJSON `ChatStreamEvent`s (delta/session/done/error) over a
-   * hijacked response as the turn progresses. The final `done` carries the
-   * persisted assistant message (authoritative — deltas are a best-effort preview).
-   */
   fastify.post('/api/threads/:threadId/messages/stream', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
-    const body = request.body as { content: string; attachments?: string };
-    let attachments: FileAttachment[] = [];
-    try { attachments = body.attachments ? JSON.parse(body.attachments) as FileAttachment[] : []; } catch { /* ignore malformed */ }
-    insertMessage(threadId, 'user', body.content, body.attachments || '[]');
+    const body = request.body as { content: string };
+    const confirmCancel = request.headers['x-confirm-cancel'] === 'true';
 
-    const run = register(threadId);
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (!thread) {
+      reply.code(404);
+      return { error: 'Thread not found' };
+    }
+    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as
+      | { repo_path: string }
+      | undefined;
+    const cwd = project?.repo_path || process.cwd();
+
+    const busy = concurrency.get(thread.project_id);
+    if (busy && busy.threadId !== threadId) {
+      reply.code(409);
+      return { kind: 'project_busy', activeThreadId: busy.threadId, activeTitle: busy.title };
+    }
+    if (busy && busy.threadId === threadId && confirmCancel) {
+      const existing = activeStreams.get(threadId);
+      existing?.stream.abort('user-confirmed-cancel');
+      await new Promise((r) => setTimeout(r, ABORT_GRACE_MS));
+      concurrency.clear(thread.project_id);
+    }
+
+    let session;
+    try {
+      session = await pi.sessionFor(threadId, cwd);
+    } catch (err: any) {
+      reply.code(500);
+      return { error: err?.message || 'failed to create session' };
+    }
+
+    const stream = new SessionEventStream();
+    activeStreams.set(threadId, { threadId, stream, projectId: thread.project_id });
+    concurrency.set(thread.project_id, threadId, thread.title);
+    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(new Date().toISOString(), threadId);
+
     reply.hijack();
     reply.raw.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
     });
-    const write = (ev: ChatStreamEvent) => {
-      try { reply.raw.write(JSON.stringify(ev) + '\n'); } catch { /* client gone */ }
+
+    const write = (ev: unknown) => {
+      try {
+        reply.raw.write(JSON.stringify(ev) + '\n');
+      } catch {
+        /* client gone */
+      }
     };
+
+    const persistUserTurn = db.prepare(
+      'INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, message_type, structured_json, thinking, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    );
+
     try {
-      const msg = await respond(threadId, body.content, attachments, write, run.abortController.signal);
-      write({ kind: 'done', message: msg });
+      const userMessageId = uuid();
+      const userTs = new Date().toISOString();
+      // Persist the user turn in the legacy chat_messages table for backward
+      // compat with anything that still reads it. Phase 5 drops the table.
+      persistUserTurn.run(
+        userMessageId,
+        threadId,
+        'user',
+        body.content,
+        '[]',
+        'text',
+        null,
+        null,
+        null,
+        userTs,
+      );
+      const subscription = session.subscribe((ev) => write(ev));
+      await session.prompt(body.content);
+      subscription();
+      write({ kind: 'done' });
     } catch (err: any) {
-      write({ kind: 'error', error: err?.message || 'Streaming failed' });
+      write({ kind: 'error', error: err?.message || 'prompt failed' });
     } finally {
-      unregister(threadId);
+      activeStreams.delete(threadId);
+      concurrency.clear(thread.project_id);
       reply.raw.end();
     }
   });
 
-  /**
-   * Abort a running generation for this thread. The executor registry holds the
-   * AbortController; aborting it will SIGTERM the CLI child process (Phase 2).
-   */
-  fastify.post('/api/threads/:threadId/abort', async (request, reply) => {
+  fastify.post('/api/threads/:threadId/abort', async (request) => {
     const { threadId } = request.params as { threadId: string };
-    const ok = abort(threadId);
-    if (!ok) return { ok: false, reason: 'no_run' };
+    const existing = activeStreams.get(threadId);
+    if (!existing) return { ok: false, reason: 'no_run' };
+    existing.stream.abort('user-abort');
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (thread) {
+      const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as
+        | { repo_path: string }
+        | undefined;
+      if (project) {
+        try {
+          const session = await pi.sessionFor(threadId, project.repo_path);
+          await session.abort();
+        } catch {
+          /* session may not be created yet */
+        }
+      }
+    }
     return { ok: true };
-  });
-
-  /**
-   * Export a chat thread as a JSONL file (portable session format).
-   * The file is written to ~/.nexus/sessions/{projectSlug}/{threadId}.jsonl.
-   */
-  fastify.post('/api/threads/:threadId/export', async (request, reply) => {
-    const { threadId } = request.params as { threadId: string };
-    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
-    if (!thread) { reply.code(404); return { error: 'Thread not found.' }; }
-    const project = db.prepare('SELECT slug, repo_path FROM projects WHERE id = ?').get(thread.project_id) as { slug: string; repo_path: string } | undefined;
-    const messages = db.prepare('SELECT role, content, thinking, tool_calls, created_at FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC').all(threadId) as Array<{ role: string; content: string; thinking: string | null; tool_calls: string | null; created_at: string }>;
-    const persona = resolvePersona(thread.agent_id);
-    const file = exportThread({
-      threadId,
-      title: thread.title,
-      agentSlug: thread.agent_id,
-      model: persona?.model || undefined,
-      provider: persona?.provider || undefined,
-      projectSlug: project?.slug || 'unknown',
-      messages,
-    });
-    return { ok: true, path: file };
-  });
-
-  /**
-   * Persist files the user dropped into a chat. Saved under the project repo at
-   * project_docs/uploads/ so a tool-capable agent can read them. Files arrive as
-   * base64 in the JSON body (per-route body limit raised for this) — no multipart
-   * dependency. Returns FileAttachment[] with repo-relative paths.
-   */
-  fastify.post('/api/threads/:threadId/upload', { bodyLimit: 25 * 1024 * 1024 }, async (request, reply) => {
-    const { threadId } = request.params as { threadId: string };
-    const body = request.body as { files?: { name: string; mime_type?: string; data_base64: string }[] };
-    const files = body?.files ?? [];
-    if (!files.length) { reply.code(400); return { error: 'No files provided.' }; }
-    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
-    if (!thread) { reply.code(404); return { error: 'Thread not found.' }; }
-    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as { repo_path: string } | undefined;
-    const repo = project?.repo_path || process.cwd();
-    const uploadsDir = path.join(repo, 'project_docs', 'uploads');
-    fs.mkdirSync(uploadsDir, { recursive: true });
-
-    const saved: FileAttachment[] = [];
-    for (const f of files) {
-      const safe = (f.name || 'file').replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120);
-      const filename = `${Date.now()}_${safe}`;
-      fs.writeFileSync(path.join(uploadsDir, filename), Buffer.from(f.data_base64, 'base64'));
-      saved.push({
-        filename,
-        original_name: f.name || filename,
-        path: path.join('project_docs', 'uploads', filename),
-        mime_type: f.mime_type || 'application/octet-stream',
-      });
-    }
-    return saved;
-  });
-
-  /**
-   * Record the user's answer to a question card, then run the continuation turn.
-   * The answer is stored both human-readably (content) and structured
-   * (structured_json), and fed back to the agent as the next user turn.
-   */
-  fastify.post('/api/threads/:threadId/answer', async (request) => {
-    const { threadId } = request.params as { threadId: string };
-    const body = request.body as { question_message_id: string; replies: Reply[] };
-
-    const qRow = db.prepare('SELECT structured_json FROM chat_messages WHERE id = ?').get(body.question_message_id) as { structured_json: string | null } | undefined;
-    if (!qRow || !qRow.structured_json) {
-      return insertMessage(threadId, 'assistant', '[Error] Question not found.');
-    }
-    const ask = JSON.parse(qRow.structured_json) as Ask;
-    const summary = buildAnswerSummary(ask, body.replies);
-
-    // Persist the user's answer turn (human-readable summary + structured replies).
-    const answerSet: AnswerSet = { replies: body.replies };
-    insertMessage(threadId, 'user', summary, '[]', 'answer', JSON.stringify(answerSet));
-
-    // Continuation turn — same path as a normal message.
-    return respond(threadId, summary);
-  });
-
-  /**
-   * Open a macOS Terminal window in the project's repo, resuming this thread's
-   * Claude session (`claude --resume <id>`). Lets you grab a stalled conversation
-   * and keep going by hand. Sessions are stored per-cwd, so we must launch from
-   * the original repo path.
-   */
-  fastify.post('/api/threads/:threadId/open-terminal', async (request, reply) => {
-    const { threadId } = request.params as { threadId: string };
-    if (process.platform !== 'darwin') {
-      reply.code(400);
-      return { error: 'Opening a terminal is only supported on macOS.' };
-    }
-    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
-    if (!thread) {
-      reply.code(404);
-      return { error: 'Thread not found.' };
-    }
-    const sessionId = thread.agent_session_id;
-    if (!sessionId || !/^[A-Za-z0-9._-]+$/.test(sessionId)) {
-      reply.code(400);
-      return { error: 'No Claude session captured for this thread yet — send a message first.' };
-    }
-    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as { repo_path: string } | undefined;
-    const cwd = project?.repo_path || process.cwd();
-    const shellCmd = `cd ${shellQuote(cwd)} && claude --resume ${sessionId}`;
-    const appleScript = `tell application "Terminal" to do script ${appleScriptQuote(shellCmd)}`;
-    try {
-      const child = spawn('osascript', ['-e', appleScript, '-e', 'tell application "Terminal" to activate'], {
-        stdio: 'ignore',
-        detached: true,
-      });
-      child.unref();
-      return { ok: true };
-    } catch (err: any) {
-      reply.code(500);
-      return { error: err?.message || 'Failed to open Terminal.' };
-    }
-  });
-
-  fastify.post('/api/threads/:threadId/archive', async (request) => {
-    const { threadId } = request.params as { threadId: string };
-    const now = new Date().toISOString();
-    db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?').run(now, threadId);
-    return { success: true };
   });
 
   fastify.patch('/api/threads/:threadId', async (request, reply) => {
@@ -457,10 +204,91 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     return db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread;
   });
 
-  // Permanently delete a thread and its messages (chat_messages cascade on FK).
   fastify.delete('/api/threads/:threadId', async (request) => {
     const { threadId } = request.params as { threadId: string };
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (thread) {
+      const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as
+        | { repo_path: string }
+        | undefined;
+      if (project) pi.dropSession(threadId, project.repo_path);
+    }
     db.prepare('DELETE FROM chat_threads WHERE id = ?').run(threadId);
     return { success: true };
   });
+
+  fastify.post('/api/threads/:threadId/archive', async (request) => {
+    const { threadId } = request.params as { threadId: string };
+    const now = new Date().toISOString();
+    db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?').run(now, threadId);
+    return { success: true };
+  });
+}
+
+/**
+ * Flatten pi's session-message entries into a list the frontend's
+ * `usePiStream` reducer can render. Each entry is one user / assistant /
+ * toolResult message. Tool calls and thinking blocks are extracted from
+ * the assistant message's `content` array.
+ */
+function flattenEntries(entries: unknown[]): unknown[] {
+  const out: unknown[] = [];
+  for (const e of entries as any[]) {
+    if (e.type !== 'message') continue;
+    const m = e.message;
+    if (!m) continue;
+    if (m.role === 'user') {
+      out.push({
+        id: e.id,
+        role: 'user',
+        content: typeof m.content === 'string' ? m.content : extractText(m.content),
+        timestamp: m.timestamp ?? e.timestamp,
+      });
+    } else if (m.role === 'assistant') {
+      let text = '';
+      let thinking = '';
+      const toolCalls: unknown[] = [];
+      for (const block of m.content ?? []) {
+        if (block.type === 'text') text += block.text;
+        else if (block.type === 'thinking') thinking += block.thinking;
+        else if (block.type === 'toolCall') {
+          toolCalls.push({
+            id: block.id,
+            name: block.name,
+            args: block.arguments,
+            status: 'completed',
+          });
+        }
+      }
+      out.push({
+        id: e.id,
+        role: 'assistant',
+        content: text,
+        thinking: thinking || null,
+        tool_calls: toolCalls.length > 0 ? toolCalls : null,
+        model: m.model,
+        provider: m.provider,
+        timestamp: m.timestamp ?? e.timestamp,
+      });
+    } else if (m.role === 'toolResult') {
+      out.push({
+        id: e.id,
+        role: 'toolResult',
+        toolCallId: m.toolCallId,
+        toolName: m.toolName,
+        content: extractText(m.content),
+        isError: m.isError,
+        timestamp: m.timestamp ?? e.timestamp,
+      });
+    }
+  }
+  return out;
+}
+
+function extractText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((b: any) => (typeof b === 'object' && b?.type === 'text' ? b.text : ''))
+    .join('');
 }

@@ -1,5 +1,5 @@
 import { Gauge } from '@phosphor-icons/react';
-import { AgentHealth, AgentStatus, MissionStatus } from '../api';
+import { MissionStatus } from '../api';
 
 interface MissionControlProps {
   status: MissionStatus | null;
@@ -7,12 +7,6 @@ interface MissionControlProps {
   onRefresh: () => void;
   onSelectAgent: (slug: string) => void;
 }
-
-const DOT: Record<AgentHealth, string> = {
-  online: 'bg-emerald-500',
-  ready: 'bg-amber-500',
-  offline: 'bg-zinc-600',
-};
 
 function StatDot({ ok }: { ok: boolean }) {
   return <span className={`inline-block w-1.5 h-1.5 rounded-full ${ok ? 'bg-emerald-500' : 'bg-zinc-600'}`} />;
@@ -27,14 +21,17 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
-function median(nums: number[]): number | null {
-  if (nums.length === 0) return null;
-  const s = [...nums].sort((a, b) => a - b);
-  const mid = Math.floor(s.length / 2);
-  return s.length % 2 ? s[mid] : Math.round((s[mid - 1] + s[mid]) / 2);
+interface ModelRow {
+  provider: string;
+  id: string;
+  name: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  configured: boolean;
 }
 
-function AgentCard({ a, onClick }: { a: AgentStatus; onClick: () => void }) {
+function ModelCard({ m, onClick }: { m: ModelRow; onClick: () => void }) {
   return (
     <button
       onClick={onClick}
@@ -42,26 +39,27 @@ function AgentCard({ a, onClick }: { a: AgentStatus; onClick: () => void }) {
     >
       <div className="flex items-center justify-between mb-1">
         <span className="flex items-center gap-2 font-medium text-zinc-200">
-          <span className={`w-2 h-2 rounded-full ${DOT[a.status]}`} />
-          {a.name}
+          <span className={`w-2 h-2 rounded-full ${m.configured ? 'bg-emerald-500' : 'bg-zinc-600'}`} />
+          {m.name}
         </span>
-        <span className="text-[10px] uppercase tracking-wider text-zinc-500">{a.status}</span>
+        <span className="text-[10px] uppercase tracking-wider text-zinc-500">
+          {m.configured ? 'configured' : 'no auth'}
+        </span>
       </div>
       <div className="text-xs text-zinc-500 truncate">
-        {a.provider} · {a.model || '—'}
+        {m.provider} · {m.id}
       </div>
       <div className="text-[11px] text-zinc-600 mt-1 truncate">
-        {a.detail}
-        {a.latencyMs != null && ` · ${a.latencyMs}ms`}
+        {m.contextWindow ? `${m.contextWindow.toLocaleString()} ctx` : ''}
+        {m.maxTokens ? ` · ${m.maxTokens.toLocaleString()} max` : ''}
       </div>
     </button>
   );
 }
 
 export default function MissionControl({ status, loading, onRefresh, onSelectAgent }: MissionControlProps) {
-  const latencies = (status?.agents ?? []).map(a => a.latencyMs).filter((n): n is number => n != null);
-  const p50 = median(latencies);
-  const onlineCount = (status?.agents ?? []).filter(a => a.status === 'online').length;
+  const configuredModels = (status?.models ?? []).filter((m) => m.configured).length;
+  const totalModels = (status?.models ?? []).length;
   const mem = status?.memory;
   const models = mem?.models;
 
@@ -118,22 +116,25 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
               </div>
             </Card>
 
-            <Card title="Latency">
-              <div className="text-2xl font-semibold text-zinc-100">{p50 != null ? `${p50}ms` : '—'}</div>
+            <Card title="Models">
+              <div className="text-2xl font-semibold text-zinc-100">
+                {configuredModels}/{totalModels}
+              </div>
               <div className="text-xs text-zinc-500 mt-1">
-                combined p50 · {onlineCount}/{status.agents.length} agents online
+                pi runtime models · auth-configured
               </div>
             </Card>
           </div>
 
-          {/* Agent roster */}
+          {/* Agent roster — now a model list. Each row shows provider,
+              id, and whether auth is configured. */}
           <div>
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium mb-2">Agents</div>
+            <div className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium mb-2">Models</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {status.agents.map(a => (
-                <AgentCard key={a.slug} a={a} onClick={() => onSelectAgent(a.slug)} />
+              {(status.models ?? []).map((m) => (
+                <ModelCard key={`${m.provider}/${m.id}`} m={m} onClick={() => onSelectAgent(m.id)} />
               ))}
-              {status.agents.length === 0 && <div className="text-sm text-zinc-600">No agents configured.</div>}
+              {(status.models ?? []).length === 0 && <div className="text-sm text-zinc-600">No models available.</div>}
             </div>
           </div>
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { Project, Task, Persona, Ticket, ChatThread, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus, DEFAULT_PERSONA_COLOR } from '@nexus/shared';
+import { Project, Task, Ticket, ChatThread, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
 import { api, MissionStatus } from './api';
 import TopBar from './components/TopBar';
 import CommandPalette, { Command } from './components/CommandPalette';
@@ -11,25 +11,18 @@ import NotificationToasts from './components/NotificationToasts';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import MemoryView from './components/MemoryView';
-import PersonasPage from './components/PersonasPage';
 import SchedulerPage from './components/SchedulerPage';
 import SettingsPage from './components/SettingsPage';
 import UsagePage from './components/UsagePage';
 import ProjectModal from './components/ProjectModal';
 import TaskModal from './components/TaskModal';
-import ColumnAgentMapping from './components/ColumnAgentMapping';
-import OpenCodeModelsView from './components/OpenCodeModelsView';
-import NewChatPicker from './components/NewChatPicker';
-import TerminalPane from './components/TerminalPane';
+import { OrchestratorModelPicker } from './components/OrchestratorModelPicker';
 import MemoryRail from './components/MemoryRail';
 
-// Top-bar destinations: cross-project globals + the management group. `null`
-// means a project is focused (project-scoped `subView` drives the main area).
-type GlobalView = 'dashboard' | 'tickets' | 'scheduler' | 'usage' | 'personas' | 'opencode-models' | 'settings';
+type GlobalView = 'dashboard' | 'tickets' | 'scheduler' | 'usage' | 'settings';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [personas, setPersonas] = useState<Persona[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
@@ -37,14 +30,14 @@ export default function App() {
   const [status, setStatus] = useState<MissionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [orchestratorPicker, setOrchestratorPicker] = useState<{ taskId: string; title: string } | null>(null);
 
   // --- navigation state -----------------------------------------------------
-  const [globalView, setGlobalView] = useState<GlobalView | null>('dashboard'); // null = a project is focused
+  const [globalView, setGlobalView] = useState<GlobalView | null>('dashboard');
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [subView, setSubView] = useState<SubView>('kanban');
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ChatThread[]>([]);
-  const [newChat, setNewChat] = useState<{ projectId: string } | null>(null);
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -67,7 +60,7 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
-        setPaletteOpen(o => !o);
+        setPaletteOpen((o) => !o);
       }
     };
     window.addEventListener('keydown', onKey);
@@ -95,18 +88,21 @@ export default function App() {
   }, []);
 
   const loadThreads = useCallback(async (projectId: string) => {
-    try { setThreads(await api.chat.threads(projectId)); }
-    catch (err) { console.error('Failed to load threads:', err); }
+    try {
+      const data = await api.chat.threads(projectId);
+      setThreads(data);
+    } catch (err) {
+      console.error('Failed to load threads:', err);
+    }
   }, []);
 
   useEffect(() => {
     refreshProjects();
-    api.personas.list().then(setPersonas).catch(err => console.error('Failed to load personas:', err));
   }, [refreshProjects]);
 
   useEffect(() => {
     if (activeProjectId) {
-      const proj = projects.find(p => p.id === activeProjectId);
+      const proj = projects.find((p) => p.id === activeProjectId);
       setActiveProject(proj || null);
       loadTasks(activeProjectId);
     } else {
@@ -128,16 +124,11 @@ export default function App() {
     return () => clearInterval(interval);
   }, [activeProjectId, loadTasks]);
 
-  // Resolve persona visuals (icon/color) for the active project's threads — the
-  // tree owns the thread list now. `status.agents` carry icon/color (Task 3).
-  const threadMetas: ThreadMeta[] = useMemo(() => threads.map(t => {
-    const agent = status?.agents.find(a => a.slug === t.agent_id);
-    return { thread: t, icon: agent?.icon, color: agent?.color ?? DEFAULT_PERSONA_COLOR };
-  }), [threads, status]);
-
-  const activeThreadAgentSlug = useMemo(
-    () => threads.find(t => t.id === activeThreadId)?.agent_id,
-    [threads, activeThreadId],
+  // The sidebar consumes a flat ThreadMeta list; the new chat model has
+  // no persona icon/color to surface.
+  const threadMetas: ThreadMeta[] = useMemo(
+    () => threads.map((t) => ({ thread: t })),
+    [threads],
   );
 
   const handleCreateProject = async (data: { name: string; description: string; repo_path: string }) => {
@@ -154,8 +145,33 @@ export default function App() {
     await loadTasks(activeProjectId);
   };
 
+  /**
+   * Moving a task to "in_progress" opens the model picker. The picker
+   * POSTs to /api/orchestrator/tasks/:id/start which sets model_key
+   * and flips status to in_progress; the orchestrator's next poll tick
+   * dispatches headlessly.
+   */
   const handleMoveTask = async (taskId: string, newStatus: TaskStatus) => {
+    if (newStatus === 'in_progress') {
+      const task = tasks.find((t) => t.id === taskId);
+      if (task) {
+        setOrchestratorPicker({ taskId, title: task.title });
+        return;
+      }
+    }
     await api.tasks.update(taskId, { status: newStatus });
+    if (activeProjectId) await loadTasks(activeProjectId);
+  };
+
+  const handleOrchestratorPick = async (modelKey: string) => {
+    if (!orchestratorPicker) return;
+    const { taskId } = orchestratorPicker;
+    setOrchestratorPicker(null);
+    try {
+      await api.agents.startTask(taskId, modelKey);
+    } catch (err) {
+      console.error('Failed to start task', err);
+    }
     if (activeProjectId) await loadTasks(activeProjectId);
   };
 
@@ -176,14 +192,15 @@ export default function App() {
     if (projectId === activeProjectId) await loadTasks(projectId);
   };
 
-  const handleProjectUpdate = (updated: Project) => {
-    setProjects(prev => prev.map(p => (p.id === updated.id ? updated : p)));
-    if (updated.id === activeProjectId) setActiveProject(updated);
-  };
-
   // --- navigation helpers ---------------------------------------------------
-  const selectGlobal = (v: GlobalView) => { setGlobalView(v); setActiveThreadId(null); };
-  const focusProject = (id: string) => { setGlobalView(null); setActiveProjectId(id); };
+  const selectGlobal = (v: GlobalView) => {
+    setGlobalView(v);
+    setActiveThreadId(null);
+  };
+  const focusProject = (id: string) => {
+    setGlobalView(null);
+    setActiveProjectId(id);
+  };
   const selectSubView = (projectId: string, sub: SubView) => {
     setGlobalView(null);
     setActiveProjectId(projectId);
@@ -208,12 +225,10 @@ export default function App() {
     if (activeProjectId) await loadThreads(activeProjectId);
   };
 
-  const startNewChat = async (slug: string, mode: 'chat' | 'terminal', launchCommand?: string) => {
-    if (!newChat) return;
-    const thread = await api.chat.createThread(newChat.projectId, slug, mode, launchCommand);
-    setNewChat(null);
-    await loadThreads(newChat.projectId);
-    selectThread(newChat.projectId, thread.id);
+  const startNewChat = async (projectId: string) => {
+    const thread = await api.chat.createThread(projectId, 'zosma');
+    await loadThreads(projectId);
+    selectThread(projectId, thread.id);
   };
 
   // --- command palette entries ---------------------------------------------
@@ -224,17 +239,15 @@ export default function App() {
       { id: 'view-scheduler', label: 'Scheduler', hint: 'View', keywords: 'cron', run: () => selectGlobal('scheduler') },
       { id: 'view-usage', label: 'Usage', hint: 'View', keywords: 'tokens', run: () => selectGlobal('usage') },
     ];
-    // Project-scoped sub-views target the active project (or the first project).
-    ([['kanban', 'Kanban'], ['memory', 'Memory'], ['chat', 'Chat']] as const).forEach(([sub, label]) => {
+    (['kanban', 'memory', 'chat'] as const).forEach((sub) => {
+      const label = sub.charAt(0).toUpperCase() + sub.slice(1);
       const pid = activeProjectId ?? projects[0]?.id;
       if (pid) cmds.push({ id: `view-${sub}`, label, hint: 'View', keywords: 'open project', run: () => selectSubView(pid, sub) });
     });
-    projects.forEach(p => cmds.push({ id: `proj-${p.id}`, label: p.name, hint: 'Project', keywords: p.repo_path, run: () => focusProject(p.id) }));
+    projects.forEach((p) => cmds.push({ id: `proj-${p.id}`, label: p.name, hint: 'Project', keywords: p.repo_path, run: () => focusProject(p.id) }));
     cmds.push({ id: 'act-new-project', label: 'New project…', hint: 'Action', run: () => setShowProjectModal(true) });
     if (activeProjectId) cmds.push({ id: 'act-new-task', label: 'New task (Triage)…', hint: 'Action', keywords: 'kanban', run: () => setTaskModalColumn('triage') });
-    cmds.push({ id: 'act-personas', label: 'Agents', hint: 'Action', keywords: 'personas agents', run: () => selectGlobal('personas') });
     cmds.push({ id: 'act-settings', label: 'Settings', hint: 'Action', run: () => selectGlobal('settings') });
-    cmds.push({ id: 'act-opencode-models', label: 'Models', hint: 'Action', keywords: 'opencode openrouter models', run: () => selectGlobal('opencode-models') });
     cmds.push({ id: 'act-refresh', label: 'Refresh status', hint: 'Action', run: () => loadStatus() });
     return cmds;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -242,9 +255,7 @@ export default function App() {
 
   // --- main content ---------------------------------------------------------
   const renderMain = () => {
-    if (globalView === 'personas') return <PersonasPage />;
     if (globalView === 'settings') return <SettingsPage />;
-    if (globalView === 'opencode-models') return <OpenCodeModelsView />;
     if (globalView === 'dashboard')
       return <MissionControl status={status} loading={statusLoading} onRefresh={loadStatus} onSelectAgent={() => {}} />;
     if (globalView === 'tickets')
@@ -252,7 +263,6 @@ export default function App() {
     if (globalView === 'scheduler') return <SchedulerPage projectId={activeProjectId ?? undefined} />;
     if (globalView === 'usage') return <UsagePage projectId={activeProjectId ?? undefined} />;
 
-    // Everything below is project-scoped.
     if (!activeProject) {
       return (
         <div className="flex-1 flex items-center justify-center">
@@ -293,49 +303,30 @@ export default function App() {
               columns={KANBAN_COLUMNS}
               columnLabels={KANBAN_COLUMN_LABELS}
               onMoveTask={handleMoveTask}
-              onAddTask={status => setTaskModalColumn(status)}
+              onAddTask={(status) => setTaskModalColumn(status)}
               onEditTask={() => {}}
               onDeleteTask={handleDeleteTask}
             />
           ) : subView === 'chat' ? (
-            (() => {
-              const active = threads.find(t => t.id === activeThreadId);
-              const content = active?.mode === 'terminal'
-                ? <TerminalPane key={active.id} threadId={active.id} />
-                : (
-                  <ChatPanel
-                    key={activeProject.id}
-                    projectId={activeProject.id}
-                    threadId={activeThreadId}
-                    agents={status?.agents}
-                    agentSlug={activeThreadAgentSlug}
-                    onThreadsChanged={() => loadThreads(activeProject.id)}
-                  />
-                );
-              return (
-                <div className="flex h-full min-h-0">
-                  <div className="flex-1 min-w-0">{content}</div>
-                  <MemoryRail projectId={activeProject.id} onOpenFull={() => selectSubView(activeProject.id, 'memory')} />
-                </div>
-              );
-            })()
+            <div className="flex h-full min-h-0">
+              <div className="flex-1 min-w-0">
+                <ChatPanel
+                  key={activeProject.id}
+                  projectId={activeProject.id}
+                  threadId={activeThreadId}
+                  onBusyConflict={() => {}}
+                  onThreadsChanged={() => loadThreads(activeProject.id)}
+                />
+              </div>
+              <MemoryRail
+                projectId={activeProject.id}
+                onOpenFull={() => selectSubView(activeProject.id, 'memory')}
+              />
+            </div>
           ) : subView === 'memory' ? (
             <MemoryView projectId={activeProject.id} />
           ) : null}
         </div>
-
-        {subView === 'kanban' && (
-          <div className="border-t border-zinc-800 bg-zinc-900 px-6 py-3 shrink-0">
-            <details className="group">
-              <summary className="text-xs text-zinc-500 cursor-pointer hover:text-zinc-200 transition-colors select-none">
-                Column-Agent Mapping — click to configure default agents per Kanban column
-              </summary>
-              <div className="mt-3 max-w-md">
-                <ColumnAgentMapping project={activeProject} onUpdate={handleProjectUpdate} />
-              </div>
-            </details>
-          </div>
-        )}
       </>
     );
   };
@@ -361,24 +352,12 @@ export default function App() {
           onSelectThread={selectThread}
           onRenameThread={handleRenameThread}
           onDeleteThread={handleDeleteThread}
-          onNewChat={(projectId) => setNewChat({ projectId })}
+          onNewChat={(projectId) => void startNewChat(projectId)}
           onNewProject={() => setShowProjectModal(true)}
         />
 
         <main className="flex-1 flex flex-col min-w-0">{renderMain()}</main>
       </div>
-
-      {newChat && (
-        <div className="fixed inset-0 z-40" onClick={() => setNewChat(null)}>
-          <div className="absolute left-60 top-24" onClick={e => e.stopPropagation()}>
-            <NewChatPicker
-              personas={(status?.agents ?? []).map(a => ({ slug: a.slug, name: a.name, icon: a.icon, color: a.color }))}
-              onStart={startNewChat}
-              onClose={() => setNewChat(null)}
-            />
-          </div>
-        </div>
-      )}
 
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
 
@@ -394,6 +373,14 @@ export default function App() {
           columnLabel={KANBAN_COLUMN_LABELS[taskModalColumn]}
           onClose={() => setTaskModalColumn(null)}
           onSubmit={handleCreateTask}
+        />
+      )}
+
+      {orchestratorPicker && (
+        <OrchestratorModelPicker
+          open={true}
+          onPick={handleOrchestratorPick}
+          onClose={() => setOrchestratorPicker(null)}
         />
       )}
     </div>

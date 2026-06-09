@@ -1,372 +1,291 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
-import { ChatThread, ChatMessage, FileAttachment, Ask, AnswerSet, ToolCallInfo } from '@nexus/shared';
-import { api, AgentStatus } from '../api';
-import QuestionCard from './QuestionCard';
-import { ThinkingBlock } from './ThinkingBlock';
-import { ActivityBlock } from './ActivityBlock';
-import { ToolCallTimeline } from './ToolCallTimeline';
+/**
+ * ChatPanel — the chat pane.
+ *
+ * Subscribes to the pi runtime's event stream for the active thread via
+ * usePiStream. The X-Confirm-Cancel conflict path (different thread in
+ * the same project is mid-run) surfaces as a confirm dialog.
+ *
+ * The previous file uploaded attachments, exported to JSONL, and used
+ * a custom "Claude session resume" chip. All of that is gone:
+ *   - Attachments: deferred to a follow-up (the route is still there at
+ *     POST /api/threads/:id/upload but the UI doesn't expose it yet)
+ *   - Export: pi sessions are already on disk in pi's tree format;
+ *     the user can read them from ~/.nexus/sessions/{cwd-slug}/*.jsonl
+ *   - Session resume: pi owns sessions natively; no terminal hand-off
+ */
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stop } from '@phosphor-icons/react';
+import { usePiStream, ChatBusyError, type StreamMessage } from '../hooks/usePiStream';
+import { useModels } from '../hooks/useModels';
+import { ModelSelector } from './ModelSelector';
+import { ToolCallTimeline } from './ToolCallTimeline';
 
 interface ChatPanelProps {
   projectId: string;
   threadId: string | null;
-  /** resolved agent status (provider + model), used to label the active thread's agent */
-  agents?: AgentStatus[];
-  /** persona slug for the active thread — lets the header label the agent without a thread list */
-  agentSlug?: string;
-  /** called after rename/delete (or a session-id/title change) so the tree (source of truth) reloads */
+  /** Called when the user confirms cancelling a busy thread in the same project. */
+  onBusyConflict: (activeThreadId: string, activeTitle: string) => void;
+  /** Called after a turn completes so the sidebar (title etc.) can refresh. */
   onThreadsChanged?: () => void;
 }
 
-/** Read a File as base64 (without the data: URL prefix) for JSON upload. */
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-export default function ChatPanel({ projectId, threadId, agents, agentSlug, onThreadsChanged }: ChatPanelProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged }: ChatPanelProps) {
+  const { models, activeModelId, setModel } = useModels();
+  const { state, startStream, abortStream } = usePiStream();
   const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [attachments, setAttachments] = useState<File[]>([]);
-  const [dragOver, setDragOver] = useState(false);
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionCopied, setSessionCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
+  const [pendingConfirm, setPendingConfirm] = useState<{ activeThreadId: string; activeTitle: string; pendingText: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const dropZoneRef = useRef<HTMLDivElement>(null);
-  // Mirrors the active thread for async handlers: lets an in-flight send check it's
-  // still on the same thread before writing results (guards against bleed when
-  // the user switches threads mid-reply).
-  const activeThreadId = threadId;
+  // Track the active thread id inside async handlers so a late-arriving
+  // event after a thread switch is dropped (guards against bleed).
   const activeThreadIdRef = useRef<string | null>(null);
-  useEffect(() => { activeThreadIdRef.current = activeThreadId; }, [activeThreadId]);
-
-  // Ctrl+O toggles the details-expanded view (tool timeline, full thinking)
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    activeThreadIdRef.current = threadId;
+  }, [threadId]);
+
+  // Load persisted messages whenever the active thread changes.
+  useEffect(() => {
+    if (!threadId) {
+      setLoadedMessages([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/threads/${threadId}`);
+        if (!res.ok) throw new Error(`GET /api/threads/${threadId} ${res.status}`);
+        const data = (await res.json()) as { messages: StreamMessage[] };
+        if (!cancelled) setLoadedMessages(data.messages ?? []);
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to load thread messages', err);
+          setLoadedMessages([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [threadId]);
+
+  // Ctrl+O toggles the details-expanded view (tool timeline, full thinking).
+  useEffect(() => {
+    function handler(e: KeyboardEvent) {
       if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
         e.preventDefault();
-        setDetailsExpanded(v => !v);
+        setDetailsExpanded((v) => !v);
       }
-    };
+    }
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  const loadMessages = useCallback(async (id: string) => {
-    try {
-      setMessages(await api.chat.messages(id));
-    } catch (err) {
-      console.error('Failed to load messages:', err);
+  // Auto-scroll on any visible-message change. (jsdom doesn't implement
+  // scrollIntoView; the optional-chained guard keeps tests green.)
+  useEffect(() => {
+    const el = messagesEndRef.current;
+    if (el && typeof el.scrollIntoView === 'function') {
+      el.scrollIntoView({ behavior: 'smooth' });
     }
-  }, []);
+  }, [loadedMessages, state.messages, state.streamingMessage]);
 
-  useEffect(() => {
-    setSessionId(null);
-    if (threadId) loadMessages(threadId);
-    else setMessages([]);
-  }, [threadId, loadMessages]);
-
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSend = async () => {
-    if (!activeThreadId) return;
-    if (!input.trim() && attachments.length === 0) return;
-
-    const threadId = activeThreadId;
-    const content = input;
-    const files = attachments;
-
-    setInput('');
-    setAttachments([]);
-    setIsTyping(true);
-
-    // Optimistically show the user's message while the agent runs (attachments
-    // appear after the post-send refresh, once they're persisted).
-    setMessages(prev => [
-      ...prev,
-      { id: `tmp-${Date.now()}`, thread_id: threadId, role: 'user', content, attachments_json: '[]', message_type: 'text', structured_json: null, created_at: new Date().toISOString() },
-    ]);
-
-    try {
-      // Upload any queued files first (persists them under the project repo), then
-      // send the turn referencing the saved attachments.
-      let attachmentsJson = '[]';
-      if (files.length > 0) {
-        const payload = await Promise.all(files.map(async f => ({
-          name: f.name,
-          mime_type: f.type || 'application/octet-stream',
-          data_base64: await fileToBase64(f),
-        })));
-        const saved = await api.chat.upload(threadId, payload);
-        attachmentsJson = JSON.stringify(saved);
-      }
-      // Provisional assistant bubble that fills in as deltas stream.
-      const provisionalId = `streaming-${Date.now()}`;
-      const baseMsg = { id: provisionalId, thread_id: threadId, role: 'assistant' as const, content: '', attachments_json: '[]', message_type: 'text' as const, structured_json: null, thinking: '', tool_calls: [] as ToolCallInfo[], created_at: new Date().toISOString() };
-      setMessages(prev => [...prev, baseMsg]);
-      let acc = '';
-      let thinkingAcc = '';
-      const toolCallsMap = new Map<string, ToolCallInfo>();
-      await api.chat.sendMessageStream(threadId, content, attachmentsJson, ev => {
-        if (activeThreadIdRef.current !== threadId) return; // user navigated away — drop
-        if (ev.kind === 'delta') {
-          acc += ev.text;
-          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, content: acc } : m)));
-        } else if (ev.kind === 'thinking') {
-          thinkingAcc += ev.text;
-          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, thinking: thinkingAcc } : m)));
-        } else if (ev.kind === 'tool_start') {
-          toolCallsMap.set(ev.tool.id, { ...ev.tool });
-          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, tool_calls: Array.from(toolCallsMap.values()) } : m)));
-        } else if (ev.kind === 'tool_end') {
-          toolCallsMap.set(ev.tool.id, { ...ev.tool });
-          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, tool_calls: Array.from(toolCallsMap.values()) } : m)));
-        } else if (ev.kind === 'tool_update') {
-          const existing = toolCallsMap.get(ev.id);
-          if (existing) {
-            Object.assign(existing, ev.patch);
-            setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, tool_calls: Array.from(toolCallsMap.values()) } : m)));
-          }
-        } else if (ev.kind === 'session') {
-          setSessionId(ev.session_id);
-        } else if (ev.kind === 'error') {
-          acc = `[error] ${ev.error}`;
-          setMessages(prev => prev.map(m => (m.id === provisionalId ? { ...m, content: acc } : m)));
-        }
-        // 'done' → finalize from the DB below (renders question cards, attachments, etc.)
-      });
-      // Replace the optimistic/provisional messages with the authoritative DB state.
-      if (activeThreadIdRef.current === threadId) {
-        await loadMessages(threadId);
-        // The turn may have captured a session id or auto-titled the thread —
-        // ask the tree (source of truth for the thread list) to refresh.
+  const submit = useCallback(
+    async (text: string, opts: { confirmCancel?: boolean } = {}) => {
+      if (!threadId) return;
+      setError(null);
+      try {
+        await startStream(threadId, text, opts);
         onThreadsChanged?.();
+      } catch (err) {
+        if (err instanceof ChatBusyError) {
+          setPendingConfirm({
+            activeThreadId: err.activeThreadId,
+            activeTitle: err.activeTitle,
+            pendingText: text,
+          });
+          onBusyConflict(err.activeThreadId, err.activeTitle);
+          return;
+        }
+        setError(err instanceof Error ? err.message : String(err));
       }
-    } catch (err) {
-      console.error('Failed to send message:', err);
-    } finally {
-      setIsTyping(false);
-    }
-  };
+    },
+    [threadId, startStream, onBusyConflict, onThreadsChanged],
+  );
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleSend = useCallback(() => {
+    const text = input.trim();
+    if (!text || !threadId) return;
+    setInput('');
+    void submit(text);
+  }, [input, threadId, submit]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
   };
 
-  // Queue the picked/dropped files; the actual upload happens at send-time (once
-  // we have a thread → project → repo path to save them under).
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-    setAttachments(prev => [...prev, ...Array.from(e.target.files!)]);
-    e.target.value = '';
-  };
+  const handleAbort = useCallback(async () => {
+    if (!threadId) return;
+    try {
+      await fetch(`/api/threads/${threadId}/abort`, { method: 'POST' });
+    } catch {
+      /* ignore */
+    }
+    await abortStream();
+  }, [threadId, abortStream]);
 
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    setAttachments(prev => [...prev, ...Array.from(e.dataTransfer.files)]);
-  };
+  const confirmCancelOther = useCallback(async () => {
+    if (!pendingConfirm) return;
+    const text = pendingConfirm.pendingText;
+    setPendingConfirm(null);
+    setInput('');
+    try {
+      await submit(text, { confirmCancel: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, [pendingConfirm, submit]);
 
-  const removeAttachment = (index: number) => {
-    setAttachments(prev => prev.filter((_, i) => i !== index));
-  };
+  if (!threadId) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-zinc-500 text-sm">Select a conversation, or use “+ New” in the tree to start one.</p>
+        </div>
+      </div>
+    );
+  }
 
-  const activeAgent = agentSlug ? agents?.find(a => a.slug === agentSlug) : undefined;
-  const activeAgentName = activeAgent?.name ?? agentSlug ?? '';
+  const visible = loadedMessages.concat(state.messages);
+  const streaming = state.streamingMessage;
+  const isRunning = state.isRunning;
+  const isEmpty = visible.length === 0 && !streaming;
 
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full">
-      {activeThreadId ? (
-        <>
-          {/* Who you're talking to */}
-          {activeAgentName && (
-            <div className="px-4 py-2 border-b border-zinc-800 flex items-center gap-3">
-              <span className="text-sm text-zinc-200 flex items-center gap-2 min-w-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
-                <span className="truncate">{activeAgentName}</span>
-                {activeAgent && (
-                  <span className="text-[10px] text-zinc-500 shrink-0 truncate">
-                    {activeAgent.provider} · {activeAgent.model || 'provider default'}
-                  </span>
-                )}
-              </span>
-            </div>
-          )}
+      <header className="px-4 py-2 border-b border-zinc-800 flex items-center gap-3">
+        <ModelSelector
+          models={models}
+          currentModelId={activeModelId}
+          onSelect={(p, id) => setModel(p, id)}
+        />
+        {activeModelId && (
+          <span className="text-[10px] text-zinc-500 truncate" data-testid="active-model-label">
+            {activeModelId}
+          </span>
+        )}
+      </header>
 
-          {/* Resume chip: the latest Claude Code session id for this thread.
-              Copy gives the exact `claude --resume <id>` command to pick the
-              conversation back up in a terminal if a turn stalls. */}
-          {sessionId && (
-            <div className="px-4 py-1.5 border-b border-zinc-800/50 flex items-center gap-2 text-[11px] text-zinc-500">
-              <span className="shrink-0">Claude session</span>
-              <code className="text-zinc-400 truncate font-mono" title={sessionId}>
-                {sessionId}
-              </code>
-              {/* Note: the osascript "Open terminal" button was removed now that
-                  Nexus has in-app terminal threads. The backend route
-                  (/api/threads/:id/open-terminal) and api.chat.openTerminal binding
-                  are intentionally retained in case we re-surface this affordance. */}
-              <button
-                onClick={() => {
-                  navigator.clipboard.writeText(`claude --resume ${sessionId}`);
-                  setSessionCopied(true);
-                  setTimeout(() => setSessionCopied(false), 1500);
-                }}
-                className="ml-auto shrink-0 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400 hover:text-white hover:border-zinc-500 transition-colors"
-                title="Copy `claude --resume <id>` to run in a terminal"
-              >
-                {sessionCopied ? 'Copied ✓' : 'Copy resume'}
-              </button>
-            </div>
-          )}
-
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
-            {messages.map((msg, idx) => {
-              if (msg.message_type === 'question' && msg.structured_json) {
-                const ask = JSON.parse(msg.structured_json) as Ask;
-                // A question is open only while it is the last message in the thread.
-                const isLast = idx === messages.length - 1;
-                const nextMsg = messages[idx + 1];
-                const answeredReplies = nextMsg && nextMsg.message_type === 'answer' && nextMsg.structured_json
-                  ? (JSON.parse(nextMsg.structured_json) as AnswerSet).replies
-                  : undefined;
-                return (
-                  <div key={msg.id} className="flex justify-start">
-                    <QuestionCard
-                      ask={ask}
-                      preamble={msg.content}
-                      threadId={activeThreadId}
-                      questionMessageId={msg.id}
-                      answered={!isLast}
-                      answeredReplies={answeredReplies}
-                      onAnswered={() => loadMessages(activeThreadId)}
-                    />
-                  </div>
-                );
-              }
-              // 'answer' messages are already shown highlighted within the
-              // preceding QuestionCard's read-only state — skip the echoed bubble.
-              if (msg.message_type === 'answer') return null;
-              return (
-                <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[72%] rounded-2xl px-4 py-2 text-sm ${msg.role === 'user' ? 'bg-indigo-500 text-ink' : 'bg-zinc-900 border border-zinc-800 text-zinc-200'}`}>
-                    {msg.attachments_json && msg.attachments_json !== '[]' && (
-                      <div className="flex flex-wrap gap-1 mb-2">
-                        {JSON.parse(msg.attachments_json).map((a: FileAttachment, i: number) => (
-                          <span key={i} className="text-xs bg-white/10 px-2 py-0.5 rounded truncate max-w-[200px]">
-                            📎 {a.original_name}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
-                  </div>
-                </div>
-              );
-            })}
-            {isTyping && (
-              <div className="flex justify-start">
-                <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-2 text-sm text-zinc-500">
-                  <span className="animate-pulse">Thinking...</span>
-                </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Drop zone & composer */}
-          <div className="border-t border-zinc-800 p-3 space-y-2">
-            {attachments.length > 0 && (
-              <div className="flex flex-wrap gap-1">
-                {attachments.map((a, i) => (
-                  <span key={i} className="flex items-center gap-1 text-xs bg-zinc-800/50 px-2 py-1 rounded text-zinc-200">
-                    📎 {a.name}
-                    <button onClick={() => removeAttachment(i)} className="text-zinc-500 hover:text-red-400 ml-1">✕</button>
-                  </span>
-                ))}
-              </div>
-            )}
-
-            <div
-              ref={dropZoneRef}
-              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-              onDragLeave={() => setDragOver(false)}
-              onDrop={handleDrop}
-              onClick={() => fileInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-lg px-4 py-3 text-center text-xs cursor-pointer transition-colors ${dragOver ? 'border-indigo-500 bg-indigo-500/10 text-white' : 'border-zinc-800 text-zinc-500 hover:border-indigo-500/50'}`}
-            >
-              {dragOver ? 'Drop files here' : 'Drop files here or click to attach'}
-              <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleFileSelect} />
-            </div>
-
-            <div className="flex gap-2">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type a message... (Enter to send, Shift+Enter for new line)"
-                rows={2}
-                className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600/50 resize-none focus:outline-none focus:border-indigo-500/50"
-              />
-              {isTyping && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try { await api.chat.abort(threadId); } catch { /* ignore */ }
-                  }}
-                  className="px-3 bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors self-end"
-                  title="Stop the current generation"
-                >
-                  <Stop className="w-5 h-5" weight="fill" />
-                </button>
-              )}
-              <button
-                onClick={handleSend}
-                disabled={(!input.trim() && attachments.length === 0) || isTyping}
-                className="px-4 bg-indigo-500 text-ink rounded-lg hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors self-end"
-              >
-                Send
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const res = await api.chat.export(threadId);
-                    if (res.ok) {
-                      alert(`Exported to ${res.path}`);
-                    }
-                  } catch (err) {
-                    console.error('Export failed:', err);
-                  }
-                }}
-                className="px-3 bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors self-end"
-                title="Export thread as JSONL"
-              >
-                Export
-              </button>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="flex-1 flex items-center justify-center">
-          <div className="text-center">
-            <p className="text-zinc-500 text-sm">Select a conversation, or use “+ New” in the tree to start one.</p>
-          </div>
+      {pendingConfirm && (
+        <div className="px-4 py-2 border-b border-amber-800/50 bg-amber-950/30 text-xs text-amber-200 flex items-center gap-3">
+          <span className="flex-1 min-w-0 truncate">
+            “{pendingConfirm.activeTitle}” is still running. Start a new chat anyway (will cancel it)?
+          </span>
+          <button
+            onClick={() => setPendingConfirm(null)}
+            className="px-2 py-0.5 rounded border border-zinc-700 text-zinc-300 hover:text-white"
+          >
+            Wait
+          </button>
+          <button
+            onClick={confirmCancelOther}
+            className="px-2 py-0.5 rounded border border-amber-700 bg-amber-800/50 text-amber-100 hover:bg-amber-700/50"
+          >
+            Start (cancel)
+          </button>
         </div>
       )}
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="chat-messages">
+        {isEmpty ? (
+          <p className="text-zinc-500 text-sm">Send a message to start.</p>
+        ) : (
+          visible.map((m) => <MessageBubble key={m.id} msg={m} detailsExpanded={detailsExpanded} />)
+        )}
+        {streaming && <MessageBubble msg={streaming} detailsExpanded={detailsExpanded} />}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {error && (
+        <div className="px-4 py-2 border-t border-zinc-800 text-xs text-red-300" role="alert">
+          {error}
+        </div>
+      )}
+
+      <div className="border-t border-zinc-800 p-3 flex gap-2 items-end">
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+          rows={2}
+          data-testid="chat-input"
+          className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600/50 resize-none focus:outline-none focus:border-indigo-500/50"
+        />
+        {isRunning ? (
+          <button
+            type="button"
+            onClick={handleAbort}
+            data-testid="abort-button"
+            className="px-3 py-2 bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors"
+            title="Stop the current generation"
+          >
+            <Stop className="w-5 h-5" weight="fill" />
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleSend}
+            data-testid="send-button"
+            disabled={!input.trim()}
+            className="px-4 py-2 bg-indigo-500 text-ink rounded-lg hover:bg-indigo-500 disabled:opacity-40 transition-colors"
+          >
+            Send
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsExpanded: boolean }) {
+  const isUser = msg.role === 'user';
+  const isTool = msg.role === 'toolResult';
+  return (
+    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+      <div
+        className={`max-w-[72%] rounded-2xl px-4 py-2 text-sm ${
+          isUser
+            ? 'bg-indigo-500 text-ink'
+            : isTool
+              ? 'bg-zinc-900/60 border border-zinc-800/50 text-zinc-400 text-xs'
+              : 'bg-zinc-900 border border-zinc-800 text-zinc-200'
+        }`}
+      >
+        {msg.thinking && (detailsExpanded || msg === undefined) && (
+          <details className="mb-2 text-xs text-zinc-400" open={detailsExpanded}>
+            <summary className="cursor-pointer text-zinc-500">Thinking</summary>
+            <pre className="mt-1 whitespace-pre-wrap font-sans">{msg.thinking}</pre>
+          </details>
+        )}
+        {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
+          <div className="mb-2">
+            <ToolCallTimeline toolCalls={msg.toolCalls as any} detailsExpanded={detailsExpanded} />
+          </div>
+        )}
+        {isTool ? (
+          <span>
+            <code className="text-zinc-500">{msg.toolName}</code>
+            {msg.isError ? ' (error)' : ''}
+          </span>
+        ) : (
+          <p className="whitespace-pre-wrap">{msg.content}</p>
+        )}
+      </div>
     </div>
   );
 }

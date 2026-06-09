@@ -3,10 +3,14 @@
  *
  * Opens ~/.nexus/nexus.db, enables WAL + foreign keys, and runs idempotent
  * CREATE TABLE statements plus guarded ALTER TABLE migrations for columns
- * added after a table's original creation. Tables: projects, tasks, personas,
+ * added after a table's original creation. Tables: projects, tasks,
  * schedules, chat_threads, chat_messages, agent_runs, tickets (a disposable
- * mirror of Jira tickets assigned to the user; Jira stays canonical). (Memory
- * lives in the standalone @nexus/memory-daemon, not here.)
+ * mirror of Jira tickets assigned to the user; Jira stays canonical).
+ * (Memory lives in the standalone @nexus/memory-daemon, not here.)
+ *
+ * Note: the legacy `personas` and `providers` tables are still referenced
+ * by some routes for one more release; they get dropped in the Phase 5
+ * migration alongside `chat_messages`.
  */
 import Database from 'better-sqlite3';
 
@@ -231,51 +235,11 @@ function runMigrations(db: Database.Database) {
   // recreated ones. Runs after the table is guaranteed to have the column.
   db.exec('CREATE INDEX IF NOT EXISTS idx_agent_runs_project ON agent_runs(project_id)');
 
-  // Provider curated-models + args migrations (for DBs created before this feature).
-  const provCols = db.pragma('table_info(providers)') as { name: string }[];
-  const provColNames = new Set(provCols.map(c => c.name));
-  const provMigrations: Array<[string, string]> = [
-    ['models', "ALTER TABLE providers ADD COLUMN models TEXT DEFAULT '[]'"],
-    ['args', 'ALTER TABLE providers ADD COLUMN args TEXT'],
-  ];
-  for (const [col, sql] of provMigrations) {
-    if (!provColNames.has(col)) {
-      db.exec(sql);
-    }
-  }
-
-  // Chat thread session-capture migration: store the resumable Claude Code
-  // session id so a hung/empty turn can be picked back up from a terminal.
-  const threadCols = db.pragma('table_info(chat_threads)') as { name: string }[];
-  if (!threadCols.some(c => c.name === 'agent_session_id')) {
-    db.exec('ALTER TABLE chat_threads ADD COLUMN agent_session_id TEXT');
-  }
-  if (!threadCols.some(c => c.name === 'mode')) {
-    db.exec("ALTER TABLE chat_threads ADD COLUMN mode TEXT NOT NULL DEFAULT 'chat'");
-  }
-  if (!threadCols.some(c => c.name === 'launch_command')) {
-    db.exec('ALTER TABLE chat_threads ADD COLUMN launch_command TEXT');
-  }
-
-  // Chat message structured-question migrations (DBs created before this feature).
-  const msgCols = db.pragma('table_info(chat_messages)') as { name: string }[];
-  const msgColNames = new Set(msgCols.map(c => c.name));
-  const msgMigrations: Array<[string, string]> = [
-    ['message_type', "ALTER TABLE chat_messages ADD COLUMN message_type TEXT NOT NULL DEFAULT 'text'"],
-    ['structured_json', 'ALTER TABLE chat_messages ADD COLUMN structured_json TEXT'],
-  ];
-  for (const [col, sql] of msgMigrations) {
-    if (!msgColNames.has(col)) {
-      db.exec(sql);
-    }
-  }
-
-  // Thinking + tool_calls migrations (for DBs created before Phase 1 chat UX).
-  const msgColNames2 = new Set((db.pragma('table_info(chat_messages)') as { name: string }[]).map(c => c.name));
-  if (!msgColNames2.has('thinking')) {
-    db.exec('ALTER TABLE chat_messages ADD COLUMN thinking TEXT');
-  }
-  if (!msgColNames2.has('tool_calls')) {
-    db.exec('ALTER TABLE chat_messages ADD COLUMN tool_calls TEXT');
+  // Task model picker — user-picked `provider/id` set by the orchestrator's
+  // "In Progress" model-picker flow. Tasks without a model_key sit idle
+  // until the picker runs.
+  const taskCols = db.pragma('table_info(tasks)') as { name: string }[];
+  if (!taskCols.some((c) => c.name === 'model_key')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN model_key TEXT');
   }
 }

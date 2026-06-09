@@ -3,23 +3,19 @@
  *
  * Boots a single Fastify process that hosts the HTTP API and starts three
  * background loops: the orchestrator (agent dispatch), the scheduler (cron),
- * and the Obsidian vault watcher. On first run it seeds default personas and
- * creates the ~/.nexus directory structure.
+ * and the Obsidian vault watcher.
  */
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import websocket from '@fastify/websocket';
-import Database from 'better-sqlite3';
-import yaml from 'js-yaml';
-import fs from 'fs';
-import path from 'path';
-import { v4 as uuid } from 'uuid';
+import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { getDb } from './db';
-import { loadConfig, getDbPath, getNexusDir } from './config';
+import { loadConfig, getDbPath } from './config';
 import { registerProjectRoutes } from './routes/projects';
 import { registerChatRoutes } from './routes/chat';
-import { registerPersonaRoutes } from './routes/personas';
 import { registerOrchestratorRoutes } from './routes/orchestrator';
 import { registerMemoryRoutes } from './routes/memory';
 import { registerScheduleRoutes } from './routes/schedules';
@@ -27,22 +23,45 @@ import { registerSettingsRoutes } from './routes/settings';
 import { registerStatusRoutes } from './routes/status';
 import { registerTicketRoutes } from './routes/tickets';
 import { registerNotificationRoutes } from './routes/notifications';
-import { registerProviderRoutes, seedProviders } from './routes/providers';
-import { registerPtyRoutes } from './routes/pty';
 import { registerAuthRoutes } from './routes/auth';
+import { registerPiRoutes } from './routes/pi';
 import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
 import { startJiraSync } from './jira/poll';
+import { PiRuntime } from './pi/runtime';
+import { ConcurrencyTracker } from './pi/concurrency';
+
+/**
+ * Run the one-shot migration to the new pi tree-format sessions.
+ * Idempotent (exits 0 immediately on user_version >= 100). A failure
+ * here is fatal — we don't want to boot on a half-migrated DB.
+ *
+ * The script lives in the repo root's `scripts/` dir; the backend
+ * workspace is at `<repo>/src/backend/`, so the script is at
+ * `<repo>/scripts/migrate-chats-to-zosma.cjs` (3 levels up from cwd).
+ */
+function maybeMigrate(): void {
+  const dbPath = getDbPath();
+  if (!existsSync(dbPath)) return; // fresh install
+  const result = spawnSync(
+    'node',
+    [join(process.cwd(), '..', '..', 'scripts', 'migrate-chats-to-zosma.cjs')],
+    { stdio: 'inherit' },
+  );
+  if (result.status !== 0) {
+    throw new Error('chat → pi session migration failed — see output above');
+  }
+}
 
 async function main() {
   const config = loadConfig();
+  maybeMigrate();
 
   const db = getDb(getDbPath());
-  seedPersonas(db);
-  seedProviders(db);
+  const pi = new PiRuntime();
   await initMemorySystem(db);
-  startOrchestrator(db);
+  startOrchestrator(db, pi);
   if (config.scheduler.enabled) {
     startScheduler(db);
   }
@@ -55,10 +74,11 @@ async function main() {
   await app.register(websocket);
 
   app.decorate('db', db);
+  app.decorate('pi', pi);
+  app.decorate('chatConcurrency', new ConcurrencyTracker());
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
-  app.register(registerPersonaRoutes);
   app.register(registerOrchestratorRoutes);
   app.register(registerMemoryRoutes);
   app.register(registerScheduleRoutes);
@@ -66,9 +86,8 @@ async function main() {
   app.register(registerStatusRoutes);
   app.register(registerTicketRoutes);
   app.register(registerNotificationRoutes);
-  app.register(registerProviderRoutes);
-  app.register(registerPtyRoutes);
   app.register(registerAuthRoutes);
+  app.register(registerPiRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
@@ -85,31 +104,6 @@ async function main() {
   } catch (err) {
     app.log.error(err);
     process.exit(1);
-  }
-}
-
-function seedPersonas(db: Database.Database) {
-  const personasDir = path.join(getNexusDir(), 'personas');
-  if (!fs.existsSync(personasDir)) return;
-
-  const files = fs.readdirSync(personasDir).filter(f => f.endsWith('.yaml'));
-  const existingSlugs = new Set(
-    (db.prepare('SELECT slug FROM personas').all() as { slug: string }[]).map(r => r.slug)
-  );
-
-  for (const file of files) {
-    const slug = file.replace('.yaml', '');
-    if (existingSlugs.has(slug)) continue;
-
-    try {
-      const raw = fs.readFileSync(path.join(personasDir, file), 'utf-8');
-      const config = yaml.load(raw) as any;
-      const now = new Date().toISOString();
-      db.prepare('INSERT OR IGNORE INTO personas (id, name, slug, config_yaml, created_at) VALUES (?, ?, ?, ?, ?)')
-        .run(uuid(), config.name, slug, raw, now);
-    } catch (err) {
-      console.error(`Failed to seed persona ${slug}:`, err);
-    }
   }
 }
 

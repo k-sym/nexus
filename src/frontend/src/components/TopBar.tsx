@@ -1,7 +1,7 @@
-import { Gauge, Ticket, Clock, ChartBar, UsersThree, Stack, Gear } from '@phosphor-icons/react';
+import { Gauge, Ticket, Clock, ChartBar, Gear } from '@phosphor-icons/react';
 
 export type GlobalView = 'dashboard' | 'tickets' | 'scheduler' | 'usage';
-export type ManageView = 'personas' | 'opencode-models' | 'settings';
+export type ManageView = 'settings';
 
 interface TopBarProps {
   view: string;
@@ -42,8 +42,6 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
 
       {/* Management group, right-aligned */}
       <div className="ml-auto flex items-center gap-1.5">
-        <button onClick={() => onSelectManage('personas')} className={item(view === 'personas')}><UsersThree size={16} /> Agents</button>
-        <button onClick={() => onSelectManage('opencode-models')} className={item(view === 'opencode-models')}><Stack size={16} /> Models</button>
         <button onClick={() => onSelectManage('settings')} className={item(view === 'settings')}><Gear size={16} /> Settings</button>
       </div>
     </header>
