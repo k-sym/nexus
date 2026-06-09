@@ -34,6 +34,7 @@ import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
 import { startScheduler } from './scheduler';
 import { startJiraSync } from './jira/poll';
+import { PiRuntime } from './pi/runtime';
 
 async function main() {
   const config = loadConfig();
@@ -55,6 +56,7 @@ async function main() {
   await app.register(websocket);
 
   app.decorate('db', db);
+  app.decorate('pi', new PiRuntime());
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);

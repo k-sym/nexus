@@ -10,13 +10,10 @@
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import {
   AuthStorage,
-  DefaultResourceLoader,
   ModelRegistry,
-  SessionManager,
-  SettingsManager,
-  type AgentSession,
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
 
@@ -100,6 +97,10 @@ export class PiRuntime {
   }
 
   private async createSession(threadId: string, cwd: string): Promise<AgentSession> {
+    // Dynamic import so the ESM-only pi package is loaded at call time
+    // (avoids top-level CJS resolution failures in tsx when the workspace
+    // doesn't set type:module).
+    const { SessionManager, SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
     const sessionManager = SessionManager.create(cwd, this.sessionDirFor(cwd), { id: threadId });
     const settingsManager = SettingsManager.inMemory();
     const resourceLoader = new DefaultResourceLoader({
