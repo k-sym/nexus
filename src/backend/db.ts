@@ -4,8 +4,8 @@
  * Opens ~/.nexus/nexus.db, enables WAL + foreign keys, and runs idempotent
  * CREATE TABLE statements plus guarded ALTER TABLE migrations for columns
  * added after a table's original creation. Tables: projects, tasks,
- * schedules, chat_threads, chat_messages, agent_runs, tickets (a disposable
- * mirror of Jira tickets assigned to the user; Jira stays canonical).
+ * chat_threads, chat_messages, agent_runs, tickets (a disposable mirror of
+ * Jira tickets assigned to the user; Jira stays canonical).
  * (Memory lives in the standalone @nexus/memory-daemon, not here.)
  *
  * Note: the legacy `personas` and `providers` tables are still referenced
@@ -56,25 +56,11 @@ function runMigrations(db: Database.Database) {
       created_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS schedules (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      name TEXT NOT NULL,
-      cron_expr TEXT NOT NULL,
-      task_template TEXT NOT NULL,
-      task_description TEXT DEFAULT '',
-      agent_id TEXT NOT NULL,
-      enabled INTEGER NOT NULL DEFAULT 1,
-      last_run TEXT,
-      next_run TEXT,
-      created_at TEXT NOT NULL
-    );
-
     CREATE TABLE IF NOT EXISTS chat_threads (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
       agent_id TEXT NOT NULL,
-      title TEXT NOT NULL DEFAULT 'New Chat',
+      title TEXT NOT NULL DEFAULT 'New Session',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       archived_at TEXT
@@ -162,20 +148,6 @@ function runMigrations(db: Database.Database) {
   const hasConfigJson = columns.some(c => c.name === 'config_json');
   if (!hasConfigJson) {
     db.exec('ALTER TABLE projects ADD COLUMN config_json TEXT DEFAULT \'{}\'');
-  }
-
-  // Schedule table migrations (for DBs created before scheduler support).
-  const schedCols = db.pragma('table_info(schedules)') as { name: string }[];
-  const schedColNames = new Set(schedCols.map(c => c.name));
-  const schedMigrations: Array<[string, string]> = [
-    ['project_id', "ALTER TABLE schedules ADD COLUMN project_id TEXT DEFAULT ''"],
-    ['task_description', "ALTER TABLE schedules ADD COLUMN task_description TEXT DEFAULT ''"],
-    ['next_run', 'ALTER TABLE schedules ADD COLUMN next_run TEXT'],
-  ];
-  for (const [col, sql] of schedMigrations) {
-    if (!schedColNames.has(col)) {
-      db.exec(sql);
-    }
   }
 
   // Agent run token-tracking migrations (for DBs created before token support).

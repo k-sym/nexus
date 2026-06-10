@@ -20,8 +20,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
   - [Personas](#personas)
   - [Orchestrator](#orchestrator)
   - [Memory](#memory)
-  - [Chat](#chat)
-  - [Scheduler](#scheduler)
+  - [Sessions](#sessions)
   - [Tickets (Jira mirror)](#tickets-jira-mirror)
   - [Mission Control](#mission-control)
 - [Model Routing](#model-routing)
@@ -43,13 +42,12 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Personas** | YAML-defined agent personalities that bind a provider + model + system prompt + tools. Assign different ones to coding, review, deploy, etc. |
 | **Multi-provider agents** | Spawns Claude Code / Codex / OpenCode as CLI subprocesses; calls OpenRouter and any local OpenAI-compatible server (omlx, LM Studio, llama.cpp, …) over HTTP. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
-| **Chat** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and 48-hour archival to Obsidian. |
-| **Scheduler** | Built-in cron for recurring tasks (daily digests, weekly reviews, etc.). |
+| **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and 48-hour archival to Obsidian. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
 | **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira sync that changed tickets, or a sync failure. Backed by a `notifications` table the frontend polls. |
-| **Mission Control** | A single dashboard aggregating daemon health, the agent roster with per-provider health, scheduler status, and an activity feed. |
+| **Mission Control** | A single dashboard aggregating daemon health, the agent roster with per-provider health, and an activity feed. |
 | **Token usage** | Per-run token tracking (exact for API providers, estimated for CLI) with a project-scoped Usage view. |
-| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, scheduler toggle, Jira sync. |
+| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, and Jira sync. |
 
 ---
 
@@ -60,14 +58,14 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 │                       Electron                           │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │               React Dashboard (Vite)                │ │
-│  │  Mission Control | Kanban | Chat | Scheduler |      │ │
+│  │  Mission Control | Kanban | Sessions | Tickets |    │ │
 │  │  Personas | Providers | Memory | Tickets | Usage    │ │
 │  └─────────────────────┬──────────────────────────────┘ │
 │                        │ HTTP (localhost:4173)           │
 │  ┌─────────────────────▼──────────────────────────────┐ │
 │  │               Node.js Backend (Fastify)             │ │
 │  │                                                      │ │
-│  │   Routes ── Orchestrator ── Scheduler ── MemClient  │ │
+│  │   Routes ── Orchestrator ── Jira Poll ── MemClient  │ │
 │  └──┬───────────┬──────────────┬──────────────┬───────┘ │
 │     │           │              │              │          │
 │  SQLite      Sub-agent     Memory client   HTTP models   │
@@ -85,14 +83,14 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 └─────────────────────────────────────────────────────────┘
 ```
 
-The backend runs the Fastify HTTP API, the orchestrator polling loop, and the scheduler loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/chats/providers/tickets; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Electron app for production.
+The backend runs the Fastify HTTP API, the orchestrator polling loop, and the Jira polling loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/providers/tickets; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Electron app for production.
 
 ### Packages
 
 | Path | Package | Role |
 |---|---|---|
 | `src/shared` | `@nexus/shared` | Shared TypeScript types and constants |
-| `src/backend` | `@nexus/backend` | Fastify API, orchestrator, scheduler |
+| `src/backend` | `@nexus/backend` | Fastify API, orchestrator, Jira polling |
 | `src/memory-daemon` | `@nexus/memory-daemon` | Standalone memory daemon (vault + index + retrieval), HTTP :4100 + MCP |
 | `src/frontend` | `@nexus/frontend` | React dashboard |
 | `electron` | `nexus-electron` | Electron shell that boots the services + loads the UI |
@@ -153,7 +151,7 @@ then opens your browser to http://localhost:5173.
 # Required for memory features; the backend degrades gracefully if it's down.
 npm run dev:daemon          # or: cd src/memory-daemon && npm start
 
-# Terminal 2 — backend (Fastify on :4173, orchestrator, scheduler)
+# Terminal 2 — backend (Fastify on :4173, orchestrator, Jira polling)
 npm run dev:backend         # or: cd src/backend && npm run dev   (tsx watch, live reload)
 
 # Terminal 3 — frontend (Vite on :5173)
@@ -337,10 +335,6 @@ memory:
     sentence_threshold: 0.05   # cross-encoder noise floor for sentence trimming
     token_budget: 1500         # cap on assembled recall context
 
-scheduler:
-  enabled: true
-  check_interval_seconds: 60
-
 jira:                            # native Jira ticket poll (Settings -> Jira). Token via JIRA_TOKEN env.
   enabled: false                 # off by default; poll runs only while the backend is up
   user: ""                       # Atlassian account email that owns the token
@@ -359,7 +353,7 @@ codex:
 
 chat:
   hot_storage_hours: 48          # archive chats older than this to Obsidian
-  archive_path: "Projects/{project_slug}/Chats"
+  archive_path: "Projects/{project_slug}/Sessions"
 ```
 
 Environment variables are interpolated with `${VAR}` syntax. Secrets are read from the environment, never written to `config.yaml`: the OpenRouter key from `OPENROUTER_API_KEY` (or `OPENROUTING_API_KEY`), the Jira API token from `JIRA_TOKEN`, and the Hermes key from `HERMES_API_KEY`.
@@ -465,9 +459,9 @@ Memory is served by the standalone **`@nexus/memory-daemon`** (`src/memory-daemo
 
 Namespaces: `nexus` (per project), `global`, plus external agent namespaces. See `src/memory-daemon/README.md` for the HTTP/MCP surface and ops.
 
-### Chat
+### Sessions
 
-Each project has a chat interface:
+Each project has a sessions interface:
 
 - Pick which persona/provider powers the conversation.
 - Drag-and-drop files onto the composer — they land in `project_docs/uploads/` and are referenced in context.
@@ -476,17 +470,6 @@ Each project has a chat interface:
 - **Live streaming**: replies stream in token-by-token (`POST /api/threads/:threadId/messages/stream`, NDJSON). This is provider-agnostic — Claude (`stream-json`), Codex (`--json`), OpenCode (`--format json`), and HTTP providers (OpenAI SSE) each go through a normalizing adapter, so you see the agent working rather than a blank wait. The non-streaming `POST .../messages` remains for non-UI callers. Claude Code turns are bounded by an **idle** timeout (no streamed activity), not a wall-clock cap — see `claude_code.idle_timeout_seconds`.
 - **Claude session capture & resume**: Claude Code turns run with `--output-format stream-json` under a self-assigned `--session-id`, so Nexus captures the resumable session id per thread (surfaced live the moment a turn starts). A chip under the chat header lets you **copy** `claude --resume <id>` or **open a macOS Terminal** already resumed into that session — useful if a turn stalls. In-app turns also continue the same session (`--resume`), so the thread is one continuous conversation shared with the terminal. (One writer at a time — hand off, don't drive both at once.)
 - Conversations older than **48 hours** are auto-archived as markdown to the Obsidian vault, then purged from the hot SQLite store.
-
-### Scheduler
-
-A built-in cron engine (checks every 60s) for recurring work:
-
-- Standard 5-field cron expressions (`minute hour day-of-month month day-of-week`) with support for `*`, lists, ranges, and steps.
-- When a schedule is due, it creates a task directly in **In Progress** so the orchestrator picks it up.
-- Defaults new tasks to the **Cron Runner** (local model) persona, configurable per schedule.
-- Manage schedules from the Scheduler tab: presets, enable/disable, next/last run times.
-
-Example: *"Every weekday at 9 AM, generate a standup digest for this project."* → `0 9 * * 1-5`.
 
 ### Tickets (Jira mirror)
 
@@ -516,7 +499,6 @@ The landing dashboard. A single `GET /api/mission-control` call aggregates:
 
 - **Memory daemon health** (reachability + the local model stack's status),
 - **Agent roster** — every persona with a per-provider health probe,
-- **Scheduler status** — enabled, schedule count, last/next run,
 - **Activity feed** — running and recent agent runs.
 
 ---
@@ -574,7 +556,7 @@ Base URL: `http://127.0.0.1:4173`
 | POST | `/api/personas` | Create/update (writes YAML) |
 | DELETE | `/api/personas/:slug` | Delete |
 
-### Chat
+### Sessions
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/projects/:projectId/threads` | List active threads |
@@ -595,14 +577,6 @@ Base URL: `http://127.0.0.1:4173`
 | POST | `/api/projects/:projectId/memories` | Add a memory |
 | PUT | `/api/memories/:id` | Update content |
 | DELETE | `/api/memories/:id` | Delete |
-
-### Scheduler
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/projects/:projectId/schedules` | List schedules |
-| POST | `/api/projects/:projectId/schedules` | Create (validates cron) |
-| PUT | `/api/schedules/:id` | Update / enable / disable |
-| DELETE | `/api/schedules/:id` | Delete |
 
 ### Tickets (Jira mirror)
 | Method | Path | Description |
@@ -626,7 +600,7 @@ Base URL: `http://127.0.0.1:4173`
 ### Mission Control
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/mission-control` | Aggregated dashboard: daemon health, agent roster + provider health, scheduler, activity |
+| GET | `/api/mission-control` | Aggregated dashboard: daemon health, agent roster + provider health, activity |
 
 ### Settings
 | Method | Path | Description |
@@ -663,7 +637,6 @@ nexus/
 │   │   │   ├── personas.ts
 │   │   │   ├── providers.ts
 │   │   │   ├── memory.ts
-│   │   │   ├── schedules.ts
 │   │   │   ├── tickets.ts       # Jira mirror + /jira/sync
 │   │   │   ├── notifications.ts # in-app notifications API
 │   │   │   ├── status.ts        # /mission-control
@@ -674,9 +647,6 @@ nexus/
 │   │   │   └── context.ts       # Prompt builder + memory injection
 │   │   ├── memory/
 │   │   │   └── client.ts        # thin HTTP client to @nexus/memory-daemon (:4100)
-│   │   ├── scheduler/
-│   │   │   ├── index.ts         # Scheduler loop
-│   │   │   └── cron.ts          # Cron parser + next-run calc
 │   │   ├── jira/
 │   │   │   ├── client.ts        # Jira REST client (fetch + map)
 │   │   │   └── poll.ts          # native ticket poll (runs while the app is up)
@@ -693,7 +663,7 @@ nexus/
 │           ├── App.tsx
 │           ├── api.ts           # Typed API client
 │           └── components/      # MissionControl, KanbanBoard, ChatPanel,
-│                                # ProvidersSettings, PersonasPage, SchedulerPage,
+│                                # ProvidersSettings, PersonasPage,
 │                                # MemoryView, TicketsView, UsagePage, QuestionCard, …
 ```
 
@@ -726,7 +696,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 
 ### Tables
 
-`projects`, `tasks`, `personas`, `providers`, `schedules`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`.
+`projects`, `tasks`, `personas`, `providers`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`.
 
 (There is no `memories` table — memory lives in the daemon's own index, not `nexus.db`.)
 
@@ -736,7 +706,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 
 | Symptom | Fix |
 |---|---|
-| Chat replies "Config needed" | Set `OPENROUTER_API_KEY` in your environment and restart the backend. |
+| Session replies "Config needed" | Set `OPENROUTER_API_KEY` in your environment and restart the backend. |
 | `no such column` SQLite error | An old DB predates a schema change. Migrations handle most cases; if needed, delete `~/.nexus/nexus.db*` and restart. |
 | `ERR_DLOPEN_FAILED` / `better_sqlite3.node was compiled against a different Node.js version (NODE_MODULE_VERSION)` at backend/daemon boot | `better-sqlite3` was rebuilt for the wrong ABI (usually Electron's instead of system Node's). The `predev`/`prestart` guard (`scripts/ensure-sqlite-abi.cjs`) auto-rebuilds it on the next `npm run web`/`dev`. To fix by hand: `npm rebuild better-sqlite3` (backend) and `npm rebuild better-sqlite3 --prefix src/memory-daemon` (daemon). |
 | Claude Code task fails instantly | Ensure the `claude` CLI is installed and on your `PATH`. Check `~/.nexus/workspaces/<slug>/outputs/<task-id>.log`. |

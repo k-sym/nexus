@@ -14,6 +14,7 @@ interface SidebarProps {
   subView: SubView;
   activeThreadId: string | null;
   threads: ThreadMeta[];
+  activeSessionIds: Set<string>;
   onSelectProject: (id: string) => void;
   onSelectSubView: (projectId: string, sub: SubView) => void;
   onSelectThread: (projectId: string, threadId: string) => void;
@@ -43,7 +44,7 @@ function Row({ active, depth, onClick, icon, children, tintColor, trailing }: {
 }
 
 export default function Sidebar({
-  projects, activeProjectId, subView, activeThreadId, threads,
+  projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onDeleteThread, onNewChat, onNewProject,
 }: SidebarProps) {
   const [openProjectId, setOpenProjectId] = useState<string | null>(activeProjectId);
@@ -72,7 +73,7 @@ export default function Sidebar({
       {projects.map((project) => {
         const open = openProjectId === project.id;
         const isActiveProject = project.id === activeProjectId;
-        const chatExpanded = chatOpen[project.id] ?? false;
+        const chatExpanded = chatOpen[project.id] ?? (isActiveProject && subView === 'chat');
         return (
           <div key={project.id}>
             <Row
@@ -118,7 +119,7 @@ export default function Sidebar({
                     )
                   }
                 >
-                  Chat
+                  Sessions
                 </Row>
 
                 {chatExpanded && (
@@ -129,11 +130,12 @@ export default function Sidebar({
                       onClick={() => onNewChat(project.id)}
                       icon={<Plus size={14} />}
                     >
-                      <span className="text-indigo-400">New</span>
+                      <span className="text-indigo-400">New Session</span>
                     </Row>
                     {isActiveProject &&
                       threads.map(({ thread }) => {
                         const isRenaming = renamingId === thread.id;
+                        const isActiveSession = activeSessionIds.has(thread.id);
                         return (
                           <Row
                             key={thread.id}
@@ -144,6 +146,12 @@ export default function Sidebar({
                             }}
                             trailing={
                               <span className="flex items-center gap-1 shrink-0">
+                                {isActiveSession && (
+                                  <span
+                                    title="Session active"
+                                    className="inline-block h-3.5 w-3.5 rounded-full border-2 border-zinc-500 border-t-zinc-200 animate-spin"
+                                  />
+                                )}
                                 <span className="hidden group-hover:flex items-center gap-1">
                                   <span
                                     role="button"
@@ -162,7 +170,7 @@ export default function Sidebar({
                                     className="text-zinc-500 hover:text-red-400"
                                     onClick={(ev) => {
                                       ev.stopPropagation();
-                                      if (window.confirm('Delete this chat? This cannot be undone.')) onDeleteThread(thread.id);
+                                      if (window.confirm('Delete this session? This cannot be undone.')) onDeleteThread(thread.id);
                                     }}
                                   >
                                     <Trash size={13} />
@@ -191,7 +199,7 @@ export default function Sidebar({
                         );
                       })}
                     {isActiveProject && threads.length === 0 && (
-                      <div className="pl-12 py-1.5 text-xs text-zinc-600">No conversations</div>
+                      <div className="pl-12 py-1.5 text-xs text-zinc-600">No sessions</div>
                     )}
                   </>
                 )}

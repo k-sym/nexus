@@ -2,21 +2,18 @@
  * Mission Control status endpoint.
  *
  * Aggregates the project-less, cross-cutting signals for the Mission Control
- * landing view: memory-daemon health, scheduler heartbeat, the pi runtime's
- * available models (with per-provider auth health), and recent agent
- * activity. The legacy "persona roster" surface is gone — the model
- * registry is the new ground truth.
+ * landing view: memory-daemon health, the pi runtime's available models
+ * (with per-provider auth health), and recent agent activity. The legacy
+ * "persona roster" surface is gone — the model registry is the new ground
+ * truth.
  */
 import { FastifyInstance } from 'fastify';
-import { loadConfig } from '../config';
 import { daemon } from '../memory/client';
 
 export async function registerStatusRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
 
   fastify.get('/api/mission-control', async () => {
-    const config = loadConfig();
-
     // Memory daemon health (degrades gracefully if unreachable).
     let memory: Record<string, unknown>;
     try {
@@ -24,21 +21,6 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
     } catch (err: any) {
       memory = { ok: false, error: err.message };
     }
-
-    // Scheduler / heartbeat — derived from the schedules table (no in-memory tick).
-    const sched = db
-      .prepare(
-        `SELECT COUNT(*) as schedules, MAX(last_run) as lastRun, MIN(next_run) as nextRun
-         FROM schedules WHERE enabled = 1`,
-      )
-      .get() as { schedules: number; lastRun: string | null; nextRun: string | null };
-    const scheduler = {
-      enabled: config.scheduler.enabled,
-      intervalSeconds: config.scheduler.check_interval_seconds,
-      schedules: sched.schedules ?? 0,
-      lastRun: sched.lastRun ?? null,
-      nextRun: sched.nextRun ?? null,
-    };
 
     // Available models with per-provider credential health. The pi
     // runtime's ModelRegistry has the curated list and knows which
@@ -74,6 +56,6 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
       )
       .all();
 
-    return { memory, scheduler, models, activity: { running, recent } };
+    return { memory, models, activity: { running, recent } };
   });
 }
