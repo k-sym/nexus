@@ -8,7 +8,7 @@
  * manual callback input when a provider asks for it.
  */
 import { FastifyInstance } from 'fastify';
-import { getModelCatalog } from './pi';
+import { buildModelCatalog } from './pi';
 
 interface AuthProvider {
   id: string;
@@ -70,7 +70,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
     if (status.state === 'complete') {
       fastify.pi.auth.reload();
       fastify.pi.models.refresh();
-      fastify.modelCuration.markOAuthProviderSynced(status.provider, getModelCatalog(fastify));
+      fastify.modelCuration.markOAuthProviderSynced(status.provider, buildModelCatalog(fastify));
     }
     return status;
   });

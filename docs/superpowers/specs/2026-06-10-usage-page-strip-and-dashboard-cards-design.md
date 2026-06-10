@@ -58,7 +58,7 @@ Stop tracking tokens in our own database (let codexbar own that), remove the ded
   - **Claude Stats** — value `—`, caption `codexbar session · 5h rolling`. Once codexbar lands: session-remaining and reset window.
   - **Codex Stats** — value `—`, caption `codexbar session · weekly`. Once codexbar lands: session-remaining and reset window.
   - **OpenRouter Stats** — value `—`, caption `codexbar credit balance`. Once codexbar lands: credit balance in USD.
-- Remove the "Tokens" column header and cell from the Recent activity grid (lines ~104-105 and ~115). Remove the ` · {r.total_tokens} tok` suffix from the running-recent rows (line ~147). Remove the now-unused `fmtTokens` import / function.
+- Remove the ` · {r.total_tokens} tok` suffix from the recent activity rows (line ~147). MissionControl uses a single-line flex layout for the Recent activity list (not a grid), so there is no Tokens column header to remove — only the inline suffix. Remove the now-unused `fmtTokens` import / function.
 
 ### New tests
 

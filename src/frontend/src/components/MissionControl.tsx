@@ -109,7 +109,7 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
                 {configuredModels}/{totalModels}
               </div>
               <div className="text-xs text-muted mt-1">
-                pi runtime models · auth-configured
+                curated models · auth-configured
               </div>
             </Card>
           </div>
