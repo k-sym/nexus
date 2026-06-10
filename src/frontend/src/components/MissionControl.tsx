@@ -114,18 +114,6 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
             </Card>
           </div>
 
-          {/* Agent roster — now a model list. Each row shows provider,
-              id, and whether auth is configured. */}
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Models</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {(status.models ?? []).map((m) => (
-                <ModelCard key={`${m.provider}/${m.id}`} m={m} onClick={() => onSelectAgent(m.id)} />
-              ))}
-              {(status.models ?? []).length === 0 && <div className="text-sm text-faint">No models available.</div>}
-            </div>
-          </div>
-
           {/* Stats — placeholder cards. Populated by the future codexbar
               integration (Claude/Codex session-remaining + OpenRouter
               credit balance). For now each card shows an em-dash. */}
@@ -144,6 +132,18 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
                 <div className="text-2xl font-semibold text-faint">—</div>
                 <div className="text-xs text-muted mt-1">codexbar credit balance</div>
               </Card>
+            </div>
+          </div>
+
+          {/* Agent roster — now a model list. Each row shows provider,
+              id, and whether auth is configured. */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Models</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {(status.models ?? []).map((m) => (
+                <ModelCard key={`${m.provider}/${m.id}`} m={m} onClick={() => onSelectAgent(m.id)} />
+              ))}
+              {(status.models ?? []).length === 0 && <div className="text-sm text-faint">No models available.</div>}
             </div>
           </div>
 

@@ -26,6 +26,22 @@ describe('MissionControl', () => {
     expect(screen.getByText('codexbar credit balance')).toBeInTheDocument();
   });
 
+  it('renders the Stats section above the Models section', () => {
+    render(
+      <MissionControl
+        status={status as any}
+        loading={false}
+        onRefresh={() => {}}
+        onSelectAgent={() => {}}
+      />,
+    );
+    const stats = screen.getByText('Stats');
+    // The status strip has a "Models" Card before the Models section, so
+    // grab the LAST "Models" element (the section header) for the order check.
+    const modelsSection = screen.getAllByText('Models').pop()!;
+    expect(stats.compareDocumentPosition(modelsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('does not show token data in the recent activity rows', () => {
     render(
       <MissionControl
