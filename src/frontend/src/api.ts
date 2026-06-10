@@ -85,9 +85,6 @@ export const api = {
     deleteThread: (threadId: string) => fetchJson<void>(`/api/threads/${threadId}`, { method: 'DELETE' }),
   },
   agents: {
-    status: () => fetchJson<any>(`/api/agents/status`),
-    runs: (taskId: string) => fetchJson<any[]>(`/api/agents/runs/${taskId}`),
-    usage: (projectId?: string) => fetchJson<any>(`/api/agents/usage${projectId ? `?projectId=${projectId}` : ''}`),
     // Sets a model on a task and moves it to in_progress; the orchestrator
     // picks it up on the next poll tick and dispatches headlessly.
     startTask: (taskId: string, modelKey: string) =>

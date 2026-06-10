@@ -14,8 +14,7 @@ export async function registerOrchestratorRoutes(fastify: FastifyInstance) {
 
     const recent = db.prepare(
       `SELECT ar.id, ar.task_id, t.title as task_title, ar.status,
-              ar.provider, ar.model,
-              ar.prompt_tokens, ar.completion_tokens, ar.total_tokens, ar.duration_ms,
+              ar.provider, ar.model, ar.duration_ms,
               ar.started_at, ar.completed_at
        FROM agent_runs ar
        JOIN tasks t ON t.id = ar.task_id
@@ -61,40 +60,5 @@ export async function registerOrchestratorRoutes(fastify: FastifyInstance) {
       taskId,
     );
     return { ok: true };
-  });
-
-  // Aggregate token usage stats, optionally scoped to a project.
-  fastify.get('/api/agents/usage', async (request) => {
-    const { projectId } = request.query as { projectId?: string };
-
-    // Scope to a project across BOTH chat runs (project_id set, task_id NULL) and
-    // task runs (scoped via their task). No tasks JOIN — that would drop chat runs.
-    const scope = projectId
-      ? '(ar.project_id = ? OR ar.task_id IN (SELECT id FROM tasks WHERE project_id = ?))'
-      : '';
-    const params = projectId ? [projectId, projectId] : [];
-
-    const totals = db.prepare(
-      `SELECT
-         COUNT(*) as runs,
-         COALESCE(SUM(ar.prompt_tokens), 0) as prompt_tokens,
-         COALESCE(SUM(ar.completion_tokens), 0) as completion_tokens,
-         COALESCE(SUM(ar.total_tokens), 0) as total_tokens,
-         COALESCE(SUM(ar.duration_ms), 0) as duration_ms
-       FROM agent_runs ar ${scope ? 'WHERE ' + scope : ''}`
-    ).get(...params) as any;
-
-    const byProvider = db.prepare(
-      `SELECT
-         ar.provider,
-         COUNT(*) as runs,
-         COALESCE(SUM(ar.total_tokens), 0) as total_tokens
-       FROM agent_runs ar
-       WHERE ar.provider IS NOT NULL${scope ? ' AND ' + scope : ''}
-       GROUP BY ar.provider
-       ORDER BY total_tokens DESC`
-    ).all(...params);
-
-    return { totals, byProvider };
   });
 }

@@ -1,6 +1,6 @@
 import type { PiRuntime } from './runtime';
 import type { ModelCurationStore } from './model-curation';
-import { getModelCatalog } from '../routes/pi';
+import { buildModelCatalog } from '../routes/pi';
 
 const OAUTH_MODEL_PROVIDERS = ['anthropic', 'openai-codex'] as const;
 
@@ -20,7 +20,7 @@ export function backfillOAuthCuratedModels(
   if (providers.length === 0) return;
 
   pi.models.refresh();
-  const catalog = getModelCatalog({ pi } as any);
+  const catalog = buildModelCatalog({ pi } as any);
   for (const provider of providers) {
     modelCuration.markOAuthProviderSynced(provider, catalog, { excludedProviders: providers });
   }

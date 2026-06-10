@@ -12,13 +12,12 @@ import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
-import UsagePage from './components/UsagePage';
 import ProjectModal from './components/ProjectModal';
 import TaskModal from './components/TaskModal';
 import { OrchestratorModelPicker } from './components/OrchestratorModelPicker';
 import MemoryRail from './components/MemoryRail';
 
-type GlobalView = 'dashboard' | 'tickets' | 'usage' | 'settings';
+type GlobalView = 'dashboard' | 'tickets' | 'settings';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -245,7 +244,6 @@ export default function App() {
     const cmds: Command[] = [
       { id: 'view-dashboard', label: 'Dashboard', hint: 'View', keywords: 'mission control', run: () => selectGlobal('dashboard') },
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
-      { id: 'view-usage', label: 'Usage', hint: 'View', keywords: 'tokens', run: () => selectGlobal('usage') },
     ];
     (['kanban', 'memory', 'chat'] as const).forEach((sub) => {
       const label = sub === 'chat' ? 'Sessions' : sub.charAt(0).toUpperCase() + sub.slice(1);
@@ -268,7 +266,6 @@ export default function App() {
       return <MissionControl status={status} loading={statusLoading} onRefresh={loadStatus} onSelectAgent={() => {}} />;
     if (globalView === 'tickets')
       return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
-    if (globalView === 'usage') return <UsagePage projectId={activeProjectId ?? undefined} />;
 
     if (!activeProject) {
       return (

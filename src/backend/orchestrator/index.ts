@@ -242,7 +242,7 @@ function completeAgentRun(
     `UPDATE agent_runs SET
        status = ?, output = ?, error = ?, completed_at = ?,
        provider = ?, model = ?,
-       prompt_tokens = ?, completion_tokens = ?, total_tokens = ?, duration_ms = ?
+       duration_ms = ?
      WHERE id = ?`,
   ).run(
     status,
@@ -251,9 +251,6 @@ function completeAgentRun(
     now,
     meta.provider || null,
     meta.model || null,
-    0,
-    0,
-    0,
     meta.durationMs || 0,
     runId,
   );

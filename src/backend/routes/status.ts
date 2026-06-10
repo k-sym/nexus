@@ -2,13 +2,14 @@
  * Mission Control status endpoint.
  *
  * Aggregates the project-less, cross-cutting signals for the Mission Control
- * landing view: memory-daemon health, the pi runtime's available models
- * (with per-provider auth health), and recent agent activity. The legacy
- * "persona roster" surface is gone — the model registry is the new ground
- * truth.
+ * landing view: memory-daemon health, the user's curated list of pi runtime
+ * models (with per-provider auth health), and recent agent activity. The
+ * legacy "persona roster" surface is gone — the model registry is the new
+ * ground truth, filtered by the user's curation choices.
  */
 import { FastifyInstance } from 'fastify';
 import { daemon } from '../memory/client';
+import { buildModelCatalog } from './pi';
 
 export async function registerStatusRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -22,22 +23,11 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
       memory = { ok: false, error: err.message };
     }
 
-    // Available models with per-provider credential health. The pi
-    // runtime's ModelRegistry has the curated list and knows which
-    // providers have auth configured (so we can mark the rest
-    // "unconfigured").
-    const all = fastify.pi.models.getAll();
-    const available = fastify.pi.models.getAvailable();
-    const configuredIds = new Set(available.map((m) => `${m.provider}/${m.id}`));
-    const models = all.map((m) => ({
-      provider: m.provider,
-      id: m.id,
-      name: m.name,
-      reasoning: m.reasoning,
-      contextWindow: m.contextWindow,
-      maxTokens: m.maxTokens,
-      configured: configuredIds.has(`${m.provider}/${m.id}`),
-    }));
+    // Curated models with per-provider credential health. We use the
+    // same catalog + curation filter as /api/models so the dashboard
+    // never shows models the user has explicitly disabled (and defaults
+    // to auth-configured models when no curation has been saved yet).
+    const models = fastify.modelCuration.apply(buildModelCatalog(fastify)).models;
 
     // Recent activity across all projects.
     const running = db
@@ -50,7 +40,7 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
     const recent = db
       .prepare(
         `SELECT ar.id, ar.task_id, t.title as task_title, ar.status, ar.provider, ar.model,
-                ar.total_tokens, ar.duration_ms, ar.started_at, ar.completed_at
+                ar.duration_ms, ar.started_at, ar.completed_at
          FROM agent_runs ar JOIN tasks t ON t.id = ar.task_id
          ORDER BY ar.started_at DESC LIMIT 10`,
       )

@@ -8,7 +8,7 @@
 import { FastifyInstance } from 'fastify';
 import type { AppliedModelCuration } from '../pi/model-curation';
 
-export function getModelCatalog(fastify: FastifyInstance) {
+export function buildModelCatalog(fastify: FastifyInstance) {
   const all = fastify.pi.models.getAll();
   const available = fastify.pi.models.getAvailable();
   const configuredKeys = new Set(available.map((m) => `${m.provider}/${m.id}`));
@@ -34,7 +34,7 @@ function toModelsResponse(applied: AppliedModelCuration) {
 
 export async function registerPiRoutes(fastify: FastifyInstance) {
   fastify.get('/api/models', async () => {
-    return toModelsResponse(fastify.modelCuration.apply(getModelCatalog(fastify)));
+    return toModelsResponse(fastify.modelCuration.apply(buildModelCatalog(fastify)));
   });
 
   fastify.put('/api/models/curation', async (request, reply) => {
@@ -47,7 +47,7 @@ export async function registerPiRoutes(fastify: FastifyInstance) {
     const known = new Set(all.map((m) => `${m.provider}/${m.id}`));
     const enabled = body.enabledModelKeys.filter((key): key is string => typeof key === 'string' && known.has(key));
     fastify.modelCuration.save(enabled);
-    return toModelsResponse(fastify.modelCuration.apply(getModelCatalog(fastify)));
+    return toModelsResponse(fastify.modelCuration.apply(buildModelCatalog(fastify)));
   });
 
   /**
