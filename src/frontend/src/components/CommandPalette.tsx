@@ -65,11 +65,11 @@ export default function CommandPalette({ open, commands, onClose }: CommandPalet
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 pt-[12vh]"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-[12vh] backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="w-full max-w-xl bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl overflow-hidden"
+        className="w-full max-w-xl surface-glass border border-strong rounded-xl overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         <input
@@ -78,11 +78,11 @@ export default function CommandPalette({ open, commands, onClose }: CommandPalet
           onChange={e => { setQuery(e.target.value); setActive(0); }}
           onKeyDown={onKeyDown}
           placeholder="Jump to a project, view, or agent — or run an action…"
-          className="w-full bg-transparent px-4 py-3 text-sm text-zinc-100 placeholder:text-zinc-500 border-b border-zinc-800 focus:outline-none"
+          className="w-full bg-transparent px-4 py-3 text-sm text-primary placeholder:text-faint border-b border-subtle focus:outline-none"
         />
         <div ref={listRef} className="max-h-80 overflow-y-auto py-1">
           {filtered.length === 0 && (
-            <div className="px-4 py-6 text-sm text-zinc-600 text-center">No matches.</div>
+            <div className="px-4 py-6 text-sm text-faint text-center">No matches.</div>
           )}
           {filtered.map((c, i) => (
             <button
@@ -91,15 +91,15 @@ export default function CommandPalette({ open, commands, onClose }: CommandPalet
               onMouseMove={() => setActive(i)}
               onClick={() => run(i)}
               className={`w-full flex items-center justify-between gap-3 px-4 py-2 text-sm text-left transition-colors ${
-                i === active ? 'bg-indigo-500/20 text-white' : 'text-zinc-300 hover:bg-zinc-800/40'
+                i === active ? 'surface-active text-primary' : 'text-muted hover:bg-[var(--surface-hover)]'
               }`}
             >
               <span className="truncate">{c.label}</span>
-              {c.hint && <span className="shrink-0 text-[10px] uppercase tracking-wider text-zinc-500">{c.hint}</span>}
+              {c.hint && <span className="shrink-0 text-[10px] uppercase tracking-wider text-faint">{c.hint}</span>}
             </button>
           ))}
         </div>
-        <div className="flex items-center gap-3 px-4 py-2 border-t border-zinc-800 text-[10px] text-zinc-600">
+        <div className="flex items-center gap-3 px-4 py-2 border-t border-subtle text-[10px] text-faint">
           <span>↑↓ navigate</span><span>⏎ select</span><span>esc close</span>
         </div>
       </div>

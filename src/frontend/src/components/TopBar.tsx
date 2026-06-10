@@ -12,7 +12,7 @@ interface TopBarProps {
 
 const item = (active: boolean) =>
   `shrink-0 flex items-center gap-1.5 px-3 py-1 text-sm rounded-md transition-colors whitespace-nowrap ${
-    active ? 'bg-indigo-500 text-ink' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/50'
+    active ? 'surface-active accent-text' : 'text-muted hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
   }`;
 
 export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPalette }: TopBarProps) {
@@ -26,13 +26,13 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
   const chrome = `${isElectron ? ' titlebar-drag' : ''}${isElectron && isMac ? ' mac-traffic-lights' : ''}`;
 
   return (
-    <header className={`h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-zinc-800 bg-zinc-900${chrome}`}>
+    <header className={`h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-subtle surface-glass${chrome}`}>
       <div className="flex items-center gap-2 pr-1">
-        <div className="w-6 h-6 rounded bg-indigo-500 flex items-center justify-center text-ink text-[11px] font-bold">N</div>
+        <div className="w-6 h-6 rounded accent-button flex items-center justify-center text-[11px] font-bold">N</div>
         <span className="font-semibold text-sm tracking-wide hidden md:inline">NEXUS</span>
       </div>
-      <button onClick={onOpenPalette} title="Command palette" className="shrink-0 px-2 py-1 text-xs text-zinc-500 hover:text-zinc-200 border border-zinc-800 rounded-md hover:border-zinc-700 transition-colors">⌘K</button>
-      <div className="w-px h-5 bg-zinc-800 mx-1 shrink-0" />
+      <button onClick={onOpenPalette} title="Command palette" className="shrink-0 px-2 py-1 text-xs text-faint hover:text-[var(--text-primary)] border border-subtle rounded-md hover:border-[var(--border-strong)] transition-colors">⌘K</button>
+      <div className="w-px h-5 bg-[var(--border-subtle)] mx-1 shrink-0" />
 
       {/* Global / cross-project links */}
       <button onClick={() => onSelectGlobal('dashboard')} className={item(view === 'dashboard')}><Gauge size={16} weight={view === 'dashboard' ? 'fill' : 'regular'} /> Dashboard</button>

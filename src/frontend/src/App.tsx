@@ -274,14 +274,14 @@ export default function App() {
       return (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
-            <h2 className="text-xl font-semibold text-zinc-400 mb-2">No project selected</h2>
-            <p className="text-zinc-500 text-sm mb-4">
+            <h2 className="text-xl font-semibold text-muted mb-2">No project selected</h2>
+            <p className="text-faint text-sm mb-4">
               {projects.length === 0 ? 'Create your first project to get started' : 'Pick a project from the tree'}
             </p>
             {projects.length === 0 && (
               <button
                 onClick={() => setShowProjectModal(true)}
-                className="px-6 py-2 bg-indigo-500 text-ink rounded-lg hover:bg-indigo-600 transition-colors"
+                className="px-6 py-2 accent-button rounded-lg transition-colors"
               >
                 New Project
               </button>
@@ -295,12 +295,12 @@ export default function App() {
 
     return (
       <>
-        <header className="flex items-center justify-between px-6 py-3 border-b border-zinc-800 bg-zinc-900 shrink-0">
+        <header className="surface-glass flex items-center justify-between px-6 py-3 border-b border-subtle shrink-0">
           <div>
             <h1 className="text-lg font-semibold">{activeProject.name}</h1>
-            <p className="text-xs text-zinc-500">{activeProject.repo_path}</p>
+            <p className="text-xs text-faint">{activeProject.repo_path}</p>
           </div>
-          <span className="text-xs text-zinc-500 uppercase tracking-wider">{viewLabel}</span>
+          <span className="text-xs text-faint uppercase tracking-wider">{viewLabel}</span>
         </header>
 
         <div className="flex-1 overflow-hidden">
@@ -340,7 +340,7 @@ export default function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden">
+    <div className="surface-canvas flex flex-col h-screen w-screen overflow-hidden">
       <TopBar
         view={globalView ?? ''}
         onSelectGlobal={selectGlobal}

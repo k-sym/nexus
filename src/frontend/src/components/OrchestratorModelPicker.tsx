@@ -24,18 +24,18 @@ export function OrchestratorModelPicker({ open, onPick, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
       data-testid="orchestrator-picker"
       onClick={onClose}
     >
       <div
-        className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 w-96 space-y-4"
+        className="surface-glass border border-subtle rounded-lg p-5 w-96 space-y-4"
         onClick={(e) => e.stopPropagation()}
       >
         <div>
-          <h3 className="text-sm font-semibold text-zinc-200">Pick a model for this task</h3>
-          <p className="text-xs text-zinc-500 mt-1">
-            The task moves to <code className="text-zinc-400">in_progress</code> and the orchestrator
+          <h3 className="text-sm font-semibold text-primary">Pick a model for this task</h3>
+          <p className="text-xs text-faint mt-1">
+            The task moves to <code className="text-muted">in_progress</code> and the orchestrator
             dispatches it headlessly on the next poll tick.
           </p>
         </div>
@@ -51,7 +51,7 @@ export function OrchestratorModelPicker({ open, onPick, onClose }: Props) {
         <div className="flex gap-2 justify-end">
           <button
             onClick={onClose}
-            className="px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-200"
+            className="px-3 py-1.5 text-xs text-muted hover:text-[var(--text-primary)]"
           >
             Cancel
           </button>
@@ -59,7 +59,7 @@ export function OrchestratorModelPicker({ open, onPick, onClose }: Props) {
             onClick={() => picked && onPick(picked)}
             disabled={!picked}
             data-testid="orchestrator-picker-run"
-            className="px-3 py-1.5 text-xs bg-indigo-500 text-ink rounded disabled:opacity-40"
+            className="px-3 py-1.5 text-xs accent-button rounded disabled:opacity-40"
           >
             Run task
           </button>

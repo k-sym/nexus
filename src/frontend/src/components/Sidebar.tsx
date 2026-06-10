@@ -33,7 +33,7 @@ function Row({ active, depth, onClick, icon, children, tintColor, trailing }: {
       onClick={onClick}
       style={{ paddingLeft: 8 + depth * 14, borderLeft: tintColor ? `2px solid ${tintColor}` : '2px solid transparent' }}
       className={`group w-full flex items-center gap-2 pr-2 py-1.5 text-sm transition-colors ${
-        active ? 'bg-indigo-500/20 text-white' : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/30'
+        active ? 'surface-active text-primary' : 'text-muted hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
       }`}
     >
       {icon && <span className="shrink-0 flex items-center w-4">{icon}</span>}
@@ -62,10 +62,10 @@ export default function Sidebar({
   };
 
   return (
-    <aside className="w-60 bg-zinc-900 border-r border-zinc-800 flex flex-col shrink-0 overflow-y-auto">
+    <aside className="w-60 surface-glass border-r border-subtle flex flex-col shrink-0 overflow-y-auto">
       <div className="flex items-center justify-between px-3 pt-3 pb-1">
-        <span className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium">Projects</span>
-        <button onClick={onNewProject} title="New project" className="text-zinc-500 hover:text-zinc-200">
+        <span className="text-[10px] uppercase tracking-wider text-faint font-medium">Projects</span>
+        <button onClick={onNewProject} title="New project" className="text-faint hover:text-[var(--text-primary)]">
           <Plus size={14} />
         </button>
       </div>
@@ -82,7 +82,7 @@ export default function Sidebar({
               onClick={() => { setOpenProjectId(open ? null : project.id); onSelectProject(project.id); }}
               icon={open ? <CaretDown size={14} /> : <CaretRight size={14} />}
             >
-              <span className="font-medium text-zinc-200 truncate">{project.name}</span>
+              <span className="font-medium text-primary truncate">{project.name}</span>
             </Row>
 
             {open && (
@@ -113,9 +113,9 @@ export default function Sidebar({
                   icon={<ChatCircle size={15} />}
                   trailing={
                     chatExpanded ? (
-                      <CaretDown size={12} className="text-zinc-600" />
+                      <CaretDown size={12} className="text-faint" />
                     ) : (
-                      <CaretRight size={12} className="text-zinc-600" />
+                      <CaretRight size={12} className="text-faint" />
                     )
                   }
                 >
@@ -130,7 +130,7 @@ export default function Sidebar({
                       onClick={() => onNewChat(project.id)}
                       icon={<Plus size={14} />}
                     >
-                      <span className="text-indigo-400">New Session</span>
+                      <span className="accent-text">New Session</span>
                     </Row>
                     {isActiveProject &&
                       threads.map(({ thread }) => {
@@ -149,14 +149,14 @@ export default function Sidebar({
                                 {isActiveSession && (
                                   <span
                                     title="Session active"
-                                    className="inline-block h-3.5 w-3.5 rounded-full border-2 border-zinc-500 border-t-zinc-200 animate-spin"
+                                    className="inline-block h-3.5 w-3.5 rounded-full border-2 border-[var(--text-faint)] border-t-[var(--accent-strong)] animate-spin"
                                   />
                                 )}
                                 <span className="hidden group-hover:flex items-center gap-1">
                                   <span
                                     role="button"
                                     title="Rename"
-                                    className="text-zinc-500 hover:text-zinc-200"
+                                    className="text-faint hover:text-[var(--text-primary)]"
                                     onClick={(ev) => {
                                       ev.stopPropagation();
                                       startRename(thread.id, thread.title);
@@ -167,7 +167,7 @@ export default function Sidebar({
                                   <span
                                     role="button"
                                     title="Delete"
-                                    className="text-zinc-500 hover:text-red-400"
+                                    className="text-faint hover:text-red-400"
                                     onClick={(ev) => {
                                       ev.stopPropagation();
                                       if (window.confirm('Delete this session? This cannot be undone.')) onDeleteThread(thread.id);
@@ -190,7 +190,7 @@ export default function Sidebar({
                                   if (ev.key === 'Enter') { ev.preventDefault(); commitRename(thread.id); }
                                   else if (ev.key === 'Escape') { ev.preventDefault(); cancelRename(); }
                                 }}
-                                className="w-full bg-zinc-800 text-zinc-100 text-sm px-1 py-0.5 rounded outline-none ring-1 ring-indigo-500"
+                                className="w-full surface-elevated text-primary text-sm px-1 py-0.5 rounded outline-none ring-1 ring-[var(--accent)]"
                               />
                             ) : (
                               thread.title
@@ -199,7 +199,7 @@ export default function Sidebar({
                         );
                       })}
                     {isActiveProject && threads.length === 0 && (
-                      <div className="pl-12 py-1.5 text-xs text-zinc-600">No sessions</div>
+                      <div className="pl-12 py-1.5 text-xs text-faint">No sessions</div>
                     )}
                   </>
                 )}
@@ -208,10 +208,10 @@ export default function Sidebar({
           </div>
         );
       })}
-      {projects.length === 0 && <div className="px-3 py-2 text-xs text-zinc-600">No projects yet</div>}
+      {projects.length === 0 && <div className="px-3 py-2 text-xs text-faint">No projects yet</div>}
 
-      <div className="mt-auto px-3 py-3 border-t border-zinc-800">
-        <div className="text-[10px] text-zinc-600/50">v0.1.0 · Personal</div>
+      <div className="mt-auto px-3 py-3 border-t border-subtle">
+        <div className="text-[10px] text-faint">v0.1.0 · Personal</div>
       </div>
     </aside>
   );
