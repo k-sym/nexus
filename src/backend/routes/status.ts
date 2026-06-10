@@ -40,7 +40,7 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
     const recent = db
       .prepare(
         `SELECT ar.id, ar.task_id, t.title as task_title, ar.status, ar.provider, ar.model,
-                ar.total_tokens, ar.duration_ms, ar.started_at, ar.completed_at
+                ar.duration_ms, ar.started_at, ar.completed_at
          FROM agent_runs ar JOIN tasks t ON t.id = ar.task_id
          ORDER BY ar.started_at DESC LIMIT 10`,
       )

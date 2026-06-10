@@ -89,9 +89,6 @@ function runMigrations(db: Database.Database) {
       error TEXT,
       provider TEXT,
       model TEXT,
-      prompt_tokens INTEGER DEFAULT 0,
-      completion_tokens INTEGER DEFAULT 0,
-      total_tokens INTEGER DEFAULT 0,
       duration_ms INTEGER DEFAULT 0,
       started_at TEXT NOT NULL,
       completed_at TEXT
@@ -156,11 +153,17 @@ function runMigrations(db: Database.Database) {
   const runMigrations: Array<[string, string]> = [
     ['provider', 'ALTER TABLE agent_runs ADD COLUMN provider TEXT'],
     ['model', 'ALTER TABLE agent_runs ADD COLUMN model TEXT'],
-    ['prompt_tokens', 'ALTER TABLE agent_runs ADD COLUMN prompt_tokens INTEGER DEFAULT 0'],
-    ['completion_tokens', 'ALTER TABLE agent_runs ADD COLUMN completion_tokens INTEGER DEFAULT 0'],
-    ['total_tokens', 'ALTER TABLE agent_runs ADD COLUMN total_tokens INTEGER DEFAULT 0'],
     ['duration_ms', 'ALTER TABLE agent_runs ADD COLUMN duration_ms INTEGER DEFAULT 0'],
   ];
+  // Existing DBs created before the token-tracking strip may still have
+  // these columns. Drop them now so the schema matches the CREATE TABLE
+  // above. SQLite 3.35+ (bundled in better-sqlite3@^12) supports DROP COLUMN.
+  const tokenColumnsToDrop = ['prompt_tokens', 'completion_tokens', 'total_tokens'];
+  for (const col of tokenColumnsToDrop) {
+    if (runColNames.has(col)) {
+      db.exec(`ALTER TABLE agent_runs DROP COLUMN ${col}`);
+    }
+  }
   for (const [col, sql] of runMigrations) {
     if (!runColNames.has(col)) {
       db.exec(sql);
@@ -185,15 +188,12 @@ function runMigrations(db: Database.Database) {
           error TEXT,
           provider TEXT,
           model TEXT,
-          prompt_tokens INTEGER DEFAULT 0,
-          completion_tokens INTEGER DEFAULT 0,
-          total_tokens INTEGER DEFAULT 0,
           duration_ms INTEGER DEFAULT 0,
           started_at TEXT NOT NULL,
           completed_at TEXT
         );
-        INSERT INTO agent_runs_new (id, task_id, status, output, error, provider, model, prompt_tokens, completion_tokens, total_tokens, duration_ms, started_at, completed_at)
-          SELECT id, task_id, status, output, error, provider, model, prompt_tokens, completion_tokens, total_tokens, duration_ms, started_at, completed_at FROM agent_runs;
+        INSERT INTO agent_runs_new (id, task_id, status, output, error, provider, model, duration_ms, started_at, completed_at)
+          SELECT id, task_id, status, output, error, provider, model, duration_ms, started_at, completed_at FROM agent_runs;
         DROP TABLE agent_runs;
         ALTER TABLE agent_runs_new RENAME TO agent_runs;
         UPDATE agent_runs SET project_id = (SELECT project_id FROM tasks WHERE tasks.id = agent_runs.task_id) WHERE task_id IS NOT NULL;
