@@ -1,14 +1,17 @@
 import { useState } from 'react';
+import type { Project } from '@nexus/shared';
 
 interface ProjectModalProps {
   onClose: () => void;
   onSubmit: (data: { name: string; description: string; repo_path: string }) => void;
+  project?: Project;
 }
 
-export default function ProjectModal({ onClose, onSubmit }: ProjectModalProps) {
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [repoPath, setRepoPath] = useState('');
+export default function ProjectModal({ onClose, onSubmit, project }: ProjectModalProps) {
+  const [name, setName] = useState(project?.name ?? '');
+  const [description, setDescription] = useState(project?.description ?? '');
+  const [repoPath, setRepoPath] = useState(project?.repo_path ?? '');
+  const isEditing = Boolean(project);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -19,7 +22,7 @@ export default function ProjectModal({ onClose, onSubmit }: ProjectModalProps) {
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
       <div className="surface-glass border border-subtle rounded-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold mb-4">New Project</h2>
+        <h2 className="text-lg font-semibold mb-4">{isEditing ? 'Edit Project' : 'New Project'}</h2>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs text-faint mb-1">Project Name</label>
@@ -58,7 +61,7 @@ export default function ProjectModal({ onClose, onSubmit }: ProjectModalProps) {
               Cancel
             </button>
             <button type="submit" disabled={!name.trim() || !repoPath.trim()} className="px-4 py-2 text-sm accent-button rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              Create Project
+              {isEditing ? 'Save Project' : 'Create Project'}
             </button>
           </div>
         </form>

@@ -31,6 +31,7 @@ function runMigrations(db: Database.Database) {
       description TEXT DEFAULT '',
       repo_path TEXT NOT NULL,
       config_json TEXT DEFAULT '{}',
+      sort_order INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -146,6 +147,16 @@ function runMigrations(db: Database.Database) {
   if (!hasConfigJson) {
     db.exec('ALTER TABLE projects ADD COLUMN config_json TEXT DEFAULT \'{}\'');
   }
+  const hasSortOrder = columns.some(c => c.name === 'sort_order');
+  if (!hasSortOrder) {
+    db.exec('ALTER TABLE projects ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0');
+    const orderedProjects = db.prepare('SELECT id FROM projects ORDER BY updated_at DESC, name COLLATE NOCASE ASC').all() as { id: string }[];
+    const updateSortOrder = db.prepare('UPDATE projects SET sort_order = ? WHERE id = ?');
+    db.transaction(() => {
+      orderedProjects.forEach((project, index) => updateSortOrder.run(index, project.id));
+    })();
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_projects_sort_order ON projects(sort_order)');
 
   // Agent run token-tracking migrations (for DBs created before token support).
   const runCols = db.pragma('table_info(agent_runs)') as { name: string }[];
