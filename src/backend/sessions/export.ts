@@ -4,7 +4,7 @@
  * ChatMessage shape. Compatible with zosma-cowork's session format.
  */
 import { writeFileSync, mkdirSync } from 'fs';
-import { dirname, join } from 'path';
+import { join } from 'path';
 import { getNexusDir } from '../config';
 
 export function exportThread(opts: {

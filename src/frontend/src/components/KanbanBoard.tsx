@@ -1,4 +1,4 @@
-import { Task, TaskStatus, KANBAN_COLUMN_LABELS } from '@nexus/shared';
+import { Task, TaskStatus } from '@nexus/shared';
 
 interface KanbanBoardProps {
   tasks: Task[];

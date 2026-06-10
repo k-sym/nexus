@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -9,7 +9,17 @@ import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import { ConcurrencyTracker } from '../pi/concurrency';
 import { registerChatRoutes } from '../routes/chat';
 
-function makeApp() {
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-chat-test-'));
   const db = new Database(join(dir, 'test.db'));
   // Minimal schema: projects + chat_threads + chat_messages. (chat_messages
@@ -31,7 +41,8 @@ function makeApp() {
       title TEXT NOT NULL DEFAULT 'New Chat',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      archived_at TEXT
+      archived_at TEXT,
+      last_model_key TEXT
     );
     CREATE TABLE chat_messages (
       id TEXT PRIMARY KEY,
@@ -54,11 +65,16 @@ function makeApp() {
   db.prepare(
     'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
   ).run(threadId, projectId, 'T1', new Date().toISOString(), new Date().toISOString());
+  if (options.includeSecondThread) {
+    db.prepare(
+      'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('thread-2', projectId, 'T2', new Date().toISOString(), new Date().toISOString());
+  }
   const paths: PiRuntimePaths = {
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   };
-  const runtime = new PiRuntime(paths);
+  const runtime = runtimeOverride ?? new PiRuntime(paths);
   const concurrency = new ConcurrencyTracker();
   const app = Fastify({ logger: false });
   app.decorate('db', db);
@@ -71,17 +87,18 @@ function makeApp() {
 test('POST /api/threads/:id/messages/stream returns 409 when a *different* thread in the same project is busy', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
-    concurrency.set('proj-1', 'other-thread', 'Other');
+    concurrency.set('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'hi' },
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
     });
     assert.equal(res.statusCode, 409);
     const body = res.json();
-    assert.equal(body.kind, 'project_busy');
+    assert.equal(body.kind, 'model_busy');
     assert.equal(body.activeThreadId, 'other-thread');
     assert.equal(body.activeTitle, 'Other');
+    assert.equal(body.modelKey, 'anthropic/sonnet');
   } finally {
     await app.close();
     db.close();
@@ -92,15 +109,73 @@ test('POST /api/threads/:id/messages/stream returns 409 when a *different* threa
 test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy thread in the same project', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
-    concurrency.set('proj-1', 'other-thread', 'Other');
+    concurrency.set('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'hi' },
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
     });
     assert.equal(res.statusCode, 409);
     const body = res.json();
     assert.equal(body.activeThreadId, 'other-thread');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream aborts the active session when confirm-cancel is set', async () => {
+  const firstPromptStarted = deferred<void>();
+  const firstAbortSeen = deferred<void>();
+  let firstAborted = false;
+
+  const firstSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      firstPromptStarted.resolve();
+      await firstAbortSeen.promise;
+    },
+    abort: async () => {
+      firstAborted = true;
+      firstAbortSeen.resolve();
+    },
+  };
+  const secondSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async (threadId: string) => (threadId === 'thread-1' ? firstSession : secondSession),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  try {
+    const first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+
+    assert.equal(second.statusCode, 200);
+    assert.equal(firstAborted, true);
+    const firstRes = await first;
+    assert.equal(firstRes.statusCode, 200);
   } finally {
     await app.close();
     db.close();
@@ -220,6 +295,3 @@ test('POST /api/threads/:id/abort returns no_run when nothing is in flight', asy
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
-// Avoid unused-import warning for `existsSync` (kept for future file-checks).
-void existsSync;

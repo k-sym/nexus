@@ -40,12 +40,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [pendingConfirm, setPendingConfirm] = useState<{ activeThreadId: string; activeTitle: string; pendingText: string } | null>(null);
   const [modelBusy, setModelBusy] = useState<{ threadId: string; title: string } | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // Track the active thread id inside async handlers so a late-arriving
-  // event after a thread switch is dropped (guards against bleed).
-  const activeThreadIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    activeThreadIdRef.current = threadId;
-  }, [threadId]);
 
   // Update the active thread in usePiStream to filter events correctly
   useEffect(() => {

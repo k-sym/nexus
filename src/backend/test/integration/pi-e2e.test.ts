@@ -30,7 +30,7 @@ test('POST /api/threads/:id/messages/stream returns 200 NDJSON', async () => {
   const db = new Database(join(dir, 'test.db'));
   db.exec(`
     CREATE TABLE projects (id TEXT PRIMARY KEY, slug TEXT, name TEXT, repo_path TEXT, config_json TEXT DEFAULT '{}', created_at TEXT, updated_at TEXT);
-    CREATE TABLE chat_threads (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, created_at TEXT, updated_at TEXT, archived_at TEXT);
+    CREATE TABLE chat_threads (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, created_at TEXT, updated_at TEXT, archived_at TEXT, last_model_key TEXT);
     CREATE TABLE chat_messages (id TEXT PRIMARY KEY, thread_id TEXT, role TEXT, content TEXT, attachments_json TEXT DEFAULT '[]', message_type TEXT DEFAULT 'text', structured_json TEXT, thinking TEXT, tool_calls TEXT, created_at TEXT);
   `);
   db.prepare('INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(
@@ -81,7 +81,7 @@ test('GET /api/threads/:threadId returns thread + empty messages for a fresh thr
   const db = new Database(join(dir, 'test.db'));
   db.exec(`
     CREATE TABLE projects (id TEXT PRIMARY KEY, slug TEXT, name TEXT, repo_path TEXT, config_json TEXT DEFAULT '{}', created_at TEXT, updated_at TEXT);
-    CREATE TABLE chat_threads (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, created_at TEXT, updated_at TEXT, archived_at TEXT);
+    CREATE TABLE chat_threads (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, created_at TEXT, updated_at TEXT, archived_at TEXT, last_model_key TEXT);
   `);
   db.prepare('INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run(
     'p1', 'p1', 'P1', dir, new Date().toISOString(), new Date().toISOString(),

@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket } from '@nexus/shared';
 
 export type AgentHealth = 'online' | 'ready' | 'offline';
 

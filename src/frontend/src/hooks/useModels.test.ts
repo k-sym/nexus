@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { useModels, modelKey, parseModelKey } from './useModels';
 
@@ -24,7 +24,10 @@ describe('useModels', () => {
   it('setModel posts the new model and updates state', async () => {
     const { result } = renderHook(() => useModels());
     await waitFor(() => expect(result.current.models.length).toBe(2));
-    await result.current.setModel('openai', 'gpt-5');
+    act(() => result.current.setThread('thread-1'));
+    await act(async () => {
+      await result.current.setModel('openai', 'gpt-5');
+    });
     await waitFor(() => expect(result.current.activeModelId).toBe('openai/gpt-5'));
   });
 

@@ -71,7 +71,7 @@ async function main() {
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
-  app.setErrorHandler((error, request, reply) => {
+  app.setErrorHandler((error, _request, reply) => {
     app.log.error(error);
     const err = error as any;
     const statusCode = err.statusCode || 500;

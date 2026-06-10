@@ -12,14 +12,12 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import { ChatThread } from '@nexus/shared';
-import { SessionEventStream } from '../pi/events';
+import type { AgentSession } from '@earendil-works/pi-coding-agent';
 
 const ABORT_GRACE_MS = 200;
 
 interface ActiveStream {
-  threadId: string;
-  stream: SessionEventStream;
-  projectId: string;
+  session: Pick<AgentSession, 'abort'>;
 }
 
 const activeStreams = new Map<string, ActiveStream>();
@@ -101,7 +99,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     if (busy && busy.threadId !== threadId) {
       if (confirmCancel) {
         const existing = activeStreams.get(busy.threadId);
-        existing?.stream.abort('user-confirmed-cancel');
+        if (existing) {
+          try {
+            await existing.session.abort();
+          } catch (err: any) {
+            console.error(`[chat] failed to abort active thread ${busy.threadId}:`, err?.message);
+          }
+          activeStreams.delete(busy.threadId);
+        }
         await new Promise((r) => setTimeout(r, ABORT_GRACE_MS));
         concurrency.clear(thread.project_id, modelKey);
       } else {
@@ -143,8 +148,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const stream = new SessionEventStream();
-    activeStreams.set(threadId, { threadId, stream, projectId: thread.project_id });
+    activeStreams.set(threadId, { session });
     concurrency.set(thread.project_id, modelKey, threadId, thread.title);
     db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(
       new Date().toISOString(),
@@ -207,20 +211,10 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const { threadId } = request.params as { threadId: string };
     const existing = activeStreams.get(threadId);
     if (!existing) return { ok: false, reason: 'no_run' };
-    existing.stream.abort('user-abort');
-    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
-    if (thread) {
-      const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as
-        | { repo_path: string }
-        | undefined;
-      if (project) {
-        try {
-          const session = await pi.sessionFor(threadId, project.repo_path);
-          await session.abort();
-        } catch {
-          /* session may not be created yet */
-        }
-      }
+    try {
+      await existing.session.abort();
+    } catch (err: any) {
+      console.error(`[chat] failed to abort active thread ${threadId}:`, err?.message);
     }
     return { ok: true };
   });

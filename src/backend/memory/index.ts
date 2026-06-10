@@ -40,7 +40,7 @@ export function projectSlug(db: Database.Database, projectId: string): string | 
 }
 
 /** Verify the daemon is reachable at boot (warn, don't crash, if it isn't). */
-export async function initMemorySystem(db: Database.Database): Promise<void> {
+export async function initMemorySystem(_db: Database.Database): Promise<void> {
   try {
     const h = await daemon.health();
     console.log(`[memory] daemon reachable (${h.status})`);
@@ -132,11 +132,11 @@ export async function getAllMemories(db: Database.Database, projectId: string): 
   }
 }
 
-export async function updateMemory(db: Database.Database, id: string, content: string): Promise<void> {
+export async function updateMemory(_db: Database.Database, id: string, content: string): Promise<void> {
   await daemon.update(id, { body: content });
 }
 
-export async function deleteMemory(db: Database.Database, id: string): Promise<void> {
+export async function deleteMemory(_db: Database.Database, id: string): Promise<void> {
   await daemon.remove(id);
 }
 

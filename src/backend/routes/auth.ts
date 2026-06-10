@@ -55,7 +55,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
   // This is a follow-up commit. The frontend can already call
   // /save-key today; OAuth providers (Anthropic, OpenAI Codex, GitHub
   // Copilot) work via API key in the meantime.
-  fastify.post('/api/auth/start-oauth', async (request, reply) => {
+  fastify.post('/api/auth/start-oauth', async (_request, reply) => {
     reply.code(501);
     return { ok: false, reason: 'not_implemented' };
   });

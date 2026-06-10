@@ -29,7 +29,7 @@ export function ensureProjectDir(projectSlug: string): string {
   return dir;
 }
 
-export function writeTaskSummary(db: Database.Database, project: Project, taskId: string, title: string, status: string, content: string, agentName?: string): void {
+export function writeTaskSummary(_db: Database.Database, project: Project, taskId: string, title: string, status: string, content: string, agentName?: string): void {
   const dir = ensureProjectDir(project.slug);
   const filePath = path.join(dir, 'Tasks', `${safeFilename(title)}.md`);
 
@@ -54,7 +54,7 @@ export function writeTaskSummary(db: Database.Database, project: Project, taskId
   fs.writeFileSync(filePath, body, 'utf-8');
 }
 
-export function writeChatArchive(projectSlug: string, title: string, threadId: string, messages: { role: string; content: string; created_at: string }[]): void {
+export function writeChatArchive(projectSlug: string, title: string, _threadId: string, messages: { role: string; content: string; created_at: string }[]): void {
   const dir = ensureProjectDir(projectSlug);
   const date = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(/:/g, '-');
   const filePath = path.join(dir, 'Chats', `${date} ${safeFilename(title)}.md`);

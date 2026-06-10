@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Project, Schedule, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS } from '@nexus/shared';
+import { Schedule } from '@nexus/shared';
 import { api } from '../api';
 
 interface SchedulerPageProps {
@@ -8,6 +8,8 @@ interface SchedulerPageProps {
    *  user to pick one rather than failing the build. */
   projectId?: string;
 }
+
+type ScheduleRow = Schedule & { description_human?: string };
 
 const CRON_PRESETS = [
   { label: 'Every day at 9 AM', value: '0 9 * * *' },
@@ -20,7 +22,7 @@ const CRON_PRESETS = [
 ];
 
 export default function SchedulerPage({ projectId }: SchedulerPageProps) {
-  const [schedules, setSchedules] = useState<any[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleRow[]>([]);
   const [showForm, setShowForm] = useState(false);
 
   const [name, setName] = useState('');
