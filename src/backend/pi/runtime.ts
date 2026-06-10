@@ -16,6 +16,15 @@ import {
   ModelRegistry,
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
+import anthropicMessagesBridge from '@blackbelt-technology/pi-anthropic-messages';
+
+type ResourceLoaderOptions = {
+  cwd: string;
+  agentDir: string;
+  settingsManager: unknown;
+  noExtensions?: boolean;
+  extensionFactories?: unknown[];
+};
 
 /**
  * A minimal model shape we expose from the runtime. Matches the fields we
@@ -51,6 +60,16 @@ export function cwdSlug(repoPath: string): string {
   if (!repoPath) return 'default';
   const cleaned = repoPath.startsWith('/') || repoPath.startsWith('\\') ? repoPath.slice(1) : repoPath;
   return cleaned.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-120) || 'default';
+}
+
+export function buildResourceLoaderOptions(
+  options: Pick<ResourceLoaderOptions, 'cwd' | 'agentDir' | 'settingsManager'>,
+): ResourceLoaderOptions {
+  return {
+    ...options,
+    noExtensions: true,
+    extensionFactories: [anthropicMessagesBridge],
+  };
 }
 
 export class PiRuntime {
@@ -130,12 +149,11 @@ export class PiRuntime {
     const { SessionManager, SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
     const sessionManager = SessionManager.create(cwd, this.sessionDirFor(cwd), { id: threadId });
     const settingsManager = SettingsManager.inMemory();
-    const resourceLoader = new DefaultResourceLoader({
+    const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
-      noExtensions: true,
-    });
+    }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({
       cwd,

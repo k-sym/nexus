@@ -24,32 +24,54 @@ export function parseModelKey(key: string): { provider: string; id: string } | u
 
 export function useModels() {
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [allModels, setAllModels] = useState<ModelInfo[]>([]);
+  const [enabledModelKeys, setEnabledModelKeys] = useState<string[]>([]);
+  const [customized, setCustomized] = useState(false);
   // Store active model per thread: threadId -> modelKey
   const [activeModels, setActiveModels] = useState<Record<string, string>>({});
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      try {
-        const res = await fetch('/api/models');
-        if (!res.ok) throw new Error(`models: ${res.status}`);
-        const data = (await res.json()) as { models: ModelInfo[] };
-        if (cancelled) return;
+  const loadModels = useCallback(async (cancelled?: () => boolean) => {
+    try {
+      const res = await fetch('/api/models');
+      if (!res.ok) throw new Error(`models: ${res.status}`);
+        const data = (await res.json()) as {
+          models: ModelInfo[];
+          allModels?: ModelInfo[];
+          enabledModelKeys?: string[];
+          customized?: boolean;
+        };
+        if (cancelled?.()) return;
         setModels(data.models || []);
+        setAllModels(data.allModels || data.models || []);
+        setEnabledModelKeys(data.enabledModelKeys || []);
+        setCustomized(data.customized === true);
       } catch (err) {
         console.error('useModels: failed to load models', err);
-        if (!cancelled) setModels([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+        if (!cancelled?.()) {
+          setModels([]);
+          setAllModels([]);
+          setEnabledModelKeys([]);
+          setCustomized(false);
+        }
+    } finally {
+      if (!cancelled?.()) setLoading(false);
     }
-    void load();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadModels(() => cancelled);
+    function refreshModels() {
+      void loadModels();
+    }
+    window.addEventListener('nexus:models-refresh', refreshModels);
     return () => {
       cancelled = true;
+      window.removeEventListener('nexus:models-refresh', refreshModels);
     };
-  }, []);
+  }, [loadModels]);
 
   const setThread = useCallback((threadId: string | null) => {
     setCurrentThreadId(threadId);
@@ -85,7 +107,26 @@ export function useModels() {
     }
   }, [currentThreadId]);
 
+  const saveCuration = useCallback(async (keys: string[]) => {
+    const res = await fetch('/api/models/curation', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabledModelKeys: keys }),
+    });
+    if (!res.ok) throw new Error(`models curation: ${res.status}`);
+    const data = (await res.json()) as {
+      models: ModelInfo[];
+      allModels: ModelInfo[];
+      enabledModelKeys: string[];
+      customized: boolean;
+    };
+    setModels(data.models || []);
+    setAllModels(data.allModels || []);
+    setEnabledModelKeys(data.enabledModelKeys || []);
+    setCustomized(data.customized === true);
+  }, []);
+
   const activeModelId = currentThreadId ? activeModels[currentThreadId] : undefined;
 
-  return { models, activeModelId, loading, setModel, setThread };
+  return { models, allModels, enabledModelKeys, customized, activeModelId, loading, setModel, setThread, saveCuration };
 }

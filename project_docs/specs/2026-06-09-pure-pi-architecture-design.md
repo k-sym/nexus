@@ -8,11 +8,11 @@
 
 ## Problem Statement
 
-The current Nexus codebase is a hybrid of Zosma Cowork and Pi runtime, creating architectural confusion:
-- 45+ references to "Zosma" scattered through code
+The current Nexus codebase is a hybrid of a legacy chat prototype and Pi runtime, creating architectural confusion:
+- 45+ legacy chat references scattered through code
 - Custom auth layer duplicating Pi's AuthStorage
-- Migration scripts for Zosma session format
-- Components like `ZosmaAuthSection`, `useZosmaAuth`
+- Legacy session migration scripts
+- Legacy auth components and hooks
 
 **User's goal:** Use subscription-based agents (not API tokens) across multiple projects with seamless context switching.
 
@@ -49,8 +49,8 @@ Fastify server
 **Key simplifications:**
 - No `chat_messages` table (Pi stores messages in JSONL)
 - No custom auth layer (Pi's AuthStorage handles it)
-- No Zosma migration scripts
-- No `zosma_session_id` column
+- No legacy chat migration scripts
+- No legacy chat session column
 
 ### Frontend (React)
 
@@ -102,17 +102,17 @@ chat_threads (id, project_id, title, created_at, updated_at)
 ## What We Delete
 
 ### Backend
-- `ZosmaAuthSection`, `useZosmaAuth` components
-- `migrate-chats-to-zosma.cjs` migration script
-- `zosma_session_id` column from `chat_threads`
+- Legacy auth components and hooks
+- Legacy chat migration script
+- Legacy chat session column from `chat_threads`
 - `chat_messages` table (Pi stores in JSONL)
-- All "ported from Zosma" comments
+- All legacy-port comments
 - Custom auth wrapper around Pi's AuthStorage
 
 ### Frontend
-- `ZosmaAuthSection.tsx` and tests
-- `useZosmaAuth.ts` hook
-- Any Zosma-specific session handling
+- Legacy auth component and tests
+- Legacy auth hook
+- Any legacy-specific session handling
 
 ---
 
@@ -135,10 +135,10 @@ chat_threads (id, project_id, title, created_at, updated_at)
 
 ## Implementation Phases
 
-### Phase 1: Strip Zosma (1-2 hours)
-1. Delete `ZosmaAuthSection`, `useZosmaAuth`
-2. Remove `migrate-chats-to-zosma.cjs`
-3. Drop `zosma_session_id` column
+### Phase 1: Strip Legacy Chat Layer (1-2 hours)
+1. Delete legacy auth component and hook
+2. Remove legacy chat migration script
+3. Drop legacy chat session column
 4. Remove `chat_messages` table
 5. Clean up comments and references
 
@@ -171,9 +171,9 @@ chat_threads (id, project_id, title, created_at, updated_at)
 - [ ] Sessions persist across app restarts
 - [ ] OAuth works for Claude Code, Codex, OpenCode
 - [ ] OpenRouter API key works
-- [ ] No Zosma references in codebase
+- [ ] No legacy chat references in codebase
 - [ ] Typecheck passes
-- [ ] All tests pass (or are deleted if Zosma-specific)
+- [ ] All tests pass (or are deleted if legacy-specific)
 
 ---
 
@@ -206,4 +206,4 @@ Pure Pi architecture gives us:
 - **More models** - 254+ via Pi registry
 - **Full features** - streaming, thinking, tools, persistence
 
-The previous agent tried to merge Zosma and Pi, creating debt. This design strips Zosma and uses Pi directly, achieving the user's goal of a multi-project chat interface with subscription-based agents.
+The previous implementation tried to merge a legacy chat prototype and Pi, creating debt. This design strips the legacy layer and uses Pi directly, achieving the user's goal of a multi-project chat interface with subscription-based agents.

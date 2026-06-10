@@ -7,7 +7,7 @@ Completed implementation of multi-thread chat system with Pure Pi architecture, 
 ## Architecture Changes
 
 ### Pure Pi Migration
-- **Removed Zosma dependencies**: Eliminated all Zosma-specific code and dependencies
+- **Removed legacy chat dependencies**: Eliminated stale prototype-specific code and dependencies
 - **Direct Pi integration**: Chat now uses Pi runtime directly without abstraction layers
 - **Simplified architecture**: Removed unnecessary complexity from hybrid approach
 
@@ -218,6 +218,39 @@ useEffect(() => {
 - Improve thinking block rendering (syntax highlighting, better formatting)
 - Enhance tool call display (collapsible details, better icons)
 - Add loading states for model selection
+
+---
+
+## Enhancement Addendum - June 10, 2026
+
+### Model Curation
+- Added a global curated model list backed by `~/.nexus/model-curation.json`.
+- Settings now shows all discovered Pi models with enable/disable switches plus select-all/deselect-all actions.
+- Chat model dropdown reads the curated list only, while Settings can still display the full available pool.
+- OAuth subscription providers are marked as synced on app startup without auto-enabling every subscription model.
+
+### OAuth Flow
+- Added OAuth flow management for Pi providers using the existing Pi `AuthStorage`.
+- Login URLs now open in the system default browser from Electron.
+- Auth completion refreshes model availability and keeps subscription models available for curation.
+
+### Anthropic Subscription Models
+- Replaced the temporary Claude CLI workaround with the Pi-native `@blackbelt-technology/pi-anthropic-messages` bridge.
+- The bridge is loaded as an inline Pi extension through `DefaultResourceLoader.extensionFactories`.
+- Anthropic/Claude traffic stays on the normal Pi SDK session path, so multi-turn sessions, model state, and concurrency tracking remain consistent.
+- The bridge is gated by the upstream extension to Anthropic Messages sessions; OpenAI, OpenRouter, Codex, and other providers are not routed through it.
+- `usePiStream` now handles Anthropic `thinking_end` events as visible thinking feedback, not only `thinking_delta`.
+
+### Naming Cleanup
+- Removed stale legacy chat naming from active code and project docs.
+- Deleted obsolete legacy chat plan/spec documents that referenced the old naming.
+
+### Verification
+- Live two-turn Anthropic OAuth smoke passed through the Pi SDK bridge.
+- `npm run typecheck` passed.
+- `npm run --workspace=src/backend test` passed.
+- `npm run --workspace=src/frontend test` passed.
+- `npm run build` passed.
 - Improve error messages and user feedback
 - Add keyboard shortcuts (Ctrl+Enter to send, Esc to abort)
 

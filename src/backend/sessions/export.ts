@@ -1,7 +1,7 @@
 /**
  * Serialize a chat thread to JSONL — first line is a header (title, agent,
  * model, project slug, timestamps), subsequent lines are messages in
- * ChatMessage shape. Compatible with zosma-cowork's session format.
+ * ChatMessage shape. Compatible with the agent session export format.
  */
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';

@@ -88,4 +88,10 @@ describe('ModelSelector', () => {
     const trigger = screen.getByRole('button');
     expect(trigger).toBeDisabled();
   });
+
+  it('explains when the curated model list is empty', async () => {
+    render(<ModelSelector models={[]} onSelect={() => {}} />);
+    await userEvent.click(screen.getByRole('button'));
+    expect(screen.getByText(/No curated models enabled/i)).toBeInTheDocument();
+  });
 });

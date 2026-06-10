@@ -31,6 +31,13 @@ export interface NotificationItem {
   created_at: string;
 }
 
+export interface ModelsResponse {
+  models: any[];
+  allModels: any[];
+  enabledModelKeys: string[];
+  customized: boolean;
+}
+
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
   // Only send a JSON content-type when there's actually a body — otherwise
   // Fastify rejects no-body DELETE/POST requests with 400 ("body cannot be empty").
@@ -91,7 +98,12 @@ export const api = {
       }),
   },
   models: {
-    list: () => fetchJson<{ models: any[] }>(`/api/models`),
+    list: () => fetchJson<ModelsResponse>(`/api/models`),
+    saveCuration: (enabledModelKeys: string[]) =>
+      fetchJson<ModelsResponse>(`/api/models/curation`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabledModelKeys }),
+      }),
     setActive: (provider: string, model: string) =>
       fetchJson<{ ok: boolean }>(`/api/models/active`, {
         method: 'POST',

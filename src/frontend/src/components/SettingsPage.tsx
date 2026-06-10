@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import { PiAuthSection } from './PiAuthSection';
+import { ModelCurationSection } from './ModelCurationSection';
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<any>(null);
@@ -75,6 +76,10 @@ export default function SettingsPage() {
       <div className="space-y-6">
         <Section title="Provider Auth">
           <PiAuthSection />
+        </Section>
+
+        <Section title="Curated Models">
+          <ModelCurationSection />
         </Section>
 
         {/* Local server config — kept here because it's an env-style

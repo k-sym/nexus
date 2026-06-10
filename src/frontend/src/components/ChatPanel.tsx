@@ -184,9 +184,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       try {
         await startStream(threadId, text, { ...opts, modelKey: activeModelId });
         onThreadsChanged?.();
-        dispatch({ type: 'RESET' });
         const msgs = await fetchThreadMessages(threadId);
-        setLoadedMessages(msgs);
+        if (msgs.length > 0) {
+          dispatch({ type: 'RESET' });
+          setLoadedMessages(msgs);
+        }
       } catch (err) {
         if (err instanceof ChatBusyError) {
           setPendingConfirm({

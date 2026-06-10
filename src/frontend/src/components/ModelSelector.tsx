@@ -134,7 +134,11 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
           </div>
           <div data-testid="model-dropdown-list" className="max-h-72 overflow-y-auto">
             {filtered.length === 0 ? (
-              <div className="p-3 text-center text-xs text-zinc-500">No models match.</div>
+              <div className="p-3 text-center text-xs text-zinc-500">
+                {models.length === 0
+                  ? 'No curated models enabled. Open Settings to enable models.'
+                  : 'No models match.'}
+              </div>
             ) : (
               filtered.map((m) => {
                 const key = modelKey(m.provider, m.id);

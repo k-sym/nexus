@@ -37,6 +37,73 @@ describe('useModels', () => {
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(result.current.models).toEqual([]);
   });
+
+  it('keeps full model catalog separate from curated selector models', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        models: [mockModels[0]],
+        allModels: mockModels,
+        enabledModelKeys: ['anthropic/claude-sonnet-4-5'],
+        customized: true,
+      }),
+    });
+    const { result } = renderHook(() => useModels());
+    await waitFor(() => expect(result.current.models.length).toBe(1));
+    expect(result.current.allModels.length).toBe(2);
+    expect(result.current.enabledModelKeys).toEqual(['anthropic/claude-sonnet-4-5']);
+    expect(result.current.customized).toBe(true);
+  });
+
+  it('saves global model curation and refreshes hook state', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          models: mockModels,
+          allModels: mockModels,
+          enabledModelKeys: [],
+          customized: false,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          models: [mockModels[1]],
+          allModels: mockModels,
+          enabledModelKeys: ['openai/gpt-5'],
+          customized: true,
+        }),
+      });
+    global.fetch = fetchMock;
+    const { result } = renderHook(() => useModels());
+    await waitFor(() => expect(result.current.allModels.length).toBe(2));
+    await act(async () => {
+      await result.current.saveCuration(['openai/gpt-5']);
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/models/curation', expect.objectContaining({ method: 'PUT' }));
+    expect(result.current.models.map((model) => `${model.provider}/${model.id}`)).toEqual(['openai/gpt-5']);
+  });
+
+  it('reloads the model list when auth changes', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ models: [mockModels[0]] }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ models: mockModels }),
+      });
+    global.fetch = fetchMock;
+    const { result } = renderHook(() => useModels());
+    await waitFor(() => expect(result.current.models.length).toBe(1));
+
+    act(() => window.dispatchEvent(new Event('nexus:models-refresh')));
+
+    await waitFor(() => expect(result.current.models.length).toBe(2));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('modelKey', () => {

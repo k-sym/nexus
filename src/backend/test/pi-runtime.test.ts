@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PiRuntime, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
+import { PiRuntime, buildResourceLoaderOptions, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
 
 test('cwdSlug encodes repo paths safely', () => {
   assert.equal(cwdSlug('/Users/me/Projects/foo'), 'Users_me_Projects_foo');
@@ -133,4 +133,16 @@ test('PiRuntime.dropSession is a no-op for a thread that has no file on disk', a
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test('buildResourceLoaderOptions includes the Anthropic Messages bridge factory', async () => {
+  const { SettingsManager } = await import('@earendil-works/pi-coding-agent');
+  const options = buildResourceLoaderOptions({
+    cwd: '/tmp/project',
+    agentDir: '/tmp/nexus-agent',
+    settingsManager: SettingsManager.inMemory(),
+  });
+
+  assert.equal(options.noExtensions, true);
+  assert.ok(options.extensionFactories?.length, 'expected at least one inline extension factory');
 });

@@ -22,6 +22,35 @@ interface ActiveStream {
 
 const activeStreams = new Map<string, ActiveStream>();
 
+function dbMessages(db: FastifyInstance['db'], threadId: string) {
+  let rows: Array<{
+    id: string;
+    role: string;
+    content: string;
+    thinking: string | null;
+    tool_calls: string | null;
+    created_at: string;
+  }>;
+  try {
+    rows = db
+      .prepare(
+        'SELECT id, role, content, thinking, tool_calls, created_at FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC',
+      )
+      .all(threadId) as typeof rows;
+  } catch (err: any) {
+    if (String(err?.message ?? '').includes('no such table: chat_messages')) return [];
+    throw err;
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    role: row.role,
+    content: row.content,
+    thinking: row.thinking,
+    tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : null,
+    timestamp: new Date(row.created_at).getTime(),
+  }));
+}
+
 export async function registerChatRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
   const pi = fastify.pi;
@@ -62,7 +91,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | undefined;
     const cwd = project?.repo_path || process.cwd();
     const entries = await pi.readMessages(threadId, cwd);
-    return { thread, cwd, messages: flattenEntries(entries) };
+    return { thread, cwd, messages: entries.length > 0 ? flattenEntries(entries) : dbMessages(db, threadId) };
   });
 
   // Backwards-compat alias — the old route returned just the messages.
@@ -75,7 +104,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | undefined;
     const cwd = project?.repo_path || process.cwd();
     const entries = await pi.readMessages(threadId, cwd);
-    return flattenEntries(entries);
+    return entries.length > 0 ? flattenEntries(entries) : dbMessages(db, threadId);
   });
 
   fastify.post('/api/threads/:threadId/messages/stream', async (request, reply) => {
@@ -120,7 +149,21 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       }
     }
 
-    let session;
+    let selectedModel: any;
+    if (body.modelKey) {
+      const sep = body.modelKey.indexOf('/');
+      if (sep > 0) {
+        const provider = body.modelKey.slice(0, sep);
+        const modelId = body.modelKey.slice(sep + 1);
+        selectedModel = pi.models.find(provider, modelId);
+        if (!selectedModel) {
+          reply.code(400);
+          return { error: `Model not found: ${body.modelKey}` };
+        }
+      }
+    }
+
+    let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel'> | undefined;
     try {
       session = await pi.sessionFor(threadId, cwd);
     } catch (err: any) {
@@ -128,27 +171,21 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       return { error: err?.message || 'failed to create session' };
     }
 
-    if (body.modelKey) {
+    if (body.modelKey && selectedModel) {
       const currentModel = pi.getSessionModel(threadId, cwd);
       if (currentModel !== body.modelKey) {
-        const sep = body.modelKey.indexOf('/');
-        if (sep > 0) {
-          const provider = body.modelKey.slice(0, sep);
-          const modelId = body.modelKey.slice(sep + 1);
-          const model = pi.models.find(provider, modelId);
-          if (model) {
-            try {
-              await session.setModel(model);
-              pi.setSessionModel(threadId, cwd, body.modelKey);
-            } catch (err: any) {
-              console.error(`[chat] setModel failed for ${body.modelKey}:`, err?.message);
-            }
-          }
+        try {
+          await session.setModel(selectedModel);
+          pi.setSessionModel(threadId, cwd, body.modelKey);
+        } catch (err: any) {
+          const message = err?.message || 'failed to select model';
+          console.error(`[chat] setModel failed for ${body.modelKey}:`, message);
+          reply.code(400);
+          return { error: message };
         }
       }
     }
 
-    activeStreams.set(threadId, { session });
     concurrency.set(thread.project_id, modelKey, threadId, thread.title);
     db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(
       new Date().toISOString(),
@@ -194,9 +231,12 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       } catch (err: any) {
         console.error('[chat] persistUserTurn failed:', err?.message);
       }
-      const subscription = session.subscribe((ev) => write(ev));
-      await session.prompt(body.content);
-      subscription();
+      if (session) {
+        activeStreams.set(threadId, { session });
+        const subscription = session.subscribe((ev) => write(ev));
+        await session.prompt(body.content);
+        subscription();
+      }
       write({ kind: 'done' });
     } catch (err: any) {
       write({ kind: 'error', error: err?.message || 'prompt failed' });
@@ -308,6 +348,10 @@ function flattenEntries(entries: unknown[]): unknown[] {
           });
         }
       }
+      const isError = m.stopReason === 'error' || !!m.errorMessage;
+      if (isError && !text) {
+        text = formatProviderError(m.errorMessage) || 'Provider returned an error with no message.';
+      }
       out.push({
         id: e.id,
         role: 'assistant',
@@ -316,6 +360,9 @@ function flattenEntries(entries: unknown[]): unknown[] {
         tool_calls: toolCalls.length > 0 ? toolCalls : null,
         model: m.model,
         provider: m.provider,
+        isError,
+        stopReason: m.stopReason,
+        errorMessage: m.errorMessage,
         timestamp: m.timestamp ?? e.timestamp,
       });
     } else if (m.role === 'toolResult') {
@@ -339,4 +386,20 @@ function extractText(content: unknown): string {
   return content
     .map((b: any) => (typeof b === 'object' && b?.type === 'text' ? b.text : ''))
     .join('');
+}
+
+function formatProviderError(message: unknown): string {
+  if (typeof message !== 'string' || !message.trim()) return '';
+  const trimmed = message.trim();
+  const jsonStart = trimmed.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(jsonStart));
+      const providerMessage = parsed?.error?.message ?? parsed?.message;
+      if (typeof providerMessage === 'string' && providerMessage.trim()) return providerMessage;
+    } catch {
+      /* fall through */
+    }
+  }
+  return trimmed;
 }
