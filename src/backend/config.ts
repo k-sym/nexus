@@ -40,10 +40,6 @@ const DEFAULT_CONFIG: NexusConfig = {
     vault_path: path.join(os.homedir(), 'Obsidian', 'Nexus'),
     sync_interval_seconds: 30,
   },
-  scheduler: {
-    enabled: true,
-    check_interval_seconds: 60,
-  },
   jira: {
     enabled: false,
     user: '',

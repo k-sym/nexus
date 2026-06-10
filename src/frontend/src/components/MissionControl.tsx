@@ -83,7 +83,7 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
       ) : (
         <div className="p-6 space-y-6">
           {/* Status strip */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Card title="Memory">
               {mem?.ok ? (
                 <>
@@ -102,18 +102,6 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
               ) : (
                 <div className="text-sm text-red-400">daemon down{mem?.error ? ` · ${mem.error}` : ''}</div>
               )}
-            </Card>
-
-            <Card title="Heartbeat">
-              <div className="text-2xl font-semibold text-zinc-100">
-                {status.scheduler.enabled ? 'On' : 'Off'}
-              </div>
-              <div className="text-xs text-zinc-500 mt-1">
-                scheduler · {status.scheduler.schedules} schedules · {status.scheduler.intervalSeconds}s
-              </div>
-              <div className="text-[11px] text-zinc-600 mt-1">
-                next: {status.scheduler.nextRun ? status.scheduler.nextRun.replace('T', ' ').slice(0, 16) : '—'}
-              </div>
             </Card>
 
             <Card title="Models">

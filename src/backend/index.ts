@@ -2,8 +2,8 @@
  * NEXUS backend entry point.
  *
  * Boots a single Fastify process that hosts the HTTP API and starts three
- * background loops: the orchestrator (agent dispatch), the scheduler (cron),
- * and the Obsidian vault watcher.
+ * background loops: the orchestrator (agent dispatch), the Jira poller, and
+ * the Obsidian vault watcher.
  */
 import Fastify from 'fastify';
 import { join } from 'node:path';
@@ -16,7 +16,6 @@ import { registerProjectRoutes } from './routes/projects';
 import { registerChatRoutes } from './routes/chat';
 import { registerOrchestratorRoutes } from './routes/orchestrator';
 import { registerMemoryRoutes } from './routes/memory';
-import { registerScheduleRoutes } from './routes/schedules';
 import { registerSettingsRoutes } from './routes/settings';
 import { registerStatusRoutes } from './routes/status';
 import { registerTicketRoutes } from './routes/tickets';
@@ -25,7 +24,6 @@ import { registerAuthRoutes } from './routes/auth';
 import { registerPiRoutes } from './routes/pi';
 import { startOrchestrator } from './orchestrator';
 import { initMemorySystem } from './memory';
-import { startScheduler } from './scheduler';
 import { startJiraSync } from './jira/poll';
 import { PiRuntime } from './pi/runtime';
 import { ConcurrencyTracker } from './pi/concurrency';
@@ -46,9 +44,6 @@ async function main() {
 
   await initMemorySystem(db);
   startOrchestrator(db, pi);
-  if (config.scheduler.enabled) {
-    startScheduler(db);
-  }
   startJiraSync(db);
 
   const app = Fastify({ logger: false });
@@ -70,7 +65,6 @@ async function main() {
   app.register(registerChatRoutes);
   app.register(registerOrchestratorRoutes);
   app.register(registerMemoryRoutes);
-  app.register(registerScheduleRoutes);
   app.register(registerSettingsRoutes);
   app.register(registerStatusRoutes);
   app.register(registerTicketRoutes);

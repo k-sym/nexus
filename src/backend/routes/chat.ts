@@ -71,7 +71,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const thread: ChatThread = {
       id: uuid(),
       project_id: projectId,
-      title: body.title?.trim() || 'New Chat',
+      title: body.title?.trim() || 'New Session',
       created_at: now,
       updated_at: now,
       archived_at: null,

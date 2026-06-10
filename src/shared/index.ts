@@ -38,20 +38,6 @@ export interface Task {
   model_key: string | null;
 }
 
-export interface Schedule {
-  id: string;
-  project_id: string;
-  name: string;
-  cron_expr: string;
-  task_template: string;
-  task_description: string;
-  agent_id: string;
-  enabled: boolean;
-  last_run: string | null;
-  next_run: string | null;
-  created_at: string;
-}
-
 /** A Jira ticket mirrored into Nexus (Jira stays canonical). */
 export interface Ticket {
   key: string;
@@ -103,10 +89,6 @@ export interface NexusConfig {
   obsidian: {
     vault_path: string;
     sync_interval_seconds: number;
-  };
-  scheduler: {
-    enabled: boolean;
-    check_interval_seconds: number;
   };
   jira: {
     /** When false (default) the poll loop stays dormant. */

@@ -21,7 +21,7 @@ describe('ChatPanel', () => {
       />,
     );
     expect(
-      screen.getByText(/Select a conversation/i),
+      screen.getByText(/Select a session/i),
     ).toBeInTheDocument();
   });
 

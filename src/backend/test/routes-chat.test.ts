@@ -38,7 +38,7 @@ function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boo
     CREATE TABLE chat_threads (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      title TEXT NOT NULL DEFAULT 'New Chat',
+      title TEXT NOT NULL DEFAULT 'New Session',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       archived_at TEXT,

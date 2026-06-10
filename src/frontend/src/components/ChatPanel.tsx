@@ -28,9 +28,11 @@ interface ChatPanelProps {
   onBusyConflict: (activeThreadId: string, activeTitle: string) => void;
   /** Called after a turn completes so the sidebar (title etc.) can refresh. */
   onThreadsChanged?: () => void;
+  /** Reports whether this session is actively streaming/thinking/tooling. */
+  onSessionActivityChange?: (threadId: string, active: boolean) => void;
 }
 
-export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged }: ChatPanelProps) {
+export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange }: ChatPanelProps) {
   const { models, activeModelId, setModel, setThread } = useModels();
   const { state, startStream, abortStream, dispatch, setActiveThread } = usePiStream();
   const [input, setInput] = useState('');
@@ -50,6 +52,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   useEffect(() => {
     setThread(threadId);
   }, [threadId, setThread]);
+
+  useEffect(() => {
+    if (!threadId || !onSessionActivityChange) return;
+    onSessionActivityChange(threadId, state.isRunning);
+    return () => onSessionActivityChange(threadId, false);
+  }, [threadId, state.isRunning, onSessionActivityChange]);
 
   // Reset stream state, abort any active stream, and clear input when switching threads.
   useEffect(() => {
@@ -245,7 +253,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
-          <p className="text-zinc-500 text-sm">Select a conversation, or use “+ New” in the tree to start one.</p>
+          <p className="text-zinc-500 text-sm">Select a session, or use “+ New Session” in the tree to start one.</p>
         </div>
       </div>
     );
@@ -285,7 +293,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       {pendingConfirm && (
         <div className="px-4 py-2 border-b border-amber-800/50 bg-amber-950/30 text-xs text-amber-200 flex items-center gap-3">
           <span className="flex-1 min-w-0 truncate">
-            “{pendingConfirm.activeTitle}” is still running. Start a new chat anyway (will cancel it)?
+            “{pendingConfirm.activeTitle}” is still running. Start a new session anyway (will cancel it)?
           </span>
           <button
             onClick={() => setPendingConfirm(null)}

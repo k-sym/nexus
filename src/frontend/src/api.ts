@@ -18,7 +18,6 @@ export interface MissionStatus {
     models?: { gen: boolean; embed: boolean; rerank: boolean };
     error?: string;
   };
-  scheduler: { enabled: boolean; intervalSeconds: number; schedules: number; lastRun: string | null; nextRun: string | null };
   models: Array<{ provider: string; id: string; name: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; configured: boolean }>;
   activity: { running: any[]; recent: any[] };
 }
@@ -74,7 +73,7 @@ export const api = {
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`/api/projects/${projectId}/threads`),
     // Creates a thread. Threads don't bind to a persona any more.
-    // The optional `title` sets the initial title (defaults to "New Chat").
+    // The optional `title` sets the initial title (defaults to "New Session").
     createThread: (projectId: string, title?: string) =>
       fetchJson<ChatThread>(`/api/projects/${projectId}/threads`, {
         method: 'POST',
@@ -131,13 +130,5 @@ export const api = {
     create: (projectId: string, data: { content: string; category?: string; agent_id?: string }) =>
       fetchJson<any>(`/api/projects/${projectId}/memories`, { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: string) => fetchJson<void>(`/api/memories/${id}`, { method: 'DELETE' }),
-  },
-  schedules: {
-    list: (projectId: string) => fetchJson<any[]>(`/api/projects/${projectId}/schedules`),
-    create: (projectId: string, data: { name: string; cron_expr: string; task_template: string; task_description?: string; agent_id: string }) =>
-      fetchJson<any>(`/api/projects/${projectId}/schedules`, { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<{ name: string; cron_expr: string; task_template: string; task_description: string; agent_id: string; enabled: boolean }>) =>
-      fetchJson<any>(`/api/schedules/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-    delete: (id: string) => fetchJson<void>(`/api/schedules/${id}`, { method: 'DELETE' }),
   },
 };

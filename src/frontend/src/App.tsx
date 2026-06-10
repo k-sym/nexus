@@ -11,7 +11,6 @@ import NotificationToasts from './components/NotificationToasts';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import MemoryView from './components/MemoryView';
-import SchedulerPage from './components/SchedulerPage';
 import SettingsPage from './components/SettingsPage';
 import UsagePage from './components/UsagePage';
 import ProjectModal from './components/ProjectModal';
@@ -19,7 +18,7 @@ import TaskModal from './components/TaskModal';
 import { OrchestratorModelPicker } from './components/OrchestratorModelPicker';
 import MemoryRail from './components/MemoryRail';
 
-type GlobalView = 'dashboard' | 'tickets' | 'scheduler' | 'usage' | 'settings';
+type GlobalView = 'dashboard' | 'tickets' | 'usage' | 'settings';
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -38,6 +37,7 @@ export default function App() {
   const [subView, setSubView] = useState<SubView>('kanban');
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ChatThread[]>([]);
+  const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(() => new Set());
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -225,22 +225,30 @@ export default function App() {
     if (activeProjectId) await loadThreads(activeProjectId);
   };
 
-  const startNewChat = async (projectId: string) => {
+  const startNewSession = async (projectId: string) => {
     const thread = await api.chat.createThread(projectId);
     await loadThreads(projectId);
     selectThread(projectId, thread.id);
   };
+
+  const handleSessionActivityChange = useCallback((threadId: string, active: boolean) => {
+    setActiveSessionIds((current) => {
+      const next = new Set(current);
+      if (active) next.add(threadId);
+      else next.delete(threadId);
+      return next;
+    });
+  }, []);
 
   // --- command palette entries ---------------------------------------------
   const commands: Command[] = useMemo(() => {
     const cmds: Command[] = [
       { id: 'view-dashboard', label: 'Dashboard', hint: 'View', keywords: 'mission control', run: () => selectGlobal('dashboard') },
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
-      { id: 'view-scheduler', label: 'Scheduler', hint: 'View', keywords: 'cron', run: () => selectGlobal('scheduler') },
       { id: 'view-usage', label: 'Usage', hint: 'View', keywords: 'tokens', run: () => selectGlobal('usage') },
     ];
     (['kanban', 'memory', 'chat'] as const).forEach((sub) => {
-      const label = sub.charAt(0).toUpperCase() + sub.slice(1);
+      const label = sub === 'chat' ? 'Sessions' : sub.charAt(0).toUpperCase() + sub.slice(1);
       const pid = activeProjectId ?? projects[0]?.id;
       if (pid) cmds.push({ id: `view-${sub}`, label, hint: 'View', keywords: 'open project', run: () => selectSubView(pid, sub) });
     });
@@ -260,7 +268,6 @@ export default function App() {
       return <MissionControl status={status} loading={statusLoading} onRefresh={loadStatus} onSelectAgent={() => {}} />;
     if (globalView === 'tickets')
       return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
-    if (globalView === 'scheduler') return <SchedulerPage projectId={activeProjectId ?? undefined} />;
     if (globalView === 'usage') return <UsagePage projectId={activeProjectId ?? undefined} />;
 
     if (!activeProject) {
@@ -284,7 +291,7 @@ export default function App() {
       );
     }
 
-    const viewLabel = subView.charAt(0).toUpperCase() + subView.slice(1);
+    const viewLabel = subView === 'chat' ? 'Sessions' : subView.charAt(0).toUpperCase() + subView.slice(1);
 
     return (
       <>
@@ -316,6 +323,7 @@ export default function App() {
                   threadId={activeThreadId}
                   onBusyConflict={() => {}}
                   onThreadsChanged={() => loadThreads(activeProject.id)}
+                  onSessionActivityChange={handleSessionActivityChange}
                 />
               </div>
               <MemoryRail
@@ -347,12 +355,13 @@ export default function App() {
           subView={subView}
           activeThreadId={activeThreadId}
           threads={activeProjectId ? threadMetas : []}
+          activeSessionIds={activeSessionIds}
           onSelectProject={focusProject}
           onSelectSubView={selectSubView}
           onSelectThread={selectThread}
           onRenameThread={handleRenameThread}
           onDeleteThread={handleDeleteThread}
-          onNewChat={(projectId) => void startNewChat(projectId)}
+          onNewChat={(projectId) => void startNewSession(projectId)}
           onNewProject={() => setShowProjectModal(true)}
         />
 

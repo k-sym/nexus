@@ -139,19 +139,6 @@ export default function SettingsPage() {
           </Field>
         </Section>
 
-        {/* Scheduler */}
-        <Section title="Scheduler">
-          <Field label="Enabled">
-            <button
-              onClick={() => update(['scheduler', 'enabled'], !config.scheduler.enabled)}
-              className={`px-3 py-1 text-xs rounded transition-colors ${config.scheduler.enabled ? 'bg-green-500/20 text-green-400' : 'bg-zinc-800 text-zinc-500'}`}
-            >
-              {config.scheduler.enabled ? 'Enabled' : 'Disabled'}
-            </button>
-            <p className="text-[10px] text-zinc-600 mt-1">Requires backend restart to take effect.</p>
-          </Field>
-        </Section>
-
         {/* Jira */}
         <Section title="Jira">
           <Field label="Sync">
