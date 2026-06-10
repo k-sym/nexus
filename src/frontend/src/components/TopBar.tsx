@@ -1,6 +1,6 @@
-import { Gauge, Ticket, ChartBar, Gear } from '@phosphor-icons/react';
+import { Gauge, Ticket, Gear } from '@phosphor-icons/react';
 
-export type GlobalView = 'dashboard' | 'tickets' | 'usage';
+export type GlobalView = 'dashboard' | 'tickets';
 export type ManageView = 'settings';
 
 interface TopBarProps {
@@ -37,7 +37,6 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
       {/* Global / cross-project links */}
       <button onClick={() => onSelectGlobal('dashboard')} className={item(view === 'dashboard')}><Gauge size={16} weight={view === 'dashboard' ? 'fill' : 'regular'} /> Dashboard</button>
       <button onClick={() => onSelectGlobal('tickets')} className={item(view === 'tickets')}><Ticket size={16} weight={view === 'tickets' ? 'fill' : 'regular'} /> Tickets</button>
-      <button onClick={() => onSelectGlobal('usage')} className={item(view === 'usage')}><ChartBar size={16} weight={view === 'usage' ? 'fill' : 'regular'} /> Usage</button>
 
       {/* Management group, right-aligned */}
       <div className="ml-auto flex items-center gap-1.5">

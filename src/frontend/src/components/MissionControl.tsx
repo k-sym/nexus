@@ -126,6 +126,27 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
             </div>
           </div>
 
+          {/* Stats — placeholder cards. Populated by the future codexbar
+              integration (Claude/Codex session-remaining + OpenRouter
+              credit balance). For now each card shows an em-dash. */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Stats</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              <Card title="Claude Stats">
+                <div className="text-2xl font-semibold text-faint">—</div>
+                <div className="text-xs text-muted mt-1">codexbar session · 5h rolling</div>
+              </Card>
+              <Card title="Codex Stats">
+                <div className="text-2xl font-semibold text-faint">—</div>
+                <div className="text-xs text-muted mt-1">codexbar session · weekly</div>
+              </Card>
+              <Card title="OpenRouter Stats">
+                <div className="text-2xl font-semibold text-faint">—</div>
+                <div className="text-xs text-muted mt-1">codexbar credit balance</div>
+              </Card>
+            </div>
+          </div>
+
           {/* Recent activity */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Recent activity</div>
@@ -144,7 +165,6 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
                   <span className="text-muted truncate">{r.task_title}</span>
                   <span className="text-xs text-faint shrink-0">
                     {r.provider} · {r.status}
-                    {r.total_tokens ? ` · ${r.total_tokens} tok` : ''}
                   </span>
                 </div>
               ))}
