@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import ChatPanel from './ChatPanel';
@@ -52,5 +52,57 @@ describe('ChatPanel', () => {
     expect(buttons.length).toBeGreaterThan(0);
     await userEvent.click(buttons[0]);
     expect(screen.getByPlaceholderText(/Search models/i)).toBeInTheDocument();
+  });
+
+  it('keeps the just-sent message visible when persisted reload is empty', async () => {
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'sonnet-4-5', name: 'Sonnet 4.5', provider: 'anthropic', configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({ thread: { id: 't1' }, messages: [] }),
+        } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+              controller.close();
+            },
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(
+      <ChatPanel
+        projectId="p1"
+        threadId="t1"
+        onBusyConflict={noop}
+      />,
+    );
+
+    await userEvent.type(screen.getByTestId('chat-input'), 'hello anthropic');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId('chat-messages')).getByText('hello anthropic')).toBeInTheDocument();
+    });
   });
 });

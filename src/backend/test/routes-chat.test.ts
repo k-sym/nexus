@@ -154,7 +154,7 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
   const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
   try {
@@ -176,6 +176,88 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
     assert.equal(firstAborted, true);
     const firstRes = await first;
     assert.equal(firstRes.statusCode, 200);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream returns model selection errors before prompting', async () => {
+  let promptCalled = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {
+      throw new Error("The model 'claude-3-5-haiku-latest' is deprecated");
+    },
+    prompt: async () => {
+      promptCalled = true;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'claude-3-5-haiku-latest' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/claude-3-5-haiku-latest' },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /deprecated/);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream keeps Anthropic OAuth on the Pi session path', async () => {
+  let sessionForCalled = false;
+  let promptCalled = false;
+  const runtime = {
+    auth: { get: () => ({ type: 'oauth' }) },
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalled = true;
+      return {
+        subscribe: (handler: (event: unknown) => void) => {
+          handler({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'hello' } });
+          return () => {};
+        },
+        setModel: async () => {},
+        prompt: async () => {
+          promptCalled = true;
+        },
+        abort: async () => {},
+      };
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'claude-haiku-4-5-20251001' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/claude-haiku-4-5-20251001' },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(sessionForCalled, true);
+    assert.equal(promptCalled, true);
+    assert.match(res.body, /text_delta/);
   } finally {
     await app.close();
     db.close();
@@ -214,6 +296,92 @@ test('GET /api/threads/:threadId returns the thread + empty messages for a fresh
     const body = res.json();
     assert.equal(body.thread.id, 'thread-1');
     assert.deepEqual(body.messages, []);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/threads/:threadId surfaces persisted assistant provider errors', async () => {
+  const runtime = {
+    readMessages: async () => [
+      {
+        type: 'message',
+        id: 'u1',
+        message: {
+          role: 'user',
+          content: [{ type: 'text', text: 'hi' }],
+          timestamp: 1,
+        },
+      },
+      {
+        type: 'message',
+        id: 'a1',
+        message: {
+          role: 'assistant',
+          content: [],
+          stopReason: 'error',
+          errorMessage:
+            '400 {"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now draw from your extra usage."}}',
+          timestamp: 2,
+        },
+      },
+    ],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+
+    assert.equal(res.statusCode, 200);
+    const assistant = res.json().messages.find((message: any) => message.role === 'assistant');
+    assert.equal(assistant.isError, true);
+    assert.match(assistant.content, /Third-party apps now draw/);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/threads/:threadId falls back to DB messages when no Pi session exists', async () => {
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    db.prepare(
+      'INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).run('m1', 'thread-1', 'user', 'hi', '2026-06-10T12:00:00.000Z');
+    db.prepare(
+      'INSERT INTO chat_messages (id, thread_id, role, content, thinking, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('m2', 'thread-1', 'assistant', 'hello', 'thinking', '2026-06-10T12:00:01.000Z');
+
+    const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(
+      res.json().messages.map((message: any) => ({
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        thinking: message.thinking,
+      })),
+      [
+        { id: 'm1', role: 'user', content: 'hi', thinking: null },
+        { id: 'm2', role: 'assistant', content: 'hello', thinking: 'thinking' },
+      ],
+    );
   } finally {
     await app.close();
     db.close();

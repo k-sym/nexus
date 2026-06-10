@@ -6,11 +6,12 @@
  * and the Obsidian vault watcher.
  */
 import Fastify from 'fastify';
+import { join } from 'node:path';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import websocket from '@fastify/websocket';
 import { getDb } from './db';
-import { loadConfig, getDbPath, resolveOpenRouterKey } from './config';
+import { loadConfig, getDbPath, getNexusDir, resolveOpenRouterKey } from './config';
 import { registerProjectRoutes } from './routes/projects';
 import { registerChatRoutes } from './routes/chat';
 import { registerOrchestratorRoutes } from './routes/orchestrator';
@@ -28,6 +29,9 @@ import { startScheduler } from './scheduler';
 import { startJiraSync } from './jira/poll';
 import { PiRuntime } from './pi/runtime';
 import { ConcurrencyTracker } from './pi/concurrency';
+import { ModelCurationStore } from './pi/model-curation';
+import { OAuthFlowManager } from './pi/oauth-flows';
+import { backfillOAuthCuratedModels } from './pi/oauth-curation-backfill';
 
 async function main() {
   const config = loadConfig();
@@ -55,7 +59,12 @@ async function main() {
 
   app.decorate('db', db);
   app.decorate('pi', pi);
+  const modelCuration = new ModelCurationStore(join(getNexusDir(), 'model-curation.json'));
+  backfillOAuthCuratedModels(pi, modelCuration);
+
   app.decorate('chatConcurrency', new ConcurrencyTracker());
+  app.decorate('modelCuration', modelCuration);
+  app.decorate('oauthFlows', new OAuthFlowManager(pi.auth));
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);

@@ -1,5 +1,6 @@
-import { describe, it, expect } from 'vitest';
-import { INITIAL_STATE, streamReducer } from './usePiStream';
+import { act, renderHook, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+import { INITIAL_STATE, streamReducer, usePiStream } from './usePiStream';
 
 describe('streamReducer', () => {
   it('START_STREAM seeds a user + empty assistant bubble', () => {
@@ -66,5 +67,189 @@ describe('streamReducer', () => {
     const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
     const reset = streamReducer(start, { type: 'RESET' });
     expect(reset).toEqual(INITIAL_STATE);
+  });
+});
+
+describe('usePiStream', () => {
+  it('shows assistant error event messages from the stream', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              event: {
+                type: 'message_update',
+                assistantMessageEvent: {
+                  type: 'error',
+                  message: "The model 'claude-3-5-haiku-latest' is deprecated",
+                },
+              },
+            }) + '\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body,
+    } as Response);
+
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'hi', {
+        modelKey: 'anthropic/claude-3-5-haiku-latest',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.status).toBe('error');
+      expect(result.current.state.error).toContain('deprecated');
+    });
+  });
+
+  it('shows API error bodies when stream setup fails', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      body: null,
+      json: async () => ({
+        error: "The model 'claude-3-5-haiku-latest' is deprecated",
+      }),
+    } as Response);
+
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'hi', {
+        modelKey: 'anthropic/claude-3-5-haiku-latest',
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.status).toBe('error');
+      expect(result.current.state.error).toContain('deprecated');
+    });
+  });
+
+  it('renders final message_end content when no text deltas arrive', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              event: {
+                type: 'message_end',
+                message: {
+                  role: 'assistant',
+                  content: [{ type: 'text', text: 'final anthropic response' }],
+                  timestamp: 123,
+                },
+              },
+            }) + '\n',
+          ),
+        );
+        controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body,
+    } as Response);
+
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'hi');
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.messages.some((message) => message.content === 'final anthropic response')).toBe(true);
+    });
+  });
+
+  it('shows Anthropic thinking_end content as thinking feedback', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              event: {
+                type: 'message_update',
+                assistantMessageEvent: {
+                  type: 'thinking_end',
+                  content: 'I am checking the request.',
+                },
+              },
+            }) + '\n',
+          ),
+        );
+        controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body,
+    } as Response);
+
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'hi');
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.messages.some((message) => message.thinking === 'I am checking the request.')).toBe(true);
+    });
+  });
+
+  it('shows assistant message_end provider errors', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              event: {
+                type: 'message_end',
+                message: {
+                  role: 'assistant',
+                  content: [],
+                  stopReason: 'error',
+                  errorMessage:
+                    '400 {"type":"error","error":{"type":"invalid_request_error","message":"Third-party apps now draw from your extra usage."}}',
+                },
+              },
+            }) + '\n',
+          ),
+        );
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body,
+    } as Response);
+
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'hi');
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.status).toBe('error');
+      expect(result.current.state.error).toContain('Third-party apps now draw');
+    });
   });
 });

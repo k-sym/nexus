@@ -51,7 +51,7 @@ export type StreamAction =
   | { type: 'TOOL_CALL_START'; toolCall: { id: string; name: string; args: Record<string, unknown> } }
   | { type: 'TOOL_CALL_UPDATE'; id: string; patch: Record<string, unknown> }
   | { type: 'TOOL_PARTIAL_OUTPUT'; id: string; partialOutput: string }
-  | { type: 'MESSAGE_END' }
+  | { type: 'MESSAGE_END'; message?: Partial<StreamMessage> }
   | { type: 'STREAM_COMPLETE' }
   | { type: 'STREAM_ERROR'; error: string }
   | { type: 'ABORT_STREAM' }
@@ -71,6 +71,60 @@ function makeId(): string {
   let out = '';
   for (let i = 0; i < 12; i++) out += ID_ALPHABET[Math.floor(Math.random() * ID_ALPHABET.length)];
   return out;
+}
+
+function extractMessageSnapshot(message: any): Partial<StreamMessage> | undefined {
+  if (!message || message.role !== 'assistant') return undefined;
+  let content = '';
+  let thinking = '';
+  const toolCalls: StreamMessage['toolCalls'] = [];
+  for (const block of message.content ?? []) {
+    if (block?.type === 'text') content += block.text ?? '';
+    else if (block?.type === 'thinking') thinking += block.thinking ?? '';
+    else if (block?.type === 'toolCall') {
+      toolCalls.push({
+        id: block.id,
+        name: block.name,
+        args: block.arguments ?? {},
+        status: 'completed',
+      });
+    }
+  }
+  return {
+    content,
+    thinking,
+    toolCalls,
+    timestamp: message.timestamp,
+  };
+}
+
+function formatProviderError(message: unknown): string {
+  if (typeof message !== 'string' || !message.trim()) return '';
+  const trimmed = message.trim();
+  const jsonStart = trimmed.indexOf('{');
+  if (jsonStart >= 0) {
+    try {
+      const parsed = JSON.parse(trimmed.slice(jsonStart));
+      const providerMessage = parsed?.error?.message ?? parsed?.message;
+      if (typeof providerMessage === 'string' && providerMessage.trim()) return providerMessage;
+    } catch {
+      /* fall through */
+    }
+  }
+  return trimmed;
+}
+
+function extractThinkingEventContent(event: any): string {
+  if (typeof event?.delta === 'string') return event.delta;
+  if (typeof event?.content === 'string') return event.content;
+  const content = event?.partial?.content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((block) => block?.type === 'thinking')
+      .map((block) => block.thinking ?? '')
+      .join('');
+  }
+  return '';
 }
 
 export function streamReducer(state: StreamState, action: StreamAction): StreamState {
@@ -164,8 +218,21 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
       };
     }
 
-    case 'MESSAGE_END':
-      return state;
+    case 'MESSAGE_END': {
+      if (!action.message) return state;
+      const current = state.streamingMessage;
+      if (!current) return state;
+      return {
+        ...state,
+        streamingMessage: {
+          ...current,
+          content: action.message.content ?? current.content,
+          thinking: action.message.thinking ?? current.thinking,
+          toolCalls: action.message.toolCalls ?? current.toolCalls,
+          timestamp: action.message.timestamp ?? current.timestamp,
+        },
+      };
+    }
 
     case 'STREAM_COMPLETE': {
       const m = state.streamingMessage;
@@ -246,15 +313,30 @@ export function usePiStream() {
       const ame = ev.assistantMessageEvent;
       if (!ame) return;
       if (ame.type === 'thinking_delta') dispatch({ type: 'THINKING_DELTA', delta: ame.delta });
+      else if (ame.type === 'thinking_end') {
+        const thinking = extractThinkingEventContent(ame);
+        if (thinking) dispatch({ type: 'MESSAGE_END', message: { thinking } });
+      }
       else if (ame.type === 'text_delta') dispatch({ type: 'TEXT_DELTA', delta: ame.delta });
       else if (ame.type === 'toolcall_end') {
         dispatch({ type: 'TOOL_CALL_START', toolCall: { id: ame.toolCall.id, name: ame.toolCall.name, args: ame.toolCall.arguments ?? {} } });
       } else if (ame.type === 'error') {
-        const reason = ame.reason === 'aborted' ? 'Aborted' : 'Error';
+        const reason =
+          ame.message ??
+          ame.error?.message ??
+          (typeof ame.error === 'string' ? ame.error : undefined) ??
+          (ame.reason === 'aborted' ? 'Aborted' : ame.reason ?? 'Error');
         dispatch({ type: 'STREAM_ERROR', error: reason });
       }
     } else if (type === 'message_end') {
-      dispatch({ type: 'MESSAGE_END' });
+      if (ev.message?.role === 'assistant' && (ev.message.stopReason === 'error' || ev.message.errorMessage)) {
+        dispatch({
+          type: 'STREAM_ERROR',
+          error: formatProviderError(ev.message.errorMessage) || 'Provider returned an error.',
+        });
+        return;
+      }
+      dispatch({ type: 'MESSAGE_END', message: extractMessageSnapshot(ev.message) });
     } else if (type === 'tool_execution_start') {
       dispatch({
         type: 'TOOL_CALL_START',
@@ -320,7 +402,8 @@ export function usePiStream() {
         );
       }
       if (!res.ok || !res.body) {
-        dispatch({ type: 'STREAM_ERROR', error: `HTTP ${res.status}` });
+        const body = await res.json().catch(() => ({}));
+        dispatch({ type: 'STREAM_ERROR', error: body.error ?? body.message ?? `HTTP ${res.status}` });
         return;
       }
       const reader = res.body.getReader();

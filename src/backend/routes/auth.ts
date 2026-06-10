@@ -3,16 +3,19 @@
  *
  * The legacy local auth subsystem (`backend/auth/oauth.ts`,
  * `backend/auth/store.ts`) is gone. Auth is now served by pi's
- * `AuthStorage` at `~/.nexus/auth.json`. We expose REST endpoints that
- * delegate to it, plus a minimal OAuth start/cancel stub for the
- * eventual full PKCE loopback flow (Phase 4 + follow-up).
+ * `AuthStorage` at `~/.nexus/auth.json`. OAuth flows are wrapped in an
+ * in-memory flow manager so the React UI can poll progress and provide
+ * manual callback input when a provider asks for it.
  */
 import { FastifyInstance } from 'fastify';
+import { getModelCatalog } from './pi';
 
 interface AuthProvider {
   id: string;
   type: 'api_key' | 'oauth';
 }
+
+const OAUTH_PROVIDERS = new Set(['anthropic', 'openai-codex', 'github-copilot']);
 
 export async function registerAuthRoutes(fastify: FastifyInstance) {
   const auth = fastify.pi.auth;
@@ -47,17 +50,43 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
     return { ok: true };
   });
 
-  // OAuth start/cancel are stubbed. The full PKCE flow needs:
-  //   1. `auth.login(providerId, callbacks)` from pi's AuthStorage
-  //   2. SSE channel from the route to the React UI for progress
-  //      (auth_url, progress, complete, cancelled, error)
-  //   3. A `cancel` route that signals an AbortController
-  // This is a follow-up commit. The frontend can already call
-  // /save-key today; OAuth providers (Anthropic, OpenAI Codex, GitHub
-  // Copilot) work via API key in the meantime.
-  fastify.post('/api/auth/start-oauth', async (_request, reply) => {
-    reply.code(501);
-    return { ok: false, reason: 'not_implemented' };
+  fastify.post('/api/auth/start-oauth', async (request, reply) => {
+    const body = request.body as { provider?: string };
+    if (!body?.provider || !OAUTH_PROVIDERS.has(body.provider)) {
+      reply.code(400);
+      return { ok: false, reason: 'unsupported_provider' };
+    }
+    const flow = fastify.oauthFlows.start(body.provider);
+    return { ok: true, flowId: flow.id };
   });
-  fastify.post('/api/auth/cancel-oauth', async () => ({ ok: true }));
+
+  fastify.get('/api/auth/oauth/:flowId', async (request, reply) => {
+    const { flowId } = request.params as { flowId: string };
+    const status = fastify.oauthFlows.status(flowId);
+    if (!status) {
+      reply.code(404);
+      return { error: 'OAuth flow not found' };
+    }
+    if (status.state === 'complete') {
+      fastify.pi.auth.reload();
+      fastify.pi.models.refresh();
+      fastify.modelCuration.markOAuthProviderSynced(status.provider, getModelCatalog(fastify));
+    }
+    return status;
+  });
+
+  fastify.post('/api/auth/oauth/:flowId/respond', async (request, reply) => {
+    const { flowId } = request.params as { flowId: string };
+    const body = request.body as { value?: string };
+    if (typeof body?.value !== 'string') {
+      reply.code(400);
+      return { ok: false, reason: 'value_required' };
+    }
+    return { ok: fastify.oauthFlows.respond(flowId, body.value) };
+  });
+
+  fastify.post('/api/auth/cancel-oauth', async (request) => {
+    const body = request.body as { flowId?: string };
+    return { ok: body?.flowId ? fastify.oauthFlows.cancel(body.flowId) : false };
+  });
 }

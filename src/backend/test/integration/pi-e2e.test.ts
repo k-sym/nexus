@@ -23,7 +23,11 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { PiRuntime } from '../../pi/runtime';
 import { ConcurrencyTracker } from '../../pi/concurrency';
+import { ModelCurationStore } from '../../pi/model-curation';
+import { OAuthFlowManager } from '../../pi/oauth-flows';
 import { registerChatRoutes } from '../../routes/chat';
+import { registerPiRoutes } from '../../routes/pi';
+import { registerAuthRoutes } from '../../routes/auth';
 
 test('POST /api/threads/:id/messages/stream returns 200 NDJSON', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
@@ -131,4 +135,143 @@ test('GET /api/models returns the pi runtime model registry (configured = auth.j
     `getAvailable (${available.length}) must be a subset of getAll (${all.length})`,
   );
   rmSync(dir, { recursive: true, force: true });
+});
+
+test('GET /api/models returns allModels plus curated models', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
+  const runtime = new PiRuntime({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  });
+  const app = Fastify({ logger: false });
+  app.decorate('pi', runtime);
+  app.decorate('modelCuration', new ModelCurationStore(join(dir, 'model-curation.json')));
+  app.register(registerPiRoutes);
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/models' });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.ok(Array.isArray(body.allModels));
+    assert.ok(Array.isArray(body.models));
+    assert.ok(Array.isArray(body.enabledModelKeys));
+    assert.equal(body.customized, false);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PUT /api/models/curation saves enabled model keys', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
+  const runtime = new PiRuntime({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  });
+  const all = runtime.models.getAll();
+  const first = all[0];
+  assert.ok(first, 'expected pi model catalog');
+  const key = `${first.provider}/${first.id}`;
+  const app = Fastify({ logger: false });
+  app.decorate('pi', runtime);
+  app.decorate('modelCuration', new ModelCurationStore(join(dir, 'model-curation.json')));
+  app.register(registerPiRoutes);
+  try {
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/models/curation',
+      payload: { enabledModelKeys: [key, 'missing/model'] },
+    });
+    assert.equal(put.statusCode, 200);
+    assert.deepEqual(put.json().enabledModelKeys, [key]);
+    const get = await app.inject({ method: 'GET', url: '/api/models' });
+    assert.deepEqual(get.json().models.map((m: any) => `${m.provider}/${m.id}`), [key]);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/auth/start-oauth starts a flow', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-auth-'));
+  const runtime = new PiRuntime({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  });
+  const app = Fastify({ logger: false });
+  app.decorate('pi', runtime);
+  app.decorate('modelCuration', new ModelCurationStore(join(dir, 'model-curation.json')));
+  app.decorate('oauthFlows', new OAuthFlowManager({
+    login: async (_provider, callbacks) => callbacks.onAuth({ url: 'https://example.test/login' }),
+  }));
+  app.register(registerAuthRoutes);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/auth/start-oauth',
+      payload: { provider: 'anthropic' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(typeof res.json().flowId, 'string');
+    const status = await app.inject({ method: 'GET', url: `/api/auth/oauth/${res.json().flowId}` });
+    assert.equal(status.statusCode, 200);
+    assert.equal(status.json().authUrl, 'https://example.test/login');
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/auth/oauth/:flowId refreshes auth and models after OAuth completes', async () => {
+  let authReloads = 0;
+  let modelRefreshes = 0;
+  const syncedProviders: string[] = [];
+  const app = Fastify({ logger: false });
+  app.decorate('pi', {
+    auth: {
+      list: () => [],
+      get: () => undefined,
+      set: () => {},
+      remove: () => {},
+      reload: () => {
+        authReloads += 1;
+      },
+    },
+    models: {
+      refresh: () => {
+        modelRefreshes += 1;
+      },
+      getAll: () => [
+        { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT 5.4', configured: true },
+      ],
+      getAvailable: () => [
+        { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT 5.4', configured: true },
+      ],
+    },
+  });
+  app.decorate('modelCuration', {
+    markOAuthProviderSynced: (provider: string) => {
+      syncedProviders.push(provider);
+    },
+  });
+  app.decorate('oauthFlows', {
+    start: () => ({ id: 'flow-complete' }),
+    status: () => ({
+      id: 'flow-complete',
+      provider: 'openai-codex',
+      state: 'complete',
+      messages: [],
+    }),
+    respond: () => false,
+    cancel: () => false,
+  });
+  app.register(registerAuthRoutes);
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/auth/oauth/flow-complete' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(authReloads, 1);
+    assert.equal(modelRefreshes, 1);
+    assert.deepEqual(syncedProviders, ['openai-codex']);
+  } finally {
+    await app.close();
+  }
 });
