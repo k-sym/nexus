@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import KanbanBoard from './KanbanBoard';
 import { Task } from '@nexus/shared';
@@ -15,6 +15,7 @@ const task: Task = {
   created_at: '2026-06-11T07:00:00.000Z',
   updated_at: '2026-06-11T07:00:00.000Z',
   model_key: null,
+  thread_id: null,
 };
 
 describe('KanbanBoard', () => {
@@ -26,7 +27,7 @@ describe('KanbanBoard', () => {
         columnLabels={{ triage: 'Triage' } as Record<string, string>}
         onMoveTask={vi.fn()}
         onAddTask={vi.fn()}
-        onEditTask={vi.fn()}
+        onOpenTask={vi.fn()}
         onDeleteTask={vi.fn()}
       />,
     );
@@ -48,7 +49,7 @@ describe('KanbanBoard', () => {
         columnLabels={{ triage: 'Triage' } as Record<string, string>}
         onMoveTask={vi.fn()}
         onAddTask={vi.fn()}
-        onEditTask={vi.fn()}
+        onOpenTask={vi.fn()}
         onDeleteTask={vi.fn()}
       />,
     );
@@ -58,5 +59,44 @@ describe('KanbanBoard', () => {
     expect(card).toHaveClass('kanban-priority-medium');
     expect(card).toHaveAttribute('data-priority', 'medium');
     expect(card?.querySelector('[data-priority-dot]')).toBeNull();
+  });
+
+  it('opens the card (edit when unlinked, reopen-chat when linked) via onOpenTask, and shows a chat glyph only when linked', () => {
+    const onOpenTask = vi.fn();
+    const linked: Task = { ...task, id: 'task-2', title: 'Linked task', thread_id: 'thread-9' };
+    const { rerender } = render(
+      <KanbanBoard
+        tasks={[task]}
+        columns={['triage']}
+        columnLabels={{ triage: 'Triage' } as Record<string, string>}
+        onMoveTask={vi.fn()}
+        onAddTask={vi.fn()}
+        onOpenTask={onOpenTask}
+        onDeleteTask={vi.fn()}
+      />,
+    );
+
+    // Unlinked card: clicking calls onOpenTask with the task; no chat glyph.
+    let card = screen.getByText('Design ambient board').closest('[data-kanban-card]')!;
+    expect(card.querySelector('[aria-label="Has a linked chat"]')).toBeNull();
+    fireEvent.click(card);
+    expect(onOpenTask).toHaveBeenCalledWith(task);
+
+    // Linked card: chat glyph present, click still routes through onOpenTask.
+    rerender(
+      <KanbanBoard
+        tasks={[linked]}
+        columns={['triage']}
+        columnLabels={{ triage: 'Triage' } as Record<string, string>}
+        onMoveTask={vi.fn()}
+        onAddTask={vi.fn()}
+        onOpenTask={onOpenTask}
+        onDeleteTask={vi.fn()}
+      />,
+    );
+    card = screen.getByText('Linked task').closest('[data-kanban-card]')!;
+    expect(card.querySelector('[aria-label="Has a linked chat"]')).not.toBeNull();
+    fireEvent.click(card);
+    expect(onOpenTask).toHaveBeenCalledWith(linked);
   });
 });

@@ -78,7 +78,7 @@ export const api = {
       fetchJson<Task>(`/api/projects/${id}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
   },
   tasks: {
-    update: (id: string, data: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'assigned_agent' | 'due_date' | 'model_key'>>) =>
+    update: (id: string, data: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'assigned_agent' | 'due_date' | 'model_key' | 'thread_id'>>) =>
       fetchJson<Task>(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => fetchJson<void>(`/api/tasks/${id}`, { method: 'DELETE' }),
   },
@@ -95,15 +95,6 @@ export const api = {
       fetchJson<ChatThread>(`/api/threads/${threadId}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
     archive: (threadId: string) => fetchJson<void>(`/api/threads/${threadId}/archive`, { method: 'POST' }),
     deleteThread: (threadId: string) => fetchJson<void>(`/api/threads/${threadId}`, { method: 'DELETE' }),
-  },
-  agents: {
-    // Sets a model on a task and moves it to in_progress; the orchestrator
-    // picks it up on the next poll tick and dispatches headlessly.
-    startTask: (taskId: string, modelKey: string) =>
-      fetchJson<{ ok: boolean }>(`/api/orchestrator/tasks/${taskId}/start`, {
-        method: 'POST',
-        body: JSON.stringify({ modelKey }),
-      }),
   },
   models: {
     list: () => fetchJson<ModelsResponse>(`/api/models`),

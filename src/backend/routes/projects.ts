@@ -4,6 +4,8 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { Project, Task, TaskStatus } from '@nexus/shared';
+import { summarizeTaskThread } from '../memory/summarize.js';
+import { insertNotification } from '../notifications/index.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
 function expandHome(p: string): string {
@@ -178,9 +180,18 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
   fastify.put('/api/tasks/:id', async (request) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { title?: string; description?: string; status?: TaskStatus; priority?: string; assigned_agent?: string; due_date?: string };
+    const body = request.body as {
+      title?: string;
+      description?: string;
+      status?: TaskStatus;
+      priority?: string;
+      assigned_agent?: string;
+      due_date?: string;
+      model_key?: string;
+      thread_id?: string;
+    };
 
-    const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task | undefined;
     if (!existing) {
       const err = new Error('Task not found') as any;
       err.statusCode = 404;
@@ -188,12 +199,38 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     }
 
     const now = new Date().toISOString();
-    db.prepare('UPDATE tasks SET title = COALESCE(?, title), description = COALESCE(?, description), status = COALESCE(?, status), priority = COALESCE(?, priority), assigned_agent = COALESCE(?, assigned_agent), due_date = COALESCE(?, due_date), updated_at = ? WHERE id = ?')
-      .run(body.title, body.description, body.status, body.priority, body.assigned_agent, body.due_date, now, id);
+    db.prepare('UPDATE tasks SET title = COALESCE(?, title), description = COALESCE(?, description), status = COALESCE(?, status), priority = COALESCE(?, priority), assigned_agent = COALESCE(?, assigned_agent), due_date = COALESCE(?, due_date), model_key = COALESCE(?, model_key), thread_id = COALESCE(?, thread_id), updated_at = ? WHERE id = ?')
+      .run(body.title, body.description, body.status, body.priority, body.assigned_agent, body.due_date, body.model_key, body.thread_id, now, id);
 
-    db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, (existing as any).project_id);
+    db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, existing.project_id);
 
-    return db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task;
+
+    // Summarize a completed task-chat into memory + Obsidian when its card is
+    // advanced into Review/Deploy. Fires only on the transition *into* a done
+    // state (so Review→Deploy doesn't re-summarize), and only for thread-linked
+    // tasks. Best-effort and fire-and-forget so the move stays responsive.
+    const DONE: TaskStatus[] = ['review', 'deploy'];
+    const crossedIntoDone =
+      body.status != null &&
+      DONE.includes(body.status) &&
+      !DONE.includes(existing.status) &&
+      !!updated.thread_id;
+    if (crossedIntoDone) {
+      void summarizeTaskThread(db, fastify.pi, updated)
+        .then((wrote) => {
+          if (wrote) {
+            insertNotification(db, {
+              level: 'info',
+              title: 'Task summarized',
+              message: `"${updated.title}" was summarized into project memory.`,
+            });
+          }
+        })
+        .catch((err) => console.error('[summarize] task summary failed:', err?.message));
+    }
+
+    return updated;
   });
 
   fastify.delete('/api/tasks/:id', async (request) => {

@@ -1,15 +1,20 @@
 import { useState } from 'react';
+import { Task } from '@nexus/shared';
 
 interface TaskModalProps {
-  columnLabel: string;
+  /** Label of the column being added to (create mode). */
+  columnLabel?: string;
+  /** When provided, the modal edits this task instead of creating a new one. */
+  task?: Task;
   onClose: () => void;
   onSubmit: (data: { title: string; description: string; priority: string }) => void;
 }
 
-export default function TaskModal({ columnLabel, onClose, onSubmit }: TaskModalProps) {
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [priority, setPriority] = useState('medium');
+export default function TaskModal({ columnLabel, task, onClose, onSubmit }: TaskModalProps) {
+  const isEdit = Boolean(task);
+  const [title, setTitle] = useState(task?.title ?? '');
+  const [description, setDescription] = useState(task?.description ?? '');
+  const [priority, setPriority] = useState(task?.priority ?? 'medium');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,8 +25,10 @@ export default function TaskModal({ columnLabel, onClose, onSubmit }: TaskModalP
   return (
     <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
       <div className="surface-glass border border-subtle rounded-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold mb-1">New Task</h2>
-        <p className="text-xs text-faint mb-4">Adding to: {columnLabel}</p>
+        <h2 className="text-lg font-semibold mb-1">{isEdit ? 'Edit Task' : 'New Task'}</h2>
+        <p className="text-xs text-faint mb-4">
+          {isEdit ? 'Update the task details' : `Adding to: ${columnLabel}`}
+        </p>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="block text-xs text-faint mb-1">Title</label>
@@ -64,7 +71,7 @@ export default function TaskModal({ columnLabel, onClose, onSubmit }: TaskModalP
               Cancel
             </button>
             <button type="submit" disabled={!title.trim()} className="px-4 py-2 text-sm accent-button rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
-              Create Task
+              {isEdit ? 'Save Changes' : 'Create Task'}
             </button>
           </div>
         </form>

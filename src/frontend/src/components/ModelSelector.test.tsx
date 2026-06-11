@@ -94,4 +94,16 @@ describe('ModelSelector', () => {
     await userEvent.click(screen.getByRole('button'));
     expect(screen.getByText(/No curated models enabled/i)).toBeInTheDocument();
   });
+
+  it('portals the dropdown to document.body so it escapes backdrop-filter containing blocks', async () => {
+    // The dropdown uses position:fixed with viewport coords. If it renders inside a
+    // surface-glass modal (which sets backdrop-filter), that ancestor becomes the
+    // containing block and the dropdown flies off-screen. Portaling to body prevents this.
+    const { container } = render(<ModelSelector models={models} onSelect={() => {}} />);
+    await userEvent.click(screen.getByRole('button'));
+    const dropdown = document.querySelector('[data-model-dropdown]');
+    expect(dropdown).not.toBeNull();
+    expect(container.contains(dropdown)).toBe(false);
+    expect(document.body.contains(dropdown!)).toBe(true);
+  });
 });

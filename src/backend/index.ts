@@ -1,9 +1,9 @@
 /**
  * NEXUS backend entry point.
  *
- * Boots a single Fastify process that hosts the HTTP API and starts three
- * background loops: the orchestrator (agent dispatch), the Jira poller, and
- * the Obsidian vault watcher.
+ * Boots a single Fastify process that hosts the HTTP API and starts the
+ * background Jira poller. Task work runs interactively in chat threads
+ * (the old headless orchestrator dispatch loop has been removed).
  */
 import Fastify from 'fastify';
 import { join } from 'node:path';
@@ -22,7 +22,6 @@ import { registerTicketRoutes } from './routes/tickets.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
-import { startOrchestrator } from './orchestrator/index.js';
 import { initMemorySystem } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { PiRuntime } from './pi/runtime.js';
@@ -45,7 +44,6 @@ async function main() {
   }
 
   await initMemorySystem(db);
-  startOrchestrator(db, pi);
   startJiraSync(db);
 
   const app = Fastify({ logger: false });

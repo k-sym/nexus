@@ -6,6 +6,7 @@
  * free-text search; selection calls back with `(provider, id)`.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { CaretUp, Check, MagnifyingGlass } from '@phosphor-icons/react';
 import { modelKey, type ModelInfo, parseModelKey } from '../hooks/useModels';
 
@@ -90,7 +91,7 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
         )}
         <CaretUp className={`w-3 h-3 transition-transform ${open ? '' : 'rotate-180'}`} />
       </button>
-      {open && (
+      {open && createPortal(
         <div
           data-model-dropdown
           className={`fixed z-50 w-72 rounded-md border border-subtle surface-glass ${
@@ -166,7 +167,8 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
               })
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

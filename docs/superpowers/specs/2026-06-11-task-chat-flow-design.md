@@ -101,12 +101,20 @@ There is no "create thread + auto-send" today. Add a minimal seed channel:
 - Conditional card click: edit when unlinked, reopen-chat when linked.
 - Update/remove orchestrator tests that assume headless dispatch.
 
-## Out of scope (tracked separately)
+## Summarize a completed task chat into memory + Obsidian (implemented)
 
-- **Summarize a completed task chat into memory + Obsidian.** The removed headless
-  run used to auto-extract insights (`addMemory`) and write an Obsidian summary
-  (`writeTaskSummary`) on completion. The chat flow will not do this automatically.
-  Deferred to a follow-up (spawned task chip "Summarize task chats into memory").
+The removed headless run used to auto-extract insights (`addMemory`) and write an
+Obsidian summary (`writeTaskSummary`) on completion. This is now reinstated for the
+chat flow, **triggered on the move into Review/Deploy** rather than headlessly:
+
+- `src/backend/memory/summarize.ts` (`summarizeTaskThread`) reads the task's linked
+  thread (pi session entries, falling back to persisted `chat_messages`), extracts
+  the assistant's text, runs the same heuristic insight extraction the orchestrator
+  used (`addMemory`), and writes the Obsidian task summary (`writeTaskSummary`).
+- `PUT /api/tasks/:id` fires it **once**, only on the transition *into* `review`/
+  `deploy` from a non-done status (so Review→Deploy doesn't re-summarize) and only
+  for thread-linked tasks. It is best-effort / fire-and-forget so the card move stays
+  responsive; on success it raises an in-app notification.
 
 ## Affected files (anticipated)
 
