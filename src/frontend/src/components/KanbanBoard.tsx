@@ -47,48 +47,48 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
           >
             <div className="flex items-center justify-between mb-2 px-1">
               <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+                <span className="text-xs font-semibold text-faint uppercase tracking-wider">
                   {columnLabels[column]}
                 </span>
-                <span className="text-[10px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded-full">
+                <span className="surface-elevated text-faint text-[10px] px-1.5 py-0.5 rounded-full">
                   {columnTasks.length}
                 </span>
               </div>
               <button
                 onClick={() => onAddTask(column)}
-                className="text-zinc-500 hover:text-zinc-200 text-lg leading-none transition-colors"
+                className="text-faint hover:text-[var(--text-primary)] text-lg leading-none transition-colors"
               >
                 +
               </button>
             </div>
 
-            <div className="flex-1 bg-zinc-900/50 rounded-lg p-2 space-y-2 overflow-y-auto min-h-[100px]">
+            <div className="flex-1 surface-glass border border-subtle rounded-lg p-2 space-y-2 overflow-y-auto min-h-[100px]">
               {columnTasks.map(task => (
                 <div
                   key={task.id}
                   draggable
                   onDragStart={(e) => handleDragStart(e, task.id)}
                   onClick={() => onEditTask(task)}
-                  className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-indigo-500/50 transition-colors group"
+                  className="surface-panel border border-subtle rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-[var(--border-strong)] transition-colors group"
                 >
                   <div className="flex items-start justify-between gap-2 mb-1">
                     <h3 className="text-sm font-medium leading-tight flex-1">{task.title}</h3>
                     <span className={`w-2 h-2 rounded-full shrink-0 mt-1 ${PRIORITY_COLORS[task.priority] || 'bg-gray-500'}`} />
                   </div>
                   {task.description && (
-                    <p className="text-xs text-zinc-500 line-clamp-2 mb-2">{task.description}</p>
+                    <p className="text-xs text-muted line-clamp-2 mb-2">{task.description}</p>
                   )}
                   <div className="flex items-center justify-between">
                     <div className="flex gap-1">
                       {task.assigned_agent && (
-                        <span className="text-[10px] bg-zinc-800/50 text-zinc-500 px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] surface-elevated text-faint px-1.5 py-0.5 rounded">
                           {task.assigned_agent}
                         </span>
                       )}
                     </div>
                     <button
                       onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
-                      className="text-zinc-500/30 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="text-faint/40 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       ✕
                     </button>
@@ -97,7 +97,7 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
               ))}
 
               {columnTasks.length === 0 && (
-                <div className="text-center text-xs text-zinc-600/40 py-4">
+                <div className="text-center text-xs text-faint/70 py-4">
                   Drop tasks here
                 </div>
               )}

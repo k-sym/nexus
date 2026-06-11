@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Sidebar, { type ThreadMeta } from './Sidebar';
 import type { ChatThread, Project } from '@nexus/shared';
 
@@ -70,6 +70,10 @@ function renderSidebar({
 }
 
 describe('Sidebar', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
   it('labels chat threads as sessions and shows active session activity', () => {
     renderSidebar({ threads: [{ thread }], activeSessionIds: new Set([thread.id]) });
 
@@ -83,6 +87,37 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('No sessions')).toBeInTheDocument();
     expect(screen.queryByText('No conversations')).not.toBeInTheDocument();
+  });
+
+  it('uses the default sidebar width when no preference is saved', () => {
+    renderSidebar();
+
+    expect(screen.getByRole('complementary', { name: 'Navigation sidebar' })).toHaveStyle({ width: '240px' });
+  });
+
+  it('uses the saved sidebar width when a preference exists', () => {
+    localStorage.setItem('nexus.sidebar.width', '320');
+
+    renderSidebar();
+
+    expect(screen.getByRole('complementary', { name: 'Navigation sidebar' })).toHaveStyle({ width: '320px' });
+  });
+
+  it('resizes and persists the sidebar width within bounds', async () => {
+    const user = userEvent.setup();
+    renderSidebar();
+
+    const sidebar = screen.getByRole('complementary', { name: 'Navigation sidebar' });
+    const handle = screen.getByTitle('Drag to resize sidebar');
+
+    await user.pointer([
+      { keys: '[MouseLeft>]', target: handle, coords: { clientX: 240, clientY: 20 } },
+      { coords: { clientX: 420, clientY: 20 } },
+      { keys: '[/MouseLeft]', coords: { clientX: 420, clientY: 20 } },
+    ]);
+
+    expect(sidebar).toHaveStyle({ width: '360px' });
+    expect(localStorage.getItem('nexus.sidebar.width')).toBe('360');
   });
 
   it('offers an edit action for project details', async () => {

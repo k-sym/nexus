@@ -253,7 +253,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="text-center">
-          <p className="text-zinc-500 text-sm">Select a session, or use “+ New Session” in the tree to start one.</p>
+          <p className="text-faint text-sm">Select a session, or use “+ New Session” in the tree to start one.</p>
         </div>
       </div>
     );
@@ -266,14 +266,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
   return (
     <div className="flex-1 flex flex-col min-w-0 h-full">
-      <header className="px-4 py-2 border-b border-zinc-800 flex items-center gap-3">
+      <header className="px-4 py-2 border-b border-subtle surface-glass flex items-center gap-3">
         <ModelSelector
           models={models}
           currentModelId={activeModelId}
           onSelect={(p, id) => setModel(p, id)}
         />
         {activeModelId && (
-          <span className="text-[10px] text-zinc-500 truncate" data-testid="active-model-label">
+          <span className="text-[10px] text-faint truncate" data-testid="active-model-label">
             {activeModelId}
           </span>
         )}
@@ -297,7 +297,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           </span>
           <button
             onClick={() => setPendingConfirm(null)}
-            className="px-2 py-0.5 rounded border border-zinc-700 text-zinc-300 hover:text-white"
+            className="px-2 py-0.5 rounded border border-subtle text-muted hover:text-white"
           >
             Wait
           </button>
@@ -312,7 +312,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="chat-messages">
         {isEmpty ? (
-          <p className="text-zinc-500 text-sm">Send a message to start.</p>
+          <p className="text-faint text-sm">Send a message to start.</p>
         ) : (
           visible.map((m) => <MessageBubble key={m.id} msg={m} detailsExpanded={detailsExpanded} />)
         )}
@@ -321,12 +321,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       </div>
 
       {error && (
-        <div className="px-4 py-2 border-t border-zinc-800 text-xs text-red-300" role="alert">
+        <div className="px-4 py-2 border-t border-subtle text-xs text-red-300" role="alert">
           {error}
         </div>
       )}
 
-      <div className="border-t border-zinc-800 p-3 flex gap-2 items-end">
+      <div className="border-t border-subtle surface-glass p-3 flex gap-2 items-end">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -334,14 +334,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
           rows={2}
           data-testid="chat-input"
-          className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600/50 resize-none focus:outline-none focus:border-indigo-500/50"
+          className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
         />
         {isRunning ? (
           <button
             type="button"
             onClick={handleAbort}
             data-testid="abort-button"
-            className="px-3 py-2 bg-zinc-700 text-zinc-300 rounded-lg hover:bg-zinc-600 transition-colors"
+            className="px-3 py-2 surface-elevated text-muted rounded-lg hover:text-[var(--text-primary)] transition-colors"
             title="Stop the current generation"
           >
             <Stop className="w-5 h-5" weight="fill" />
@@ -352,7 +352,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             onClick={handleSend}
             data-testid="send-button"
             disabled={!input.trim()}
-            className="px-4 py-2 bg-indigo-500 text-ink rounded-lg hover:bg-indigo-500 disabled:opacity-40 transition-colors"
+            className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
           >
             Send
           </button>
@@ -371,10 +371,10 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
       <div
         className={`max-w-[72%] rounded-2xl px-4 py-2 text-sm ${
           isUser
-            ? 'bg-indigo-500 text-ink'
+            ? 'accent-button'
             : isTool
-              ? 'bg-zinc-900/60 border border-zinc-800/50 text-zinc-400 text-xs'
-              : 'bg-zinc-900 border border-zinc-800 text-zinc-200'
+              ? 'surface-panel border border-subtle text-muted text-xs'
+              : 'surface-glass border border-subtle text-primary'
         }`}
       >
         {!isUser && msg.thinking && (
@@ -391,7 +391,7 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
         )}
         {isTool ? (
           <span>
-            <code className="text-zinc-500">{msg.toolName}</code>
+            <code className="text-faint">{msg.toolName}</code>
             {msg.isError ? ' (error)' : ''}
           </span>
         ) : (
