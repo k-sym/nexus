@@ -19,6 +19,15 @@ export interface MissionStatus {
     error?: string;
   };
   models: Array<{ provider: string; id: string; name: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; configured: boolean }>;
+  stats?: Record<'claude' | 'codex' | 'openrouter', {
+    ok: boolean;
+    value: string;
+    caption: string;
+    windows?: Partial<Record<'session' | 'weekly', { usedPercent: number; remainingPercent: number; resetLabel?: string; resetsAt?: string; windowMinutes?: number }>>;
+    source?: string;
+    sampledAt?: string;
+    error?: string;
+  }>;
   activity: { running: any[]; recent: any[] };
 }
 
