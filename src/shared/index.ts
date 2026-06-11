@@ -33,9 +33,13 @@ export interface Task {
   due_date: string | null;
   created_at: string;
   updated_at: string;
-  /** Set by the orchestrator's "In Progress" model picker; tasks without
-   *  a model_key sit idle until the picker runs. */
+  /** Model picked when the task was moved to "In Progress" (provider/id).
+   *  Seeds the linked chat thread's first turn. */
   model_key: string | null;
+  /** The chat thread this task runs in. Set when the task is moved to
+   *  "In Progress" and a model is picked; the agent works in that thread
+   *  instead of running headlessly. Null for tasks never started. */
+  thread_id: string | null;
 }
 
 /** A Jira ticket mirrored into Nexus (Jira stays canonical). */

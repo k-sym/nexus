@@ -1,3 +1,4 @@
+import { ChatCircle } from '@phosphor-icons/react';
 import { Task, TaskStatus } from '@nexus/shared';
 
 interface KanbanBoardProps {
@@ -6,7 +7,9 @@ interface KanbanBoardProps {
   columnLabels: Record<TaskStatus, string>;
   onMoveTask: (taskId: string, newStatus: TaskStatus) => void;
   onAddTask: (status: TaskStatus) => void;
-  onEditTask: (task: Task) => void;
+  /** Click a card. Linked tasks reopen their chat; unlinked tasks edit. The
+   *  parent decides based on `task.thread_id`. */
+  onOpenTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
 }
 
@@ -17,7 +20,7 @@ const PRIORITY_CLASSES: Record<string, string> = {
   urgent: 'kanban-priority-urgent',
 };
 
-export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, onAddTask, onEditTask, onDeleteTask }: KanbanBoardProps) {
+export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, onAddTask, onOpenTask, onDeleteTask }: KanbanBoardProps) {
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     e.dataTransfer.setData('taskId', taskId);
     e.dataTransfer.effectAllowed = 'move';
@@ -73,11 +76,19 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
                   data-priority={task.priority}
                   draggable
                   onDragStart={(e) => handleDragStart(e, task.id)}
-                  onClick={() => onEditTask(task)}
+                  onClick={() => onOpenTask(task)}
+                  title={task.thread_id ? 'Open task chat' : 'Edit task'}
                   className={`kanban-card ${PRIORITY_CLASSES[task.priority] || PRIORITY_CLASSES.low} border rounded-lg p-3 pl-4 cursor-grab active:cursor-grabbing transition-colors group`}
                 >
                   <div className="flex items-start justify-between gap-2 mb-1">
                     <h3 className="text-sm font-medium leading-tight flex-1">{task.title}</h3>
+                    {task.thread_id && (
+                      <ChatCircle
+                        className="w-3.5 h-3.5 text-faint shrink-0 mt-0.5"
+                        weight="fill"
+                        aria-label="Has a linked chat"
+                      />
+                    )}
                   </div>
                   {task.description && (
                     <p className="text-xs text-muted line-clamp-2 mb-2">{task.description}</p>

@@ -1,7 +1,7 @@
 /**
- * OrchestratorModelPicker — modal invoked when a Kanban task moves
- * to "In Progress". The user picks a model; the orchestrator picks
- * it up on the next poll tick and dispatches headlessly.
+ * TaskModelPicker — modal invoked when a Kanban task moves to "In Progress".
+ * The user picks a model; a new chat thread opens seeded with the task and the
+ * agent starts working there (the user can steer it as it goes).
  */
 import { useEffect, useState } from 'react';
 import { useModels, modelKey } from '../hooks/useModels';
@@ -13,7 +13,7 @@ interface Props {
   onClose: () => void;
 }
 
-export function OrchestratorModelPicker({ open, onPick, onClose }: Props) {
+export function TaskModelPicker({ open, onPick, onClose }: Props) {
   const { models, activeModelId, setModel } = useModels();
   const [picked, setPicked] = useState<string | undefined>(activeModelId);
   useEffect(() => {
@@ -25,7 +25,7 @@ export function OrchestratorModelPicker({ open, onPick, onClose }: Props) {
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      data-testid="orchestrator-picker"
+      data-testid="task-model-picker"
       onClick={onClose}
     >
       <div
@@ -35,8 +35,7 @@ export function OrchestratorModelPicker({ open, onPick, onClose }: Props) {
         <div>
           <h3 className="text-sm font-semibold text-primary">Pick a model for this task</h3>
           <p className="text-xs text-faint mt-1">
-            The task moves to <code className="text-muted">in_progress</code> and the orchestrator
-            dispatches it headlessly on the next poll tick.
+            A new chat opens with this task and the agent starts working. You can guide it as it goes.
           </p>
         </div>
         <ModelSelector
@@ -58,7 +57,7 @@ export function OrchestratorModelPicker({ open, onPick, onClose }: Props) {
           <button
             onClick={() => picked && onPick(picked)}
             disabled={!picked}
-            data-testid="orchestrator-picker-run"
+            data-testid="task-model-picker-run"
             className="px-3 py-1.5 text-xs accent-button rounded disabled:opacity-40"
           >
             Run task

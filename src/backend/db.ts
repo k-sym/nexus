@@ -45,6 +45,7 @@ function runMigrations(db: Database.Database) {
       priority TEXT NOT NULL DEFAULT 'medium',
       assigned_agent TEXT,
       due_date TEXT,
+      thread_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -224,6 +225,12 @@ function runMigrations(db: Database.Database) {
   const taskCols = db.pragma('table_info(tasks)') as { name: string }[];
   if (!taskCols.some((c) => c.name === 'model_key')) {
     db.exec('ALTER TABLE tasks ADD COLUMN model_key TEXT');
+  }
+  // Task ↔ chat link — moving a task to "In Progress" now opens an
+  // interactive chat thread (replacing headless dispatch). The thread id
+  // is stored here so clicking the card reopens its conversation.
+  if (!taskCols.some((c) => c.name === 'thread_id')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN thread_id TEXT');
   }
 
   // Chat thread model persistence — remember which model was last used

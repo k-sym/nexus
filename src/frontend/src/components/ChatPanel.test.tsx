@@ -106,6 +106,61 @@ describe('ChatPanel', () => {
     });
   });
 
+  it('auto-submits a task seed exactly once and then reports it consumed', async () => {
+    const encoder = new TextEncoder();
+    let streamCalls = 0;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'sonnet-4-5', name: 'Sonnet 4.5', provider: 'anthropic', configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        streamCalls += 1;
+        // The seeded model must reach the backend as the stream's modelKey.
+        expect(JSON.parse(String(init?.body)).modelKey).toBe('anthropic/sonnet-4-5');
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+              controller.close();
+            },
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    const onSeedConsumed = vi.fn();
+    const seed = { threadId: 't1', prompt: 'Implement the task', modelKey: 'anthropic/sonnet-4-5' };
+    const { rerender } = render(
+      <ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} seed={seed} onSeedConsumed={onSeedConsumed} />,
+    );
+
+    await waitFor(() => {
+      expect(within(screen.getByTestId('chat-messages')).getByText('Implement the task')).toBeInTheDocument();
+    });
+    expect(onSeedConsumed).toHaveBeenCalledTimes(1);
+    expect(streamCalls).toBe(1);
+
+    // The seed is cleared by the parent after consumption; a re-render must not re-fire it.
+    rerender(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} seed={null} onSeedConsumed={onSeedConsumed} />);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(streamCalls).toBe(1);
+  });
+
   it('renders user request bubbles with the chat glass treatment instead of the CTA gradient', async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

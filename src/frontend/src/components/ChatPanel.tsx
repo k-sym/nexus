@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stop } from '@phosphor-icons/react';
 import { usePiStream, ChatBusyError, type StreamMessage } from '../hooks/usePiStream';
-import { useModels } from '../hooks/useModels';
+import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
 import { ModelSelector } from './ModelSelector';
 import { ToolCallTimeline } from './ToolCallTimeline';
@@ -31,9 +31,14 @@ interface ChatPanelProps {
   onThreadsChanged?: () => void;
   /** Reports whether this session is actively streaming/thinking/tooling. */
   onSessionActivityChange?: (threadId: string, active: boolean) => void;
+  /** A task-seeded first turn. When `seed.threadId` matches the active thread,
+   *  ChatPanel auto-submits `seed.prompt` once (with `seed.modelKey`) and calls
+   *  `onSeedConsumed`. Used by the "Run task" flow to start the agent on open. */
+  seed?: { threadId: string; prompt: string; modelKey: string } | null;
+  onSeedConsumed?: () => void;
 }
 
-export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange }: ChatPanelProps) {
+export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, seed, onSeedConsumed }: ChatPanelProps) {
   const { models, activeModelId, setModel, setThread } = useModels();
   const { state, startStream, abortStream, dispatch, setActiveThread } = usePiStream();
   const [input, setInput] = useState('');
@@ -165,6 +170,23 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     };
   }, [threadId, setModel]);
 
+  // A task-seeded first turn fires exactly once per thread. The ref guard
+  // keeps it from re-firing on remount, thread-switch, or the re-render that
+  // clears the seed after `onSeedConsumed`. Runs after the load-messages
+  // effect above so the seeded model wins over its initial blanking.
+  const seededThreadRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!seed || !threadId || seed.threadId !== threadId) return;
+    if (seededThreadRef.current === threadId) return;
+    seededThreadRef.current = threadId;
+    const parsed = parseModelKey(seed.modelKey);
+    if (parsed) void setModel(parsed.provider, parsed.id);
+    void submit(seed.prompt, { modelKey: seed.modelKey });
+    onSeedConsumed?.();
+    // submit/setModel are stable enough; we intentionally key only on the seed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed, threadId]);
+
   // Ctrl+O toggles the details-expanded view (tool timeline, full thinking).
   useEffect(() => {
     function handler(e: KeyboardEvent) {
@@ -187,11 +209,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   }, [loadedMessages, state.messages, state.streamingMessage]);
 
   const submit = useCallback(
-    async (text: string, opts: { confirmCancel?: boolean } = {}) => {
+    async (text: string, opts: { confirmCancel?: boolean; modelKey?: string } = {}) => {
       if (!threadId) return;
       setError(null);
       try {
-        await startStream(threadId, text, { ...opts, modelKey: activeModelId });
+        await startStream(threadId, text, { confirmCancel: opts.confirmCancel, modelKey: opts.modelKey ?? activeModelId });
         onThreadsChanged?.();
         const msgs = await fetchThreadMessages(threadId);
         if (msgs.length > 0) {

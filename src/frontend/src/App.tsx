@@ -14,10 +14,32 @@ import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
 import ProjectModal from './components/ProjectModal';
 import TaskModal from './components/TaskModal';
-import { OrchestratorModelPicker } from './components/OrchestratorModelPicker';
+import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
 
 type GlobalView = 'dashboard' | 'tickets' | 'settings';
+
+/** A task-seeded first turn handed to ChatPanel once the run-task chat opens. */
+interface TaskSeed {
+  threadId: string;
+  prompt: string;
+  modelKey: string;
+}
+
+/** Build the seeded first chat message from a task — the visible equivalent of
+ *  the old headless `buildTaskPrompt`. */
+function buildTaskSeedPrompt(task: Task, project: Project): string {
+  const parts: string[] = [];
+  parts.push(`You are working on a task in the **${project.name}** project.`);
+  if (project.repo_path) parts.push(`Working directory: ${project.repo_path}`);
+  parts.push(`Priority: ${task.priority}`);
+  parts.push('');
+  parts.push(`## Task: ${task.title}`);
+  if (task.description) parts.push(task.description);
+  parts.push('');
+  parts.push('Work through this task here. I can steer you as you go.');
+  return parts.join('\n');
+}
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
@@ -25,11 +47,13 @@ export default function App() {
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [orchestratorPicker, setOrchestratorPicker] = useState<{ taskId: string; title: string } | null>(null);
+  const [taskPicker, setTaskPicker] = useState<{ taskId: string; title: string } | null>(null);
+  const [taskSeed, setTaskSeed] = useState<TaskSeed | null>(null);
 
   // --- navigation state -----------------------------------------------------
   const [globalView, setGlobalView] = useState<GlobalView | null>('dashboard');
@@ -197,17 +221,28 @@ export default function App() {
     await loadTasks(activeProjectId);
   };
 
+  const handleEditTask = async (data: { title: string; description: string; priority: string }) => {
+    if (!editingTask) return;
+    await api.tasks.update(editingTask.id, { ...data, priority: data.priority as Task['priority'] });
+    setEditingTask(null);
+    if (activeProjectId) await loadTasks(activeProjectId);
+  };
+
   /**
-   * Moving a task to "in_progress" opens the model picker. The picker
-   * POSTs to /api/orchestrator/tasks/:id/start which sets model_key
-   * and flips status to in_progress; the orchestrator's next poll tick
-   * dispatches headlessly.
+   * Moving a task to "in_progress" opens an interactive chat. A task already
+   * linked to a thread reopens that chat directly; an unlinked task shows the
+   * model picker first (which then creates the thread). Other moves are a
+   * plain status update.
    */
   const handleMoveTask = async (taskId: string, newStatus: TaskStatus) => {
     if (newStatus === 'in_progress') {
       const task = tasks.find((t) => t.id === taskId);
+      if (task?.thread_id && activeProjectId) {
+        selectThread(activeProjectId, task.thread_id);
+        return;
+      }
       if (task) {
-        setOrchestratorPicker({ taskId, title: task.title });
+        setTaskPicker({ taskId, title: task.title });
         return;
       }
     }
@@ -215,16 +250,44 @@ export default function App() {
     if (activeProjectId) await loadTasks(activeProjectId);
   };
 
-  const handleOrchestratorPick = async (modelKey: string) => {
-    if (!orchestratorPicker) return;
-    const { taskId } = orchestratorPicker;
-    setOrchestratorPicker(null);
-    try {
-      await api.agents.startTask(taskId, modelKey);
-    } catch (err) {
-      console.error('Failed to start task', err);
+  /** Click a card: linked → reopen its chat; unlinked → edit. */
+  const handleOpenTask = (task: Task) => {
+    if (task.thread_id && activeProjectId) {
+      selectThread(activeProjectId, task.thread_id);
+    } else {
+      setEditingTask(task);
     }
-    if (activeProjectId) await loadTasks(activeProjectId);
+  };
+
+  /**
+   * "Run task" from the picker: create a chat thread titled after the task,
+   * link it (thread_id + model_key) and flip the card to in_progress, then
+   * navigate to the chat and seed its first turn so the agent starts working.
+   */
+  const handleRunTask = async (modelKey: string) => {
+    if (!taskPicker || !activeProjectId) return;
+    const { taskId } = taskPicker;
+    setTaskPicker(null);
+    const task = tasks.find((t) => t.id === taskId);
+    const project = projects.find((p) => p.id === activeProjectId);
+    if (!task || !project) return;
+
+    // Reopen if it somehow already has a thread (avoid duplicates).
+    if (task.thread_id) {
+      selectThread(activeProjectId, task.thread_id);
+      return;
+    }
+
+    try {
+      const thread = await api.chat.createThread(activeProjectId, task.title);
+      await api.tasks.update(taskId, { status: 'in_progress', thread_id: thread.id, model_key: modelKey });
+      await loadThreads(activeProjectId);
+      await loadTasks(activeProjectId);
+      setTaskSeed({ threadId: thread.id, prompt: buildTaskSeedPrompt(task, project), modelKey });
+      selectThread(activeProjectId, thread.id);
+    } catch (err) {
+      console.error('Failed to start task chat', err);
+    }
   };
 
   const handleDeleteTask = async (taskId: string) => {
@@ -361,7 +424,7 @@ export default function App() {
               columnLabels={KANBAN_COLUMN_LABELS}
               onMoveTask={handleMoveTask}
               onAddTask={(status) => setTaskModalColumn(status)}
-              onEditTask={() => {}}
+              onOpenTask={handleOpenTask}
               onDeleteTask={handleDeleteTask}
             />
           ) : subView === 'chat' ? (
@@ -374,6 +437,8 @@ export default function App() {
                   onBusyConflict={() => {}}
                   onThreadsChanged={() => loadThreads(activeProject.id)}
                   onSessionActivityChange={handleSessionActivityChange}
+                  seed={taskSeed}
+                  onSeedConsumed={() => setTaskSeed(null)}
                 />
               </div>
               <MemoryRail
@@ -449,11 +514,19 @@ export default function App() {
         />
       )}
 
-      {orchestratorPicker && (
-        <OrchestratorModelPicker
+      {editingTask && (
+        <TaskModal
+          task={editingTask}
+          onClose={() => setEditingTask(null)}
+          onSubmit={handleEditTask}
+        />
+      )}
+
+      {taskPicker && (
+        <TaskModelPicker
           open={true}
-          onPick={handleOrchestratorPick}
-          onClose={() => setOrchestratorPicker(null)}
+          onPick={handleRunTask}
+          onClose={() => setTaskPicker(null)}
         />
       )}
     </div>
