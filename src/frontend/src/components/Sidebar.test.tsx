@@ -1,4 +1,5 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import Sidebar, { type ThreadMeta } from './Sidebar';
 import type { ChatThread, Project } from '@nexus/shared';
@@ -14,6 +15,14 @@ const project: Project = {
   updated_at: '2026-06-10T00:00:00.000Z',
 };
 
+const secondProject: Project = {
+  ...project,
+  id: 'project-2',
+  slug: 'mywise',
+  name: 'mywise',
+  repo_path: '/repo/mywise',
+};
+
 const thread: ChatThread = {
   id: 'thread-1',
   project_id: project.id,
@@ -25,10 +34,22 @@ const thread: ChatThread = {
 
 const noop = vi.fn();
 
-function renderSidebar(threads: ThreadMeta[] = [{ thread }], activeSessionIds = new Set<string>()) {
+function renderSidebar({
+  threads = [{ thread }],
+  activeSessionIds = new Set<string>(),
+  onEditProject = noop,
+  onDeleteProject = noop,
+  onReorderProjects = noop,
+}: {
+  threads?: ThreadMeta[];
+  activeSessionIds?: Set<string>;
+  onEditProject?: (project: Project) => void;
+  onDeleteProject?: (projectId: string) => void;
+  onReorderProjects?: (projectIds: string[]) => void;
+} = {}) {
   return render(
     <Sidebar
-      projects={[project]}
+      projects={[project, secondProject]}
       activeProjectId={project.id}
       subView="chat"
       activeThreadId={thread.id}
@@ -41,13 +62,16 @@ function renderSidebar(threads: ThreadMeta[] = [{ thread }], activeSessionIds = 
       onDeleteThread={noop}
       onNewChat={noop}
       onNewProject={noop}
+      onEditProject={onEditProject}
+      onDeleteProject={onDeleteProject}
+      onReorderProjects={onReorderProjects}
     />,
   );
 }
 
 describe('Sidebar', () => {
   it('labels chat threads as sessions and shows active session activity', () => {
-    renderSidebar([{ thread }], new Set([thread.id]));
+    renderSidebar({ threads: [{ thread }], activeSessionIds: new Set([thread.id]) });
 
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.queryByText('Chat')).not.toBeInTheDocument();
@@ -55,9 +79,48 @@ describe('Sidebar', () => {
   });
 
   it('shows an empty sessions state', () => {
-    renderSidebar([]);
+    renderSidebar({ threads: [] });
 
     expect(screen.getByText('No sessions')).toBeInTheDocument();
     expect(screen.queryByText('No conversations')).not.toBeInTheDocument();
+  });
+
+  it('offers an edit action for project details', async () => {
+    const user = userEvent.setup();
+    const onEditProject = vi.fn();
+    renderSidebar({ onEditProject });
+
+    await user.click(screen.getAllByTitle('Edit project')[0]);
+
+    expect(onEditProject).toHaveBeenCalledWith(project);
+  });
+
+  it('confirms before deleting a project', async () => {
+    const user = userEvent.setup();
+    const onDeleteProject = vi.fn();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderSidebar({ onDeleteProject });
+
+    await user.click(screen.getAllByTitle('Delete project')[0]);
+
+    expect(window.confirm).toHaveBeenCalledWith('Delete this project? This cannot be undone.');
+    expect(onDeleteProject).toHaveBeenCalledWith(project.id);
+  });
+
+  it('reorders projects by dragging one project onto another', () => {
+    const onReorderProjects = vi.fn();
+    renderSidebar({ onReorderProjects });
+    const dataTransfer = {
+      effectAllowed: '',
+      dropEffect: '',
+      data: new Map<string, string>(),
+      setData(format: string, value: string) { this.data.set(format, value); },
+      getData(format: string) { return this.data.get(format) ?? ''; },
+    };
+
+    fireEvent.dragStart(screen.getByText('mywise').closest('button')!, { dataTransfer });
+    fireEvent.drop(screen.getByText('nexus').closest('button')!, { dataTransfer });
+
+    expect(onReorderProjects).toHaveBeenCalledWith(['project-2', 'project-1']);
   });
 });

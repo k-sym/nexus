@@ -22,15 +22,26 @@ interface SidebarProps {
   onDeleteThread: (threadId: string) => void;
   onNewChat: (projectId: string) => void;
   onNewProject: () => void;
+  onEditProject: (project: Project) => void;
+  onDeleteProject: (projectId: string) => void;
+  onReorderProjects: (projectIds: string[]) => void;
 }
 
-function Row({ active, depth, onClick, icon, children, tintColor, trailing }: {
+function Row({ active, depth, onClick, icon, children, tintColor, trailing, draggable, onDragStart, onDragOver, onDrop }: {
   active: boolean; depth: number; onClick: () => void; icon?: React.ReactNode;
   children: React.ReactNode; tintColor?: string; trailing?: React.ReactNode;
+  draggable?: boolean;
+  onDragStart?: (ev: React.DragEvent<HTMLButtonElement>) => void;
+  onDragOver?: (ev: React.DragEvent<HTMLButtonElement>) => void;
+  onDrop?: (ev: React.DragEvent<HTMLButtonElement>) => void;
 }) {
   return (
     <button
       onClick={onClick}
+      draggable={draggable}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       style={{ paddingLeft: 8 + depth * 14, borderLeft: tintColor ? `2px solid ${tintColor}` : '2px solid transparent' }}
       className={`group w-full flex items-center gap-2 pr-2 py-1.5 text-sm transition-colors ${
         active ? 'surface-active text-primary' : 'text-muted hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
@@ -46,6 +57,7 @@ function Row({ active, depth, onClick, icon, children, tintColor, trailing }: {
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onDeleteThread, onNewChat, onNewProject,
+  onEditProject, onDeleteProject, onReorderProjects,
 }: SidebarProps) {
   const [openProjectId, setOpenProjectId] = useState<string | null>(activeProjectId);
   const [chatOpen, setChatOpen] = useState<Record<string, boolean>>({});
@@ -61,6 +73,30 @@ export default function Sidebar({
     cancelRename();
   };
 
+  const handleProjectDragStart = (ev: React.DragEvent<HTMLButtonElement>, projectId: string) => {
+    ev.dataTransfer.setData('application/x-nexus-project-id', projectId);
+    ev.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleProjectDragOver = (ev: React.DragEvent<HTMLButtonElement>) => {
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'move';
+  };
+
+  const handleProjectDrop = (ev: React.DragEvent<HTMLButtonElement>, targetProjectId: string) => {
+    ev.preventDefault();
+    const draggedProjectId = ev.dataTransfer.getData('application/x-nexus-project-id');
+    if (!draggedProjectId || draggedProjectId === targetProjectId) return;
+
+    const orderedIds = projects.map((project) => project.id);
+    const fromIndex = orderedIds.indexOf(draggedProjectId);
+    const toIndex = orderedIds.indexOf(targetProjectId);
+    if (fromIndex === -1 || toIndex === -1) return;
+
+    orderedIds.splice(fromIndex, 1);
+    orderedIds.splice(toIndex, 0, draggedProjectId);
+    onReorderProjects(orderedIds);
+  };
   return (
     <aside className="w-60 surface-glass border-r border-subtle flex flex-col shrink-0 overflow-y-auto">
       <div className="flex items-center justify-between px-3 pt-3 pb-1">
@@ -81,6 +117,36 @@ export default function Sidebar({
               depth={0}
               onClick={() => { setOpenProjectId(open ? null : project.id); onSelectProject(project.id); }}
               icon={open ? <CaretDown size={14} /> : <CaretRight size={14} />}
+              draggable
+              onDragStart={(ev) => handleProjectDragStart(ev, project.id)}
+              onDragOver={handleProjectDragOver}
+              onDrop={(ev) => handleProjectDrop(ev, project.id)}
+              trailing={
+                <span className="hidden group-hover:flex items-center gap-1 shrink-0">
+                  <span
+                    role="button"
+                    title="Edit project"
+                    className="text-faint hover:text-[var(--text-primary)]"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onEditProject(project);
+                    }}
+                  >
+                    <PencilSimple size={13} />
+                  </span>
+                  <span
+                    role="button"
+                    title="Delete project"
+                    className="text-faint hover:text-red-400"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      if (window.confirm('Delete this project? This cannot be undone.')) onDeleteProject(project.id);
+                    }}
+                  >
+                    <Trash size={13} />
+                  </span>
+                </span>
+              }
             >
               <span className="font-medium text-primary truncate">{project.name}</span>
             </Row>

@@ -26,9 +26,39 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     return candidate;
   }
 
+  const listProjects = () => db.prepare('SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC').all() as Project[];
+
   fastify.get('/api/projects', async () => {
-    const rows = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all();
+    const rows = listProjects();
     return rows as Project[];
+  });
+
+  fastify.put('/api/projects/order', async (request) => {
+    const body = request.body as { project_ids?: string[] };
+    const projectIds = body.project_ids ?? [];
+    const uniqueIds = new Set(projectIds);
+    if (!Array.isArray(projectIds) || projectIds.some((id) => typeof id !== 'string') || uniqueIds.size !== projectIds.length) {
+      const err = new Error('project_ids must be a list of unique project IDs') as any;
+      err.statusCode = 400;
+      throw err;
+    }
+
+    if (projectIds.length > 0) {
+      const placeholders = projectIds.map(() => '?').join(', ');
+      const rows = db.prepare(`SELECT id FROM projects WHERE id IN (${placeholders})`).all(...projectIds) as { id: string }[];
+      if (rows.length !== projectIds.length) {
+        const err = new Error('Project not found') as any;
+        err.statusCode = 404;
+        throw err;
+      }
+    }
+
+    const updateSortOrder = db.prepare('UPDATE projects SET sort_order = ? WHERE id = ?');
+    db.transaction(() => {
+      projectIds.forEach((id, index) => updateSortOrder.run(index, id));
+    })();
+
+    return listProjects();
   });
 
   fastify.get('/api/projects/:id', async (request) => {
@@ -55,20 +85,22 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     const baseSlug = body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'project';
     const slug = uniqueSlug(db, baseSlug);
     const now = new Date().toISOString();
+    const nextSortOrder = ((db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM projects').get() as { next: number }).next);
 
-    const project: Project = {
+    const project = {
       id: uuid(),
       slug,
       name: body.name,
       description: body.description || '',
       repo_path: repoPath,
       config_json: '{}',
+      sort_order: nextSortOrder,
       created_at: now,
       updated_at: now,
     };
 
-    db.prepare('INSERT INTO projects (id, slug, name, description, repo_path, config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(project.id, project.slug, project.name, project.description, project.repo_path, project.config_json, project.created_at, project.updated_at);
+    db.prepare('INSERT INTO projects (id, slug, name, description, repo_path, config_json, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(project.id, project.slug, project.name, project.description, project.repo_path, project.config_json, project.sort_order, project.created_at, project.updated_at);
 
     const docsDir = path.join(repoPath, 'project_docs');
     for (const sub of ['specs', 'plans', 'uploads']) {

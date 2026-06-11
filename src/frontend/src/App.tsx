@@ -23,6 +23,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [showProjectModal, setShowProjectModal] = useState(false);
+  const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
@@ -135,6 +136,58 @@ export default function App() {
     setShowProjectModal(false);
     await refreshProjects();
     selectSubView(created.id, 'kanban');
+  };
+
+  const openNewProjectModal = () => {
+    setEditingProject(null);
+    setShowProjectModal(true);
+  };
+
+  const openEditProjectModal = (project: Project) => {
+    setEditingProject(project);
+    setShowProjectModal(true);
+  };
+
+  const handleSaveProject = async (data: { name: string; description: string; repo_path: string }) => {
+    if (!editingProject) {
+      await handleCreateProject(data);
+      return;
+    }
+
+    await api.projects.update(editingProject.id, data);
+    setShowProjectModal(false);
+    setEditingProject(null);
+    await refreshProjects();
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    await api.projects.delete(projectId);
+    if (projectId === activeProjectId) {
+      setActiveProjectId(null);
+      setActiveProject(null);
+      setActiveThreadId(null);
+      setTasks([]);
+      setThreads([]);
+      setGlobalView('dashboard');
+    }
+    await refreshProjects();
+  };
+
+  const handleReorderProjects = async (projectIds: string[]) => {
+    setProjects((current) => {
+      const byId = new Map(current.map((project) => [project.id, project]));
+      const ordered = projectIds.map((id) => byId.get(id)).filter((project): project is Project => Boolean(project));
+      const remaining = current.filter((project) => !projectIds.includes(project.id));
+      return [...ordered, ...remaining];
+    });
+
+    try {
+      await api.projects.reorder(projectIds);
+      await refreshProjects();
+    } catch (err) {
+      console.error('Failed to reorder projects:', err);
+      await refreshProjects();
+    }
   };
 
   const handleCreateTask = async (data: { title: string; description: string; priority: string }) => {
@@ -251,7 +304,7 @@ export default function App() {
       if (pid) cmds.push({ id: `view-${sub}`, label, hint: 'View', keywords: 'open project', run: () => selectSubView(pid, sub) });
     });
     projects.forEach((p) => cmds.push({ id: `proj-${p.id}`, label: p.name, hint: 'Project', keywords: p.repo_path, run: () => focusProject(p.id) }));
-    cmds.push({ id: 'act-new-project', label: 'New project…', hint: 'Action', run: () => setShowProjectModal(true) });
+    cmds.push({ id: 'act-new-project', label: 'New project…', hint: 'Action', run: openNewProjectModal });
     if (activeProjectId) cmds.push({ id: 'act-new-task', label: 'New task (Triage)…', hint: 'Action', keywords: 'kanban', run: () => setTaskModalColumn('triage') });
     cmds.push({ id: 'act-settings', label: 'Settings', hint: 'Action', run: () => selectGlobal('settings') });
     cmds.push({ id: 'act-refresh', label: 'Refresh status', hint: 'Action', run: () => loadStatus() });
@@ -277,7 +330,7 @@ export default function App() {
             </p>
             {projects.length === 0 && (
               <button
-                onClick={() => setShowProjectModal(true)}
+                onClick={openNewProjectModal}
                 className="px-6 py-2 accent-button rounded-lg transition-colors"
               >
                 New Project
@@ -359,7 +412,10 @@ export default function App() {
           onRenameThread={handleRenameThread}
           onDeleteThread={handleDeleteThread}
           onNewChat={(projectId) => void startNewSession(projectId)}
-          onNewProject={() => setShowProjectModal(true)}
+          onNewProject={openNewProjectModal}
+          onEditProject={openEditProjectModal}
+          onDeleteProject={(projectId) => void handleDeleteProject(projectId)}
+          onReorderProjects={(projectIds) => void handleReorderProjects(projectIds)}
         />
 
         <main className="flex-1 flex flex-col min-w-0">{renderMain()}</main>
@@ -371,7 +427,14 @@ export default function App() {
       <NotificationToasts />
 
       {showProjectModal && (
-        <ProjectModal onClose={() => setShowProjectModal(false)} onSubmit={handleCreateProject} />
+        <ProjectModal
+          project={editingProject ?? undefined}
+          onClose={() => {
+            setShowProjectModal(false);
+            setEditingProject(null);
+          }}
+          onSubmit={handleSaveProject}
+        />
       )}
 
       {taskModalColumn && (

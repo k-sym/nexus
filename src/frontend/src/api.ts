@@ -60,6 +60,8 @@ export const api = {
       fetchJson<Project>(`/api/projects`, { method: 'POST', body: JSON.stringify(data) }),
     update: (id: string, data: Partial<Pick<Project, 'name' | 'description' | 'repo_path' | 'config_json'>>) =>
       fetchJson<Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
+    reorder: (projectIds: string[]) =>
+      fetchJson<Project[]>(`/api/projects/order`, { method: 'PUT', body: JSON.stringify({ project_ids: projectIds }) }),
     delete: (id: string) => fetchJson<void>(`/api/projects/${id}`, { method: 'DELETE' }),
     tasks: (id: string) => fetchJson<Task[]>(`/api/projects/${id}/tasks`),
     createTask: (id: string, data: { title: string; description?: string; status?: string; priority?: string; assigned_agent?: string }) =>
