@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
 import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash } from '@phosphor-icons/react';
 
@@ -25,6 +25,24 @@ interface SidebarProps {
   onEditProject: (project: Project) => void;
   onDeleteProject: (projectId: string) => void;
   onReorderProjects: (projectIds: string[]) => void;
+}
+
+const SIDEBAR_WIDTH_KEY = 'nexus.sidebar.width';
+const DEFAULT_SIDEBAR_WIDTH = 240;
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 360;
+
+function clampSidebarWidth(width: number): number {
+  return Math.min(MAX_SIDEBAR_WIDTH, Math.max(MIN_SIDEBAR_WIDTH, Math.round(width)));
+}
+
+function readSidebarWidth(): number {
+  try {
+    const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    return Number.isFinite(saved) && saved > 0 ? clampSidebarWidth(saved) : DEFAULT_SIDEBAR_WIDTH;
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH;
+  }
 }
 
 function Row({ active, depth, onClick, icon, children, tintColor, trailing, draggable, onDragStart, onDragOver, onDrop }: {
@@ -63,6 +81,8 @@ export default function Sidebar({
   const [chatOpen, setChatOpen] = useState<Record<string, boolean>>({});
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
+  const dragStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
   useEffect(() => { if (activeProjectId) setOpenProjectId(activeProjectId); }, [activeProjectId]);
 
   const startRename = (id: string, current: string) => { setRenamingId(id); setRenameDraft(current); };
@@ -97,8 +117,42 @@ export default function Sidebar({
     orderedIds.splice(toIndex, 0, draggedProjectId);
     onReorderProjects(orderedIds);
   };
+
+  const startResize = (ev: React.PointerEvent<HTMLDivElement>) => {
+    ev.preventDefault();
+    dragStartRef.current = { startX: ev.clientX, startWidth: sidebarWidth };
+
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (moveEv: PointerEvent) => {
+      const start = dragStartRef.current;
+      if (!start) return;
+      const nextWidth = clampSidebarWidth(start.startWidth + moveEv.clientX - start.startX);
+      setSidebarWidth(nextWidth);
+      try { localStorage.setItem(SIDEBAR_WIDTH_KEY, String(nextWidth)); } catch { /* ignore */ }
+    };
+
+    const onUp = () => {
+      dragStartRef.current = null;
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  };
+
   return (
-    <aside className="w-60 surface-glass border-r border-subtle flex flex-col shrink-0 overflow-y-auto">
+    <aside
+      aria-label="Navigation sidebar"
+      style={{ width: `${sidebarWidth}px` }}
+      className="relative surface-glass border-r border-subtle flex flex-col shrink-0 overflow-y-auto"
+    >
       <div className="flex items-center justify-between px-3 pt-3 pb-1">
         <span className="text-[10px] uppercase tracking-wider text-faint font-medium">Projects</span>
         <button onClick={onNewProject} title="New project" className="text-faint hover:text-[var(--text-primary)]">
@@ -279,6 +333,14 @@ export default function Sidebar({
       <div className="mt-auto px-3 py-3 border-t border-subtle">
         <div className="text-[10px] text-faint">v0.1.0 · Personal</div>
       </div>
+      <div
+        role="separator"
+        aria-label="Resize sidebar"
+        aria-orientation="vertical"
+        title="Drag to resize sidebar"
+        onPointerDown={startResize}
+        className="absolute right-0 top-0 h-full w-2 cursor-col-resize touch-none bg-transparent transition-colors hover:bg-[var(--accent-soft)]"
+      />
     </aside>
   );
 }

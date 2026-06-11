@@ -72,7 +72,7 @@ export default function MemoryRail({ projectId, onOpenFull }: MemoryRailProps) {
       <button
         onClick={() => setOpen(true)}
         title="Show memory"
-        className="shrink-0 w-8 border-l border-zinc-800 bg-zinc-900/50 flex flex-col items-center justify-center gap-2 text-zinc-500 hover:text-zinc-200 transition-colors"
+        className="shrink-0 w-8 border-l border-subtle surface-glass flex flex-col items-center justify-center gap-2 text-faint hover:text-[var(--text-primary)] transition-colors"
       >
         <CaretLeft size={16} />
         <span className="text-[10px] uppercase tracking-wider [writing-mode:vertical-rl]">Memory</span>
@@ -81,14 +81,14 @@ export default function MemoryRail({ projectId, onOpenFull }: MemoryRailProps) {
   }
 
   return (
-    <aside className="shrink-0 w-72 border-l border-zinc-800 bg-zinc-900/50 flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-        <span className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium">Memory</span>
+    <aside className="shrink-0 w-72 border-l border-subtle surface-glass flex flex-col min-h-0">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-subtle">
+        <span className="text-[10px] uppercase tracking-wider text-faint font-medium">Memory</span>
         <div className="flex items-center gap-2">
-          <button onClick={onOpenFull} title="Open full Memory page" className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-200 transition-colors">
+          <button onClick={onOpenFull} title="Open full Memory page" className="flex items-center gap-1 text-xs text-faint hover:text-[var(--text-primary)] transition-colors">
             <ArrowSquareOut size={14} /> Open
           </button>
-          <button onClick={() => setOpen(false)} title="Collapse" className="text-zinc-500 hover:text-zinc-200 transition-colors">
+          <button onClick={() => setOpen(false)} title="Collapse" className="text-faint hover:text-[var(--text-primary)] transition-colors">
             <CaretRight size={14} />
           </button>
         </div>
@@ -96,32 +96,32 @@ export default function MemoryRail({ projectId, onOpenFull }: MemoryRailProps) {
 
       <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
         {recent.length === 0 && (
-          <div className="text-xs text-zinc-600 text-center py-6">No memories yet.</div>
+          <div className="text-xs text-faint text-center py-6">No memories yet.</div>
         )}
         {recent.map(m => (
-          <div key={m.id} className="bg-zinc-900 border border-zinc-800 rounded-md px-2.5 py-2" title={m.content}>
+          <div key={m.id} className="surface-panel border border-subtle rounded-md px-2.5 py-2" title={m.content}>
             <div className="flex items-center gap-2 mb-0.5">
-              <span className="text-[10px] uppercase tracking-wider text-indigo-400/80">{m.category}</span>
-              {m.created_at && <span className="text-[10px] text-zinc-600">{m.created_at.slice(0, 10)}</span>}
+              <span className="text-[10px] uppercase tracking-wider accent-text">{m.category}</span>
+              {m.created_at && <span className="text-[10px] text-faint">{m.created_at.slice(0, 10)}</span>}
             </div>
-            <p className="text-xs text-zinc-300 leading-relaxed line-clamp-3 break-words">{m.content}</p>
+            <p className="text-xs text-muted leading-relaxed line-clamp-3 break-words">{m.content}</p>
           </div>
         ))}
       </div>
 
-      <div className="border-t border-zinc-800 p-2">
+      <div className="border-t border-subtle p-2">
         <textarea
           value={draft}
           onChange={e => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
           placeholder="Add a memory… (Enter to save)"
           rows={2}
-          className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 resize-none focus:outline-none focus:border-indigo-500/50"
+          className="w-full surface-panel border border-subtle rounded-md px-2 py-1.5 text-xs text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
         />
         <button
           onClick={handleAdd}
           disabled={adding || !draft.trim()}
-          className="mt-1 w-full px-2 py-1 text-xs bg-indigo-500 text-ink rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors"
+          className="mt-1 w-full px-2 py-1 text-xs accent-button rounded-md disabled:opacity-40 transition-colors"
         >
           {adding ? 'Adding…' : 'Add'}
         </button>

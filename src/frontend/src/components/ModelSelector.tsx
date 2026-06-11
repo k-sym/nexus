@@ -82,18 +82,18 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
         type="button"
         onClick={() => !disabled && setOpen((p) => !p)}
         disabled={disabled}
-        className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-2.5 py-1 text-xs text-zinc-200 hover:border-zinc-500 disabled:opacity-50"
+        className="inline-flex items-center gap-1.5 rounded-md border border-subtle surface-panel px-2.5 py-1 text-xs text-primary hover:border-[var(--border-strong)] disabled:opacity-50"
       >
         <span className="max-w-[180px] truncate">{label}</span>
         {current && (
-          <span className="text-[10px] text-zinc-500">{providerShort(current.provider)}</span>
+          <span className="text-[10px] text-faint">{providerShort(current.provider)}</span>
         )}
         <CaretUp className={`w-3 h-3 transition-transform ${open ? '' : 'rotate-180'}`} />
       </button>
       {open && (
         <div
           data-model-dropdown
-          className={`fixed z-50 w-72 rounded-md border border-zinc-700 bg-zinc-950 shadow-lg ${
+          className={`fixed z-50 w-72 rounded-md border border-subtle surface-glass ${
             placement === 'above' ? 'mb-1' : 'mt-1'
           }`}
           style={
@@ -120,21 +120,21 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
                 })()
           }
         >
-          <div className="border-b border-zinc-800 p-2">
+          <div className="border-b border-subtle p-2">
             <div className="relative">
-              <MagnifyingGlass className="absolute left-2 top-1.5 w-3 h-3 text-zinc-500" />
+              <MagnifyingGlass className="absolute left-2 top-1.5 w-3 h-3 text-faint" />
               <input
                 autoFocus
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search models…"
-                className="w-full rounded-sm bg-zinc-900 border border-zinc-800 pl-7 pr-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-zinc-600"
+                className="w-full rounded-sm surface-panel border border-subtle pl-7 pr-2 py-1 text-xs text-primary placeholder:text-faint focus:outline-none focus:border-strong"
               />
             </div>
           </div>
           <div data-testid="model-dropdown-list" className="max-h-72 overflow-y-auto">
             {filtered.length === 0 ? (
-              <div className="p-3 text-center text-xs text-zinc-500">
+              <div className="p-3 text-center text-xs text-faint">
                 {models.length === 0
                   ? 'No curated models enabled. Open Settings to enable models.'
                   : 'No models match.'}
@@ -151,16 +151,16 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
                       onSelect(m.provider, m.id);
                       setOpen(false);
                     }}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-zinc-200 hover:bg-zinc-900"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-primary hover:bg-[var(--surface-hover)]"
                   >
                     <span className="flex-1 min-w-0">
                       <span className="block truncate">{m.name}</span>
-                      <span className="block text-[10px] text-zinc-500 truncate">
+                      <span className="block text-[10px] text-faint truncate">
                         {providerShort(m.provider)} · {m.id}
                         {m.configured === false ? ' · no auth' : ''}
                       </span>
                     </span>
-                    {isCurrent && <Check className="w-3 h-3 text-indigo-400" />}
+                    {isCurrent && <Check className="w-3 h-3 accent-text" />}
                   </button>
                 );
               })
