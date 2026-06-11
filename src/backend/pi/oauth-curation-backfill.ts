@@ -1,6 +1,6 @@
-import type { PiRuntime } from './runtime';
-import type { ModelCurationStore } from './model-curation';
-import { buildModelCatalog } from '../routes/pi';
+import type { PiRuntime } from './runtime.js';
+import type { ModelCurationStore } from './model-curation.js';
+import { buildModelCatalog } from '../routes/pi.js';
 
 const OAUTH_MODEL_PROVIDERS = ['anthropic', 'openai-codex'] as const;
 

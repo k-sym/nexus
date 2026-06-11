@@ -8,9 +8,9 @@
  * ground truth, filtered by the user's curation choices.
  */
 import { FastifyInstance } from 'fastify';
-import { daemon } from '../memory/client';
-import { buildModelCatalog } from './pi';
-import { getUsageStats } from '../codexbar';
+import { daemon } from '../memory/client.js';
+import { buildModelCatalog } from './pi.js';
+import { getUsageStats } from '../codexbar.js';
 
 export async function registerStatusRoutes(fastify: FastifyInstance) {
   const db = fastify.db;

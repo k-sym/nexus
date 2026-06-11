@@ -8,6 +8,7 @@
  * regular fetch + ReadableStream consumer.
  */
 import { useCallback, useReducer, useRef } from 'react';
+import { apiFetch } from '../api-base';
 
 /** Granular tool execution phase for richer status display. */
 export type ToolPhase =
@@ -376,7 +377,7 @@ export function usePiStream() {
       abortRef.current = ctrl;
       let res: Response;
       try {
-        res = await fetch(`/api/threads/${threadId}/messages/stream`, {
+        res = await apiFetch(`/api/threads/${threadId}/messages/stream`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',

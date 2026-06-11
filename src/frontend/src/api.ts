@@ -6,6 +6,7 @@
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
 import { Project, Task, ChatThread, Ticket } from '@nexus/shared';
+import { apiFetch } from './api-base';
 
 export type AgentHealth = 'online' | 'ready' | 'offline';
 
@@ -53,7 +54,7 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
     ...(options.body ? { 'Content-Type': 'application/json' } : {}),
     ...(options.headers as Record<string, string> | undefined),
   };
-  const res = await fetch(url, { ...options, headers });
+  const res = await apiFetch(url, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error((body as any).error || res.statusText);

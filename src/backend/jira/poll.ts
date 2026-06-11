@@ -6,10 +6,10 @@
  */
 import type Database from 'better-sqlite3';
 import type { NexusConfig } from '@nexus/shared';
-import { loadConfig } from '../config';
-import { fetchJiraTickets, type JiraQueryConfig } from './client';
-import { syncTickets, type IncomingTicket, type SyncResult } from '../tickets/sync';
-import { insertNotification } from '../notifications';
+import { loadConfig } from '../config.js';
+import { fetchJiraTickets, type JiraQueryConfig } from './client.js';
+import { syncTickets, type IncomingTicket, type SyncResult } from '../tickets/sync.js';
+import { insertNotification } from '../notifications/index.js';
 
 type JiraConfig = NexusConfig['jira'];
 type FetchTickets = (cfg: JiraQueryConfig, token: string) => Promise<IncomingTicket[]>;

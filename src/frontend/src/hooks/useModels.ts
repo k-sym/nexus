@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { apiFetch } from '../api-base';
 
 export interface ModelInfo {
   id: string;
@@ -34,7 +35,7 @@ export function useModels() {
 
   const loadModels = useCallback(async (cancelled?: () => boolean) => {
     try {
-      const res = await fetch('/api/models');
+      const res = await apiFetch('/api/models');
       if (!res.ok) throw new Error(`models: ${res.status}`);
         const data = (await res.json()) as {
           models: ModelInfo[];
@@ -97,7 +98,7 @@ export function useModels() {
     }));
     
     try {
-      await fetch('/api/models/active', {
+      await apiFetch('/api/models/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, model: id }),
@@ -108,7 +109,7 @@ export function useModels() {
   }, [currentThreadId]);
 
   const saveCuration = useCallback(async (keys: string[]) => {
-    const res = await fetch('/api/models/curation', {
+    const res = await apiFetch('/api/models/curation', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabledModelKeys: keys }),

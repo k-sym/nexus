@@ -1,9 +1,9 @@
 import 'fastify';
 import Database from 'better-sqlite3';
-import type { PiRuntime } from './pi/runtime';
-import type { ConcurrencyTracker } from './pi/concurrency';
-import type { ModelCurationStore } from './pi/model-curation';
-import type { OAuthFlowManager } from './pi/oauth-flows';
+import type { PiRuntime } from './pi/runtime.js';
+import type { ConcurrencyTracker } from './pi/concurrency.js';
+import type { ModelCurationStore } from './pi/model-curation.js';
+import type { OAuthFlowManager } from './pi/oauth-flows.js';
 
 declare module 'fastify' {
   interface FastifyInstance {

@@ -6,7 +6,7 @@
  * overwritten on save if a new non-masked value is provided.
  */
 import { FastifyInstance } from 'fastify';
-import { loadConfig, saveConfig } from '../config';
+import { loadConfig, saveConfig } from '../config.js';
 import { NexusConfig } from '@nexus/shared';
 
 const MASK = '••••••••';

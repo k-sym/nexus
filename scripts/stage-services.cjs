@@ -76,6 +76,69 @@ function fixSpawnHelper(moduleRoot) {
   }
 }
 
+function compileTsNodeModules(moduleRoot) {
+  const nm = path.join(moduleRoot, 'node_modules');
+  if (!fs.existsSync(nm)) return;
+  for (const scope of fs.readdirSync(nm, { withFileTypes: true })) {
+    if (!scope.isDirectory() || !scope.name.startsWith('@')) continue;
+    const scopeDir = path.join(nm, scope.name);
+    for (const pkg of fs.readdirSync(scopeDir, { withFileTypes: true })) {
+      if (!pkg.isDirectory()) continue;
+      const pkgDir = path.join(scopeDir, pkg.name);
+      const pkgJsonPath = path.join(pkgDir, 'package.json');
+      if (!fs.existsSync(pkgJsonPath)) continue;
+      let pkgJson;
+      try { pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8')); } catch { continue; }
+      const main = pkgJson.main || (typeof pkgJson.exports?.['.'] === 'string' ? pkgJson.exports['.'] : '');
+      if (typeof main !== 'string' || !main.endsWith('.ts')) continue;
+      log(`  compiling .ts entries in ${scope.name}/${pkg.name}…`);
+      const tsFiles = [];
+      (function walk(dir) {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, entry.name);
+          if (entry.isDirectory() && entry.name !== 'node_modules') walk(full);
+          else if (entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.d.ts')) tsFiles.push(full);
+        }
+      })(pkgDir);
+      if (tsFiles.length === 0) continue;
+      const tsconfig = {
+        compilerOptions: {
+          target: 'ES2022',
+          module: 'ESNext',
+          moduleResolution: 'Bundler',
+          outDir: pkgDir,
+          rootDir: pkgDir,
+          strict: false,
+          esModuleInterop: true,
+          skipLibCheck: true,
+          declaration: false,
+          noEmit: false,
+          allowSyntheticDefaultImports: true,
+          resolveJsonModule: true,
+          isolatedModules: true,
+        },
+        files: tsFiles,
+      };
+      const tsconfigPath = path.join(pkgDir, 'tsconfig.staging.json');
+      fs.writeFileSync(tsconfigPath, JSON.stringify(tsconfig, null, 2));
+      try {
+        execFileSync('npx', ['tsc', '-p', tsconfigPath], { cwd: ROOT, stdio: 'inherit' });
+      } finally {
+        fs.rmSync(tsconfigPath, { force: true });
+      }
+      for (const ts of tsFiles) fs.rmSync(ts, { force: true });
+      pkgJson.main = pkgJson.main.replace(/\.ts$/, '.js');
+      if (pkgJson.exports && typeof pkgJson.exports['.'] === 'string') {
+        pkgJson.exports['.'] = pkgJson.exports['.'].replace(/\.ts$/, '.js');
+      }
+      if (pkgJson.pi && Array.isArray(pkgJson.pi.extensions)) {
+        pkgJson.pi.extensions = pkgJson.pi.extensions.map(function (e) { return e.replace(/\.ts$/, '.js'); });
+      }
+      fs.writeFileSync(pkgJsonPath, JSON.stringify(pkgJson, null, 2) + '\n');
+    }
+  }
+}
+
 reset(OUT);
 
 // ── @nexus/shared → tarball (private workspace dep, not on any registry) ──
@@ -102,6 +165,7 @@ log('packed shared →', path.basename(sharedTgz));
   npm(['install', '--omit=dev', '--no-workspaces', '--no-audit', '--no-fund'], dir);
   pruneNodePty(dir);
   fixSpawnHelper(dir);
+  compileTsNodeModules(dir);
 }
 
 // ── daemon ──

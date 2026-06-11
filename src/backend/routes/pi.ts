@@ -6,7 +6,7 @@
  * and the orchestrator's "pick a model" picker.
  */
 import { FastifyInstance } from 'fastify';
-import type { AppliedModelCuration } from '../pi/model-curation';
+import type { AppliedModelCuration } from '../pi/model-curation.js';
 
 export function buildModelCatalog(fastify: FastifyInstance) {
   const all = fastify.pi.models.getAll();

@@ -11,10 +11,10 @@
  * written to the vault as plain markdown by ./obsidian (the daemon indexes them too).
  */
 import Database from 'better-sqlite3';
-import { loadConfig } from '../config';
-import { daemon, DaemonRecallItem } from './client';
+import { loadConfig } from '../config.js';
+import { daemon, DaemonRecallItem } from './client.js';
 
-export { writeTaskSummary, writeChatArchive, getVaultPath, ensureProjectDir } from './obsidian';
+export { writeTaskSummary, writeChatArchive, getVaultPath, ensureProjectDir } from './obsidian.js';
 
 /** Memory shape returned to the frontend list view (daemon-backed). */
 export interface Memory {

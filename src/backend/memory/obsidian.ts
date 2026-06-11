@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
 import { Project } from '@nexus/shared';
-import { expandHome, loadConfig } from '../config';
+import { expandHome, loadConfig } from '../config.js';
 
 export function getVaultPath(): string {
   // Honor the configured vault_path (shared with the daemon) rather than

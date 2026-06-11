@@ -21,10 +21,10 @@ import {
   createAgentSession,
   type AgentSession,
 } from '@earendil-works/pi-coding-agent';
-import { getNexusDir } from '../config';
-import { addMemory } from '../memory';
-import { writeTaskSummary } from '../memory/obsidian';
-import type { PiRuntime } from '../pi/runtime';
+import { getNexusDir } from '../config.js';
+import { addMemory } from '../memory/index.js';
+import { writeTaskSummary } from '../memory/obsidian.js';
+import type { PiRuntime } from '../pi/runtime.js';
 
 const POLL_INTERVAL_MS = 5000;
 

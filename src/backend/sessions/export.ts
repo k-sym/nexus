@@ -5,7 +5,7 @@
  */
 import { writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
-import { getNexusDir } from '../config';
+import { getNexusDir } from '../config.js';
 
 export function exportThread(opts: {
   threadId: string;

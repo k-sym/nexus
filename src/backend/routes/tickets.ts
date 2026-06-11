@@ -6,7 +6,7 @@
  * canonical; Nexus never writes back.
  */
 import { FastifyInstance } from 'fastify';
-import { syncTickets, type IncomingTicket } from '../tickets/sync';
+import { syncTickets, type IncomingTicket } from '../tickets/sync.js';
 
 export async function registerTicketRoutes(fastify: FastifyInstance) {
   const db = fastify.db;

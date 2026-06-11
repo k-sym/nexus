@@ -5,7 +5,7 @@
  * The Nexus backend is just a client — it never touches the vault/index directly,
  * which keeps the daemon the single writer. Set MEMORY_DAEMON_URL to override.
  */
-import { loadConfig } from '../config';
+import { loadConfig } from '../config.js';
 
 export interface DaemonRecallItem {
   id: string;

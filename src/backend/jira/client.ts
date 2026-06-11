@@ -3,7 +3,7 @@
  * legacy jira-sync.sh curl did. Auth is HTTP Basic (account email : API token);
  * the token comes from the JIRA_TOKEN env var, never config/DB.
  */
-import type { IncomingTicket } from '../tickets/sync';
+import type { IncomingTicket } from '../tickets/sync.js';
 
 export class JiraError extends Error {
   constructor(message: string, readonly status?: number, readonly bodySnippet?: string) {

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { loadConfig, resolveOpenRouterKey } from './config';
+import { loadConfig, resolveOpenRouterKey } from './config.js';
 
 export type CodexBarProvider = 'claude' | 'codex' | 'openrouter';
 

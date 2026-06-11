@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stop } from '@phosphor-icons/react';
 import { usePiStream, ChatBusyError, type StreamMessage } from '../hooks/usePiStream';
 import { useModels } from '../hooks/useModels';
+import { apiFetch } from '../api-base';
 import { ModelSelector } from './ModelSelector';
 import { ToolCallTimeline } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -78,7 +79,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     let cancelled = false;
     const checkStatus = async () => {
       try {
-        const res = await fetch(`/api/projects/${projectId}/model-status?modelKey=${encodeURIComponent(activeModelId)}`);
+        const res = await apiFetch(`/api/projects/${projectId}/model-status?modelKey=${encodeURIComponent(activeModelId)}`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) {
@@ -105,7 +106,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   // Helper to fetch thread messages (without setting model)
   const fetchThreadMessages = useCallback(async (id: string) => {
     try {
-      const res = await fetch(`/api/threads/${id}`);
+      const res = await apiFetch(`/api/threads/${id}`);
       if (!res.ok) throw new Error(`GET /api/threads/${id} ${res.status}`);
       const data = (await res.json()) as { messages: any[] };
       return (data.messages ?? []).map((m: any) => ({
@@ -133,7 +134,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(`/api/threads/${threadId}`);
+        const res = await apiFetch(`/api/threads/${threadId}`);
         if (!res.ok) throw new Error(`GET /api/threads/${threadId} ${res.status}`);
         const data = (await res.json()) as { messages: any[]; thread?: any };
         
@@ -230,7 +231,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const handleAbort = useCallback(async () => {
     if (!threadId) return;
     try {
-      await fetch(`/api/threads/${threadId}/abort`, { method: 'POST' });
+      await apiFetch(`/api/threads/${threadId}/abort`, { method: 'POST' });
     } catch {
       /* ignore */
     }

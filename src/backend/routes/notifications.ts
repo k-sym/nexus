@@ -1,6 +1,6 @@
 /** Notifications API — unseen list + mark-seen, polled by the frontend toaster. */
 import { FastifyInstance } from 'fastify';
-import { listUnseen, markSeen } from '../notifications';
+import { listUnseen, markSeen } from '../notifications/index.js';
 
 export async function registerNotificationRoutes(fastify: FastifyInstance) {
   const db = fastify.db;

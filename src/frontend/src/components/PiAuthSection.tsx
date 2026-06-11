@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { apiFetch } from '../api-base';
 
 interface AuthProvider {
   id: string;
@@ -76,7 +77,7 @@ export function PiAuthSection() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/status');
+      const res = await apiFetch('/api/auth/status');
       const data = await res.json();
       setProviders(data.providers || []);
     } catch (err) {
@@ -92,7 +93,7 @@ export function PiAuthSection() {
 
   const pollFlow = useCallback(
     async (flowId: string) => {
-      const res = await fetch(`/api/auth/oauth/${flowId}`);
+      const res = await apiFetch(`/api/auth/oauth/${flowId}`);
       if (!res.ok) throw new Error('OAuth flow status failed');
       const data = normalizeFlow((await res.json()) as OAuthFlowResponse);
       setFlow(data);
@@ -123,7 +124,7 @@ export function PiAuthSection() {
     if (!key) return;
     setSaving(provider);
     try {
-      await fetch('/api/auth/save-key', {
+      await apiFetch('/api/auth/save-key', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, key }),
@@ -141,7 +142,7 @@ export function PiAuthSection() {
     setSaving(provider);
     setManualValue('');
     try {
-      const res = await fetch('/api/auth/start-oauth', {
+      const res = await apiFetch('/api/auth/start-oauth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider }),
@@ -166,7 +167,7 @@ export function PiAuthSection() {
     if (!flow || !manualValue.trim()) return;
     setSaving(flow.provider);
     try {
-      await fetch(`/api/auth/oauth/${flow.id}/respond`, {
+      await apiFetch(`/api/auth/oauth/${flow.id}/respond`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ value: manualValue }),
@@ -187,7 +188,7 @@ export function PiAuthSection() {
   const logout = async (provider: string) => {
     setSaving(provider);
     try {
-      await fetch('/api/auth/logout', {
+      await apiFetch('/api/auth/logout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider }),

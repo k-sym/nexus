@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { MemoryInput, addMemory, getRelevantMemories, getAllMemories, deleteMemory, updateMemory } from '../memory';
+import { MemoryInput, addMemory, getRelevantMemories, getAllMemories, deleteMemory, updateMemory } from '../memory/index.js';
 
 export async function registerMemoryRoutes(fastify: FastifyInstance) {
   const db = fastify.db;

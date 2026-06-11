@@ -8,7 +8,7 @@
  * manual callback input when a provider asks for it.
  */
 import { FastifyInstance } from 'fastify';
-import { buildModelCatalog } from './pi';
+import { buildModelCatalog } from './pi.js';
 
 interface AuthProvider {
   id: string;
