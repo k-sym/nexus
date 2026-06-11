@@ -30,8 +30,10 @@ import { ConcurrencyTracker } from './pi/concurrency';
 import { ModelCurationStore } from './pi/model-curation';
 import { OAuthFlowManager } from './pi/oauth-flows';
 import { backfillOAuthCuratedModels } from './pi/oauth-curation-backfill';
+import { loadLocalEnvFile } from './env';
 
 async function main() {
+  loadLocalEnvFile();
   const config = loadConfig();
 
   const db = getDb(getDbPath());

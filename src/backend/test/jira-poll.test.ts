@@ -63,6 +63,21 @@ test('runJiraSyncOnce true no-op (no tickets, none existing) makes no notificati
   assert.equal(notifs.length, 0);
 });
 
+test('runJiraSyncOnce preserves existing tickets when Jira unexpectedly returns zero issues', async () => {
+  const { db, cleanup } = freshDb();
+  await runJiraSyncOnce(db, JIRA, 'tok', async () => [{ key: 'SUP-1', summary: 'one' }]);
+
+  const res = await runJiraSyncOnce(db, JIRA, 'tok', async () => []);
+  const count = (db.prepare('SELECT COUNT(*) c FROM tickets').get() as { c: number }).c;
+  const notifs = listUnseen(db);
+  cleanup();
+
+  assert.equal(res, null);
+  assert.equal(count, 1);
+  assert.equal(notifs[0]?.level, 'error');
+  assert.match(notifs[0]?.message ?? '', /returned zero tickets/i);
+});
+
 test('runJiraSyncOnce notifies error and stays non-throwing on fetch failure', async () => {
   const { db, cleanup } = freshDb();
   const res = await runJiraSyncOnce(db, JIRA, 'tok', async () => { throw new Error('HTTP 401: bad token'); });
