@@ -122,6 +122,14 @@ npm install
 
 ### Set your API keys
 
+For local development, copy `.env.example` to `.env` and fill in the values you use:
+
+```bash
+cp .env.example .env
+```
+
+The backend loads `.env` on startup. Already-exported shell variables take precedence.
+
 ```bash
 export OPENROUTER_API_KEY="sk-or-..."   # OpenRouter agents + chat
 export OMLX_API_KEY="..."               # local model server, if it requires auth
@@ -356,7 +364,7 @@ chat:
   archive_path: "Projects/{project_slug}/Sessions"
 ```
 
-Environment variables are interpolated with `${VAR}` syntax. Secrets are read from the environment, never written to `config.yaml`: the OpenRouter key from `OPENROUTER_API_KEY` (or `OPENROUTING_API_KEY`), the Jira API token from `JIRA_TOKEN`, and the Hermes key from `HERMES_API_KEY`.
+Environment variables are interpolated with `${VAR}` syntax. Secrets are read from exported environment variables or a local `.env` file, never written to `config.yaml`: the OpenRouter key from `OPENROUTER_API_KEY` (or `OPENROUTING_API_KEY`), the Jira API token from `JIRA_TOKEN`, and the Hermes key from `HERMES_API_KEY`.
 
 ---
 

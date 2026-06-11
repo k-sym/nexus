@@ -29,6 +29,15 @@ export async function runJiraSyncOnce(
 
   try {
     const tickets = await fetchTickets({ user: jira.user, instance: jira.instance, project: jira.project }, token);
+    const existingCount = (db.prepare('SELECT COUNT(*) AS count FROM tickets').get() as { count: number }).count;
+    if (tickets.length === 0 && existingCount > 0) {
+      insertNotification(db, {
+        level: 'error',
+        title: 'Jira sync skipped',
+        message: `Jira returned zero tickets; kept ${existingCount} existing mirrored ticket${existingCount === 1 ? '' : 's'}. Check JIRA_TOKEN, account email, and Jira assignment before clearing.`,
+      });
+      return null;
+    }
     const res = syncTickets(db, tickets, { source: 'nexus', replaceAll: true });
     if (res.inserted + res.updated + res.removed > 0) {
       insertNotification(db, {
