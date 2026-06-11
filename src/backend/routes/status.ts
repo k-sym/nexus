@@ -10,6 +10,7 @@
 import { FastifyInstance } from 'fastify';
 import { daemon } from '../memory/client';
 import { buildModelCatalog } from './pi';
+import { getUsageStats } from '../codexbar';
 
 export async function registerStatusRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -46,6 +47,8 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
       )
       .all();
 
-    return { memory, models, activity: { running, recent } };
+    const stats = await getUsageStats();
+
+    return { memory, models, stats, activity: { running, recent } };
   });
 }

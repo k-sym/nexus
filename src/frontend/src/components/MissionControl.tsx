@@ -21,6 +21,87 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
   );
 }
 
+type UsageWindow = { usedPercent: number; remainingPercent: number; resetLabel?: string; windowMinutes?: number };
+type UsageStat = {
+  ok: boolean;
+  value: string;
+  caption: string;
+  windows?: Partial<Record<'session' | 'weekly', UsageWindow>>;
+  source?: string;
+  sampledAt?: string;
+  error?: string;
+};
+
+function windowReserveText(window: UsageWindow) {
+  if (window.usedPercent > 100) return `${window.usedPercent - 100}% in deficit`;
+  return `${window.remainingPercent}% in reserve`;
+}
+
+function updatedLabel(sampledAt?: string) {
+  if (!sampledAt) return null;
+  const sampled = new Date(sampledAt).valueOf();
+  if (!Number.isFinite(sampled)) return null;
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - sampled) / 1000));
+  if (elapsedSeconds < 60) return 'Updated just now';
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  if (elapsedMinutes < 60) return `Updated ${elapsedMinutes} min ago`;
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) return `Updated ${elapsedHours} hr ago`;
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `Updated ${elapsedDays} day${elapsedDays === 1 ? '' : 's'} ago`;
+}
+
+function UsageWindowRow({ label, window }: { label: string; window: UsageWindow }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-xs font-medium text-zinc-200">{label}</span>
+        {window.resetLabel && <span className="text-[11px] text-faint">Resets {window.resetLabel}</span>}
+      </div>
+      <div className="h-1.5 rounded-full bg-[var(--surface-hover)] overflow-hidden">
+        <div className="h-full bg-cyan-500" style={{ width: `${Math.min(100, Math.max(0, window.usedPercent))}%` }} />
+      </div>
+      <div className="flex items-center justify-between gap-3 text-[11px] text-muted">
+        <span>{window.usedPercent}% used</span>
+        <span>{windowReserveText(window)}</span>
+      </div>
+    </div>
+  );
+}
+
+function UsageCard({ title, stat, fallback }: {
+  title: string;
+  stat?: UsageStat;
+  fallback: string;
+}) {
+  const value = stat?.value ?? '—';
+  const caption = stat?.caption ?? fallback;
+  const source = stat?.source === 'history' || stat?.source === 'history-cache' || stat?.source === 'claude-statusline-cache'
+    ? 'cached'
+    : stat?.source;
+  const windows = stat?.windows;
+  const updated = updatedLabel(stat?.sampledAt);
+
+  return (
+    <Card title={title}>
+      {windows?.session || windows?.weekly ? (
+        <div className="space-y-3">
+          {windows.session && <UsageWindowRow label="Session" window={windows.session} />}
+          {windows.weekly && <UsageWindowRow label="Weekly" window={windows.weekly} />}
+        </div>
+      ) : (
+        <>
+          <div className={`text-2xl font-semibold ${stat?.ok ? 'text-primary' : 'text-faint'}`}>{value}</div>
+          <div className="text-xs text-muted mt-1">{caption}</div>
+        </>
+      )}
+      {updated && <div className="text-[10px] text-faint mt-2">{updated}</div>}
+      {source && <div className="text-[10px] text-faint mt-1">{source}</div>}
+      {!stat?.ok && stat?.error && <div className="text-[10px] text-faint mt-1 truncate" title={stat.error}>{stat.error}</div>}
+    </Card>
+  );
+}
+
 interface ModelRow {
   provider: string;
   id: string;
@@ -62,6 +143,7 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
   const totalModels = (status?.models ?? []).length;
   const mem = status?.memory;
   const models = mem?.models;
+  const stats = status?.stats;
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -114,24 +196,12 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
             </Card>
           </div>
 
-          {/* Stats — placeholder cards. Populated by the future codexbar
-              integration (Claude/Codex session-remaining + OpenRouter
-              credit balance). For now each card shows an em-dash. */}
           <div>
             <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Stats</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <Card title="Claude Stats">
-                <div className="text-2xl font-semibold text-faint">—</div>
-                <div className="text-xs text-muted mt-1">codexbar session · 5h rolling</div>
-              </Card>
-              <Card title="Codex Stats">
-                <div className="text-2xl font-semibold text-faint">—</div>
-                <div className="text-xs text-muted mt-1">codexbar session · weekly</div>
-              </Card>
-              <Card title="OpenRouter Stats">
-                <div className="text-2xl font-semibold text-faint">—</div>
-                <div className="text-xs text-muted mt-1">codexbar credit balance</div>
-              </Card>
+              <UsageCard title="Claude Stats" stat={stats?.claude} fallback="codexbar session · 5h rolling" />
+              <UsageCard title="Codex Stats" stat={stats?.codex} fallback="codexbar session · weekly" />
+              <UsageCard title="OpenRouter Stats" stat={stats?.openrouter} fallback="codexbar credit balance" />
             </div>
           </div>
 
