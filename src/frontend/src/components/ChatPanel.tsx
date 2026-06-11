@@ -370,9 +370,10 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
+        data-chat-role={isUser ? 'user' : isTool ? 'tool' : 'assistant'}
         className={`max-w-[72%] rounded-2xl px-4 py-2 text-sm ${
           isUser
-            ? 'accent-button'
+            ? 'chat-request-bubble'
             : isTool
               ? 'surface-panel border border-subtle text-muted text-xs'
               : 'surface-glass border border-subtle text-primary'

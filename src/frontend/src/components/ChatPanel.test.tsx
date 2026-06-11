@@ -105,4 +105,58 @@ describe('ChatPanel', () => {
       expect(within(screen.getByTestId('chat-messages')).getByText('hello anthropic')).toBeInTheDocument();
     });
   });
+
+  it('renders user request bubbles with the chat glass treatment instead of the CTA gradient', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'sonnet-4-5', name: 'Sonnet 4.5', provider: 'anthropic', configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({
+            thread: { id: 't1' },
+            messages: [
+              {
+                id: 'm-user',
+                role: 'user',
+                content: 'Could you update the deployment YAML?',
+                timestamp: 1,
+              },
+              {
+                id: 'm-assistant',
+                role: 'assistant',
+                content: 'I will check the deployment scripts.',
+                timestamp: 2,
+              },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(
+      <ChatPanel
+        projectId="p1"
+        threadId="t1"
+        onBusyConflict={noop}
+      />,
+    );
+
+    const request = await screen.findByText('Could you update the deployment YAML?');
+    const requestBubble = request.closest('[data-chat-role="user"]');
+
+    expect(requestBubble).toHaveClass('chat-request-bubble');
+    expect(requestBubble).not.toHaveClass('accent-button');
+  });
 });

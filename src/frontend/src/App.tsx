@@ -390,7 +390,11 @@ export default function App() {
   };
 
   return (
-    <div className="surface-canvas flex flex-col h-screen w-screen overflow-hidden">
+    <div className="ambient-shell surface-canvas flex flex-col h-screen w-screen overflow-hidden">
+      <div className="ambient-particle-layer ambient-particles-far" aria-hidden="true" />
+      <div className="ambient-particle-layer ambient-particles-mid" aria-hidden="true" />
+      <div className="ambient-particle-layer ambient-particles-near" aria-hidden="true" />
+
       <TopBar
         view={globalView ?? ''}
         onSelectGlobal={selectGlobal}

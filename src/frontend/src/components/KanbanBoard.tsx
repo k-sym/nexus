@@ -10,11 +10,11 @@ interface KanbanBoardProps {
   onDeleteTask: (taskId: string) => void;
 }
 
-const PRIORITY_COLORS: Record<string, string> = {
-  low: 'bg-gray-500',
-  medium: 'bg-blue-500',
-  high: 'bg-orange-500',
-  urgent: 'bg-red-500',
+const PRIORITY_CLASSES: Record<string, string> = {
+  low: 'kanban-priority-low',
+  medium: 'kanban-priority-medium',
+  high: 'kanban-priority-high',
+  urgent: 'kanban-priority-urgent',
 };
 
 export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, onAddTask, onEditTask, onDeleteTask }: KanbanBoardProps) {
@@ -62,18 +62,22 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
               </button>
             </div>
 
-            <div className="flex-1 surface-glass border border-subtle rounded-lg p-2 space-y-2 overflow-y-auto min-h-[100px]">
+            <div
+              data-kanban-lane
+              className="flex-1 kanban-lane rounded-lg p-2 space-y-2 overflow-y-auto min-h-[100px] transition-colors"
+            >
               {columnTasks.map(task => (
                 <div
                   key={task.id}
+                  data-kanban-card
+                  data-priority={task.priority}
                   draggable
                   onDragStart={(e) => handleDragStart(e, task.id)}
                   onClick={() => onEditTask(task)}
-                  className="surface-panel border border-subtle rounded-lg p-3 cursor-grab active:cursor-grabbing hover:border-[var(--border-strong)] transition-colors group"
+                  className={`kanban-card ${PRIORITY_CLASSES[task.priority] || PRIORITY_CLASSES.low} border rounded-lg p-3 pl-4 cursor-grab active:cursor-grabbing transition-colors group`}
                 >
                   <div className="flex items-start justify-between gap-2 mb-1">
                     <h3 className="text-sm font-medium leading-tight flex-1">{task.title}</h3>
-                    <span className={`w-2 h-2 rounded-full shrink-0 mt-1 ${PRIORITY_COLORS[task.priority] || 'bg-gray-500'}`} />
                   </div>
                   {task.description && (
                     <p className="text-xs text-muted line-clamp-2 mb-2">{task.description}</p>
@@ -97,7 +101,7 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
               ))}
 
               {columnTasks.length === 0 && (
-                <div className="text-center text-xs text-faint/70 py-4">
+                <div className="text-center text-xs text-faint/70 py-4 border border-dashed border-[rgba(168,185,208,0.16)] rounded-lg">
                   Drop tasks here
                 </div>
               )}
