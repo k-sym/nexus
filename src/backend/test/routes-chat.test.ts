@@ -310,14 +310,14 @@ test('POST /api/threads/:id/messages/stream forwards and persists accepted image
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'openai', id: 'vision', input: ['text', 'image'] }) },
   };
   const { app, db, dir } = makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'see this', images: [pngImage] },
+      payload: { content: 'see this', modelKey: 'openai/vision', images: [pngImage] },
     });
 
     assert.equal(res.statusCode, 200);
@@ -328,6 +328,120 @@ test('POST /api/threads/:id/messages/stream forwards and persists accepted image
     };
     assert.equal(row.content, 'see this');
     assert.deepEqual(JSON.parse(row.attachments_json), [pngImage]);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects images for text-only models', async () => {
+  let promptCalled = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalled = true;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openai', id: 'text-only', input: ['text'] }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'look', modelKey: 'openai/text-only', images: [pngImage] },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /does not support image input/i);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects images without a selected image-capable model', async () => {
+  let promptCalled = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalled = true;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'look', images: [pngImage] },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /does not support image input/i);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream accepts screenshot-sized image payloads', async () => {
+  let promptCalled = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalled = true;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openai', id: 'vision', input: ['text', 'image'] }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const largeImage = {
+      type: 'image',
+      data: 'a'.repeat(1_500_000),
+      mimeType: 'image/png',
+      name: 'large-screenshot.png',
+      size: 1_125_000,
+    };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'look', modelKey: 'openai/vision', images: [largeImage] },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(promptCalled, true);
   } finally {
     await app.close();
     db.close();

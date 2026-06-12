@@ -29,12 +29,17 @@ interface ChatImageAttachment {
 }
 
 const activeStreams = new Map<string, ActiveStream>();
+const CHAT_STREAM_BODY_LIMIT_BYTES = 50 * 1024 * 1024;
 const allowedImageMimeTypes = new Set<ChatImageAttachment['mimeType']>([
   'image/png',
   'image/jpeg',
   'image/gif',
   'image/webp',
 ]);
+
+function modelSupportsImageInput(model: { input?: unknown } | undefined): boolean {
+  return Array.isArray(model?.input) && model.input.includes('image');
+}
 
 function dbMessages(db: FastifyInstance['db'], threadId: string) {
   let rows: Array<{
@@ -126,7 +131,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     return entries.length > 0 ? flattenEntries(entries) : dbMessages(db, threadId);
   });
 
-  fastify.post('/api/threads/:threadId/messages/stream', async (request, reply) => {
+  fastify.post('/api/threads/:threadId/messages/stream', { bodyLimit: CHAT_STREAM_BODY_LIMIT_BYTES }, async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
     const body = request.body as { content: string; modelKey?: string; images?: unknown };
     const confirmCancel = request.headers['x-confirm-cancel'] === 'true';
@@ -186,6 +191,10 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           return { error: `Model not found: ${body.modelKey}` };
         }
       }
+    }
+    if (images.length > 0 && !modelSupportsImageInput(selectedModel)) {
+      reply.code(400);
+      return { error: 'Selected model does not support image input' };
     }
 
     let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel'> | undefined;
