@@ -11,7 +11,9 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 5173,
+    // Honor PORT when set (e.g. the preview tool's auto-assigned port);
+    // default to 5173 for the normal `npm run dev` workflow.
+    port: process.env.PORT ? Number(process.env.PORT) : 5173,
     proxy: {
       // Object form with ws:true so the PTY WebSocket (/api/threads/:id/pty)
       // upgrade is proxied to the backend, not just plain HTTP requests.

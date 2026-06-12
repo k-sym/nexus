@@ -2,12 +2,22 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import { PiAuthSection } from './PiAuthSection';
 import { ModelCurationSection } from './ModelCurationSection';
+import { getBackgroundMotion, setBackgroundMotion, type BackgroundMotion } from '../appearance';
+
+const MOTION_OPTIONS: { mode: BackgroundMotion; label: string }[] = [
+  { mode: 'off', label: 'Off' },
+  { mode: 'on', label: 'Smooth' },
+  { mode: 'low', label: 'Battery saver' },
+];
 
 export default function SettingsPage() {
   const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  // Appearance prefs are local-only (localStorage) and apply instantly, so they
+  // live outside the config object and the Save Changes flow.
+  const [motion, setMotion] = useState<BackgroundMotion>(getBackgroundMotion);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,6 +85,32 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-6">
+          <Section title="Appearance">
+            <Field label="Animated background">
+              <div className="inline-flex rounded overflow-hidden border border-subtle">
+                {MOTION_OPTIONS.map(({ mode, label }) => (
+                  <button
+                    key={mode}
+                    onClick={() => {
+                      setMotion(mode);
+                      setBackgroundMotion(mode);
+                    }}
+                    className={`px-3 py-1 text-xs transition-colors ${motion === mode ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-faint mt-1">
+                Drifts and twinkles the starfield. <span className="text-muted">Off</span> (default) shows
+                the static starfield with zero animation cost. <span className="text-muted">Smooth</span> is
+                full 60fps. <span className="text-muted">Battery saver</span> keeps the motion but steps it
+                to ~5fps — near-identical, far less GPU. Applies instantly and pauses when the window
+                isn't focused.
+              </p>
+            </Field>
+          </Section>
+
           <Section title="Provider Auth">
             <PiAuthSection />
           </Section>
