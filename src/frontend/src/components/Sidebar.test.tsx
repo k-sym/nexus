@@ -55,6 +55,10 @@ function renderSidebar({
       activeThreadId={thread.id}
       threads={threads}
       activeSessionIds={activeSessionIds}
+      projectCounts={{
+        [project.id]: { tasks: 3, sessions: threads.length },
+        [secondProject.id]: { tasks: 10, sessions: 2 },
+      }}
       onSelectProject={noop}
       onSelectSubView={noop}
       onSelectThread={noop}
@@ -87,6 +91,15 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('No sessions')).toBeInTheDocument();
     expect(screen.queryByText('No conversations')).not.toBeInTheDocument();
+  });
+
+  it('shows project, kanban, and sessions counts in the drawer', () => {
+    renderSidebar({ threads: [{ thread }, { thread: { ...thread, id: 'thread-2', title: 'Second session' } }] });
+
+    expect(screen.getByText('3/2')).toBeInTheDocument();
+    expect(screen.getByText('10/2')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
   });
 
   it('uses the default sidebar width when no preference is saved', () => {

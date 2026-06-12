@@ -155,6 +155,24 @@ export default function App() {
     [threads],
   );
 
+  const sidebarProjectCounts = useMemo(() => {
+    const counts = Object.fromEntries(
+      projects.map((project) => [
+        project.id,
+        {
+          tasks: project.task_count ?? 0,
+          sessions: project.chat_session_count ?? 0,
+        },
+      ]),
+    );
+
+    if (activeProjectId) {
+      counts[activeProjectId] = { tasks: tasks.length, sessions: threads.length };
+    }
+
+    return counts;
+  }, [projects, activeProjectId, tasks.length, threads.length]);
+
   const handleCreateProject = async (data: { name: string; description: string; repo_path: string }) => {
     const created = await api.projects.create(data);
     setShowProjectModal(false);
@@ -475,6 +493,7 @@ export default function App() {
           activeThreadId={activeThreadId}
           threads={activeProjectId ? threadMetas : []}
           activeSessionIds={activeSessionIds}
+          projectCounts={sidebarProjectCounts}
           onSelectProject={focusProject}
           onSelectSubView={selectSubView}
           onSelectThread={selectThread}
