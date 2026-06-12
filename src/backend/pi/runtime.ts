@@ -39,6 +39,7 @@ export interface ModelShape {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  input?: Array<'text' | 'image'>;
 }
 
 export interface PiRuntimePaths {
@@ -199,6 +200,7 @@ export class PiRuntime {
       reasoning: m.reasoning,
       contextWindow: m.contextWindow,
       maxTokens: m.maxTokens,
+      input: (m as any).input,
     };
   }
 

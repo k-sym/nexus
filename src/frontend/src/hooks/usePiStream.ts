@@ -17,10 +17,19 @@ export type ToolPhase =
   | { type: 'done'; toolName: string }
   | { type: 'error'; toolName: string; message: string };
 
+export type ChatImageAttachment = {
+  type: 'image';
+  data: string;
+  mimeType: string;
+  name?: string;
+  size?: number;
+};
+
 export interface StreamMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'toolResult';
   content: string;
+  attachments?: ChatImageAttachment[];
   thinking?: string;
   toolCalls?: Array<{
     id: string;
@@ -46,7 +55,7 @@ export interface StreamState {
 }
 
 export type StreamAction =
-  | { type: 'START_STREAM'; prompt: string }
+  | { type: 'START_STREAM'; prompt: string; attachments?: ChatImageAttachment[] }
   | { type: 'TEXT_DELTA'; delta: string }
   | { type: 'THINKING_DELTA'; delta: string }
   | { type: 'TOOL_CALL_START'; toolCall: { id: string; name: string; args: Record<string, unknown> } }
@@ -140,6 +149,7 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
             id: makeId(),
             role: 'user',
             content: action.prompt,
+            attachments: action.attachments,
             timestamp: Date.now(),
           },
         ],
@@ -370,11 +380,20 @@ export function usePiStream() {
   }, []);
 
   const startStream = useCallback(
-    async (threadId: string, text: string, opts: { confirmCancel?: boolean; modelKey?: string } = {}) => {
+    async (
+      threadId: string,
+      text: string,
+      opts: { confirmCancel?: boolean; modelKey?: string; images?: ChatImageAttachment[] } = {},
+    ) => {
       activeThreadRef.current = threadId;
-      dispatch({ type: 'START_STREAM', prompt: text });
+      dispatch({ type: 'START_STREAM', prompt: text, attachments: opts.images });
       const ctrl = new AbortController();
       abortRef.current = ctrl;
+      const requestBody = {
+        content: text,
+        modelKey: opts.modelKey,
+        ...(opts.images?.length ? { images: opts.images } : {}),
+      };
       let res: Response;
       try {
         res = await apiFetch(`/api/threads/${threadId}/messages/stream`, {
@@ -383,7 +402,7 @@ export function usePiStream() {
             'Content-Type': 'application/json',
             ...(opts.confirmCancel ? { 'X-Confirm-Cancel': 'true' } : {}),
           },
-          body: JSON.stringify({ content: text, modelKey: opts.modelKey }),
+          body: JSON.stringify(requestBody),
           signal: ctrl.signal,
         });
       } catch (err) {

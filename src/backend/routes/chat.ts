@@ -20,13 +20,28 @@ interface ActiveStream {
   session: Pick<AgentSession, 'abort'>;
 }
 
+interface ChatImageAttachment {
+  type: 'image';
+  data: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  name?: string;
+  size?: number;
+}
+
 const activeStreams = new Map<string, ActiveStream>();
+const allowedImageMimeTypes = new Set<ChatImageAttachment['mimeType']>([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
 
 function dbMessages(db: FastifyInstance['db'], threadId: string) {
   let rows: Array<{
     id: string;
     role: string;
     content: string;
+    attachments_json: string | null;
     thinking: string | null;
     tool_calls: string | null;
     created_at: string;
@@ -34,21 +49,25 @@ function dbMessages(db: FastifyInstance['db'], threadId: string) {
   try {
     rows = db
       .prepare(
-        'SELECT id, role, content, thinking, tool_calls, created_at FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC',
+        'SELECT id, role, content, attachments_json, thinking, tool_calls, created_at FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC',
       )
       .all(threadId) as typeof rows;
   } catch (err: any) {
     if (String(err?.message ?? '').includes('no such table: chat_messages')) return [];
     throw err;
   }
-  return rows.map((row) => ({
-    id: row.id,
-    role: row.role,
-    content: row.content,
-    thinking: row.thinking,
-    tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : null,
-    timestamp: new Date(row.created_at).getTime(),
-  }));
+  return rows.map((row) => {
+    const attachments = parseStoredAttachments(row.attachments_json);
+    return {
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      ...(row.role === 'user' && attachments.length > 0 ? { attachments } : {}),
+      thinking: row.thinking,
+      tool_calls: row.tool_calls ? JSON.parse(row.tool_calls) : null,
+      timestamp: new Date(row.created_at).getTime(),
+    };
+  });
 }
 
 export async function registerChatRoutes(fastify: FastifyInstance) {
@@ -109,7 +128,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
   fastify.post('/api/threads/:threadId/messages/stream', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
-    const body = request.body as { content: string; modelKey?: string };
+    const body = request.body as { content: string; modelKey?: string; images?: unknown };
     const confirmCancel = request.headers['x-confirm-cancel'] === 'true';
 
     const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
@@ -121,6 +140,12 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | { repo_path: string }
       | undefined;
     const cwd = project?.repo_path || process.cwd();
+    const imagesResult = validateChatImages(body.images);
+    if (!imagesResult.ok) {
+      reply.code(400);
+      return { error: imagesResult.error };
+    }
+    const images = imagesResult.images;
 
     // Check if this project+model combination is already streaming
     const modelKey = body.modelKey || 'default';
@@ -221,7 +246,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           threadId,
           'user',
           body.content,
-          '[]',
+          JSON.stringify(images),
           'text',
           null,
           null,
@@ -234,7 +259,11 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       if (session) {
         activeStreams.set(threadId, { session });
         const subscription = session.subscribe((ev) => write(ev));
-        await session.prompt(body.content);
+        if (images.length > 0) {
+          await session.prompt(body.content, { images });
+        } else {
+          await session.prompt(body.content);
+        }
         subscription();
       }
       write({ kind: 'done' });
@@ -326,10 +355,12 @@ function flattenEntries(entries: unknown[]): unknown[] {
     const m = e.message;
     if (!m) continue;
     if (m.role === 'user') {
+      const attachments = extractImageAttachments(m);
       out.push({
         id: e.id,
         role: 'user',
         content: typeof m.content === 'string' ? m.content : extractText(m.content),
+        ...(attachments.length > 0 ? { attachments } : {}),
         timestamp: m.timestamp ?? e.timestamp,
       });
     } else if (m.role === 'assistant') {
@@ -378,6 +409,66 @@ function flattenEntries(entries: unknown[]): unknown[] {
     }
   }
   return out;
+}
+
+function validateChatImages(images: unknown): { ok: true; images: ChatImageAttachment[] } | { ok: false; error: string } {
+  if (images === undefined) return { ok: true, images: [] };
+  if (!Array.isArray(images)) return { ok: false, error: 'images must be an array' };
+  if (images.length > 5) return { ok: false, error: 'images must contain at most 5 images' };
+
+  const validated: ChatImageAttachment[] = [];
+  for (let index = 0; index < images.length; index += 1) {
+    const item = images[index] as any;
+    if (!item || typeof item !== 'object') {
+      return { ok: false, error: `images[${index}] must be an object` };
+    }
+    if (item.type !== 'image') {
+      return { ok: false, error: `images[${index}].type must be "image"` };
+    }
+    if (typeof item.data !== 'string' || item.data.length === 0) {
+      return { ok: false, error: `images[${index}].data must be a non-empty string` };
+    }
+    if (typeof item.mimeType !== 'string' || !allowedImageMimeTypes.has(item.mimeType as ChatImageAttachment['mimeType'])) {
+      return { ok: false, error: `images[${index}].mimeType has unsupported image MIME type` };
+    }
+    if (item.name !== undefined && typeof item.name !== 'string') {
+      return { ok: false, error: `images[${index}].name must be a string` };
+    }
+    if (item.size !== undefined && (!Number.isFinite(item.size) || item.size < 0)) {
+      return { ok: false, error: `images[${index}].size must be a non-negative number` };
+    }
+
+    validated.push({
+      type: 'image',
+      data: item.data,
+      mimeType: item.mimeType,
+      ...(item.name !== undefined ? { name: item.name } : {}),
+      ...(item.size !== undefined ? { size: item.size } : {}),
+    });
+  }
+  return { ok: true, images: validated };
+}
+
+function parseStoredAttachments(value: string | null): ChatImageAttachment[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    const validated = validateChatImages(parsed);
+    return validated.ok ? validated.images : [];
+  } catch {
+    return [];
+  }
+}
+
+function extractImageAttachments(message: any): ChatImageAttachment[] {
+  const candidates: unknown[] = [];
+  if (Array.isArray(message?.attachments)) candidates.push(...message.attachments);
+  if (Array.isArray(message?.images)) candidates.push(...message.images);
+  if (Array.isArray(message?.content)) {
+    candidates.push(...message.content.filter((block: any) => block?.type === 'image'));
+  }
+  const validated = validateChatImages(candidates);
+  return validated.ok ? validated.images : [];
 }
 
 function extractText(content: unknown): string {
