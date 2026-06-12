@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stop } from '@phosphor-icons/react';
-import { usePiStream, ChatBusyError, type StreamMessage } from '../hooks/usePiStream';
+import { usePiStream, ChatBusyError, type ChatImageAttachment, type StreamMessage } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
 import { ModelSelector } from './ModelSelector';
@@ -38,6 +38,28 @@ interface ChatPanelProps {
   onSeedConsumed?: () => void;
 }
 
+const MAX_PENDING_IMAGES = 5;
+const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+function fileToImageAttachment(file: File): Promise<ChatImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result ?? '');
+      const comma = result.indexOf(',');
+      resolve({
+        type: 'image',
+        data: comma >= 0 ? result.slice(comma + 1) : result,
+        mimeType: file.type,
+        name: file.name,
+        size: file.size,
+      });
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read image.'));
+    reader.readAsDataURL(file);
+  });
+}
+
 export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, seed, onSeedConsumed }: ChatPanelProps) {
   const { models, activeModelId, setModel, setThread } = useModels();
   const { state, startStream, abortStream, dispatch, setActiveThread } = usePiStream();
@@ -47,7 +69,15 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ activeThreadId: string; activeTitle: string; pendingText: string } | null>(null);
   const [modelBusy, setModelBusy] = useState<{ threadId: string; title: string } | null>(null);
+  const [pendingImages, setPendingImages] = useState<ChatImageAttachment[]>([]);
+  const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
+  const [draggingImages, setDraggingImages] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const activeModel = models.find((model) => `${model.provider}/${model.id}` === activeModelId);
+  const hasPendingImages = pendingImages.length > 0;
+  const selectedModelSupportsImages = activeModel?.input?.includes('image') ?? false;
+  const imageModelBlocked = hasPendingImages && !!activeModelId && !selectedModelSupportsImages;
 
   // Update the active thread in usePiStream to filter events correctly
   useEffect(() => {
@@ -72,6 +102,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setError(null);
     setPendingConfirm(null);
     setInput('');
+    setPendingImages([]);
+    setAttachmentWarning(null);
+    setDraggingImages(false);
   }, [threadId, dispatch, abortStream]);
 
   // Check if the selected model is busy in another thread (poll every 2 seconds)
@@ -209,17 +242,23 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   }, [loadedMessages, state.messages, state.streamingMessage]);
 
   const submit = useCallback(
-    async (text: string, opts: { confirmCancel?: boolean; modelKey?: string } = {}) => {
+    async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; images?: ChatImageAttachment[] } = {}) => {
       if (!threadId) return;
       setError(null);
       try {
-        await startStream(threadId, text, { confirmCancel: opts.confirmCancel, modelKey: opts.modelKey ?? activeModelId });
+        await startStream(threadId, text, {
+          confirmCancel: opts.confirmCancel,
+          modelKey: opts.modelKey ?? activeModelId,
+          images: opts.images ?? pendingImages,
+        });
         onThreadsChanged?.();
         const msgs = await fetchThreadMessages(threadId);
         if (msgs.length > 0) {
           dispatch({ type: 'RESET' });
           setLoadedMessages(msgs);
         }
+        setPendingImages([]);
+        setAttachmentWarning(null);
       } catch (err) {
         if (err instanceof ChatBusyError) {
           setPendingConfirm({
@@ -233,15 +272,15 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         setError(err instanceof Error ? err.message : String(err));
       }
     },
-    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, fetchThreadMessages, dispatch],
+    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, pendingImages, fetchThreadMessages, dispatch],
   );
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (!text || !threadId) return;
+    if ((!text && pendingImages.length === 0) || !threadId || imageModelBlocked) return;
     setInput('');
-    void submit(text);
-  }, [input, threadId, submit]);
+    void submit(text, { images: pendingImages });
+  }, [input, threadId, imageModelBlocked, pendingImages, submit]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -272,6 +311,64 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     }
   }, [pendingConfirm, submit]);
 
+  const addImageFiles = useCallback(async (files: File[]) => {
+    const imageFiles = files.filter((file) => SUPPORTED_IMAGE_MIME_TYPES.has(file.type));
+    const rejected = files.length - imageFiles.length;
+    const slots = Math.max(0, MAX_PENDING_IMAGES - pendingImages.length);
+    const accepted = imageFiles.slice(0, slots);
+    const overLimit = imageFiles.length > slots;
+
+    if (rejected > 0) {
+      setAttachmentWarning('Only PNG, JPEG, GIF, and WebP images can be attached.');
+    } else if (overLimit) {
+      setAttachmentWarning(`Only ${MAX_PENDING_IMAGES} images can be attached to one message.`);
+    } else {
+      setAttachmentWarning(null);
+    }
+
+    if (accepted.length === 0) return;
+    try {
+      const attachments = await Promise.all(accepted.map(fileToImageAttachment));
+      setPendingImages((current) => [...current, ...attachments].slice(0, MAX_PENDING_IMAGES));
+    } catch (err) {
+      setAttachmentWarning(err instanceof Error ? err.message : 'Failed to read image.');
+    }
+  }, [pendingImages.length]);
+
+  const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDraggingImages(false);
+    void addImageFiles(Array.from(e.dataTransfer.files));
+  }, [addImageFiles]);
+
+  const handleDragEnter = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) {
+      e.preventDefault();
+      setDraggingImages(true);
+    }
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault();
+  }, []);
+
+  const handleDragLeave = useCallback((e: React.DragEvent<HTMLDivElement>) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDraggingImages(false);
+  }, []);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(e.clipboardData.files);
+    if (files.length === 0) return;
+    e.preventDefault();
+    void addImageFiles(files);
+  }, [addImageFiles]);
+
+  const removePendingImage = useCallback((index: number) => {
+    setPendingImages((current) => current.filter((_, i) => i !== index));
+    setAttachmentWarning(null);
+  }, []);
+
   if (!threadId) {
     return (
       <div className="flex-1 flex items-center justify-center">
@@ -288,7 +385,19 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const isEmpty = visible.length === 0 && !streaming;
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 h-full">
+    <div
+      className="flex-1 flex flex-col min-w-0 h-full relative"
+      data-testid="chat-drop-target"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {draggingImages && (
+        <div className="absolute inset-3 z-20 rounded-lg border border-dashed border-cyan-300/50 bg-slate-950/70 flex items-center justify-center text-sm text-primary pointer-events-none">
+          Release to attach images
+        </div>
+      )}
       <header className="px-4 py-2 border-b border-subtle surface-glass flex items-center gap-3">
         <ModelSelector
           models={models}
@@ -349,16 +458,54 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         </div>
       )}
 
-      <div className="border-t border-subtle surface-glass p-3 flex gap-2 items-end">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
-          rows={2}
-          data-testid="chat-input"
-          className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
-        />
+      <div className="border-t border-subtle surface-glass p-3">
+        {attachmentWarning && <div className="pb-2 text-xs text-amber-200">{attachmentWarning}</div>}
+        {imageModelBlocked && (
+          <div className="pb-2 text-xs text-amber-200">
+            The selected model does not support images. Pick a vision-capable model or remove the images.
+          </div>
+        )}
+        {pendingImages.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-2">
+            {pendingImages.map((image, index) => (
+              <div
+                key={`${image.name ?? 'image'}-${index}`}
+                data-testid="pending-image-thumb"
+                className="relative w-20 h-16 rounded-md overflow-hidden border border-subtle surface-elevated shrink-0"
+              >
+                <img
+                  src={`data:${image.mimeType};base64,${image.data}`}
+                  alt={image.name ?? `Image ${index + 1}`}
+                  className="w-full h-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={() => removePendingImage(index)}
+                  className="absolute right-1 top-1 w-5 h-5 rounded-full bg-zinc-950/85 text-xs text-primary"
+                  aria-label={`Remove ${image.name ?? `image ${index + 1}`}`}
+                >
+                  x
+                </button>
+                {image.name && (
+                  <span className="absolute left-1 bottom-1 max-w-[4.5rem] truncate rounded bg-zinc-950/80 px-1 text-[9px] text-zinc-200">
+                    {image.name}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 items-end">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
+            placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+            rows={2}
+            data-testid="chat-input"
+            className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
+          />
         {isRunning ? (
           <button
             type="button"
@@ -374,12 +521,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             type="button"
             onClick={handleSend}
             data-testid="send-button"
-            disabled={!input.trim()}
+            disabled={(!input.trim() && pendingImages.length === 0) || imageModelBlocked}
             className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
           >
             Send
           </button>
         )}
+        </div>
       </div>
     </div>
   );
@@ -411,6 +559,18 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
         {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
           <div className="mb-2">
             <ToolCallTimeline toolCalls={msg.toolCalls as any} detailsExpanded={detailsExpanded} />
+          </div>
+        )}
+        {isUser && msg.attachments && msg.attachments.length > 0 && (
+          <div className="mb-2 grid grid-cols-2 gap-2">
+            {msg.attachments.map((image, index) => (
+              <img
+                key={`${image.name ?? 'image'}-${index}`}
+                src={`data:${image.mimeType};base64,${image.data}`}
+                alt={image.name ?? `Attached image ${index + 1}`}
+                className="max-h-40 rounded-lg border border-subtle object-cover"
+              />
+            ))}
           </div>
         )}
         {isTool ? (

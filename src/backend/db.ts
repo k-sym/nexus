@@ -143,6 +143,11 @@ function runMigrations(db: Database.Database) {
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
   db.exec('DROP TABLE IF EXISTS memories;');
 
+  const chatCols = db.pragma('table_info(chat_messages)') as { name: string }[];
+  if (!chatCols.some((c) => c.name === 'attachments_json')) {
+    db.exec('ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT DEFAULT \'[]\'');
+  }
+
   const columns = db.pragma('table_info(projects)') as { name: string }[];
   const hasConfigJson = columns.some(c => c.name === 'config_json');
   if (!hasConfigJson) {

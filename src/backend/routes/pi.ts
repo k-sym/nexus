@@ -19,6 +19,7 @@ export function buildModelCatalog(fastify: FastifyInstance) {
     reasoning: m.reasoning,
     contextWindow: m.contextWindow,
     maxTokens: m.maxTokens,
+    input: (m as any).input,
     configured: configuredKeys.has(`${m.provider}/${m.id}`),
   }));
 }

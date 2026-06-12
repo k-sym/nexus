@@ -4,6 +4,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime, buildResourceLoaderOptions, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
+import { buildModelCatalog } from '../routes/pi';
 
 test('cwdSlug encodes repo paths safely', () => {
   assert.equal(cwdSlug('/Users/me/Projects/foo'), 'Users_me_Projects_foo');
@@ -145,4 +146,50 @@ test('buildResourceLoaderOptions includes the Anthropic Messages bridge factory'
 
   assert.equal(options.noExtensions, true);
   assert.ok(options.extensionFactories?.length, 'expected at least one inline extension factory');
+});
+
+test('PiRuntime.findModel exposes model input capabilities', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = {
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  };
+  try {
+    const rt = new PiRuntime(paths);
+    (rt.models as any).find = () => ({
+      id: 'vision-model',
+      name: 'Vision Model',
+      provider: 'test',
+      input: ['text', 'image'],
+    });
+
+    assert.deepEqual(rt.findModel('test', 'vision-model')?.input, ['text', 'image']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('buildModelCatalog exposes model input capabilities', () => {
+  const fastify = {
+    pi: {
+      models: {
+        getAll: () => [
+          {
+            provider: 'test',
+            id: 'vision-model',
+            name: 'Vision Model',
+            input: ['text', 'image'],
+          },
+        ],
+        getAvailable: () => [
+          {
+            provider: 'test',
+            id: 'vision-model',
+          },
+        ],
+      },
+    },
+  } as any;
+
+  assert.deepEqual(buildModelCatalog(fastify)[0].input, ['text', 'image']);
 });

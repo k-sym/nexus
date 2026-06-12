@@ -84,6 +84,14 @@ function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boo
   return { app, db, dir, runtime, concurrency };
 }
 
+const pngImage = {
+  type: 'image',
+  data: 'iVBORw0KGgo=',
+  mimeType: 'image/png',
+  name: 'screenshot.png',
+  size: 10,
+};
+
 test('POST /api/threads/:id/messages/stream returns 409 when a *different* thread in the same project is busy', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
@@ -221,6 +229,260 @@ test('POST /api/threads/:id/messages/stream returns model selection errors befor
   }
 });
 
+test('POST /api/threads/:id/messages/stream rejects too many images', async () => {
+  let promptCalled = false;
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async () => {
+        promptCalled = true;
+      },
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', images: Array.from({ length: 6 }, () => pngImage) },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /at most 5 images/i);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects unsupported image MIME types', async () => {
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async () => {},
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', images: [{ ...pngImage, mimeType: 'image/svg+xml' }] },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /unsupported image MIME type/i);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream forwards and persists accepted images', async () => {
+  let promptArgs: unknown[] = [];
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async (...args: unknown[]) => {
+        promptArgs = args;
+      },
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openai', id: 'vision', input: ['text', 'image'] }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'see this', modelKey: 'openai/vision', images: [pngImage] },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(promptArgs, ['see this', { images: [pngImage] }]);
+    const row = db.prepare('SELECT content, attachments_json FROM chat_messages WHERE thread_id = ?').get('thread-1') as {
+      content: string;
+      attachments_json: string;
+    };
+    assert.equal(row.content, 'see this');
+    assert.deepEqual(JSON.parse(row.attachments_json), [pngImage]);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects images for text-only models', async () => {
+  let promptCalled = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalled = true;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openai', id: 'text-only', input: ['text'] }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'look', modelKey: 'openai/text-only', images: [pngImage] },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /does not support image input/i);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects images without a selected image-capable model', async () => {
+  let promptCalled = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalled = true;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'look', images: [pngImage] },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /does not support image input/i);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream accepts screenshot-sized image payloads', async () => {
+  let promptCalled = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalled = true;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openai', id: 'vision', input: ['text', 'image'] }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const largeImage = {
+      type: 'image',
+      data: 'a'.repeat(1_500_000),
+      mimeType: 'image/png',
+      name: 'large-screenshot.png',
+      size: 1_125_000,
+    };
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'look', modelKey: 'openai/vision', images: [largeImage] },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(promptCalled, true);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream preserves text-only prompt behavior', async () => {
+  let promptArgs: unknown[] = [];
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async (...args: unknown[]) => {
+        promptArgs = args;
+      },
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'plain text' },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(promptArgs, ['plain text']);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream keeps Anthropic OAuth on the Pi session path', async () => {
   let sessionForCalled = false;
   let promptCalled = false;
@@ -349,6 +611,41 @@ test('GET /api/threads/:threadId surfaces persisted assistant provider errors', 
   }
 });
 
+test('GET /api/threads/:threadId preserves image attachments from Pi user entries', async () => {
+  const runtime = {
+    readMessages: async () => [
+      {
+        type: 'message',
+        id: 'u1',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: 'look' },
+            pngImage,
+          ],
+          timestamp: 1,
+        },
+      },
+    ],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json().messages[0].attachments, [pngImage]);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/threads/:threadId falls back to DB messages when no Pi session exists', async () => {
   const runtime = {
     readMessages: async () => [],
@@ -382,6 +679,32 @@ test('GET /api/threads/:threadId falls back to DB messages when no Pi session ex
         { id: 'm2', role: 'assistant', content: 'hello', thinking: 'thinking' },
       ],
     );
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/threads/:threadId preserves image attachments from DB fallback rows', async () => {
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    db.prepare(
+      'INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('m1', 'thread-1', 'user', 'look', JSON.stringify([pngImage]), '2026-06-10T12:00:00.000Z');
+
+    const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json().messages[0].attachments, [pngImage]);
   } finally {
     await app.close();
     db.close();

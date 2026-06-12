@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { ModelCurationStore, type ModelCatalogItem } from '../pi/model-curation';
 
 const catalog: ModelCatalogItem[] = [
-  { provider: 'anthropic', id: 'claude-sonnet-4-5', name: 'Claude Sonnet', configured: true },
+  { provider: 'anthropic', id: 'claude-sonnet-4-5', name: 'Claude Sonnet', configured: true, input: ['text', 'image'] },
   { provider: 'openai-codex', id: 'gpt-5.4', name: 'GPT 5.4 Codex', configured: true },
   { provider: 'google', id: 'gemini-pro', name: 'Gemini Pro', configured: false },
 ];
@@ -102,6 +102,18 @@ test('ModelCurationStore can exclude multiple OAuth providers from first sync ba
     });
     const result = store.apply(catalog);
     assert.deepEqual(result.enabledKeys, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ModelCurationStore preserves model input capabilities', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-curation-'));
+  try {
+    const store = new ModelCurationStore(join(dir, 'model-curation.json'));
+    const result = store.apply(catalog);
+    assert.deepEqual(result.allModels[0].input, ['text', 'image']);
+    assert.deepEqual(result.models[0].input, ['text', 'image']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

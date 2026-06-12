@@ -8,6 +8,7 @@ export interface ModelInfo {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  input?: Array<'text' | 'image'>;
   configured?: boolean;
 }
 

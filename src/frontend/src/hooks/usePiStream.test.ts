@@ -12,6 +12,25 @@ describe('streamReducer', () => {
     expect(next.streamingMessage?.isStreaming).toBe(true);
   });
 
+  it('START_STREAM stores image attachments on the optimistic user message', () => {
+    const attachments = [
+      {
+        type: 'image' as const,
+        data: 'data:image/png;base64,abc',
+        mimeType: 'image/png',
+        name: 'sketch.png',
+        size: 123,
+      },
+    ];
+    const next = streamReducer(INITIAL_STATE, {
+      type: 'START_STREAM',
+      prompt: 'describe this',
+      attachments,
+    });
+
+    expect(next.messages[0].attachments).toEqual(attachments);
+  });
+
   it('TEXT_DELTA appends to the streaming message', () => {
     const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
     const next = streamReducer(start, { type: 'TEXT_DELTA', delta: 'hello' });
@@ -132,6 +151,43 @@ describe('usePiStream', () => {
     await waitFor(() => {
       expect(result.current.state.status).toBe('error');
       expect(result.current.state.error).toContain('deprecated');
+    });
+  });
+
+  it('sends images in the stream request body when provided', async () => {
+    const images = [
+      {
+        type: 'image' as const,
+        data: 'data:image/jpeg;base64,abc',
+        mimeType: 'image/jpeg',
+        name: 'photo.jpg',
+        size: 456,
+      },
+    ];
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(controller) {
+          controller.close();
+        },
+      }),
+    } as Response);
+
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'what is this?', {
+        modelKey: 'anthropic/claude-sonnet-4',
+        images,
+      });
+    });
+
+    const [, init] = vi.mocked(global.fetch).mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toEqual({
+      content: 'what is this?',
+      modelKey: 'anthropic/claude-sonnet-4',
+      images,
     });
   });
 

@@ -9,6 +9,7 @@ export interface ModelCatalogItem {
   reasoning?: boolean;
   contextWindow?: number;
   maxTokens?: number;
+  input?: Array<'text' | 'image'>;
 }
 
 interface CurationFile {
