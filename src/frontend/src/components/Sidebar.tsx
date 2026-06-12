@@ -8,6 +8,11 @@ export interface ThreadMeta {
   thread: ChatThread;
 }
 
+export interface SidebarProjectCounts {
+  tasks: number;
+  sessions: number;
+}
+
 interface SidebarProps {
   projects: Project[];
   activeProjectId: string | null;
@@ -15,6 +20,7 @@ interface SidebarProps {
   activeThreadId: string | null;
   threads: ThreadMeta[];
   activeSessionIds: Set<string>;
+  projectCounts: Record<string, SidebarProjectCounts>;
   onSelectProject: (id: string) => void;
   onSelectSubView: (projectId: string, sub: SubView) => void;
   onSelectThread: (projectId: string, threadId: string) => void;
@@ -72,8 +78,17 @@ function Row({ active, depth, onClick, icon, children, tintColor, trailing, drag
   );
 }
 
+function CountBadge({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <span className={`shrink-0 tabular-nums text-[11px] font-semibold accent-text ${className}`}>
+      {children}
+    </span>
+  );
+}
+
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
+  projectCounts,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onDeleteThread, onNewChat, onNewProject,
   onEditProject, onDeleteProject, onReorderProjects,
 }: SidebarProps) {
@@ -164,6 +179,7 @@ export default function Sidebar({
         const open = openProjectId === project.id;
         const isActiveProject = project.id === activeProjectId;
         const chatExpanded = chatOpen[project.id] ?? (isActiveProject && subView === 'chat');
+        const counts = projectCounts[project.id] ?? { tasks: 0, sessions: 0 };
         return (
           <div key={project.id}>
             <Row
@@ -176,28 +192,31 @@ export default function Sidebar({
               onDragOver={handleProjectDragOver}
               onDrop={(ev) => handleProjectDrop(ev, project.id)}
               trailing={
-                <span className="hidden group-hover:flex items-center gap-1 shrink-0">
-                  <span
-                    role="button"
-                    title="Edit project"
-                    className="text-faint hover:text-[var(--text-primary)]"
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      onEditProject(project);
-                    }}
-                  >
-                    <PencilSimple size={13} />
-                  </span>
-                  <span
-                    role="button"
-                    title="Delete project"
-                    className="text-faint hover:text-red-400"
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      if (window.confirm('Delete this project? This cannot be undone.')) onDeleteProject(project.id);
-                    }}
-                  >
-                    <Trash size={13} />
+                <span className="flex items-center gap-1.5 shrink-0">
+                  <CountBadge className="group-hover:hidden">{counts.tasks}/{counts.sessions}</CountBadge>
+                  <span className="hidden group-hover:flex items-center gap-1">
+                    <span
+                      role="button"
+                      title="Edit project"
+                      className="text-faint hover:text-[var(--text-primary)]"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        onEditProject(project);
+                      }}
+                    >
+                      <PencilSimple size={13} />
+                    </span>
+                    <span
+                      role="button"
+                      title="Delete project"
+                      className="text-faint hover:text-red-400"
+                      onClick={(ev) => {
+                        ev.stopPropagation();
+                        if (window.confirm('Delete this project? This cannot be undone.')) onDeleteProject(project.id);
+                      }}
+                    >
+                      <Trash size={13} />
+                    </span>
                   </span>
                 </span>
               }
@@ -212,6 +231,7 @@ export default function Sidebar({
                   depth={1}
                   onClick={() => onSelectSubView(project.id, 'kanban')}
                   icon={<Kanban size={15} />}
+                  trailing={<CountBadge>{counts.tasks}</CountBadge>}
                 >
                   Kanban
                 </Row>
@@ -232,11 +252,14 @@ export default function Sidebar({
                   }}
                   icon={<ChatCircle size={15} />}
                   trailing={
-                    chatExpanded ? (
-                      <CaretDown size={12} className="text-faint" />
-                    ) : (
-                      <CaretRight size={12} className="text-faint" />
-                    )
+                    <span className="flex items-center gap-1.5 shrink-0">
+                      <CountBadge>{counts.sessions}</CountBadge>
+                      {chatExpanded ? (
+                        <CaretDown size={12} className="text-faint" />
+                      ) : (
+                        <CaretRight size={12} className="text-faint" />
+                      )}
+                    </span>
                   }
                 >
                   Sessions

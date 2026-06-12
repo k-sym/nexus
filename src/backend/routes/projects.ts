@@ -28,7 +28,25 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     return candidate;
   }
 
-  const listProjects = () => db.prepare('SELECT * FROM projects ORDER BY sort_order ASC, updated_at DESC').all() as Project[];
+  const listProjects = () => db.prepare(`
+    SELECT
+      projects.*,
+      COALESCE(task_counts.count, 0) AS task_count,
+      COALESCE(thread_counts.count, 0) AS chat_session_count
+    FROM projects
+    LEFT JOIN (
+      SELECT project_id, COUNT(*) AS count
+      FROM tasks
+      GROUP BY project_id
+    ) AS task_counts ON task_counts.project_id = projects.id
+    LEFT JOIN (
+      SELECT project_id, COUNT(*) AS count
+      FROM chat_threads
+      WHERE archived_at IS NULL
+      GROUP BY project_id
+    ) AS thread_counts ON thread_counts.project_id = projects.id
+    ORDER BY sort_order ASC, updated_at DESC
+  `).all() as Project[];
 
   fastify.get('/api/projects', async () => {
     const rows = listProjects();

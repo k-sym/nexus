@@ -81,7 +81,7 @@ body {
   .ambient-shell::after {
     content: '';
     position: fixed;
-    inset: 0;
+    inset: -3rem;
     z-index: 0;
     pointer-events: none;
   }
@@ -92,17 +92,15 @@ body {
       radial-gradient(circle at 78% 18%, rgba(234, 179, 8, 0.08), transparent 16rem),
       radial-gradient(circle at 38% 72%, rgba(168, 85, 247, 0.10), transparent 24rem),
       linear-gradient(115deg, rgba(255, 255, 255, 0.025), transparent 34%, rgba(125, 211, 252, 0.025) 70%, transparent);
-    filter: blur(0.2px);
     opacity: 0.88;
-    animation: ambient-drift 24s ease-in-out infinite alternate;
   }
 
   .ambient-shell::after {
     background-image:
-      radial-gradient(circle, rgba(190, 242, 255, 0.96) 0 1.8px, rgba(190, 242, 255, 0.24) 2.6px, transparent 4.2px),
-      radial-gradient(circle, rgba(253, 224, 71, 0.84) 0 1.7px, rgba(253, 224, 71, 0.22) 2.6px, transparent 4px),
-      radial-gradient(circle, rgba(196, 181, 253, 0.88) 0 1.6px, rgba(196, 181, 253, 0.24) 2.6px, transparent 3.8px),
-      radial-gradient(circle, rgba(255, 255, 255, 0.46) 0 1.2px, rgba(255, 255, 255, 0.16) 2.4px, transparent 3.4px);
+      radial-gradient(circle, rgba(190, 242, 255, 0.96) 0 1.8px, rgba(190, 242, 255, 0.24) 2.6px, rgba(190, 242, 255, 0.07) 7px, transparent 11px),
+      radial-gradient(circle, rgba(253, 224, 71, 0.84) 0 1.7px, rgba(253, 224, 71, 0.22) 2.6px, rgba(253, 224, 71, 0.05) 6px, transparent 9px),
+      radial-gradient(circle, rgba(196, 181, 253, 0.88) 0 1.6px, rgba(196, 181, 253, 0.24) 2.6px, rgba(196, 181, 253, 0.07) 7px, transparent 11px),
+      radial-gradient(circle, rgba(255, 255, 255, 0.46) 0 1.2px, rgba(255, 255, 255, 0.16) 2.4px, rgba(255, 255, 255, 0.05) 6px, transparent 9px);
     background-position:
       4rem 6rem,
       15rem 19rem,
@@ -114,12 +112,6 @@ body {
       33rem 29rem,
       15rem 18rem;
     opacity: 0.50;
-    filter:
-      drop-shadow(0 0 9px rgba(125, 211, 252, 0.55))
-      drop-shadow(0 0 14px rgba(196, 181, 253, 0.22));
-    animation:
-      ambient-drift 22s linear infinite alternate-reverse,
-      ambient-twinkle 5.5s ease-in-out infinite alternate;
   }
 
   .ambient-shell > * {
@@ -137,57 +129,41 @@ body {
 
   .ambient-particles-far {
     background-image:
-      radial-gradient(circle, rgba(255, 255, 255, 0.34) 0 0.8px, rgba(255, 255, 255, 0.08) 1.7px, transparent 2.8px),
-      radial-gradient(circle, rgba(165, 180, 252, 0.42) 0 0.9px, rgba(165, 180, 252, 0.10) 1.8px, transparent 3px);
+      radial-gradient(circle, rgba(255, 255, 255, 0.34) 0 0.8px, rgba(255, 255, 255, 0.08) 1.7px, rgba(255, 255, 255, 0.03) 4px, transparent 6px),
+      radial-gradient(circle, rgba(165, 180, 252, 0.42) 0 0.9px, rgba(165, 180, 252, 0.10) 1.8px, rgba(165, 180, 252, 0.05) 5px, transparent 7px);
     background-position:
       3rem 8rem,
       18rem 14rem;
     background-size:
       13rem 16rem,
       21rem 19rem;
-    filter: drop-shadow(0 0 6px rgba(165, 180, 252, 0.22));
     opacity: 0.38;
-    animation:
-      ambient-drift-far 38s linear infinite alternate,
-      ambient-twinkle 7s ease-in-out infinite alternate;
   }
 
   .ambient-particles-mid {
     background-image:
-      radial-gradient(circle, rgba(125, 211, 252, 0.78) 0 1.4px, rgba(125, 211, 252, 0.20) 2.5px, transparent 4px),
-      radial-gradient(circle, rgba(196, 181, 253, 0.66) 0 1.3px, rgba(196, 181, 253, 0.20) 2.4px, transparent 3.8px);
+      radial-gradient(circle, rgba(125, 211, 252, 0.78) 0 1.4px, rgba(125, 211, 252, 0.20) 2.5px, rgba(125, 211, 252, 0.06) 7px, transparent 10px),
+      radial-gradient(circle, rgba(196, 181, 253, 0.66) 0 1.3px, rgba(196, 181, 253, 0.20) 2.4px, rgba(196, 181, 253, 0.06) 7px, transparent 10px);
     background-position:
       7rem 5rem,
       24rem 17rem;
     background-size:
       24rem 22rem,
       32rem 27rem;
-    filter:
-      drop-shadow(0 0 8px rgba(125, 211, 252, 0.42))
-      drop-shadow(0 0 13px rgba(196, 181, 253, 0.20));
     opacity: 0.46;
-    animation:
-      ambient-drift-mid 27s ease-in-out infinite alternate-reverse,
-      ambient-twinkle 5.5s ease-in-out infinite alternate;
   }
 
   .ambient-particles-near {
     background-image:
-      radial-gradient(circle, rgba(253, 224, 71, 0.82) 0 1.9px, rgba(253, 224, 71, 0.22) 3px, transparent 4.8px),
-      radial-gradient(circle, rgba(103, 232, 249, 0.86) 0 2.1px, rgba(103, 232, 249, 0.24) 3.4px, transparent 5.2px);
+      radial-gradient(circle, rgba(253, 224, 71, 0.82) 0 1.9px, rgba(253, 224, 71, 0.22) 3px, rgba(253, 224, 71, 0.07) 9px, transparent 13px),
+      radial-gradient(circle, rgba(103, 232, 249, 0.86) 0 2.1px, rgba(103, 232, 249, 0.24) 3.4px, rgba(103, 232, 249, 0.08) 9px, transparent 13px);
     background-position:
       10rem 18rem,
       29rem 7rem;
     background-size:
       35rem 31rem,
       42rem 34rem;
-    filter:
-      drop-shadow(0 0 10px rgba(253, 224, 71, 0.38))
-      drop-shadow(0 0 16px rgba(103, 232, 249, 0.28));
     opacity: 0.42;
-    animation:
-      ambient-drift-near 18s ease-in-out infinite alternate,
-      ambient-twinkle 4.25s ease-in-out infinite alternate-reverse;
   }
 
   .surface-panel {
@@ -196,8 +172,8 @@ body {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.045),
       0 12px 30px rgba(0, 0, 0, 0.20);
-    backdrop-filter: blur(16px) saturate(135%);
-    -webkit-backdrop-filter: blur(16px) saturate(135%);
+    backdrop-filter: blur(10px) saturate(135%);
+    -webkit-backdrop-filter: blur(10px) saturate(135%);
   }
 
   .surface-glass {
@@ -208,8 +184,8 @@ body {
       inset 0 -1px 0 rgba(255, 255, 255, 0.018),
       0 18px 54px rgba(0, 0, 0, 0.30),
       0 0 0 1px rgba(125, 211, 252, 0.045);
-    backdrop-filter: blur(24px) saturate(150%);
-    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    backdrop-filter: blur(14px) saturate(150%);
+    -webkit-backdrop-filter: blur(14px) saturate(150%);
   }
 
   .surface-elevated {
@@ -273,8 +249,8 @@ body {
       0 16px 42px rgba(0, 0, 0, 0.30),
       0 0 28px rgba(125, 211, 252, 0.08),
       0 0 34px rgba(139, 92, 246, 0.12);
-    backdrop-filter: blur(22px) saturate(145%);
-    -webkit-backdrop-filter: blur(22px) saturate(145%);
+    backdrop-filter: blur(14px) saturate(145%);
+    -webkit-backdrop-filter: blur(14px) saturate(145%);
   }
 
   .kanban-lane {
@@ -301,8 +277,8 @@ body {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.05),
       0 16px 36px rgba(0, 0, 0, 0.28);
-    backdrop-filter: blur(18px) saturate(140%);
-    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    backdrop-filter: blur(12px) saturate(140%);
+    -webkit-backdrop-filter: blur(12px) saturate(140%);
   }
 
   .kanban-card::before {
@@ -345,37 +321,37 @@ body {
 
 @keyframes ambient-drift {
   from {
-    transform: translate3d(-1.8rem, -1.2rem, 0) scale(1);
+    transform: translate3d(-1.8rem, -1.2rem, 0);
   }
   to {
-    transform: translate3d(2.4rem, 1.8rem, 0) scale(1.035);
+    transform: translate3d(2.4rem, 1.8rem, 0);
   }
 }
 
 @keyframes ambient-drift-far {
   from {
-    transform: translate3d(-1.4rem, 0.8rem, 0) scale(1);
+    transform: translate3d(-1.4rem, 0.8rem, 0);
   }
   to {
-    transform: translate3d(1.8rem, -1rem, 0) scale(1.018);
+    transform: translate3d(1.8rem, -1rem, 0);
   }
 }
 
 @keyframes ambient-drift-mid {
   from {
-    transform: translate3d(2rem, -1.2rem, 0) scale(1.01);
+    transform: translate3d(2rem, -1.2rem, 0);
   }
   to {
-    transform: translate3d(-2.6rem, 1.8rem, 0) scale(1.032);
+    transform: translate3d(-2.6rem, 1.8rem, 0);
   }
 }
 
 @keyframes ambient-drift-near {
   from {
-    transform: translate3d(-2.8rem, -1.6rem, 0) scale(1.02);
+    transform: translate3d(-2.8rem, -1.6rem, 0);
   }
   to {
-    transform: translate3d(3.6rem, 2.4rem, 0) scale(1.055);
+    transform: translate3d(3.6rem, 2.4rem, 0);
   }
 }
 
@@ -388,11 +364,70 @@ body {
   }
 }
 
+/* The starfield is static by default. The drifting/twinkling animation is
+   opt-in (Settings → Appearance → Animated background), enabled by adding the
+   `ambient-animate` class to <html> — see appearance.ts. */
+.ambient-animate .ambient-shell::before {
+  animation: ambient-drift 24s ease-in-out infinite alternate;
+}
+.ambient-animate .ambient-shell::after {
+  animation:
+    ambient-drift 22s linear infinite alternate-reverse,
+    ambient-twinkle 5.5s ease-in-out infinite alternate;
+}
+.ambient-animate .ambient-particles-far {
+  animation:
+    ambient-drift-far 38s linear infinite alternate,
+    ambient-twinkle 7s ease-in-out infinite alternate;
+}
+.ambient-animate .ambient-particles-mid {
+  animation:
+    ambient-drift-mid 27s ease-in-out infinite alternate-reverse,
+    ambient-twinkle 5.5s ease-in-out infinite alternate;
+}
+.ambient-animate .ambient-particles-near {
+  animation:
+    ambient-drift-near 18s ease-in-out infinite alternate,
+    ambient-twinkle 4.25s ease-in-out infinite alternate-reverse;
+}
+
+/* "Battery saver" — keeps the same drift/twinkle but steps the timing to ~5fps
+   instead of 60. The motion is slow enough that this is near-imperceptible,
+   while the glass backdrop-filter re-blurs ~12x less often. Step counts ≈
+   duration × 5. Only the timing functions are overridden; everything else is
+   inherited from the `.ambient-animate` rules above. */
+.ambient-animate.ambient-lowpower .ambient-shell::before {
+  animation-timing-function: steps(120);
+}
+.ambient-animate.ambient-lowpower .ambient-shell::after {
+  animation-timing-function: steps(110), steps(28);
+}
+.ambient-animate.ambient-lowpower .ambient-particles-far {
+  animation-timing-function: steps(190), steps(35);
+}
+.ambient-animate.ambient-lowpower .ambient-particles-mid {
+  animation-timing-function: steps(135), steps(28);
+}
+.ambient-animate.ambient-lowpower .ambient-particles-near {
+  animation-timing-function: steps(90), steps(21);
+}
+
+/* Pause ambient motion when the window is unfocused or hidden — no compositor
+   work happens while paused, so background CPU drops to ~0 when the app isn't
+   in front. Toggled from main.tsx via the `ambient-paused` class on <html>. */
+.ambient-paused .ambient-shell::before,
+.ambient-paused .ambient-shell::after,
+.ambient-paused .ambient-particle-layer {
+  animation-play-state: paused;
+}
+
+/* Respect the OS "reduce motion" setting regardless of the opt-in. Uses
+   !important so it wins over the higher-specificity `.ambient-animate` rules. */
 @media (prefers-reduced-motion: reduce) {
   .ambient-shell::before,
   .ambient-shell::after,
   .ambient-particle-layer {
-    animation: none;
+    animation: none !important;
   }
 }
 

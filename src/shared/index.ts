@@ -16,6 +16,8 @@ export interface Project {
   description: string;
   repo_path: string;
   config_json: string;
+  task_count?: number;
+  chat_session_count?: number;
   created_at: string;
   updated_at: string;
 }

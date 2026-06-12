@@ -34,6 +34,14 @@ function makeApp() {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+    CREATE TABLE chat_threads (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL DEFAULT 'New Session',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
   `);
 
   const now = new Date().toISOString();
@@ -49,6 +57,47 @@ function makeApp() {
   app.register(registerProjectRoutes);
   return { app, db, dir };
 }
+
+test('GET /api/projects includes task and active chat session counts', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    const now = new Date().toISOString();
+    const insertTask = db.prepare(
+      'INSERT INTO tasks (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    );
+    insertTask.run('task-1', 'project-a', 'Task 1', now, now);
+    insertTask.run('task-2', 'project-a', 'Task 2', now, now);
+    insertTask.run('task-3', 'project-b', 'Task 3', now, now);
+
+    const insertThread = db.prepare(
+      'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    insertThread.run('thread-1', 'project-a', 'Active A', now, now, null);
+    insertThread.run('thread-2', 'project-a', 'Archived A', now, now, now);
+    insertThread.run('thread-3', 'project-b', 'Active B', now, now, null);
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects' });
+
+    assert.equal(res.statusCode, 200);
+    const projects = res.json();
+    assert.deepEqual(
+      projects.map((project: { id: string; task_count: number; chat_session_count: number }) => ({
+        id: project.id,
+        task_count: project.task_count,
+        chat_session_count: project.chat_session_count,
+      })),
+      [
+        { id: 'project-a', task_count: 2, chat_session_count: 1 },
+        { id: 'project-b', task_count: 1, chat_session_count: 1 },
+        { id: 'project-c', task_count: 0, chat_session_count: 0 },
+      ],
+    );
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('PUT /api/projects/order persists the sidebar project order', async () => {
   const { app, db, dir } = makeApp();
