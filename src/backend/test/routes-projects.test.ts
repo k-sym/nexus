@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { registerProjectRoutes } from '../routes/projects';
+import { loadConfig, saveConfig } from '../config';
 
 function makeApp() {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-project-routes-test-'));
@@ -149,6 +150,36 @@ test('POST /api/projects/:id/github/sync creates triage tasks from open issues',
     assert.equal(row.status, 'triage');
     assert.equal(row.external_id, '7');
   } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/projects/:id/github/sync no-ops when github is disabled in config', async () => {
+  const { app, db, dir } = makeApp();
+  const original = loadConfig();
+  try {
+    saveConfig({ ...original, github: { enabled: false } });
+    db.prepare("UPDATE projects SET git_remote = 'git@github.com:o/r.git' WHERE id = 'project-a'").run();
+
+    // Fetch must never be called while disabled; fail loudly if it is.
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => {
+      throw new Error('network should not be reached when github sync is disabled');
+    };
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/projects/project-a/github/sync' });
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.json(), { created: 0, total: 0 });
+    } finally {
+      (globalThis as any).fetch = realFetch;
+    }
+
+    const count = db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE project_id = 'project-a'").get() as { n: number };
+    assert.equal(count.n, 0);
+  } finally {
+    saveConfig(original);
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });

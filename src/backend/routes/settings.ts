@@ -27,11 +27,17 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         ...config.models,
         openrouter: { api_key: maskSecret(config.models.openrouter.api_key) },
       },
+      // Derived, read-only signal so the UI can show "token detected" without
+      // ever receiving the secret. The GITHUB_TOKEN value itself is never sent.
+      github_token_detected: !!process.env.GITHUB_TOKEN,
     };
   });
 
   fastify.put('/api/settings', async (request) => {
-    const incoming = request.body as NexusConfig;
+    // The GET response includes a derived `github_token_detected` flag; strip
+    // it so it never gets persisted into config.yaml when the UI echoes it back.
+    const { github_token_detected: _ignored, ...incoming } =
+      request.body as NexusConfig & { github_token_detected?: boolean };
     const current = loadConfig();
 
     // Preserve the existing API key unless a new (non-masked) one was provided.
@@ -44,6 +50,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       ...current,
       ...incoming,
       jira: incoming.jira ?? current.jira,
+      github: incoming.github ?? current.github,
       models: {
         openrouter: { api_key: apiKey },
         local: {
@@ -63,6 +70,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         ...merged.models,
         openrouter: { api_key: maskSecret(merged.models.openrouter.api_key) },
       },
+      github_token_detected: !!process.env.GITHUB_TOKEN,
     };
   });
 }

@@ -9,6 +9,7 @@ import { insertNotification } from '../notifications/index.js';
 import { detectGitRemote } from '../github/repo.js';
 import { syncGitHubIssues, ensureProjectGitRemote } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
+import { loadConfig } from '../config.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
 function expandHome(p: string): string {
@@ -185,6 +186,10 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       const err = new Error('Project not found') as any;
       err.statusCode = 404;
       throw err;
+    }
+    // Honour the Settings toggle: when GitHub is disabled, sync is a no-op.
+    if (!loadConfig().github.enabled) {
+      return { created: 0, total: 0 };
     }
     // Self-heal projects created before remote-detection existed: an empty
     // git_remote gets detected from repo_path and persisted before syncing.

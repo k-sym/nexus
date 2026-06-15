@@ -145,6 +145,11 @@ export interface NexusConfig {
      *  Whitespace/case-tolerant literal match; three asterisks match any text. */
     content_rules: string[];
   };
+  github: {
+    /** When false the GitHub issue sync no-ops. Defaults to true so existing
+     *  behaviour is preserved. The token is read from GITHUB_TOKEN only. */
+    enabled: boolean;
+  };
 }
 
 export interface ProjectConfig {
