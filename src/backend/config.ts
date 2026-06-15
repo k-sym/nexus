@@ -46,6 +46,7 @@ const DEFAULT_CONFIG: NexusConfig = {
     instance: '',
     project: 'SUP',
     poll_minutes: 15,
+    content_rules: [],
   },
 };
 

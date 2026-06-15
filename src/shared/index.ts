@@ -134,6 +134,9 @@ export interface NexusConfig {
     project: string;
     /** Poll cadence in minutes while Nexus is running. */
     poll_minutes: number;
+    /** User-maintained chunks stripped from every ticket body during cleaning.
+     *  Whitespace/case-tolerant literal match; three asterisks match any text. */
+    content_rules: string[];
   };
 }
 
