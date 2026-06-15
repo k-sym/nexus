@@ -16,6 +16,8 @@ export interface Project {
   description: string;
   repo_path: string;
   config_json: string;
+  /** Detected `git remote origin` URL of repo_path; '' when none/not a git repo. */
+  git_remote: string;
   task_count?: number;
   chat_session_count?: number;
   created_at: string;
@@ -42,6 +44,11 @@ export interface Task {
    *  "In Progress" and a model is picked; the agent works in that thread
    *  instead of running headlessly. Null for tasks never started. */
   thread_id: string | null;
+  /** Source system for an auto-triaged task, e.g. 'github'. Null for manual tasks. */
+  external_source: string | null;
+  /** Identifier within the source system, e.g. the GitHub issue number as text.
+   *  Paired with external_source to dedup re-syncs. Null for manual tasks. */
+  external_id: string | null;
 }
 
 /** A Jira ticket mirrored into Nexus (Jira stays canonical). */
