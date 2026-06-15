@@ -7,7 +7,7 @@
 import type Database from 'better-sqlite3';
 import { v4 as uuid } from 'uuid';
 import type { Project } from '@nexus/shared';
-import { parseGitHubRepo } from './repo.js';
+import { parseGitHubRepo, detectGitRemote } from './repo.js';
 import { fetchOpenIssues } from './client.js';
 
 const THROTTLE_MS = 3 * 60 * 1000; // at most one network sync per project per 3 min
@@ -16,6 +16,24 @@ const lastSyncAt = new Map<string, number>();
 /** Test helper: clear the in-memory throttle between cases. */
 export function __resetThrottle(): void {
   lastSyncAt.clear();
+}
+
+/**
+ * Backfill a project's git_remote from its repo_path when it's empty. Projects
+ * created before remote-detection existed have an empty git_remote, so they'd
+ * never sync; this detects and persists the remote on first sync. Detection is
+ * injectable for tests. Returns the (possibly updated) project.
+ */
+export async function ensureProjectGitRemote(
+  db: Database.Database,
+  project: Project,
+  detect: (repoPath: string) => Promise<string> = detectGitRemote,
+): Promise<Project> {
+  if (project.git_remote || !project.repo_path) return project;
+  const detected = await detect(project.repo_path);
+  if (!detected) return project;
+  db.prepare('UPDATE projects SET git_remote = ? WHERE id = ?').run(detected, project.id);
+  return { ...project, git_remote: detected };
 }
 
 export interface SyncResult {

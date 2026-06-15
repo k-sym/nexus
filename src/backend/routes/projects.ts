@@ -7,7 +7,7 @@ import { Project, Task, TaskStatus } from '@nexus/shared';
 import { summarizeTaskThread } from '../memory/summarize.js';
 import { insertNotification } from '../notifications/index.js';
 import { detectGitRemote } from '../github/repo.js';
-import { syncGitHubIssues } from '../github/sync.js';
+import { syncGitHubIssues, ensureProjectGitRemote } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
@@ -180,12 +180,15 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
   fastify.post('/api/projects/:id/github/sync', async (request) => {
     const { id } = request.params as { id: string };
-    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
-    if (!project) {
+    const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
+    if (!existing) {
       const err = new Error('Project not found') as any;
       err.statusCode = 404;
       throw err;
     }
+    // Self-heal projects created before remote-detection existed: an empty
+    // git_remote gets detected from repo_path and persisted before syncing.
+    const project = await ensureProjectGitRemote(db, existing);
     try {
       const { created, total } = await syncGitHubIssues(db, project);
       return { created, total };

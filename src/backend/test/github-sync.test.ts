@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { syncGitHubIssues, __resetThrottle } from '../github/sync';
+import { syncGitHubIssues, ensureProjectGitRemote, __resetThrottle } from '../github/sync';
 
 function makeDb() {
   const db = new Database(':memory:');
@@ -89,4 +89,28 @@ test('a project with no GitHub remote is a no-op', async () => {
   const res = await syncGitHubIssues(db, project(db), { fetchImpl, now: () => 0 });
   assert.deepEqual(res, { created: 0, total: 0, skippedThrottle: false });
   assert.equal(called, false, 'never hits the network without a GitHub remote');
+});
+
+test('ensureProjectGitRemote backfills an empty git_remote from repo_path and persists it', async () => {
+  const db = makeDb();
+  db.prepare("UPDATE projects SET git_remote = '' WHERE id = 'p1'").run();
+  const updated = await ensureProjectGitRemote(db, project(db), async () => 'git@github.com:o/r.git');
+  assert.equal(updated.git_remote, 'git@github.com:o/r.git', 'returns the project with the detected remote');
+  const persisted = db.prepare("SELECT git_remote FROM projects WHERE id = 'p1'").get() as any;
+  assert.equal(persisted.git_remote, 'git@github.com:o/r.git', 'persisted the detected remote to the row');
+});
+
+test('ensureProjectGitRemote leaves an already-set git_remote untouched (no detection)', async () => {
+  const db = makeDb(); // p1 starts with git@github.com:o/r.git
+  let called = false;
+  const updated = await ensureProjectGitRemote(db, project(db), async () => { called = true; return 'git@github.com:other/x.git'; });
+  assert.equal(called, false, 'does not run detection when git_remote is already set');
+  assert.equal(updated.git_remote, 'git@github.com:o/r.git');
+});
+
+test('ensureProjectGitRemote is a no-op when detection finds nothing', async () => {
+  const db = makeDb();
+  db.prepare("UPDATE projects SET git_remote = '' WHERE id = 'p1'").run();
+  const updated = await ensureProjectGitRemote(db, project(db), async () => '');
+  assert.equal(updated.git_remote, '', 'stays empty when no remote is detected');
 });
