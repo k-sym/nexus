@@ -7,6 +7,12 @@ import { tmpdir } from 'node:os';
 import { getDb } from '../db';
 import { registerTicketRoutes } from '../routes/tickets';
 
+// Keep these tests hermetic regardless of the developer's shell: a configured
+// JIRA_TOKEN (present on machines that actually run the poll) would push the
+// "unconfigured" case down the live-fetch path. The route treats a missing
+// token as unconfigured, so clearing it here guarantees the precondition.
+delete process.env.JIRA_TOKEN;
+
 function appWithDb() {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-desc-'));
   const db = getDb(join(dir, 'test.db'));
