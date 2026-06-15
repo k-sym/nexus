@@ -6,6 +6,9 @@ import path from 'path';
 import { Project, Task, TaskStatus } from '@nexus/shared';
 import { summarizeTaskThread } from '../memory/summarize.js';
 import { insertNotification } from '../notifications/index.js';
+import { detectGitRemote } from '../github/repo.js';
+import { syncGitHubIssues } from '../github/sync.js';
+import { GitHubError } from '../github/client.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
 function expandHome(p: string): string {
@@ -107,6 +110,8 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     const now = new Date().toISOString();
     const nextSortOrder = ((db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS next FROM projects').get() as { next: number }).next);
 
+    const gitRemote = await detectGitRemote(repoPath);
+
     const project = {
       id: uuid(),
       slug,
@@ -115,12 +120,13 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       repo_path: repoPath,
       config_json: '{}',
       sort_order: nextSortOrder,
+      git_remote: gitRemote,
       created_at: now,
       updated_at: now,
     };
 
-    db.prepare('INSERT INTO projects (id, slug, name, description, repo_path, config_json, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(project.id, project.slug, project.name, project.description, project.repo_path, project.config_json, project.sort_order, project.created_at, project.updated_at);
+    db.prepare('INSERT INTO projects (id, slug, name, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(project.id, project.slug, project.name, project.description, project.repo_path, project.config_json, project.sort_order, project.git_remote, project.created_at, project.updated_at);
 
     const docsDir = path.join(repoPath, 'project_docs');
     for (const sub of ['specs', 'plans', 'uploads']) {
@@ -151,9 +157,11 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
+    const gitRemote = repoPath !== undefined ? await detectGitRemote(repoPath) : undefined;
+
     const now = new Date().toISOString();
-    db.prepare('UPDATE projects SET name = COALESCE(?, name), description = COALESCE(?, description), repo_path = COALESCE(?, repo_path), config_json = COALESCE(?, config_json), updated_at = ? WHERE id = ?')
-      .run(body.name ?? null, body.description ?? null, repoPath ?? null, body.config_json ?? null, now, id);
+    db.prepare('UPDATE projects SET name = COALESCE(?, name), description = COALESCE(?, description), repo_path = COALESCE(?, repo_path), config_json = COALESCE(?, config_json), git_remote = COALESCE(?, git_remote), updated_at = ? WHERE id = ?')
+      .run(body.name ?? null, body.description ?? null, repoPath ?? null, body.config_json ?? null, gitRemote ?? null, now, id);
 
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   });
@@ -168,6 +176,30 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
     const rows = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY created_at DESC').all(id);
     return rows as Task[];
+  });
+
+  fastify.post('/api/projects/:id/github/sync', async (request) => {
+    const { id } = request.params as { id: string };
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
+    if (!project) {
+      const err = new Error('Project not found') as any;
+      err.statusCode = 404;
+      throw err;
+    }
+    try {
+      const { created, total } = await syncGitHubIssues(db, project);
+      return { created, total };
+    } catch (err) {
+      if (err instanceof GitHubError) {
+        insertNotification(db, {
+          level: 'error',
+          title: 'GitHub sync failed',
+          message: `${project.name}: ${err.message}`,
+        });
+        return { created: 0, total: 0 };
+      }
+      throw err;
+    }
   });
 
   fastify.post('/api/projects/:id/tasks', async (request) => {
