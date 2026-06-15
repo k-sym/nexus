@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { syncGitHubIssues, ensureProjectGitRemote, __resetThrottle } from '../github/sync';
+import { syncGitHubIssues, ensureProjectGitRemote, priorityFromLabels, __resetThrottle } from '../github/sync';
 
 function makeDb() {
   const db = new Database(':memory:');
@@ -32,6 +32,41 @@ function fetchReturning(issues: Array<{ number: number; title: string }>) {
     { status: 200 },
   );
 }
+
+test('priorityFromLabels maps each tier case-insensitively, first-match-wins, default medium', () => {
+  // urgent tier
+  assert.equal(priorityFromLabels(['Urgent']), 'urgent');
+  assert.equal(priorityFromLabels(['critical bug']), 'urgent');
+  assert.equal(priorityFromLabels(['P0']), 'urgent');
+  // high tier
+  assert.equal(priorityFromLabels(['High priority']), 'high');
+  assert.equal(priorityFromLabels(['p1']), 'high');
+  // low tier
+  assert.equal(priorityFromLabels(['low']), 'low');
+  assert.equal(priorityFromLabels(['P3']), 'low');
+  assert.equal(priorityFromLabels(['Trivial']), 'low');
+  // default
+  assert.equal(priorityFromLabels(['bug', 'documentation']), 'medium');
+  assert.equal(priorityFromLabels([]), 'medium');
+  // first-match-wins: urgent outranks low even when low appears first in the list
+  assert.equal(priorityFromLabels(['low', 'urgent']), 'urgent');
+});
+
+test('first sync derives task priority from issue labels', async () => {
+  const db = makeDb();
+  __resetThrottle();
+  const fetchImpl = async () => new Response(
+    JSON.stringify([
+      { number: 1, title: 'One', body: 'b', html_url: 'https://github.com/o/r/issues/1', labels: [{ name: 'P1: high' }] },
+      { number: 2, title: 'Two', body: 'b', html_url: 'https://github.com/o/r/issues/2', labels: [{ name: 'bug' }] },
+    ]),
+    { status: 200 },
+  );
+  await syncGitHubIssues(db, project(db), { fetchImpl: fetchImpl as any, now: () => 1000 });
+  const rows = db.prepare('SELECT external_id, priority FROM tasks ORDER BY external_id').all() as any[];
+  assert.equal(rows.find((r) => r.external_id === '1').priority, 'high');
+  assert.equal(rows.find((r) => r.external_id === '2').priority, 'medium');
+});
 
 test('first sync creates a triage task per open issue, stamped with external id', async () => {
   const db = makeDb();

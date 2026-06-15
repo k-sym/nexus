@@ -6,7 +6,7 @@
  */
 import type Database from 'better-sqlite3';
 import { v4 as uuid } from 'uuid';
-import type { Project } from '@nexus/shared';
+import type { Project, TaskPriority } from '@nexus/shared';
 import { parseGitHubRepo, detectGitRemote } from './repo.js';
 import { fetchOpenIssues } from './client.js';
 
@@ -47,6 +47,21 @@ export interface SyncOptions {
   token?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
+}
+
+/**
+ * Derive a task priority from an issue's label names. Case-insensitive and
+ * first-match-wins over the whole label set, checked from highest tier down:
+ * 'urgent'/'critical'/'p0' -> urgent; 'high'/'p1' -> high;
+ * 'low'/'p3'/'trivial' -> low; otherwise 'medium'.
+ */
+export function priorityFromLabels(labels: string[]): TaskPriority {
+  const names = labels.map((l) => l.toLowerCase());
+  const has = (...keys: string[]) => names.some((n) => keys.some((k) => n.includes(k)));
+  if (has('urgent', 'critical', 'p0')) return 'urgent';
+  if (has('high', 'p1')) return 'high';
+  if (has('low', 'p3', 'trivial')) return 'low';
+  return 'medium';
 }
 
 /** Build a task body that records the source issue and a short excerpt. */
@@ -92,7 +107,7 @@ export async function syncGitHubIssues(
         uuid(), project.id,
         `[#${issue.number}] ${issue.title}`,
         issueBody(issue.number, issue.html_url, issue.body),
-        'triage', 'medium', 'github', externalId, ts, ts,
+        'triage', priorityFromLabels(issue.labels), 'github', externalId, ts, ts,
       );
       created++;
     }

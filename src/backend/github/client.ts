@@ -21,9 +21,13 @@ export interface GitHubIssue {
   title: string;
   body: string | null;
   html_url: string;
+  /** Label names attached to the issue ([] when none). */
+  labels: string[];
 }
 
-interface RawIssue extends GitHubIssue {
+interface RawIssue extends Omit<GitHubIssue, 'labels'> {
+  /** Raw GitHub labels: array of objects carrying a `name`. */
+  labels?: Array<{ name: string }> | null;
   /** Present only on pull requests in the issues feed. */
   pull_request?: unknown;
 }
@@ -62,7 +66,13 @@ export async function fetchOpenIssues(
     const batch = (await res.json()) as RawIssue[];
     for (const raw of batch) {
       if (raw.pull_request) continue; // the issues feed includes PRs; drop them
-      all.push({ number: raw.number, title: raw.title, body: raw.body ?? null, html_url: raw.html_url });
+      all.push({
+        number: raw.number,
+        title: raw.title,
+        body: raw.body ?? null,
+        html_url: raw.html_url,
+        labels: raw.labels?.map((l) => l.name) ?? [],
+      });
     }
     if (batch.length < PER_PAGE) break; // last page reached
   }

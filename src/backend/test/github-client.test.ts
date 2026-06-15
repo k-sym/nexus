@@ -37,6 +37,19 @@ test('fetchOpenIssues omits Authorization when no token is given', async () => {
   assert.equal(headers['authorization'], undefined);
 });
 
+test('fetchOpenIssues parses labels, defaulting to an empty array when absent', async () => {
+  const payload = [
+    ISSUE(1, { labels: [{ name: 'bug' }, { name: 'P1: high' }] }),
+    ISSUE(2), // no labels field
+    ISSUE(3, { labels: [] }),
+  ];
+  const fakeFetch = async () => new Response(JSON.stringify(payload), { status: 200 });
+  const issues = await fetchOpenIssues({ owner: 'o', repo: 'r' }, undefined, fakeFetch as any);
+  assert.deepEqual(issues.find((i) => i.number === 1)?.labels, ['bug', 'P1: high']);
+  assert.deepEqual(issues.find((i) => i.number === 2)?.labels, []);
+  assert.deepEqual(issues.find((i) => i.number === 3)?.labels, []);
+});
+
 test('fetchOpenIssues filters out pull requests', async () => {
   const payload = [ISSUE(1), ISSUE(2, { pull_request: { url: 'x' } }), ISSUE(3)];
   const fakeFetch = async () => new Response(JSON.stringify(payload), { status: 200 });
