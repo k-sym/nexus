@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea } from '@nexus/shared';
 import { apiFetch } from './api-base';
 
 export type AgentHealth = 'online' | 'ready' | 'offline';
@@ -118,6 +118,16 @@ export const api = {
   },
   tickets: {
     list: () => fetchJson<Ticket[]>(`/api/tickets`),
+    description: (key: string, refresh = false) =>
+      fetchJson<TicketDescription>(`/api/tickets/${encodeURIComponent(key)}/description${refresh ? '?refresh=1' : ''}`),
+  },
+  braindump: {
+    list: () => fetchJson<BraindumpIdea[]>(`/api/braindump`),
+    create: (data: { title: string; body?: string }) =>
+      fetchJson<BraindumpIdea>(`/api/braindump`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: Partial<Pick<BraindumpIdea, 'title' | 'body' | 'status' | 'project_id' | 'task_id'>>) =>
+      fetchJson<BraindumpIdea>(`/api/braindump/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    delete: (id: string) => fetchJson<void>(`/api/braindump/${id}`, { method: 'DELETE' }),
   },
   notifications: {
     list: () => fetchJson<NotificationItem[]>(`/api/notifications`),

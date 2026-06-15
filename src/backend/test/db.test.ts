@@ -50,3 +50,22 @@ test('migrates existing chat_messages tables with attachments_json', () => {
 
   assert.ok(cols.includes('attachments_json'), 'attachments_json column present on migrated chat_messages');
 });
+
+test('migrations add ticket description columns', () => {
+  const base = join(tmpdir(), `nexus-dbmig-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  const db = getDb(base);
+  const cols = (db.pragma('table_info(tickets)') as { name: string }[]).map((c) => c.name);
+  assert.ok(cols.includes('description_adf'));
+  assert.ok(cols.includes('description_fetched_at'));
+  db.close();
+  for (const ext of ['', '-wal', '-shm']) fs.rmSync(base + ext, { force: true });
+});
+
+test('migrations create braindump_ideas table', () => {
+  const base = join(tmpdir(), `nexus-dbmig2-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  const db = getDb(base);
+  const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='braindump_ideas'").get();
+  assert.ok(row, 'braindump_ideas table should exist');
+  db.close();
+  for (const ext of ['', '-wal', '-shm']) fs.rmSync(base + ext, { force: true });
+});

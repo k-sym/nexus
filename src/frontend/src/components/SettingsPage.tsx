@@ -67,7 +67,7 @@ export default function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-6 max-w-2xl mx-auto">
-        <div className="flex items-center justify-between gap-4 mb-6">
+        <div className="sticky top-0 z-10 -mx-6 px-6 py-4 mb-6 flex items-center justify-between gap-4 surface-glass border-b border-subtle">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">Settings</h1>
             <p className="text-xs text-faint mt-0.5">Edit ~/.nexus/config.yaml. Some changes require a backend restart.</p>
@@ -221,6 +221,45 @@ export default function SettingsPage() {
                 onChange={(e) => update(['jira', 'poll_minutes'], parseInt(e.target.value, 10) || 15)}
                 className="w-full surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary"
               />
+            </Field>
+            <Field label="Content strip rules">
+              <div className="space-y-2">
+                {((config.jira.content_rules ?? []) as string[]).map((rule: string, i: number) => (
+                  <div key={i} className="flex gap-2">
+                    <textarea
+                      value={rule}
+                      onChange={(e) => {
+                        const next = [...((config.jira.content_rules ?? []) as string[])];
+                        next[i] = e.target.value;
+                        update(['jira', 'content_rules'], next);
+                      }}
+                      rows={3}
+                      placeholder="Paste a footer chunk to strip from every ticket..."
+                      className="flex-1 surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary font-mono resize-y"
+                    />
+                    <button
+                      onClick={() => {
+                        const next = ((config.jira.content_rules ?? []) as string[]).filter((_: string, j: number) => j !== i);
+                        update(['jira', 'content_rules'], next);
+                      }}
+                      title="Remove rule"
+                      className="shrink-0 px-2 py-1 text-xs surface-elevated text-faint hover:text-red-400 rounded transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => update(['jira', 'content_rules'], [...((config.jira.content_rules ?? []) as string[]), ''])}
+                  className="px-3 py-1 text-xs surface-elevated text-faint hover:text-primary rounded transition-colors"
+                >
+                  + Add rule
+                </button>
+                <p className="text-[10px] text-faint">
+                  Pasted text is removed from every ticket preview (ignores whitespace and case). Use{' '}
+                  <span className="font-mono text-muted">***</span> for parts that vary between tickets, e.g. a tracking URL.
+                </p>
+              </div>
             </Field>
             <p className="text-xs text-faint">
               The API token is read from the <span className="font-mono text-muted">JIRA_TOKEN</span> environment

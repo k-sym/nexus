@@ -58,6 +58,33 @@ export interface Ticket {
   synced_at: string;
 }
 
+/** Cleaned, display-ready body of a Jira ticket, fetched lazily on selection. */
+export interface TicketDescription {
+  key: string;
+  /** Readable plain text: paragraphs separated by blank lines, list items as "• …". Empty string when the ticket has no description. */
+  body: string;
+  /** Sections pulled out of the body and offered behind a "show more" fold. */
+  trimmed: { kind: 'forwarded' | 'footer'; text: string }[];
+  /** ISO timestamp the body was last fetched from Jira; null if never fetched. */
+  fetchedAt: string | null;
+  /** True when Jira returned no description content for this ticket. */
+  empty: boolean;
+}
+
+/** A free-form idea captured in the Braindump view before it becomes a project task. */
+export interface BraindumpIdea {
+  id: string;
+  title: string;
+  body: string;
+  status: 'active' | 'triaged';
+  /** Set when triaged into a project. */
+  project_id: string | null;
+  /** The task created on triage. */
+  task_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 /** A chat thread — one conversation per row, linked to a project. */
 export interface ChatThread {
   id: string;
@@ -107,6 +134,9 @@ export interface NexusConfig {
     project: string;
     /** Poll cadence in minutes while Nexus is running. */
     poll_minutes: number;
+    /** User-maintained chunks stripped from every ticket body during cleaning.
+     *  Whitespace/case-tolerant literal match; three asterisks match any text. */
+    content_rules: string[];
   };
 }
 

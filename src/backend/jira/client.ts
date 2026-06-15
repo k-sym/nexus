@@ -95,3 +95,34 @@ export async function fetchJiraTickets(
   const json = (await res.json()) as { issues?: JiraIssue[] };
   return mapIssues(json.issues ?? [], instance);
 }
+
+/**
+ * Fetch a single issue's description (raw ADF). Returns null when the issue has
+ * no description. `fetchImpl` is injectable for tests.
+ */
+export async function fetchJiraIssueDescription(
+  cfg: JiraQueryConfig,
+  token: string,
+  key: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<unknown | null> {
+  const instance = normalizeInstance(cfg.instance);
+  const url = `https://${instance}/rest/api/3/issue/${encodeURIComponent(key)}?fields=description`;
+  const auth = Buffer.from(`${cfg.user}:${token}`).toString('base64');
+
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      method: 'GET',
+      headers: { authorization: `Basic ${auth}`, accept: 'application/json' },
+    });
+  } catch (err) {
+    throw new JiraError(`Jira request failed: ${(err as Error).message}`);
+  }
+  if (!res.ok) {
+    const snippet = (await res.text().catch(() => '')).trim().replace(/\s+/g, ' ').slice(0, 300);
+    throw new JiraError(`Jira ${cfg.instance} -> HTTP ${res.status}${snippet ? `: ${snippet}` : ''}`, res.status, snippet || undefined);
+  }
+  const json = (await res.json()) as { fields?: { description?: unknown } };
+  return json.fields?.description ?? null;
+}

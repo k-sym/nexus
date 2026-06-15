@@ -19,6 +19,7 @@ import { registerMemoryRoutes } from './routes/memory.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { registerTicketRoutes } from './routes/tickets.js';
+import { registerBraindumpRoutes } from './routes/braindump.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
@@ -68,6 +69,7 @@ async function main() {
   app.register(registerSettingsRoutes);
   app.register(registerStatusRoutes);
   app.register(registerTicketRoutes);
+  app.register(registerBraindumpRoutes);
   app.register(registerNotificationRoutes);
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
