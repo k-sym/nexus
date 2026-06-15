@@ -158,3 +158,20 @@ test('applyContentRules collapses blank lines left behind', () => {
   const body = 'A.\n\nREMOVE ME\n\nB.';
   assert.equal(applyContentRules(body, ['REMOVE ME']), 'A.\n\nB.');
 });
+
+test('cleanAdf applies content rules before the heuristic trim', () => {
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Real body.' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'CONFIDENTIAL NOTICE: do not forward.' }] },
+    ],
+  };
+  const result = cleanAdf(doc, ['CONFIDENTIAL NOTICE: do not forward.']);
+  assert.equal(result.body, 'Real body.');
+});
+
+test('cleanAdf with no rules behaves as before', () => {
+  const doc = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Hello.' }] }] };
+  assert.equal(cleanAdf(doc).body, 'Hello.');
+});

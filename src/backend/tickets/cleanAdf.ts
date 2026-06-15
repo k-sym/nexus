@@ -151,9 +151,9 @@ export function trimBoilerplate(text: string): CleanedBody {
   return { body, trimmed };
 }
 
-/** Fetch-to-display pipeline: raw ADF → cleaned, trimmed plain text. */
-export function cleanAdf(doc: AdfNode | null | undefined): CleanedBody {
-  return trimBoilerplate(adfToText(doc));
+/** Fetch-to-display pipeline: raw ADF -> user strip rules -> heuristic trim -> cleaned text. */
+export function cleanAdf(doc: AdfNode | null | undefined, rules: string[] = []): CleanedBody {
+  return trimBoilerplate(applyContentRules(adfToText(doc), rules));
 }
 
 /**
