@@ -6,6 +6,7 @@ import CommandPalette, { Command } from './components/CommandPalette';
 import Sidebar, { SubView, ThreadMeta } from './components/Sidebar';
 import MissionControl from './components/MissionControl';
 import TicketsView from './components/TicketsView';
+import BraindumpView from './components/BraindumpView';
 import DaemonToasts from './components/DaemonToasts';
 import NotificationToasts from './components/NotificationToasts';
 import KanbanBoard from './components/KanbanBoard';
@@ -17,7 +18,7 @@ import TaskModal from './components/TaskModal';
 import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
 
-type GlobalView = 'dashboard' | 'tickets' | 'settings';
+type GlobalView = 'dashboard' | 'tickets' | 'braindump' | 'settings';
 
 /** A task-seeded first turn handed to ChatPanel once the run-task chat opens. */
 interface TaskSeed {
@@ -325,6 +326,17 @@ export default function App() {
     if (projectId === activeProjectId) await loadTasks(projectId);
   };
 
+  const handleTriageIdea = async (projectId: string, idea: { title: string; body: string }): Promise<string> => {
+    const task = await api.projects.createTask(projectId, {
+      title: idea.title,
+      description: idea.body || '',
+      status: 'triage',
+      priority: 'medium',
+    });
+    if (projectId === activeProjectId) await loadTasks(projectId);
+    return task.id;
+  };
+
   // --- navigation helpers ---------------------------------------------------
   const selectGlobal = (v: GlobalView) => {
     setGlobalView(v);
@@ -378,6 +390,7 @@ export default function App() {
     const cmds: Command[] = [
       { id: 'view-dashboard', label: 'Dashboard', hint: 'View', keywords: 'mission control', run: () => selectGlobal('dashboard') },
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
+      { id: 'view-braindump', label: 'Braindump', hint: 'View', keywords: 'ideas capture', run: () => selectGlobal('braindump') },
     ];
     (['kanban', 'memory', 'chat'] as const).forEach((sub) => {
       const label = sub === 'chat' ? 'Sessions' : sub.charAt(0).toUpperCase() + sub.slice(1);
@@ -400,6 +413,8 @@ export default function App() {
       return <MissionControl status={status} loading={statusLoading} onRefresh={loadStatus} onSelectAgent={() => {}} />;
     if (globalView === 'tickets')
       return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
+    if (globalView === 'braindump')
+      return <BraindumpView projects={projects} onTriage={handleTriageIdea} />;
 
     if (!activeProject) {
       return (
