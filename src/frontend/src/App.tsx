@@ -137,6 +137,20 @@ export default function App() {
   }, [activeProjectId, projects, loadTasks]);
 
   useEffect(() => {
+    if (!activeProjectId || subView !== 'kanban') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { created } = await api.projects.githubSync(activeProjectId);
+        if (!cancelled && created > 0) await loadTasks(activeProjectId);
+      } catch (err) {
+        console.error('GitHub sync failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeProjectId, subView, loadTasks]);
+
+  useEffect(() => {
     if (activeProjectId) loadThreads(activeProjectId);
     else setThreads([]);
   }, [activeProjectId, loadThreads]);

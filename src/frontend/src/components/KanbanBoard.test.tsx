@@ -16,6 +16,8 @@ const task: Task = {
   updated_at: '2026-06-11T07:00:00.000Z',
   model_key: null,
   thread_id: null,
+  external_source: null,
+  external_id: null,
 };
 
 describe('KanbanBoard', () => {
