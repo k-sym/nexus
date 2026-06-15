@@ -30,11 +30,14 @@ export async function registerTicketRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
+    const config = loadConfig();
+    const rules = config.jira.content_rules ?? [];
+
     const respond = (adfJson: string | null, fetchedAt: string | null) => {
       if (!adfJson) return { key, body: '', trimmed: [], fetchedAt, empty: true };
       let adf: AdfNode | null = null;
       try { adf = JSON.parse(adfJson) as AdfNode; } catch { adf = null; }
-      const cleaned = cleanAdf(adf);
+      const cleaned = cleanAdf(adf, rules);
       return { key, body: cleaned.body, trimmed: cleaned.trimmed, fetchedAt, empty: cleaned.body.length === 0 };
     };
 
@@ -42,7 +45,6 @@ export async function registerTicketRoutes(fastify: FastifyInstance) {
       return respond(row.description_adf, row.description_fetched_at);
     }
 
-    const config = loadConfig();
     const token = process.env.JIRA_TOKEN;
     if (!config.jira.enabled || !config.jira.user || !config.jira.instance || !token) {
       // Not configured to fetch — return cache if any, else empty.
