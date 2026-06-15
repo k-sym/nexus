@@ -222,6 +222,45 @@ export default function SettingsPage() {
                 className="w-full surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary"
               />
             </Field>
+            <Field label="Content strip rules">
+              <div className="space-y-2">
+                {((config.jira.content_rules ?? []) as string[]).map((rule: string, i: number) => (
+                  <div key={i} className="flex gap-2">
+                    <textarea
+                      value={rule}
+                      onChange={(e) => {
+                        const next = [...((config.jira.content_rules ?? []) as string[])];
+                        next[i] = e.target.value;
+                        update(['jira', 'content_rules'], next);
+                      }}
+                      rows={3}
+                      placeholder="Paste a footer chunk to strip from every ticket..."
+                      className="flex-1 surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary font-mono resize-y"
+                    />
+                    <button
+                      onClick={() => {
+                        const next = ((config.jira.content_rules ?? []) as string[]).filter((_: string, j: number) => j !== i);
+                        update(['jira', 'content_rules'], next);
+                      }}
+                      title="Remove rule"
+                      className="shrink-0 px-2 py-1 text-xs surface-elevated text-faint hover:text-red-400 rounded transition-colors"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => update(['jira', 'content_rules'], [...((config.jira.content_rules ?? []) as string[]), ''])}
+                  className="px-3 py-1 text-xs surface-elevated text-faint hover:text-primary rounded transition-colors"
+                >
+                  + Add rule
+                </button>
+                <p className="text-[10px] text-faint">
+                  Pasted text is removed from every ticket preview (ignores whitespace and case). Use{' '}
+                  <span className="font-mono text-muted">***</span> for parts that vary between tickets, e.g. a tracking URL.
+                </p>
+              </div>
+            </Field>
             <p className="text-xs text-faint">
               The API token is read from the <span className="font-mono text-muted">JIRA_TOKEN</span> environment
               variable, never stored here. Changes apply on the next backend restart.
