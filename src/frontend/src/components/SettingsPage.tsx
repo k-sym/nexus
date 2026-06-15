@@ -67,7 +67,7 @@ export default function SettingsPage() {
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-6 max-w-2xl mx-auto">
-        <div className="flex items-center justify-between gap-4 mb-6">
+        <div className="sticky top-0 z-10 -mx-6 px-6 py-4 mb-6 flex items-center justify-between gap-4 surface-glass border-b border-subtle">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">Settings</h1>
             <p className="text-xs text-faint mt-0.5">Edit ~/.nexus/config.yaml. Some changes require a backend restart.</p>
