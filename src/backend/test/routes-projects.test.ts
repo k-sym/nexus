@@ -46,6 +46,14 @@ function makeApp() {
       updated_at TEXT NOT NULL,
       archived_at TEXT
     );
+    CREATE TABLE notifications (
+      id TEXT PRIMARY KEY,
+      level TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      seen_at TEXT
+    );
   `);
 
   const now = new Date().toISOString();
@@ -150,6 +158,62 @@ test('POST /api/projects/:id/github/sync creates triage tasks from open issues',
     assert.equal(row.status, 'triage');
     assert.equal(row.external_id, '7');
   } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/projects/:id/github/sync dedups identical failure notifications and re-notifies after success', async () => {
+  const { app, db, dir } = makeApp();
+  const { __resetThrottle, __resetErrorState } = await import('../github/sync');
+  const { __primeTokenCache } = await import('../github/token');
+  const realFetch = globalThis.fetch;
+  const realToken = process.env.GITHUB_TOKEN;
+  try {
+    delete process.env.GITHUB_TOKEN;
+    __resetThrottle();
+    __resetErrorState();
+    // Prime the resolver cache to null so it never shells out to the real gh.
+    __primeTokenCache(null);
+
+    db.prepare("UPDATE projects SET git_remote = 'git@github.com:o/r.git' WHERE id = 'project-a'").run();
+
+    // First two syncs both fail with the same HTTP 404 — only one toast.
+    (globalThis as any).fetch = async () => new Response('Not Found', { status: 404 });
+
+    const first = await app.inject({ method: 'POST', url: '/api/projects/project-a/github/sync' });
+    assert.equal(first.statusCode, 200);
+    assert.deepEqual(first.json(), { created: 0, total: 0 });
+
+    __resetThrottle(); // bypass the per-project throttle so the route runs again
+    const second = await app.inject({ method: 'POST', url: '/api/projects/project-a/github/sync' });
+    assert.deepEqual(second.json(), { created: 0, total: 0 });
+
+    const afterTwoFails = db.prepare(
+      "SELECT COUNT(*) AS n FROM notifications WHERE title = 'GitHub sync failed'",
+    ).get() as { n: number };
+    assert.equal(afterTwoFails.n, 1);
+
+    // A successful sync clears the remembered error...
+    (globalThis as any).fetch = async () => new Response('[]', { status: 200 });
+    __resetThrottle();
+    const ok = await app.inject({ method: 'POST', url: '/api/projects/project-a/github/sync' });
+    assert.deepEqual(ok.json(), { created: 0, total: 0 });
+
+    // ...so a later identical failure notifies again (second row).
+    (globalThis as any).fetch = async () => new Response('Not Found', { status: 404 });
+    __resetThrottle();
+    await app.inject({ method: 'POST', url: '/api/projects/project-a/github/sync' });
+
+    const finalCount = db.prepare(
+      "SELECT COUNT(*) AS n FROM notifications WHERE title = 'GitHub sync failed'",
+    ).get() as { n: number };
+    assert.equal(finalCount.n, 2);
+  } finally {
+    (globalThis as any).fetch = realFetch;
+    if (realToken === undefined) delete process.env.GITHUB_TOKEN;
+    else process.env.GITHUB_TOKEN = realToken;
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });

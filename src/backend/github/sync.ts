@@ -9,6 +9,7 @@ import { v4 as uuid } from 'uuid';
 import type { Project, TaskPriority } from '@nexus/shared';
 import { parseGitHubRepo, detectGitRemote } from './repo.js';
 import { fetchOpenIssues } from './client.js';
+import { resolveGitHubToken } from './token.js';
 
 const THROTTLE_MS = 3 * 60 * 1000; // at most one network sync per project per 3 min
 const lastSyncAt = new Map<string, number>();
@@ -16,6 +17,35 @@ const lastSyncAt = new Map<string, number>();
 /** Test helper: clear the in-memory throttle between cases. */
 export function __resetThrottle(): void {
   lastSyncAt.clear();
+}
+
+// Last sync-error message we notified about, per project. Used to suppress a
+// flood of identical "GitHub sync failed" toasts on every Kanban open (e.g. a
+// private repo with no token returning the same 404 each time).
+const lastSyncError = new Map<string, string>();
+
+/**
+ * Record a sync error and report whether it's worth notifying about: returns
+ * true (and stores the message) when it differs from the last error for this
+ * project, false when it's identical to the last one we already notified about.
+ */
+export function noteSyncError(projectId: string, message: string): boolean {
+  if (lastSyncError.get(projectId) === message) return false;
+  lastSyncError.set(projectId, message);
+  return true;
+}
+
+/**
+ * Forget a project's last sync error. Call on a successful sync so a later
+ * failure notifies again instead of being deduped against a stale message.
+ */
+export function clearSyncError(projectId: string): void {
+  lastSyncError.delete(projectId);
+}
+
+/** Test-only: clear the per-project last-error map. */
+export function __resetErrorState(): void {
+  lastSyncError.clear();
 }
 
 /**
@@ -87,7 +117,7 @@ export async function syncGitHubIssues(
   }
   lastSyncAt.set(project.id, now());
 
-  const token = opts.token ?? process.env.GITHUB_TOKEN;
+  const token = opts.token ?? await resolveGitHubToken();
   const issues = await fetchOpenIssues(ref, token, fetchImpl);
 
   const existing = db.prepare(

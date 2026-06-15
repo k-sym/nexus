@@ -8,6 +8,7 @@
 import { FastifyInstance } from 'fastify';
 import { loadConfig, saveConfig } from '../config.js';
 import { NexusConfig } from '@nexus/shared';
+import { resolveGitHubToken } from '../github/token.js';
 
 const MASK = '••••••••';
 
@@ -28,8 +29,9 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         openrouter: { api_key: maskSecret(config.models.openrouter.api_key) },
       },
       // Derived, read-only signal so the UI can show "token detected" without
-      // ever receiving the secret. The GITHUB_TOKEN value itself is never sent.
-      github_token_detected: !!process.env.GITHUB_TOKEN,
+      // ever receiving the secret. Reflects the resolver (GITHUB_TOKEN or a
+      // `gh auth token` fallback); the token value itself is never sent.
+      github_token_detected: !!(await resolveGitHubToken()),
     };
   });
 
@@ -70,7 +72,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         ...merged.models,
         openrouter: { api_key: maskSecret(merged.models.openrouter.api_key) },
       },
-      github_token_detected: !!process.env.GITHUB_TOKEN,
+      github_token_detected: !!(await resolveGitHubToken()),
     };
   });
 }

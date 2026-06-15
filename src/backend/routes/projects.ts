@@ -7,7 +7,7 @@ import { Project, Task, TaskStatus } from '@nexus/shared';
 import { summarizeTaskThread } from '../memory/summarize.js';
 import { insertNotification } from '../notifications/index.js';
 import { detectGitRemote } from '../github/repo.js';
-import { syncGitHubIssues, ensureProjectGitRemote } from '../github/sync.js';
+import { syncGitHubIssues, ensureProjectGitRemote, noteSyncError, clearSyncError } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
 import { loadConfig } from '../config.js';
 
@@ -196,14 +196,20 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     const project = await ensureProjectGitRemote(db, existing);
     try {
       const { created, total } = await syncGitHubIssues(db, project);
+      clearSyncError(id);
       return { created, total };
     } catch (err) {
       if (err instanceof GitHubError) {
-        insertNotification(db, {
-          level: 'error',
-          title: 'GitHub sync failed',
-          message: `${project.name}: ${err.message}`,
-        });
+        // Only notify when this error differs from the last one we surfaced for
+        // this project — otherwise a private repo without a token would spam an
+        // identical toast on every Kanban open.
+        if (noteSyncError(id, err.message)) {
+          insertNotification(db, {
+            level: 'error',
+            title: 'GitHub sync failed',
+            message: `${project.name}: ${err.message}`,
+          });
+        }
         return { created: 0, total: 0 };
       }
       throw err;
