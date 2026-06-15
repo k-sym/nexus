@@ -59,3 +59,58 @@ test('adfToText returns empty string for null/empty docs', () => {
   assert.equal(adfToText(null), '');
   assert.equal(adfToText({ type: 'doc', content: [] }), '');
 });
+
+import { trimBoilerplate, cleanAdf } from '../tickets/cleanAdf';
+
+test('trimBoilerplate pulls out a forwarded-header block', () => {
+  const text = [
+    'FYI please action this.',
+    '',
+    'From: AWS <no-reply@aws.test>',
+    'Sent: 01 May 2026',
+    'To: Support',
+    'Subject: Action required',
+    '',
+    'The real body starts here.',
+  ].join('\n');
+  const result = trimBoilerplate(text);
+  assert.match(result.body, /FYI please action this\./);
+  assert.match(result.body, /The real body starts here\./);
+  assert.doesNotMatch(result.body, /no-reply@aws\.test/);
+  assert.ok(result.trimmed.some((t) => t.kind === 'forwarded' && /From: AWS/.test(t.text)));
+});
+
+test('trimBoilerplate folds a trailing signature/footer block', () => {
+  const text = [
+    'Here is the actual content of the ticket.',
+    '',
+    '--',
+    'Jane Smith',
+    'Follow us on LinkedIn',
+    'Unsubscribe here',
+  ].join('\n');
+  const result = trimBoilerplate(text);
+  assert.equal(result.body, 'Here is the actual content of the ticket.');
+  assert.ok(result.trimmed.some((t) => t.kind === 'footer' && /Jane Smith/.test(t.text)));
+});
+
+test('trimBoilerplate leaves clean bodies untouched', () => {
+  const text = 'Just a normal ticket body with no email cruft.';
+  const result = trimBoilerplate(text);
+  assert.equal(result.body, text);
+  assert.deepEqual(result.trimmed, []);
+});
+
+test('cleanAdf composes adfToText + trimBoilerplate', () => {
+  const doc = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', content: [{ type: 'text', text: 'Body line.' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: '--' }] },
+      { type: 'paragraph', content: [{ type: 'text', text: 'Unsubscribe here' }] },
+    ],
+  };
+  const result = cleanAdf(doc);
+  assert.equal(result.body, 'Body line.');
+  assert.ok(result.trimmed.some((t) => t.kind === 'footer'));
+});

@@ -92,3 +92,66 @@ export function adfToText(doc: AdfNode | null | undefined): string {
     .filter((s) => s.length > 0)
     .join('\n\n');
 }
+
+export interface CleanedBody {
+  body: string;
+  trimmed: { kind: 'forwarded' | 'footer'; text: string }[];
+}
+
+const HEADER_LINE = /^(From|Sent|To|Cc|Bcc|Subject|Date|Reply-To)\s*:\s/i;
+const FOOTER_DELIM = /^--\s*$/;
+const FOOTER_KEYWORD = /(unsubscribe|follow us|view (this|in) (email|browser)|all rights reserved|©|privacy policy|manage (your )?preferences)/i;
+
+/**
+ * Conservative best-effort cleanup of forwarded-email cruft. Favours
+ * under-trimming over eating real content.
+ */
+export function trimBoilerplate(text: string): CleanedBody {
+  const trimmed: { kind: 'forwarded' | 'footer'; text: string }[] = [];
+  let lines = text.split('\n');
+
+  // 1) Forwarded-header blocks: a run of lines (blanks allowed between) where
+  //    at least two lines match the header pattern. Pull the whole run out.
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (HEADER_LINE.test(lines[i])) {
+      let j = i;
+      const block: string[] = [];
+      let headerCount = 0;
+      while (j < lines.length && (HEADER_LINE.test(lines[j]) || lines[j].trim() === '')) {
+        if (HEADER_LINE.test(lines[j])) headerCount++;
+        block.push(lines[j]);
+        j++;
+      }
+      if (headerCount >= 2) {
+        trimmed.push({ kind: 'forwarded', text: block.join('\n').trim() });
+        i = j - 1;
+        continue;
+      }
+    }
+    kept.push(lines[i]);
+  }
+  lines = kept;
+
+  // 2) Footer block: from the first signature delimiter / footer keyword to the
+  //    end — but only if there's real body above it (index > 0).
+  let footerStart = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (FOOTER_DELIM.test(lines[i]) || FOOTER_KEYWORD.test(lines[i])) {
+      if (i > 0) { footerStart = i; break; }
+    }
+  }
+  if (footerStart >= 0) {
+    const footer = lines.slice(footerStart).join('\n').trim();
+    if (footer.length > 0) trimmed.push({ kind: 'footer', text: footer });
+    lines = lines.slice(0, footerStart);
+  }
+
+  const body = lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { body, trimmed };
+}
+
+/** Fetch-to-display pipeline: raw ADF → cleaned, trimmed plain text. */
+export function cleanAdf(doc: AdfNode | null | undefined): CleanedBody {
+  return trimBoilerplate(adfToText(doc));
+}
