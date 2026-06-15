@@ -266,6 +266,28 @@ export default function SettingsPage() {
               variable, never stored here. Changes apply on the next backend restart.
             </p>
           </Section>
+
+          {/* GitHub */}
+          <Section title="GitHub">
+            <Field label="Issue sync">
+              <button
+                onClick={() => update(['github', 'enabled'], !config.github?.enabled)}
+                className={`px-3 py-1 text-xs rounded transition-colors ${config.github?.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+              >
+                {config.github?.enabled ? 'Enabled' : 'Disabled'}
+              </button>
+            </Field>
+            <Field label="Token">
+              <span className={`text-sm ${config.github_token_detected ? 'text-green-400' : 'text-faint'}`}>
+                {config.github_token_detected ? 'detected' : 'not detected'}
+              </span>
+            </Field>
+            <p className="text-xs text-faint">
+              The API token is read from the <span className="font-mono text-muted">GITHUB_TOKEN</span> environment
+              variable in <span className="font-mono text-muted">.env</span>, never stored here. A token is optional
+              for public repositories. Changes apply on the next backend restart.
+            </p>
+          </Section>
         </div>
       </div>
     </div>

@@ -1,6 +1,13 @@
 import { useState } from 'react';
 import type { Project } from '@nexus/shared';
 
+/** Reduce a github remote URL to "owner/repo" for display; null if not GitHub. */
+function parseRepoLabel(remote?: string): string | null {
+  if (!remote) return null;
+  const m = /github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/.exec(remote.trim());
+  return m ? `${m[1]}/${m[2]}` : null;
+}
+
 interface ProjectModalProps {
   onClose: () => void;
   onSubmit: (data: { name: string; description: string; repo_path: string }) => void;
@@ -56,6 +63,15 @@ export default function ProjectModal({ onClose, onSubmit, project }: ProjectModa
             />
             <p className="text-[10px] text-faint mt-1">Path to an existing local directory</p>
           </div>
+          {isEditing && (
+            <div>
+              <label className="block text-xs text-faint mb-1">Git repository</label>
+              <p className="text-sm font-mono text-muted">
+                {parseRepoLabel(project?.git_remote) ?? 'none detected'}
+              </p>
+              <p className="text-[10px] text-faint mt-1">Detected from the repository's git remote. Open issues sync into Triage.</p>
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-muted hover:text-[var(--text-primary)] transition-colors">
               Cancel

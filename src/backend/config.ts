@@ -48,6 +48,11 @@ const DEFAULT_CONFIG: NexusConfig = {
     poll_minutes: 15,
     content_rules: [],
   },
+  github: {
+    // Default true so the existing sync behaviour is preserved for configs
+    // written before this block existed (deepMerge backfills it on load).
+    enabled: true,
+  },
 };
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */

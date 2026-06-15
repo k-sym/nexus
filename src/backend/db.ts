@@ -32,6 +32,7 @@ function runMigrations(db: Database.Database) {
       repo_path TEXT NOT NULL,
       config_json TEXT DEFAULT '{}',
       sort_order INTEGER NOT NULL DEFAULT 0,
+      git_remote TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -46,6 +47,8 @@ function runMigrations(db: Database.Database) {
       assigned_agent TEXT,
       due_date TEXT,
       thread_id TEXT,
+      external_source TEXT,
+      external_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -183,6 +186,21 @@ function runMigrations(db: Database.Database) {
     })();
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_projects_sort_order ON projects(sort_order)');
+
+  // GitHub issue triage: track the repo on the project, and stamp synced tasks
+  // with their source issue so re-syncs dedup regardless of column.
+  const projCols2 = db.pragma('table_info(projects)') as { name: string }[];
+  if (!projCols2.some((c) => c.name === 'git_remote')) {
+    db.exec("ALTER TABLE projects ADD COLUMN git_remote TEXT NOT NULL DEFAULT ''");
+  }
+  const taskCols2 = db.pragma('table_info(tasks)') as { name: string }[];
+  if (!taskCols2.some((c) => c.name === 'external_source')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN external_source TEXT');
+  }
+  if (!taskCols2.some((c) => c.name === 'external_id')) {
+    db.exec('ALTER TABLE tasks ADD COLUMN external_id TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_tasks_external ON tasks(project_id, external_source, external_id)');
 
   // Agent run token-tracking migrations (for DBs created before token support).
   const runCols = db.pragma('table_info(agent_runs)') as { name: string }[];

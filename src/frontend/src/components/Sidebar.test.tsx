@@ -11,6 +11,7 @@ const project: Project = {
   description: '',
   repo_path: '/repo/nexus',
   config_json: '{}',
+  git_remote: '',
   created_at: '2026-06-10T00:00:00.000Z',
   updated_at: '2026-06-10T00:00:00.000Z',
 };

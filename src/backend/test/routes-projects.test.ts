@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { registerProjectRoutes } from '../routes/projects';
+import { loadConfig, saveConfig } from '../config';
 
 function makeApp() {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-project-routes-test-'));
@@ -19,6 +20,7 @@ function makeApp() {
       repo_path TEXT NOT NULL,
       config_json TEXT DEFAULT '{}',
       sort_order INTEGER NOT NULL DEFAULT 0,
+      git_remote TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -31,6 +33,8 @@ function makeApp() {
       priority TEXT NOT NULL DEFAULT 'medium',
       assigned_agent TEXT,
       due_date TEXT,
+      external_source TEXT,
+      external_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -114,6 +118,68 @@ test('PUT /api/projects/order persists the sidebar project order', async () => {
     const list = await app.inject({ method: 'GET', url: '/api/projects' });
     assert.deepEqual(list.json().map((p: { id: string }) => p.id), ['project-c', 'project-a', 'project-b']);
   } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/projects/:id/github/sync creates triage tasks from open issues', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    // Point project-a at a GitHub remote and stub the network via the route's fetch.
+    db.prepare("UPDATE projects SET git_remote = 'git@github.com:o/r.git' WHERE id = 'project-a'").run();
+    const { __resetThrottle } = await import('../github/sync');
+    __resetThrottle();
+
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => new Response(
+      JSON.stringify([{ number: 7, title: 'Bug', body: 'b', html_url: 'https://github.com/o/r/issues/7' }]),
+      { status: 200 },
+    );
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/projects/project-a/github/sync' });
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.json(), { created: 1, total: 1 });
+    } finally {
+      (globalThis as any).fetch = realFetch;
+    }
+
+    const row = db.prepare("SELECT title, status, external_id FROM tasks WHERE project_id = 'project-a'").get() as any;
+    assert.equal(row.title, '[#7] Bug');
+    assert.equal(row.status, 'triage');
+    assert.equal(row.external_id, '7');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/projects/:id/github/sync no-ops when github is disabled in config', async () => {
+  const { app, db, dir } = makeApp();
+  const original = loadConfig();
+  try {
+    saveConfig({ ...original, github: { enabled: false } });
+    db.prepare("UPDATE projects SET git_remote = 'git@github.com:o/r.git' WHERE id = 'project-a'").run();
+
+    // Fetch must never be called while disabled; fail loudly if it is.
+    const realFetch = globalThis.fetch;
+    (globalThis as any).fetch = async () => {
+      throw new Error('network should not be reached when github sync is disabled');
+    };
+    try {
+      const res = await app.inject({ method: 'POST', url: '/api/projects/project-a/github/sync' });
+      assert.equal(res.statusCode, 200);
+      assert.deepEqual(res.json(), { created: 0, total: 0 });
+    } finally {
+      (globalThis as any).fetch = realFetch;
+    }
+
+    const count = db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE project_id = 'project-a'").get() as { n: number };
+    assert.equal(count.n, 0);
+  } finally {
+    saveConfig(original);
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
