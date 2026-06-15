@@ -155,3 +155,34 @@ export function trimBoilerplate(text: string): CleanedBody {
 export function cleanAdf(doc: AdfNode | null | undefined): CleanedBody {
   return trimBoilerplate(adfToText(doc));
 }
+
+/**
+ * Build a matcher for a single strip rule: whitespace-tolerant, case-insensitive
+ * literal match, with three asterisks standing in for any run of text (non-greedy)
+ * so a pasted chunk still matches when a per-ticket fragment (e.g. a tracking URL)
+ * varies between tickets.
+ *
+ * Split on the literal `***` FIRST, then escape + whitespace-relax each segment,
+ * then join with a non-greedy wildcard. No sentinel substitution, so nothing in
+ * the rule text can collide with it.
+ */
+function ruleToRegex(rule: string): RegExp {
+  const source = rule.trim()
+    .split('***')
+    .map((seg) => seg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'))
+    .join('[\\s\\S]*?');
+  return new RegExp(source, 'gi');
+}
+
+/**
+ * Remove every user-defined strip rule from `text`. Rules are applied in order;
+ * empty/whitespace-only rules are skipped. Blank lines left behind are collapsed.
+ */
+export function applyContentRules(text: string, rules: string[]): string {
+  let out = text;
+  for (const rule of rules) {
+    if (!rule || !rule.trim()) continue;
+    out = out.replace(ruleToRegex(rule), '');
+  }
+  return out.replace(/\n{3,}/g, '\n\n').trim();
+}
