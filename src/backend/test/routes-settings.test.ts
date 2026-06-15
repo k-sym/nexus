@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { registerSettingsRoutes } from '../routes/settings';
 import { loadConfig, saveConfig } from '../config';
+import { __primeTokenCache } from '../github/token';
 
 // A live GITHUB_TOKEN in the developer's shell (or .env) would flip the
 // "token not detected" assertion below. Mirror the Jira tests' handling of
@@ -20,6 +21,9 @@ test('GET /api/settings reports github_token_detected without exposing the token
   const app = makeApp();
   try {
     delete process.env.GITHUB_TOKEN;
+    // Prime the resolver's gh-fallback cache to null so it can't shell out to a
+    // real authenticated gh on this machine and flip the "not detected" check.
+    __primeTokenCache(null);
     const absent = await app.inject({ method: 'GET', url: '/api/settings' });
     assert.equal(absent.statusCode, 200);
     const absentJson = absent.json();
@@ -44,6 +48,8 @@ test('PUT /api/settings round-trips github.enabled and never persists the derive
   const original = loadConfig();
   const app = makeApp();
   try {
+    delete process.env.GITHUB_TOKEN;
+    __primeTokenCache(null);
     // Echo the derived flag back (as the UI would) to confirm it is stripped.
     const put = await app.inject({
       method: 'PUT',

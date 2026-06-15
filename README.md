@@ -136,6 +136,8 @@ export OMLX_API_KEY="..."               # local model server, if it requires aut
 export HERMES_API_KEY="..."             # remote Hermes agent (if used)
 ```
 
+GitHub issue sync: run `gh auth login` before starting, or set `GITHUB_TOKEN`.
+
 ### Run in dev (one command)
 
 ```bash

@@ -34,7 +34,7 @@ or reset. Sync's only job is to create a triage task for issues not yet tracked.
 | Issue → task flow | **Auto-create Triage tasks**, deduped by issue number stored on the task. |
 | Sync trigger | **On Kanban navigation, throttled** (~3 min cache window per project). |
 | Remote URL read | **Shell out** to `git -C <repo_path> remote get-url origin` via `execFile`. |
-| Auth | `GITHUB_TOKEN` env var (mirrors `JIRA_TOKEN`); optional for public repos. |
+| Auth | Token resolves from `GITHUB_TOKEN`, falling back to `gh auth token`; optional for public repos. Run `gh auth login` before launching Nexus (the packaged app has no repo `.env`). |
 | Deleted-task behavior | If a task is deleted and the issue is still open, the next sync recreates it in Triage (accepted tradeoff). |
 
 ## Dedup behavior (the core invariant)
@@ -82,7 +82,7 @@ Detection failure never blocks the save.
     paginated up to a sane cap.
   - Native `fetch`. Headers: `Accept: application/vnd.github+json`,
     `User-Agent: nexus` (GitHub requires UA), and `Authorization: Bearer <token>`
-    when `GITHUB_TOKEN` is set.
+    when a token is resolved (`GITHUB_TOKEN`, else `gh auth token`).
   - **Filters out pull requests** (entries carrying a `pull_request` field).
   - Non-2xx → throws typed `GitHubError` (mirrors `JiraError`).
 
@@ -91,7 +91,7 @@ Detection failure never blocks the save.
 1. **Throttle** — module-level `Map<projectId, lastSyncMs>`; return
    `{ created: 0, total: 0 }` early if within the window (constant ≈ 3 min).
 2. Parse repo from `project.git_remote`; if no GitHub remote → no-op.
-3. `fetchOpenIssues(...)` with `process.env.GITHUB_TOKEN`.
+3. `fetchOpenIssues(...)` with the resolved token (`GITHUB_TOKEN`, else `gh auth token`).
 4. For each issue: skip if a task with matching `external_source`/`external_id`
    exists; else insert a `status='triage'`, `priority='medium'` task —
    `title: "[#<n>] <title>"`,
@@ -115,8 +115,10 @@ In **edit** mode only, a read-only line: `Git repository: owner/repo` (or
 
 - Missing/failed `git` remote → empty `git_remote`, project still saves.
 - No GitHub remote on a project → sync is a silent no-op.
-- Private repo without `GITHUB_TOKEN`, or rate-limited → `GitHubError` → a
-  notification row; navigation and task loading proceed normally.
+- Private repo with no resolvable token (`GITHUB_TOKEN` / `gh auth token`), or
+  rate-limited → `GitHubError` → a notification row (deduped per project so an
+  identical error doesn't re-toast on every Kanban open); navigation and task
+  loading proceed normally.
 
 ## Testing
 
