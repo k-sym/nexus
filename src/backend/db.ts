@@ -121,6 +121,17 @@ function runMigrations(db: Database.Database) {
       synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS braindump_ideas (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active',
+      project_id TEXT,
+      task_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       level TEXT NOT NULL DEFAULT 'info',
@@ -138,6 +149,7 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
     CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
+    CREATE INDEX IF NOT EXISTS idx_braindump_status ON braindump_ideas(status);
   `);
 
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
@@ -146,6 +158,14 @@ function runMigrations(db: Database.Database) {
   const chatCols = db.pragma('table_info(chat_messages)') as { name: string }[];
   if (!chatCols.some((c) => c.name === 'attachments_json')) {
     db.exec('ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT DEFAULT \'[]\'');
+  }
+
+  const ticketCols = db.pragma('table_info(tickets)') as { name: string }[];
+  if (!ticketCols.some((c) => c.name === 'description_adf')) {
+    db.exec('ALTER TABLE tickets ADD COLUMN description_adf TEXT');
+  }
+  if (!ticketCols.some((c) => c.name === 'description_fetched_at')) {
+    db.exec('ALTER TABLE tickets ADD COLUMN description_fetched_at TEXT');
   }
 
   const columns = db.pragma('table_info(projects)') as { name: string }[];
