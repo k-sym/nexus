@@ -43,6 +43,7 @@ function renderSidebar({
   onReorderProjects = noop,
   onArchiveThread = noop,
   onDeleteThread = noop,
+  onNewChat = noop,
 }: {
   threads?: ThreadMeta[];
   activeSessionIds?: Set<string>;
@@ -51,6 +52,7 @@ function renderSidebar({
   onReorderProjects?: (projectIds: string[]) => void;
   onArchiveThread?: (threadId: string) => void;
   onDeleteThread?: (threadId: string) => void;
+  onNewChat?: (projectId: string) => void;
 } = {}) {
   return render(
     <Sidebar
@@ -70,7 +72,7 @@ function renderSidebar({
       onRenameThread={noop}
       onArchiveThread={onArchiveThread}
       onDeleteThread={onDeleteThread}
-      onNewChat={noop}
+      onNewChat={onNewChat}
       onNewProject={noop}
       onEditProject={onEditProject}
       onDeleteProject={onDeleteProject}
@@ -99,13 +101,33 @@ describe('Sidebar', () => {
     expect(screen.queryByText('No conversations')).not.toBeInTheDocument();
   });
 
-  it('shows project, kanban, and sessions counts in the drawer', () => {
+  it('shows project and kanban counts with a sessions create button in the drawer', () => {
     renderSidebar({ threads: [{ thread }, { thread: { ...thread, id: 'thread-2', title: 'Second session' } }] });
 
     expect(screen.getByText('3/2')).toBeInTheDocument();
     expect(screen.getByText('10/2')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
-    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByTitle('New session')).toBeInTheDocument();
+  });
+
+  it('separates each project group with a top divider', () => {
+    renderSidebar();
+
+    expect(screen.getByLabelText('Project group: nexus')).toHaveClass('border-t');
+    expect(screen.getByLabelText('Project group: mywise')).toHaveClass('border-t');
+  });
+
+  it('uses the sessions plus button to start a new session', async () => {
+    const user = userEvent.setup();
+    const onNewChat = vi.fn();
+    renderSidebar({ onNewChat });
+
+    expect(screen.queryByText('New Session')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTitle('New session'));
+
+    expect(onNewChat).toHaveBeenCalledWith(project.id);
+    expect(screen.getByText(thread.title)).toBeInTheDocument();
   });
 
   it('uses the default sidebar width when no preference is saved', () => {

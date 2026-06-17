@@ -182,7 +182,11 @@ export default function Sidebar({
         const chatExpanded = chatOpen[project.id] ?? (isActiveProject && subView === 'chat');
         const counts = projectCounts[project.id] ?? { tasks: 0, sessions: 0 };
         return (
-          <div key={project.id}>
+          <div
+            key={project.id}
+            aria-label={`Project group: ${project.name}`}
+            className={`border-t border-white/[0.08] ${open ? 'bg-white/[0.035]' : ''}`}
+          >
             <Row
               active={false}
               depth={0}
@@ -254,7 +258,18 @@ export default function Sidebar({
                   icon={<ChatCircle size={15} />}
                   trailing={
                     <span className="flex items-center gap-1.5 shrink-0">
-                      <CountBadge>{counts.sessions}</CountBadge>
+                      <span
+                        role="button"
+                        title="New session"
+                        aria-label="New session"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-[var(--accent-soft)] text-base leading-none accent-text hover:bg-[rgba(139,92,246,0.28)]"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onNewChat(project.id);
+                        }}
+                      >
+                        <Plus size={14} />
+                      </span>
                       {chatExpanded ? (
                         <CaretDown size={12} className="text-faint" />
                       ) : (
@@ -268,14 +283,6 @@ export default function Sidebar({
 
                 {chatExpanded && (
                   <>
-                    <Row
-                      active={false}
-                      depth={2}
-                      onClick={() => onNewChat(project.id)}
-                      icon={<Plus size={14} />}
-                    >
-                      <span className="accent-text">New Session</span>
-                    </Row>
                     {isActiveProject &&
                       threads.map(({ thread }) => {
                         const isRenaming = renamingId === thread.id;
