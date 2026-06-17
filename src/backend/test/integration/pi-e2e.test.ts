@@ -167,9 +167,10 @@ test('PUT /api/models/curation saves enabled model keys', async () => {
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
-  const all = runtime.models.getAll();
-  const first = all[0];
-  assert.ok(first, 'expected pi model catalog');
+  runtime.auth.setRuntimeApiKey('openrouter', 'test-key');
+  runtime.models.refresh();
+  const first = runtime.models.getAvailable().find((model) => model.provider === 'openrouter');
+  assert.ok(first, 'expected configured OpenRouter model');
   const key = `${first.provider}/${first.id}`;
   const app = Fastify({ logger: false });
   app.decorate('pi', runtime);
@@ -185,6 +186,37 @@ test('PUT /api/models/curation saves enabled model keys', async () => {
     assert.deepEqual(put.json().enabledModelKeys, [key]);
     const get = await app.inject({ method: 'GET', url: '/api/models' });
     assert.deepEqual(get.json().models.map((m: any) => `${m.provider}/${m.id}`), [key]);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PUT /api/models/curation ignores unconfigured model keys', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
+  const runtime = new PiRuntime({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  });
+  const all = runtime.models.getAll();
+  const unconfigured = all.find((model) => !runtime.models.getAvailable().some((available) =>
+    available.provider === model.provider && available.id === model.id,
+  ));
+  assert.ok(unconfigured, 'expected at least one unconfigured pi model');
+  const key = `${unconfigured.provider}/${unconfigured.id}`;
+  const app = Fastify({ logger: false });
+  app.decorate('pi', runtime);
+  app.decorate('modelCuration', new ModelCurationStore(join(dir, 'model-curation.json')));
+  app.register(registerPiRoutes);
+  try {
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/models/curation',
+      payload: { enabledModelKeys: [key] },
+    });
+    assert.equal(put.statusCode, 200);
+    assert.deepEqual(put.json().enabledModelKeys, []);
+    assert.deepEqual(put.json().models, []);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });

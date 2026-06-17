@@ -22,11 +22,13 @@ beforeEach(() => {
 });
 
 describe('ModelCurationSection', () => {
-  it('renders full Pi catalog with enabled switch state', async () => {
+  it('renders configured models with enabled switch state', async () => {
     render(<ModelCurationSection />);
     expect(await screen.findByText('Claude Sonnet')).toBeInTheDocument();
     expect(screen.getByText('GPT 5.4 Codex')).toBeInTheDocument();
+    expect(screen.queryByText('Gemini Pro')).not.toBeInTheDocument();
     expect(screen.getByText(/3 total/i)).toBeInTheDocument();
+    expect(screen.getByText(/2 configured/i)).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: /Claude Sonnet/i })).toBeChecked();
     expect(screen.getByRole('switch', { name: /GPT 5.4 Codex/i })).not.toBeChecked();
   });
@@ -52,6 +54,25 @@ describe('ModelCurationSection', () => {
         expect.objectContaining({
           method: 'PUT',
           body: JSON.stringify({ enabledModelKeys: [] }),
+        }),
+      ),
+    );
+  });
+
+  it('selects all configured models only', async () => {
+    render(<ModelCurationSection />);
+    await screen.findByText('Claude Sonnet');
+
+    await userEvent.click(screen.getByRole('button', { name: /^Select all$/i }));
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        '/api/models/curation',
+        expect.objectContaining({
+          method: 'PUT',
+          body: JSON.stringify({
+            enabledModelKeys: ['anthropic/claude-sonnet-4-5', 'openai-codex/gpt-5.4'],
+          }),
         }),
       ),
     );

@@ -44,8 +44,8 @@ export async function registerPiRoutes(fastify: FastifyInstance) {
       reply.code(400);
       return { error: 'enabledModelKeys must be an array' };
     }
-    const all = fastify.pi.models.getAll();
-    const known = new Set(all.map((m) => `${m.provider}/${m.id}`));
+    const available = fastify.pi.models.getAvailable();
+    const known = new Set(available.map((m) => `${m.provider}/${m.id}`));
     const enabled = body.enabledModelKeys.filter((key): key is string => typeof key === 'string' && known.has(key));
     fastify.modelCuration.save(enabled);
     return toModelsResponse(fastify.modelCuration.apply(buildModelCatalog(fastify)));

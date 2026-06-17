@@ -15,13 +15,14 @@ export function ModelCurationSection() {
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [bulkSaving, setBulkSaving] = useState(false);
   const enabledSet = useMemo(() => new Set(enabledModelKeys), [enabledModelKeys]);
+  const configuredModels = useMemo(() => allModels.filter((model) => model.configured !== false), [allModels]);
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return allModels;
-    return allModels.filter((model) =>
+    if (!q) return configuredModels;
+    return configuredModels.filter((model) =>
       [model.name, model.id, model.provider].some((value) => value.toLowerCase().includes(q)),
     );
-  }, [allModels, query]);
+  }, [configuredModels, query]);
 
   const toggle = async (key: string) => {
     setSavingKey(key);
@@ -50,7 +51,7 @@ export function ModelCurationSection() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-3">
         <p className="text-xs text-zinc-500">
-          {enabledModelKeys.length} enabled · {allModels.length} total
+          {enabledModelKeys.length} enabled · {configuredModels.length} configured · {allModels.length} total
           {!customized ? ' · using configured models until customized' : ''}
         </p>
         <div className="flex items-center gap-2">
@@ -64,8 +65,8 @@ export function ModelCurationSection() {
           </button>
           <button
             type="button"
-            onClick={() => void saveAll(allModels.map((model) => modelKey(model.provider, model.id)))}
-            disabled={bulkSaving || enabledModelKeys.length === allModels.length}
+            onClick={() => void saveAll(configuredModels.map((model) => modelKey(model.provider, model.id)))}
+            disabled={bulkSaving || enabledModelKeys.length === configuredModels.length}
             className="rounded border border-zinc-800 px-2 py-1.5 text-xs text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 disabled:opacity-40"
           >
             Select all
