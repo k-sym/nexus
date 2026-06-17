@@ -41,12 +41,16 @@ function renderSidebar({
   onEditProject = noop,
   onDeleteProject = noop,
   onReorderProjects = noop,
+  onArchiveThread = noop,
+  onDeleteThread = noop,
 }: {
   threads?: ThreadMeta[];
   activeSessionIds?: Set<string>;
   onEditProject?: (project: Project) => void;
   onDeleteProject?: (projectId: string) => void;
   onReorderProjects?: (projectIds: string[]) => void;
+  onArchiveThread?: (threadId: string) => void;
+  onDeleteThread?: (threadId: string) => void;
 } = {}) {
   return render(
     <Sidebar
@@ -64,7 +68,8 @@ function renderSidebar({
       onSelectSubView={noop}
       onSelectThread={noop}
       onRenameThread={noop}
-      onDeleteThread={noop}
+      onArchiveThread={onArchiveThread}
+      onDeleteThread={onDeleteThread}
       onNewChat={noop}
       onNewProject={noop}
       onEditProject={onEditProject}
@@ -154,6 +159,31 @@ describe('Sidebar', () => {
 
     expect(window.confirm).toHaveBeenCalledWith('Delete this project? This cannot be undone.');
     expect(onDeleteProject).toHaveBeenCalledWith(project.id);
+  });
+
+  it('offers an archive action for sessions', async () => {
+    const user = userEvent.setup();
+    const onArchiveThread = vi.fn();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderSidebar({ onArchiveThread });
+
+    await user.click(screen.getByTitle('Archive to memory'));
+
+    expect(window.confirm).toHaveBeenCalledWith('Archive this session to memory and delete it?');
+    expect(onArchiveThread).toHaveBeenCalledWith(thread.id);
+  });
+
+  it('keeps delete separate from archive', async () => {
+    const user = userEvent.setup();
+    const onArchiveThread = vi.fn();
+    const onDeleteThread = vi.fn();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderSidebar({ onArchiveThread, onDeleteThread });
+
+    await user.click(screen.getAllByTitle('Delete').at(-1)!);
+
+    expect(onDeleteThread).toHaveBeenCalledWith(thread.id);
+    expect(onArchiveThread).not.toHaveBeenCalled();
   });
 
   it('reorders projects by dragging one project onto another', () => {

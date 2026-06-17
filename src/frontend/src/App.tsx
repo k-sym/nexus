@@ -379,6 +379,12 @@ export default function App() {
     if (activeProjectId) await loadThreads(activeProjectId);
   };
 
+  const handleArchiveThread = async (threadId: string) => {
+    await api.chat.archiveThread(threadId);
+    if (threadId === activeThreadId) setActiveThreadId(null);
+    if (activeProjectId) await loadThreads(activeProjectId);
+  };
+
   const handleDeleteThread = async (threadId: string) => {
     await api.chat.deleteThread(threadId);
     if (threadId === activeThreadId) setActiveThreadId(null);
@@ -531,6 +537,7 @@ export default function App() {
           onSelectSubView={selectSubView}
           onSelectThread={selectThread}
           onRenameThread={handleRenameThread}
+          onArchiveThread={handleArchiveThread}
           onDeleteThread={handleDeleteThread}
           onNewChat={(projectId) => void startNewSession(projectId)}
           onNewProject={openNewProjectModal}

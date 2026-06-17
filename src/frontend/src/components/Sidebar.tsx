@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
-import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash } from '@phosphor-icons/react';
+import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon } from '@phosphor-icons/react';
 
 export type SubView = 'kanban' | 'memory' | 'chat';
 
@@ -25,6 +25,7 @@ interface SidebarProps {
   onSelectSubView: (projectId: string, sub: SubView) => void;
   onSelectThread: (projectId: string, threadId: string) => void;
   onRenameThread: (threadId: string, title: string) => void;
+  onArchiveThread: (threadId: string) => void;
   onDeleteThread: (threadId: string) => void;
   onNewChat: (projectId: string) => void;
   onNewProject: () => void;
@@ -89,7 +90,7 @@ function CountBadge({ children, className = '' }: { children: React.ReactNode; c
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
   projectCounts,
-  onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onDeleteThread, onNewChat, onNewProject,
+  onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onArchiveThread, onDeleteThread, onNewChat, onNewProject,
   onEditProject, onDeleteProject, onReorderProjects,
 }: SidebarProps) {
   const [openProjectId, setOpenProjectId] = useState<string | null>(activeProjectId);
@@ -306,6 +307,17 @@ export default function Sidebar({
                                     }}
                                   >
                                     <PencilSimple size={13} />
+                                  </span>
+                                  <span
+                                    role="button"
+                                    title="Archive to memory"
+                                    className="text-faint hover:text-[var(--text-primary)]"
+                                    onClick={(ev) => {
+                                      ev.stopPropagation();
+                                      if (window.confirm('Archive this session to memory and delete it?')) onArchiveThread(thread.id);
+                                    }}
+                                  >
+                                    <ArchiveBoxIcon size={13} />
                                   </span>
                                   <span
                                     role="button"

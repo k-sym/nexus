@@ -95,7 +95,7 @@ export const api = {
       }),
     renameThread: (threadId: string, title: string) =>
       fetchJson<ChatThread>(`/api/threads/${threadId}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
-    archive: (threadId: string) => fetchJson<void>(`/api/threads/${threadId}/archive`, { method: 'POST' }),
+    archiveThread: (threadId: string) => fetchJson<{ memoryId: string | null }>(`/api/threads/${threadId}/archive`, { method: 'POST' }),
     deleteThread: (threadId: string) => fetchJson<void>(`/api/threads/${threadId}`, { method: 'DELETE' }),
   },
   models: {
