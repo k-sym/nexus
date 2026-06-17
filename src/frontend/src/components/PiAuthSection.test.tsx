@@ -15,6 +15,20 @@ beforeEach(() => {
 });
 
 describe('PiAuthSection', () => {
+  it('shows Amazon Bedrock in the provider auth list', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/status') {
+        return jsonResponse({ providers: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<PiAuthSection />);
+
+    expect(await screen.findByText('Amazon Bedrock')).toBeInTheDocument();
+  });
+
   it('starts OpenAI Codex subscription OAuth and shows device-code guidance', async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

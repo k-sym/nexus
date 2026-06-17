@@ -211,6 +211,7 @@ export function PiAuthSection() {
     { id: 'openai', label: 'OpenAI' },
     { id: 'openai-codex', label: 'OpenAI Codex' },
     { id: 'google', label: 'Google (Gemini)' },
+    { id: 'amazon-bedrock', label: 'Amazon Bedrock' },
   ];
 
   return (
