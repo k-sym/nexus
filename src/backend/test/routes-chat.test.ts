@@ -903,3 +903,101 @@ test('POST /api/threads/:id/abort returns no_run when nothing is in flight', asy
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('archiveThreadToMemory summarizes, stores memory, deletes the thread, and drops pi session files', async () => {
+  const stored: any[] = [];
+  const dropped: Array<{ threadId: string; cwd: string }> = [];
+  const { archiveThreadToMemory } = await import('../sessions/archive');
+  const { app, db, dir } = makeApp({
+    readMessages: async () => [
+      { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'We need archive sessions.' }] } },
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Decision: archive writes memory before deleting.' }] } },
+    ],
+    dropSession: (threadId: string, cwd: string) => dropped.push({ threadId, cwd }),
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    models: { find: () => undefined },
+  });
+  try {
+    const result = await archiveThreadToMemory(db, app.pi, 'thread-1', {
+      summarize: async (input) => {
+        assert.match(input.transcript, /archive sessions/);
+        return 'Archive sessions should preserve decisions in memory before deleting the source chat.';
+      },
+      storeMemory: async (input) => {
+        stored.push(input);
+        return { id: 'memory-1' };
+      },
+    });
+
+    assert.equal(result.memoryId, 'memory-1');
+    const row = db.prepare('SELECT COUNT(*) AS count FROM chat_threads WHERE id = ?').get('thread-1') as { count: number };
+    assert.equal(row.count, 0);
+    assert.equal(stored.length, 1);
+    assert.equal(stored[0].category, 'session_archive');
+    assert.equal(stored[0].agent_id, 'session-archive');
+    assert.equal(stored[0].metadata.thread_id, 'thread-1');
+    assert.deepEqual(dropped, [{ threadId: 'thread-1', cwd: dir }]);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('archiveThreadToMemory keeps the thread when memory storage fails', async () => {
+  const { archiveThreadToMemory, ArchiveThreadError } = await import('../sessions/archive');
+  const { app, db, dir } = makeApp({
+    readMessages: async () => [
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Decision: keep source when memory fails.' }] } },
+    ],
+    dropSession: () => assert.fail('dropSession must not run when memory fails'),
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    models: { find: () => undefined },
+  });
+  try {
+    await assert.rejects(
+      archiveThreadToMemory(db, app.pi, 'thread-1', {
+        summarize: async () => 'A usable summary',
+        storeMemory: async () => null,
+      }),
+      (err: unknown) => err instanceof ArchiveThreadError && err.statusCode === 502 && /memory/i.test(err.message),
+    );
+    const row = db.prepare('SELECT COUNT(*) AS count FROM chat_threads WHERE id = ?').get('thread-1') as { count: number };
+    assert.equal(row.count, 1);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('archiveThreadToMemory rejects empty sessions without deleting', async () => {
+  const { archiveThreadToMemory, ArchiveThreadError } = await import('../sessions/archive');
+  const { app, db, dir } = makeApp({
+    readMessages: async () => [],
+    dropSession: () => assert.fail('dropSession must not run for empty sessions'),
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    models: { find: () => undefined },
+  });
+  try {
+    await assert.rejects(
+      archiveThreadToMemory(db, app.pi, 'thread-1', {
+        summarize: async () => assert.fail('summarize must not run for empty sessions'),
+        storeMemory: async () => assert.fail('storeMemory must not run for empty sessions'),
+      }),
+      (err: unknown) => err instanceof ArchiveThreadError && err.statusCode === 400 && /no meaningful/i.test(err.message),
+    );
+    const row = db.prepare('SELECT COUNT(*) AS count FROM chat_threads WHERE id = ?').get('thread-1') as { count: number };
+    assert.equal(row.count, 1);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
