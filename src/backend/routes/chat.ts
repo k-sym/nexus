@@ -15,6 +15,7 @@ import path from 'node:path';
 import { v4 as uuid } from 'uuid';
 import { ChatThread } from '@nexus/shared';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
+import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
 
 const ABORT_GRACE_MS = 200;
 
@@ -361,11 +362,19 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     return { success: true };
   });
 
-  fastify.post('/api/threads/:threadId/archive', async (request) => {
+  fastify.post('/api/threads/:threadId/archive', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
-    const now = new Date().toISOString();
-    db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?').run(now, threadId);
-    return { success: true };
+    try {
+      return await archiveThreadToMemory(db, pi, threadId);
+    } catch (err: any) {
+      if (err instanceof ArchiveThreadError) {
+        reply.code(err.statusCode);
+        return { error: err.message };
+      }
+      console.error(`[archive] failed to archive thread ${threadId}:`, err?.message);
+      reply.code(500);
+      return { error: 'Failed to archive session' };
+    }
   });
 
   // Check if a model is currently streaming in a project

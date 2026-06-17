@@ -876,6 +876,51 @@ test('DELETE /api/threads/:threadId removes the row', async () => {
   }
 });
 
+test('DELETE /api/threads/:id removes the thread without calling archive storage', async () => {
+  const runtime = {
+    readMessages: async () => assert.fail('delete must not read messages for archive'),
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({ method: 'DELETE', url: '/api/threads/thread-1' });
+    assert.equal(res.statusCode, 200);
+    const row = db.prepare('SELECT COUNT(*) AS count FROM chat_threads WHERE id = ?').get('thread-1') as { count: number };
+    assert.equal(row.count, 0);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/archive returns an error and keeps empty sessions', async () => {
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => assert.fail('archive must not drop empty sessions'),
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({ method: 'POST', url: '/api/threads/thread-1/archive' });
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /no meaningful/i);
+    const row = db.prepare('SELECT COUNT(*) AS count FROM chat_threads WHERE id = ?').get('thread-1') as { count: number };
+    assert.equal(row.count, 1);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/projects/:projectId/threads returns threads for the project', async () => {
   const { app, db, dir } = makeApp();
   try {
