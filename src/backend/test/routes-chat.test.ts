@@ -539,6 +539,40 @@ test('POST /api/threads/:id/messages/stream preserves text-only prompt behavior'
   }
 });
 
+test('POST /api/threads/:id/messages/stream emits context usage after prompting', async () => {
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+    getContextUsage: () => ({ tokens: 182_000, contextWindow: 200_000, percent: 91 }),
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'plain text' },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.match(res.body, /"type":"context_usage"/);
+    assert.match(res.body, /"percent":91/);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream keeps Anthropic OAuth on the Pi session path', async () => {
   let sessionForCalled = false;
   let promptCalled = false;

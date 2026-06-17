@@ -123,6 +123,63 @@ describe('ChatPanel', () => {
     });
   });
 
+  it('shows compact context usage above the Send button after a turn', async () => {
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'sonnet-4-5', name: 'Sonnet 4.5', provider: 'anthropic', configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({ thread: { id: 't1' }, messages: [] }),
+        } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  JSON.stringify({
+                    event: {
+                      type: 'context_usage',
+                      usage: { tokens: 182_000, contextWindow: 200_000, percent: 91 },
+                    },
+                  }) + '\n',
+                ),
+              );
+              controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+              controller.close();
+            },
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+
+    await userEvent.type(screen.getByTestId('chat-input'), 'check context');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    const composerActions = await screen.findByTestId('composer-actions');
+    expect(within(composerActions).getByText('91% (182k/200k)')).toBeInTheDocument();
+    expect(screen.queryByText(/Context 91% full/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Consider starting a new session/i)).not.toBeInTheDocument();
+  });
+
   it('auto-submits a task seed exactly once and then reports it consumed', async () => {
     const encoder = new TextEncoder();
     let streamCalls = 0;

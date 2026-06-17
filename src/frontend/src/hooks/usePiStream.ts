@@ -36,6 +36,12 @@ export type ChatFileAttachment = {
 
 export type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
 
+export interface ContextUsage {
+  tokens: number | null;
+  contextWindow: number;
+  percent: number | null;
+}
+
 export interface StreamMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'toolResult';
@@ -63,6 +69,7 @@ export interface StreamState {
   isRunning: boolean;
   status: 'idle' | 'thinking' | 'tool_call' | 'responding' | 'error';
   error: string | null;
+  contextUsage: ContextUsage | null;
 }
 
 export type StreamAction =
@@ -73,10 +80,11 @@ export type StreamAction =
   | { type: 'TOOL_CALL_UPDATE'; id: string; patch: Record<string, unknown> }
   | { type: 'TOOL_PARTIAL_OUTPUT'; id: string; partialOutput: string }
   | { type: 'MESSAGE_END'; message?: Partial<StreamMessage> }
+  | { type: 'CONTEXT_USAGE'; usage: ContextUsage | null }
   | { type: 'STREAM_COMPLETE' }
   | { type: 'STREAM_ERROR'; error: string }
   | { type: 'ABORT_STREAM' }
-  | { type: 'RESET' };
+  | { type: 'RESET'; contextUsage?: ContextUsage | null };
 
 export const INITIAL_STATE: StreamState = {
   messages: [],
@@ -84,6 +92,7 @@ export const INITIAL_STATE: StreamState = {
   isRunning: false,
   status: 'idle',
   error: null,
+  contextUsage: null,
 };
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -146,6 +155,19 @@ function extractThinkingEventContent(event: any): string {
       .join('');
   }
   return '';
+}
+
+function normalizeContextUsage(value: any): ContextUsage | null {
+  if (!value || typeof value !== 'object') return null;
+  const contextWindow = Number(value.contextWindow);
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0) return null;
+  const tokens = value.tokens === null ? null : Number(value.tokens);
+  const percent = value.percent === null ? null : Number(value.percent);
+  return {
+    tokens: Number.isFinite(tokens) ? tokens : null,
+    contextWindow,
+    percent: Number.isFinite(percent) ? percent : null,
+  };
 }
 
 export function streamReducer(state: StreamState, action: StreamAction): StreamState {
@@ -256,6 +278,9 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
       };
     }
 
+    case 'CONTEXT_USAGE':
+      return { ...state, contextUsage: action.usage };
+
     case 'STREAM_COMPLETE': {
       const m = state.streamingMessage;
       if (!m) {
@@ -293,7 +318,7 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
     }
 
     case 'RESET':
-      return INITIAL_STATE;
+      return { ...INITIAL_STATE, contextUsage: action.contextUsage ?? null };
 
     default:
       return state;
@@ -320,20 +345,25 @@ export function usePiStream() {
     activeThreadRef.current = threadId;
   }, []);
 
-  const routeEvent = useCallback((ev: any, threadId: string) => {
+  const routeEvent = useCallback((ev: any, threadId: string): ContextUsage | null => {
     // Only dispatch events if they belong to the active thread
     if (activeThreadRef.current !== threadId) {
-      return;
+      return null;
     }
     
     const type = ev?.type;
+    if (type === 'context_usage') {
+      const usage = normalizeContextUsage(ev.usage);
+      dispatch({ type: 'CONTEXT_USAGE', usage });
+      return usage;
+    }
     if (type === 'message_start') {
       // start a fresh assistant sub-bubble; reducer is single-bubble for now
-      return;
+      return null;
     }
     if (type === 'message_update') {
       const ame = ev.assistantMessageEvent;
-      if (!ame) return;
+      if (!ame) return null;
       if (ame.type === 'thinking_delta') dispatch({ type: 'THINKING_DELTA', delta: ame.delta });
       else if (ame.type === 'thinking_end') {
         const thinking = extractThinkingEventContent(ame);
@@ -356,7 +386,7 @@ export function usePiStream() {
           type: 'STREAM_ERROR',
           error: formatProviderError(ev.message.errorMessage) || 'Provider returned an error.',
         });
-        return;
+        return null;
       }
       dispatch({ type: 'MESSAGE_END', message: extractMessageSnapshot(ev.message) });
     } else if (type === 'tool_execution_start') {
@@ -388,6 +418,7 @@ export function usePiStream() {
     } else if (type === 'error') {
       dispatch({ type: 'STREAM_ERROR', error: ev.message ?? 'Unknown error' });
     }
+    return null;
   }, []);
 
   const startStream = useCallback(
@@ -395,7 +426,7 @@ export function usePiStream() {
       threadId: string,
       text: string,
       opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[] } = {},
-    ) => {
+    ): Promise<ContextUsage | null> => {
       activeThreadRef.current = threadId;
       const attachments = opts.attachments ?? opts.images ?? [];
       dispatch({ type: 'START_STREAM', prompt: text, attachments });
@@ -422,10 +453,10 @@ export function usePiStream() {
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
           dispatch({ type: 'ABORT_STREAM' });
-          return;
+          return null;
         }
         dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
-        return;
+        return null;
       }
       if (res.status === 409) {
         const body = await res.json().catch(() => ({}));
@@ -438,11 +469,12 @@ export function usePiStream() {
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({}));
         dispatch({ type: 'STREAM_ERROR', error: body.error ?? body.message ?? `HTTP ${res.status}` });
-        return;
+        return null;
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      let lastContextUsage: ContextUsage | null = null;
       try {
         for (;;) {
           const { value, done } = await reader.read();
@@ -461,25 +493,27 @@ export function usePiStream() {
             }
             if (parsed?.kind === 'done') {
               dispatch({ type: 'STREAM_COMPLETE' });
-              return;
+              return lastContextUsage;
             }
             if (parsed?.kind === 'error') {
               dispatch({ type: 'STREAM_ERROR', error: parsed.error ?? 'stream error' });
-              return;
+              return lastContextUsage;
             }
             const inner = parsed?.event ?? parsed;
-            routeEvent(inner, threadId);
+            const usage = routeEvent(inner, threadId);
+            if (usage) lastContextUsage = usage;
           }
         }
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
           dispatch({ type: 'ABORT_STREAM' });
-          return;
+          return lastContextUsage;
         }
         dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
       } finally {
         abortRef.current = null;
       }
+      return lastContextUsage;
     },
     [routeEvent],
   );

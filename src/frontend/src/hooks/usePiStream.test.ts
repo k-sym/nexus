@@ -73,6 +73,15 @@ describe('streamReducer', () => {
     expect(err.error).toBe('boom');
   });
 
+  it('CONTEXT_USAGE stores the latest context window saturation', () => {
+    const next = streamReducer(INITIAL_STATE, {
+      type: 'CONTEXT_USAGE',
+      usage: { tokens: 170_000, contextWindow: 200_000, percent: 85 },
+    });
+
+    expect(next.contextUsage).toEqual({ tokens: 170_000, contextWindow: 200_000, percent: 85 });
+  });
+
   it('ABORT_STREAM preserves any partial content', () => {
     const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
     const delta = streamReducer(start, { type: 'TEXT_DELTA', delta: 'partial' });
@@ -227,6 +236,43 @@ describe('usePiStream', () => {
 
     await waitFor(() => {
       expect(result.current.state.messages.some((message) => message.content === 'final anthropic response')).toBe(true);
+    });
+  });
+
+  it('records context usage events from the stream and returns the latest usage', async () => {
+    const encoder = new TextEncoder();
+    const body = new ReadableStream({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            JSON.stringify({
+              event: {
+                type: 'context_usage',
+                usage: { tokens: 190_000, contextWindow: 200_000, percent: 95 },
+              },
+            }) + '\n',
+          ),
+        );
+        controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+        controller.close();
+      },
+    });
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body,
+    } as Response);
+
+    const { result } = renderHook(() => usePiStream());
+
+    let usage;
+    await act(async () => {
+      usage = await result.current.startStream('thread-1', 'hi');
+    });
+
+    expect(usage).toEqual({ tokens: 190_000, contextWindow: 200_000, percent: 95 });
+    await waitFor(() => {
+      expect(result.current.state.contextUsage).toEqual({ tokens: 190_000, contextWindow: 200_000, percent: 95 });
     });
   });
 

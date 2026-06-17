@@ -15,7 +15,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Stop } from '@phosphor-icons/react';
-import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type StreamMessage } from '../hooks/usePiStream';
+import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
 import { ModelSelector } from './ModelSelector';
@@ -61,6 +61,36 @@ const EXTENSION_MIME_TYPES: Record<string, string> = {
   '.xls': 'application/vnd.ms-excel',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
+
+function formatCompactTokens(tokens: number): string {
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}m`;
+  if (tokens >= 1_000) return `${Math.round(tokens / 1_000)}k`;
+  return tokens.toLocaleString();
+}
+
+function roundedContextPercent(usage: ContextUsage | null): number | null {
+  if (!usage || usage.percent === null) return null;
+  return Math.max(0, Math.round(usage.percent));
+}
+
+function ContextUsageLabel({ usage }: { usage: ContextUsage | null }) {
+  if (!usage) return null;
+  const percent = roundedContextPercent(usage);
+  const used = usage.tokens === null ? null : formatCompactTokens(usage.tokens);
+  const total = formatCompactTokens(usage.contextWindow);
+  const isNearFull = percent !== null && percent >= 85;
+  const label = `${percent === null ? '—' : `${percent}%`} ${used ? `(${used}/${total})` : `(${total})`}`;
+
+  return (
+    <div
+      className={`h-4 text-right text-[11px] leading-4 ${isNearFull ? 'text-amber-200' : 'text-faint'}`}
+      data-testid="context-usage"
+      title={percent === null ? 'Context usage recalculating' : `Context usage: ${label}`}
+    >
+      {label}
+    </div>
+  );
+}
 
 function inferMimeType(file: File): string {
   if (file.type) return file.type;
@@ -282,7 +312,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       setError(null);
       const attachments = opts.attachments ?? pendingAttachments;
       try {
-        await startStream(threadId, text, {
+        const contextUsage = await startStream(threadId, text, {
           confirmCancel: opts.confirmCancel,
           modelKey: opts.modelKey ?? activeModelId,
           attachments,
@@ -290,7 +320,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         onThreadsChanged?.();
         const msgs = await fetchThreadMessages(threadId);
         if (msgs.length > 0) {
-          dispatch({ type: 'RESET' });
+          dispatch({ type: 'RESET', contextUsage });
           setLoadedMessages(msgs);
         }
         setPendingAttachments([]);
@@ -560,27 +590,30 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             data-testid="chat-input"
             className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
           />
-        {isRunning ? (
-          <button
-            type="button"
-            onClick={handleAbort}
-            data-testid="abort-button"
-            className="px-3 py-2 surface-elevated text-muted rounded-lg hover:text-[var(--text-primary)] transition-colors"
-            title="Stop the current generation"
-          >
-            <Stop className="w-5 h-5" weight="fill" />
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={handleSend}
-            data-testid="send-button"
-            disabled={(!input.trim() && pendingAttachments.length === 0) || imageModelBlocked}
-            className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
-          >
-            Send
-          </button>
-        )}
+          <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
+            <ContextUsageLabel usage={state.contextUsage} />
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={handleAbort}
+                data-testid="abort-button"
+                className="px-3 py-2 surface-elevated text-muted rounded-lg hover:text-[var(--text-primary)] transition-colors"
+                title="Stop the current generation"
+              >
+                <Stop className="w-5 h-5 mx-auto" weight="fill" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleSend}
+                data-testid="send-button"
+                disabled={(!input.trim() && pendingAttachments.length === 0) || imageModelBlocked}
+                className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
+              >
+                Send
+              </button>
+            )}
+          </div>
         </div>
       </div>
     </div>

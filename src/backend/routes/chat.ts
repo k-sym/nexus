@@ -233,7 +233,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const savedAttachments = saveFileAttachments(attachments, cwd);
     const promptContent = promptWithFileReferences(body.content, savedAttachments);
 
-    let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel'> | undefined;
+    let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> | undefined;
     try {
       session = await pi.sessionFor(threadId, cwd);
     } catch (err: any) {
@@ -309,6 +309,8 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         } else {
           await session.prompt(promptContent);
         }
+        const contextUsage = safeContextUsage(session);
+        if (contextUsage) write({ type: 'context_usage', usage: contextUsage });
         subscription();
       }
       write({ kind: 'done' });
@@ -385,6 +387,16 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     }
     return { busy: false };
   });
+}
+
+function safeContextUsage(session: Partial<Pick<AgentSession, 'getContextUsage'>>): ReturnType<AgentSession['getContextUsage']> | undefined {
+  if (typeof session.getContextUsage !== 'function') return undefined;
+  try {
+    return session.getContextUsage();
+  } catch (err: any) {
+    console.error('[chat] getContextUsage failed:', err?.message);
+    return undefined;
+  }
 }
 
 /**
