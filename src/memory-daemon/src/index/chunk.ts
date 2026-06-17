@@ -1,4 +1,6 @@
-// Text segmentation. Chunks = 300-word windows with 80-word overlap (ArcRift params).
+// Text segmentation. Chunks = 220-word windows with 50-word overlap.
+// The local embedder runs with a 512-token physical batch; 300-word chunks can
+// tokenize above that, so the default keeps a practical margin below the limit.
 // Sentences = boundary split, kept only if >= 5 chars (drops noise fragments).
 
 export interface ChunkOpts {
@@ -7,8 +9,8 @@ export interface ChunkOpts {
 }
 
 export function splitIntoChunks(text: string, opts: ChunkOpts = {}): string[] {
-  const wordsPerChunk = opts.wordsPerChunk ?? 300;
-  const overlap = opts.overlap ?? 80;
+  const wordsPerChunk = opts.wordsPerChunk ?? 220;
+  const overlap = opts.overlap ?? 50;
   const step = Math.max(1, wordsPerChunk - overlap);
   const words = text.split(/\s+/).filter(Boolean);
   if (words.length === 0) return [];
