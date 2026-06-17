@@ -76,6 +76,20 @@ describe('MissionControl', () => {
     expect(stats.compareDocumentPosition(modelsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it('renders Recent activity above the Models section', () => {
+    render(
+      <MissionControl
+        status={status as any}
+        loading={false}
+        onRefresh={() => {}}
+        onSelectAgent={() => {}}
+      />,
+    );
+    const activity = screen.getByText('Recent activity');
+    const modelsSection = screen.getAllByText('Models').pop()!;
+    expect(activity.compareDocumentPosition(modelsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('does not show token data in the recent activity rows', () => {
     render(
       <MissionControl
@@ -95,5 +109,26 @@ describe('MissionControl', () => {
     );
     expect(screen.getByText('Sample task')).toBeInTheDocument();
     expect(screen.queryByText(/tok/i)).not.toBeInTheDocument();
+  });
+
+  it('labels recent activity rows that are not linked to a task', () => {
+    render(
+      <MissionControl
+        status={{
+          ...status,
+          activity: {
+            running: [],
+            recent: [
+              { id: '1', task_id: null, task_title: null, provider: 'claude', model: 'sonnet', status: 'completed' },
+            ],
+          },
+        } as any}
+        loading={false}
+        onRefresh={() => {}}
+        onSelectAgent={() => {}}
+      />,
+    );
+    expect(screen.getByText('Chat activity')).toBeInTheDocument();
+    expect(screen.getByText('claude · completed')).toBeInTheDocument();
   });
 });

@@ -7,7 +7,7 @@ export async function registerOrchestratorRoutes(fastify: FastifyInstance) {
     const running = db.prepare(
       `SELECT ar.id, ar.task_id, t.title as task_title, ar.provider, ar.model, ar.started_at
        FROM agent_runs ar
-       JOIN tasks t ON t.id = ar.task_id
+       LEFT JOIN tasks t ON t.id = ar.task_id
        WHERE ar.status = 'running'
        ORDER BY ar.started_at DESC`
     ).all();
@@ -17,7 +17,7 @@ export async function registerOrchestratorRoutes(fastify: FastifyInstance) {
               ar.provider, ar.model, ar.duration_ms,
               ar.started_at, ar.completed_at
        FROM agent_runs ar
-       JOIN tasks t ON t.id = ar.task_id
+       LEFT JOIN tasks t ON t.id = ar.task_id
        ORDER BY ar.started_at DESC
        LIMIT 15`
     ).all();

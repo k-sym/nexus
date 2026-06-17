@@ -34,7 +34,7 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
     const running = db
       .prepare(
         `SELECT ar.id, ar.task_id, t.title as task_title, ar.provider, ar.model, ar.started_at
-         FROM agent_runs ar JOIN tasks t ON t.id = ar.task_id
+         FROM agent_runs ar LEFT JOIN tasks t ON t.id = ar.task_id
          WHERE ar.status = 'running' ORDER BY ar.started_at DESC LIMIT 10`,
       )
       .all();
@@ -42,7 +42,7 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
       .prepare(
         `SELECT ar.id, ar.task_id, t.title as task_title, ar.status, ar.provider, ar.model,
                 ar.duration_ms, ar.started_at, ar.completed_at
-         FROM agent_runs ar JOIN tasks t ON t.id = ar.task_id
+         FROM agent_runs ar LEFT JOIN tasks t ON t.id = ar.task_id
          ORDER BY ar.started_at DESC LIMIT 10`,
       )
       .all();

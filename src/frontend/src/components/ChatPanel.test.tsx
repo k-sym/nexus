@@ -9,6 +9,10 @@ function imageFile(name = 'screen.png', type = 'image/png') {
   return new File(['image-bytes'], name, { type });
 }
 
+function documentFile(name = 'notes.pdf', type = 'application/pdf') {
+  return new File(['document-bytes'], name, { type });
+}
+
 function makeDataTransfer(files: File[]) {
   return {
     files,
@@ -240,7 +244,7 @@ describe('ChatPanel', () => {
 
     fireEvent.dragEnter(pane, { dataTransfer: makeDataTransfer([imageFile()]) });
 
-    expect(screen.getByText(/Release to attach images/i)).toBeInTheDocument();
+    expect(screen.getByText(/Release to attach files/i)).toBeInTheDocument();
   });
 
   it('drops images into thumbnails above the textarea and sends them', async () => {
@@ -296,6 +300,95 @@ describe('ChatPanel', () => {
     expect(streamBody.images[0].mimeType).toBe('image/png');
   });
 
+  it('clears pending attachments from the composer immediately after sending', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'vision', name: 'Vision', provider: 'openai', input: ['text', 'image'], configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'openai/vision' }, messages: [] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        expect(JSON.parse(String(init?.body)).images).toHaveLength(1);
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({ start() {} }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const pane = await screen.findByTestId('chat-drop-target');
+    fireEvent.drop(pane, { dataTransfer: makeDataTransfer([imageFile('screen.png')]) });
+
+    expect(await screen.findByText('screen.png')).toBeInTheDocument();
+    await userEvent.type(screen.getByTestId('chat-input'), 'describe this');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => expect(screen.queryByTestId('pending-attachment')).not.toBeInTheDocument());
+    expect(within(screen.getByTestId('chat-messages')).getByText('describe this')).toBeInTheDocument();
+  });
+
+  it('accepts document attachments and sends them without requiring an image-capable model', async () => {
+    const encoder = new TextEncoder();
+    let streamBody: any;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'text', name: 'Text', provider: 'openai', input: ['text'], configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'openai/text' }, messages: [] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        streamBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+              controller.close();
+            },
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const pane = await screen.findByTestId('chat-drop-target');
+    fireEvent.drop(pane, { dataTransfer: makeDataTransfer([documentFile('brief.pdf')]) });
+
+    expect(await screen.findByText('brief.pdf')).toBeInTheDocument();
+    expect(screen.getByTestId('send-button')).not.toBeDisabled();
+    await userEvent.type(screen.getByTestId('chat-input'), 'summarise this');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => expect(streamBody.attachments).toHaveLength(1));
+    expect(streamBody.attachments[0]).toMatchObject({ type: 'file', mimeType: 'application/pdf', name: 'brief.pdf' });
+    expect(streamBody.images).toBeUndefined();
+  });
+
   it('limits pending image attachments to five', async () => {
     render(
       <ChatPanel
@@ -309,7 +402,7 @@ describe('ChatPanel', () => {
 
     fireEvent.drop(pane, { dataTransfer: makeDataTransfer(files) });
 
-    expect(await screen.findByText(/Only 5 images can be attached/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Only 5 files can be attached/i)).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByTestId('pending-image-thumb')).toHaveLength(5));
   });
 

@@ -10,6 +10,8 @@
  * `X-Confirm-Cancel: true` to override.
  */
 import { FastifyInstance } from 'fastify';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { v4 as uuid } from 'uuid';
 import { ChatThread } from '@nexus/shared';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
@@ -28,6 +30,26 @@ interface ChatImageAttachment {
   size?: number;
 }
 
+interface ChatFileAttachment {
+  type: 'file';
+  data: string;
+  mimeType:
+    | 'application/pdf'
+    | 'text/plain'
+    | 'text/markdown'
+    | 'text/csv'
+    | 'application/csv'
+    | 'application/msword'
+    | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    | 'application/vnd.ms-excel'
+    | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  name: string;
+  size?: number;
+  path?: string;
+}
+
+type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
+
 const activeStreams = new Map<string, ActiveStream>();
 const CHAT_STREAM_BODY_LIMIT_BYTES = 50 * 1024 * 1024;
 const allowedImageMimeTypes = new Set<ChatImageAttachment['mimeType']>([
@@ -35,6 +57,17 @@ const allowedImageMimeTypes = new Set<ChatImageAttachment['mimeType']>([
   'image/jpeg',
   'image/gif',
   'image/webp',
+]);
+const allowedFileMimeTypes = new Set<ChatFileAttachment['mimeType']>([
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/csv',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 ]);
 
 function modelSupportsImageInput(model: { input?: unknown } | undefined): boolean {
@@ -133,7 +166,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
   fastify.post('/api/threads/:threadId/messages/stream', { bodyLimit: CHAT_STREAM_BODY_LIMIT_BYTES }, async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
-    const body = request.body as { content: string; modelKey?: string; images?: unknown };
+    const body = request.body as { content: string; modelKey?: string; images?: unknown; attachments?: unknown };
     const confirmCancel = request.headers['x-confirm-cancel'] === 'true';
 
     const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
@@ -145,12 +178,13 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | { repo_path: string }
       | undefined;
     const cwd = project?.repo_path || process.cwd();
-    const imagesResult = validateChatImages(body.images);
-    if (!imagesResult.ok) {
+    const attachmentsResult = validateChatAttachments(body.attachments, body.images);
+    if (!attachmentsResult.ok) {
       reply.code(400);
-      return { error: imagesResult.error };
+      return { error: attachmentsResult.error };
     }
-    const images = imagesResult.images;
+    const attachments = attachmentsResult.attachments;
+    const images = attachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
 
     // Check if this project+model combination is already streaming
     const modelKey = body.modelKey || 'default';
@@ -196,6 +230,8 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       reply.code(400);
       return { error: 'Selected model does not support image input' };
     }
+    const savedAttachments = saveFileAttachments(attachments, cwd);
+    const promptContent = promptWithFileReferences(body.content, savedAttachments);
 
     let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel'> | undefined;
     try {
@@ -255,7 +291,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           threadId,
           'user',
           body.content,
-          JSON.stringify(images),
+          JSON.stringify(savedAttachments),
           'text',
           null,
           null,
@@ -269,9 +305,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         activeStreams.set(threadId, { session });
         const subscription = session.subscribe((ev) => write(ev));
         if (images.length > 0) {
-          await session.prompt(body.content, { images });
+          await session.prompt(promptContent, { images });
         } else {
-          await session.prompt(body.content);
+          await session.prompt(promptContent);
         }
         subscription();
       }
@@ -364,7 +400,7 @@ function flattenEntries(entries: unknown[]): unknown[] {
     const m = e.message;
     if (!m) continue;
     if (m.role === 'user') {
-      const attachments = extractImageAttachments(m);
+      const attachments = extractChatAttachments(m);
       out.push({
         id: e.id,
         role: 'user',
@@ -420,64 +456,134 @@ function flattenEntries(entries: unknown[]): unknown[] {
   return out;
 }
 
-function validateChatImages(images: unknown): { ok: true; images: ChatImageAttachment[] } | { ok: false; error: string } {
-  if (images === undefined) return { ok: true, images: [] };
-  if (!Array.isArray(images)) return { ok: false, error: 'images must be an array' };
-  if (images.length > 5) return { ok: false, error: 'images must contain at most 5 images' };
+function validateChatAttachments(
+  attachments: unknown,
+  legacyImages?: unknown,
+): { ok: true; attachments: ChatAttachment[] } | { ok: false; error: string } {
+  const input = attachments === undefined ? legacyImages : attachments;
+  const field = attachments === undefined ? 'images' : 'attachments';
+  if (input === undefined) return { ok: true, attachments: [] };
+  if (!Array.isArray(input)) return { ok: false, error: `${field} must be an array` };
+  if (input.length > 5) {
+    return { ok: false, error: field === 'images' ? 'images must contain at most 5 images' : 'attachments must contain at most 5 files' };
+  }
 
-  const validated: ChatImageAttachment[] = [];
-  for (let index = 0; index < images.length; index += 1) {
-    const item = images[index] as any;
+  const validated: ChatAttachment[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index] as any;
     if (!item || typeof item !== 'object') {
-      return { ok: false, error: `images[${index}] must be an object` };
+      return { ok: false, error: `${field}[${index}] must be an object` };
     }
-    if (item.type !== 'image') {
-      return { ok: false, error: `images[${index}].type must be "image"` };
+    if (item.type !== 'image' && item.type !== 'file') {
+      return { ok: false, error: `${field}[${index}].type must be "image" or "file"` };
     }
     if (typeof item.data !== 'string' || item.data.length === 0) {
-      return { ok: false, error: `images[${index}].data must be a non-empty string` };
+      return { ok: false, error: `${field}[${index}].data must be a non-empty string` };
     }
-    if (typeof item.mimeType !== 'string' || !allowedImageMimeTypes.has(item.mimeType as ChatImageAttachment['mimeType'])) {
-      return { ok: false, error: `images[${index}].mimeType has unsupported image MIME type` };
+    if (
+      item.type === 'image' &&
+      (typeof item.mimeType !== 'string' || !allowedImageMimeTypes.has(item.mimeType as ChatImageAttachment['mimeType']))
+    ) {
+      return { ok: false, error: `${field}[${index}].mimeType has unsupported image MIME type` };
+    }
+    if (
+      item.type === 'file' &&
+      (typeof item.mimeType !== 'string' || !allowedFileMimeTypes.has(item.mimeType as ChatFileAttachment['mimeType']))
+    ) {
+      return { ok: false, error: `${field}[${index}].mimeType has unsupported file MIME type` };
+    }
+    if (item.type === 'file' && (typeof item.name !== 'string' || item.name.trim().length === 0)) {
+      return { ok: false, error: `${field}[${index}].name must be a non-empty string` };
     }
     if (item.name !== undefined && typeof item.name !== 'string') {
-      return { ok: false, error: `images[${index}].name must be a string` };
+      return { ok: false, error: `${field}[${index}].name must be a string` };
     }
     if (item.size !== undefined && (!Number.isFinite(item.size) || item.size < 0)) {
-      return { ok: false, error: `images[${index}].size must be a non-negative number` };
+      return { ok: false, error: `${field}[${index}].size must be a non-negative number` };
+    }
+    if (item.path !== undefined && typeof item.path !== 'string') {
+      return { ok: false, error: `${field}[${index}].path must be a string` };
     }
 
-    validated.push({
-      type: 'image',
-      data: item.data,
-      mimeType: item.mimeType,
-      ...(item.name !== undefined ? { name: item.name } : {}),
-      ...(item.size !== undefined ? { size: item.size } : {}),
-    });
+    if (item.type === 'image') {
+      validated.push({
+        type: 'image',
+        data: item.data,
+        mimeType: item.mimeType,
+        ...(item.name !== undefined ? { name: item.name } : {}),
+        ...(item.size !== undefined ? { size: item.size } : {}),
+      });
+    } else {
+      validated.push({
+        type: 'file',
+        data: item.data,
+        mimeType: item.mimeType,
+        name: item.name,
+        ...(item.size !== undefined ? { size: item.size } : {}),
+        ...(item.path !== undefined ? { path: item.path } : {}),
+      });
+    }
   }
-  return { ok: true, images: validated };
+  return { ok: true, attachments: validated };
 }
 
-function parseStoredAttachments(value: string | null): ChatImageAttachment[] {
+function saveFileAttachments(attachments: ChatAttachment[], cwd: string): ChatAttachment[] {
+  if (!attachments.some((attachment) => attachment.type === 'file')) return attachments;
+  const uploadsDir = path.join(cwd, 'project_docs', 'uploads');
+  mkdirSync(uploadsDir, { recursive: true });
+  return attachments.map((attachment) => {
+    if (attachment.type !== 'file') return attachment;
+    const filename = uniqueUploadFilename(uploadsDir, attachment.name);
+    const filePath = path.join(uploadsDir, filename);
+    writeFileSync(filePath, Buffer.from(attachment.data, 'base64'));
+    return { ...attachment, name: filename, path: filePath };
+  });
+}
+
+function uniqueUploadFilename(dir: string, name: string): string {
+  const safe = sanitizeFilename(name) || 'attachment';
+  if (!existsSync(path.join(dir, safe))) return safe;
+  const ext = path.extname(safe);
+  const stem = path.basename(safe, ext);
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `${stem}-${index}${ext}`;
+    if (!existsSync(path.join(dir, candidate))) return candidate;
+  }
+  return `${stem}-${uuid()}${ext}`;
+}
+
+function sanitizeFilename(name: string): string {
+  const base = path.basename(name).replace(/[^a-zA-Z0-9._ -]/g, '_').trim();
+  return base === '.' || base === '..' ? 'attachment' : base;
+}
+
+function promptWithFileReferences(content: string, attachments: ChatAttachment[]): string {
+  const files = attachments.filter((attachment): attachment is ChatFileAttachment => attachment.type === 'file' && !!attachment.path);
+  if (files.length === 0) return content;
+  const lines = files.map((file) => `- ${file.name}: ${file.path}`);
+  return `${content}\n\nAttached files:\n${lines.join('\n')}`;
+}
+
+function parseStoredAttachments(value: string | null): ChatAttachment[] {
   if (!value) return [];
   try {
     const parsed = JSON.parse(value);
-    const validated = validateChatImages(parsed);
-    return validated.ok ? validated.images : [];
+    const validated = validateChatAttachments(parsed);
+    return validated.ok ? validated.attachments : [];
   } catch {
     return [];
   }
 }
 
-function extractImageAttachments(message: any): ChatImageAttachment[] {
+function extractChatAttachments(message: any): ChatAttachment[] {
   const candidates: unknown[] = [];
   if (Array.isArray(message?.attachments)) candidates.push(...message.attachments);
   if (Array.isArray(message?.images)) candidates.push(...message.images);
   if (Array.isArray(message?.content)) {
     candidates.push(...message.content.filter((block: any) => block?.type === 'image'));
   }
-  const validated = validateChatImages(candidates);
-  return validated.ok ? validated.images : [];
+  const validated = validateChatAttachments(candidates);
+  return validated.ok ? validated.attachments : [];
 }
 
 function extractText(content: unknown): string {

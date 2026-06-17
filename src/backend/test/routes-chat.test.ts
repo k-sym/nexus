@@ -92,6 +92,14 @@ const pngImage = {
   size: 10,
 };
 
+const pdfAttachment = {
+  type: 'file',
+  data: 'JVBERi0xLjQK',
+  mimeType: 'application/pdf',
+  name: 'brief.pdf',
+  size: 9,
+};
+
 test('POST /api/threads/:id/messages/stream returns 409 when a *different* thread in the same project is busy', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
@@ -328,6 +336,54 @@ test('POST /api/threads/:id/messages/stream forwards and persists accepted image
     };
     assert.equal(row.content, 'see this');
     assert.deepEqual(JSON.parse(row.attachments_json), [pngImage]);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream stores document attachments and references saved paths in the prompt', async () => {
+  let promptArgs: unknown[] = [];
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async (...args: unknown[]) => {
+        promptArgs = args;
+      },
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openai', id: 'text', input: ['text'] }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'summarise this', modelKey: 'openai/text', attachments: [pdfAttachment] },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(promptArgs.length, 1);
+    assert.match(String(promptArgs[0]), /summarise this/);
+    assert.match(String(promptArgs[0]), /Attached files:/);
+    assert.match(String(promptArgs[0]), /project_docs\/uploads\/brief\.pdf/);
+
+    const row = db.prepare('SELECT content, attachments_json FROM chat_messages WHERE thread_id = ?').get('thread-1') as {
+      content: string;
+      attachments_json: string;
+    };
+    assert.equal(row.content, 'summarise this');
+    const stored = JSON.parse(row.attachments_json);
+    assert.deepEqual(stored[0], {
+      ...pdfAttachment,
+      path: join(dir, 'project_docs', 'uploads', 'brief.pdf'),
+    });
   } finally {
     await app.close();
     db.close();
@@ -705,6 +761,33 @@ test('GET /api/threads/:threadId preserves image attachments from DB fallback ro
 
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.json().messages[0].attachments, [pngImage]);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/threads/:threadId preserves file attachments from DB fallback rows', async () => {
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const stored = { ...pdfAttachment, path: join(dir, 'project_docs', 'uploads', 'brief.pdf') };
+    db.prepare(
+      'INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('m1', 'thread-1', 'user', 'look', JSON.stringify([stored]), '2026-06-10T12:00:00.000Z');
+
+    const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json().messages[0].attachments, [stored]);
   } finally {
     await app.close();
     db.close();

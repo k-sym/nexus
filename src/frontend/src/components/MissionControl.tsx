@@ -205,6 +205,33 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
             </div>
           </div>
 
+          {/* Recent activity */}
+          <div>
+            <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Recent activity</div>
+            <div className="surface-glass border border-subtle rounded-lg divide-y divide-[var(--border-subtle)]">
+              {status.activity.running.map((r: any) => (
+                <div key={r.id} className="flex items-center justify-between px-4 py-2 text-sm">
+                  <span className="flex items-center gap-2 text-muted truncate">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                    {r.task_title ?? 'Chat activity'}
+                  </span>
+                  <span className="text-xs text-faint shrink-0">{r.provider} · running</span>
+                </div>
+              ))}
+              {status.activity.recent.map((r: any) => (
+                <div key={r.id} className="flex items-center justify-between px-4 py-2 text-sm">
+                  <span className="text-muted truncate">{r.task_title ?? 'Chat activity'}</span>
+                  <span className="text-xs text-faint shrink-0">
+                    {r.provider} · {r.status}
+                  </span>
+                </div>
+              ))}
+              {status.activity.running.length === 0 && status.activity.recent.length === 0 && (
+                <div className="px-4 py-6 text-sm text-faint text-center">No agent activity yet.</div>
+              )}
+            </div>
+          </div>
+
           {/* Agent roster — now a model list. Each row shows provider,
               id, and whether auth is configured. */}
           <div>
@@ -214,33 +241,6 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
                 <ModelCard key={`${m.provider}/${m.id}`} m={m} onClick={() => onSelectAgent(m.id)} />
               ))}
               {(status.models ?? []).length === 0 && <div className="text-sm text-faint">No models available.</div>}
-            </div>
-          </div>
-
-          {/* Recent activity */}
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Recent activity</div>
-            <div className="surface-glass border border-subtle rounded-lg divide-y divide-[var(--border-subtle)]">
-              {status.activity.running.map((r: any) => (
-                <div key={r.id} className="flex items-center justify-between px-4 py-2 text-sm">
-                  <span className="flex items-center gap-2 text-muted truncate">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    {r.task_title}
-                  </span>
-                  <span className="text-xs text-faint shrink-0">{r.provider} · running</span>
-                </div>
-              ))}
-              {status.activity.recent.map((r: any) => (
-                <div key={r.id} className="flex items-center justify-between px-4 py-2 text-sm">
-                  <span className="text-muted truncate">{r.task_title}</span>
-                  <span className="text-xs text-faint shrink-0">
-                    {r.provider} · {r.status}
-                  </span>
-                </div>
-              ))}
-              {status.activity.running.length === 0 && status.activity.recent.length === 0 && (
-                <div className="px-4 py-6 text-sm text-faint text-center">No agent activity yet.</div>
-              )}
             </div>
           </div>
         </div>

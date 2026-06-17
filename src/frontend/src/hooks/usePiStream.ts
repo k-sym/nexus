@@ -25,11 +25,22 @@ export type ChatImageAttachment = {
   size?: number;
 };
 
+export type ChatFileAttachment = {
+  type: 'file';
+  data: string;
+  mimeType: string;
+  name: string;
+  size?: number;
+  path?: string;
+};
+
+export type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
+
 export interface StreamMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'toolResult';
   content: string;
-  attachments?: ChatImageAttachment[];
+  attachments?: ChatAttachment[];
   thinking?: string;
   toolCalls?: Array<{
     id: string;
@@ -55,7 +66,7 @@ export interface StreamState {
 }
 
 export type StreamAction =
-  | { type: 'START_STREAM'; prompt: string; attachments?: ChatImageAttachment[] }
+  | { type: 'START_STREAM'; prompt: string; attachments?: ChatAttachment[] }
   | { type: 'TEXT_DELTA'; delta: string }
   | { type: 'THINKING_DELTA'; delta: string }
   | { type: 'TOOL_CALL_START'; toolCall: { id: string; name: string; args: Record<string, unknown> } }
@@ -383,16 +394,19 @@ export function usePiStream() {
     async (
       threadId: string,
       text: string,
-      opts: { confirmCancel?: boolean; modelKey?: string; images?: ChatImageAttachment[] } = {},
+      opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[] } = {},
     ) => {
       activeThreadRef.current = threadId;
-      dispatch({ type: 'START_STREAM', prompt: text, attachments: opts.images });
+      const attachments = opts.attachments ?? opts.images ?? [];
+      dispatch({ type: 'START_STREAM', prompt: text, attachments });
       const ctrl = new AbortController();
       abortRef.current = ctrl;
+      const images = attachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
+      const files = attachments.filter((attachment) => attachment.type === 'file');
       const requestBody = {
         content: text,
         modelKey: opts.modelKey,
-        ...(opts.images?.length ? { images: opts.images } : {}),
+        ...(files.length > 0 ? { attachments } : images.length > 0 ? { images } : {}),
       };
       let res: Response;
       try {
