@@ -14,6 +14,7 @@ import { getDb } from './db.js';
 import { loadConfig, getDbPath, getNexusDir, resolveOpenRouterKey } from './config.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerChatRoutes } from './routes/chat.js';
+import { registerAssistantRoutes } from './routes/assistant.js';
 import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerMemoryRoutes } from './routes/memory.js';
 import { registerSettingsRoutes } from './routes/settings.js';
@@ -64,6 +65,7 @@ async function main() {
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
+  app.register(registerAssistantRoutes);
   app.register(registerOrchestratorRoutes);
   app.register(registerMemoryRoutes);
   app.register(registerSettingsRoutes);

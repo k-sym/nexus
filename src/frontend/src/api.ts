@@ -131,6 +131,9 @@ export const api = {
       fetchJson<BraindumpIdea>(`/api/braindump/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => fetchJson<void>(`/api/braindump/${id}`, { method: 'DELETE' }),
   },
+  assistant: {
+    thread: () => fetchJson<{ id: 'global'; messages: any[] }>(`/api/assistant/thread`),
+  },
   notifications: {
     list: () => fetchJson<NotificationItem[]>(`/api/notifications`),
     seen: (ids: string[]) =>

@@ -144,6 +144,13 @@ function runMigrations(db: Database.Database) {
       seen_at TEXT
     );
 
+    CREATE TABLE IF NOT EXISTS assistant_messages (
+      id TEXT PRIMARY KEY,
+      role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_chat_threads_project ON chat_threads(project_id);
@@ -153,6 +160,7 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
     CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
     CREATE INDEX IF NOT EXISTS idx_braindump_status ON braindump_ideas(status);
+    CREATE INDEX IF NOT EXISTS idx_assistant_messages_created ON assistant_messages(created_at);
   `);
 
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.

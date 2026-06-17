@@ -115,6 +115,33 @@ export default function SettingsPage() {
             <PiAuthSection />
           </Section>
 
+          <Section title="Assistant">
+            <Field label="Assistant URL">
+              <input
+                type="text"
+                value={config.assistant?.url ?? ''}
+                onChange={(e) => update(['assistant', 'url'], e.target.value)}
+                placeholder="https://assistant.example.com/v1"
+                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">
+                Remote OpenAI-compatible assistant endpoint for Hermes, OpenClaw, or similar.
+              </p>
+            </Field>
+            <Field label="Key">
+              <input
+                type="text"
+                value={config.assistant?.api_key ?? ''}
+                onChange={(e) => update(['assistant', 'api_key'], e.target.value)}
+                placeholder="${ASSISTANT_API_KEY} or paste a key"
+                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">
+                Supports <span className="font-mono">{'${ASSISTANT_API_KEY}'}</span>. Existing saved keys are masked on load.
+              </p>
+            </Field>
+          </Section>
+
           <Section title="Curated Models">
             <ModelCurationSection />
           </Section>

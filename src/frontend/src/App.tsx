@@ -11,6 +11,7 @@ import DaemonToasts from './components/DaemonToasts';
 import NotificationToasts from './components/NotificationToasts';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
+import AssistantView from './components/AssistantView';
 import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
 import ProjectModal from './components/ProjectModal';
@@ -18,7 +19,7 @@ import TaskModal from './components/TaskModal';
 import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
 
-type GlobalView = 'dashboard' | 'tickets' | 'braindump' | 'settings';
+type GlobalView = 'dashboard' | 'tickets' | 'braindump' | 'assistant' | 'settings';
 
 /** A task-seeded first turn handed to ChatPanel once the run-task chat opens. */
 interface TaskSeed {
@@ -405,6 +406,7 @@ export default function App() {
       { id: 'view-dashboard', label: 'Dashboard', hint: 'View', keywords: 'mission control', run: () => selectGlobal('dashboard') },
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
       { id: 'view-braindump', label: 'Braindump', hint: 'View', keywords: 'ideas capture', run: () => selectGlobal('braindump') },
+      { id: 'view-assistant', label: 'Assistant', hint: 'View', keywords: 'hermes openclaw remote chat', run: () => selectGlobal('assistant') },
     ];
     (['kanban', 'memory', 'chat'] as const).forEach((sub) => {
       const label = sub === 'chat' ? 'Sessions' : sub.charAt(0).toUpperCase() + sub.slice(1);
@@ -429,6 +431,8 @@ export default function App() {
       return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
     if (globalView === 'braindump')
       return <BraindumpView projects={projects} onTriage={handleTriageIdea} />;
+    if (globalView === 'assistant')
+      return <AssistantView />;
 
     if (!activeProject) {
       return (

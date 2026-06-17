@@ -117,6 +117,12 @@ export interface NexusConfig {
       rerank_model: string;
     };
   };
+  assistant: {
+    /** OpenAI-compatible remote assistant endpoint, e.g. Hermes/OpenClaw. */
+    url: string;
+    /** Supports ${ASSISTANT_API_KEY}; raw values are masked by settings routes. */
+    api_key: string;
+  };
   memory: {
     // The standalone @nexus/memory-daemon (markdown-canonical vault + index).
     daemon_url: string;

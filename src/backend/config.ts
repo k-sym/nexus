@@ -25,6 +25,10 @@ const DEFAULT_CONFIG: NexusConfig = {
       rerank_model: '',
     },
   },
+  assistant: {
+    url: '',
+    api_key: '${ASSISTANT_API_KEY}',
+  },
   memory: {
     daemon_url: 'http://127.0.0.1:4100',
     auto_inject: {
@@ -151,6 +155,12 @@ export function resolveOpenRouterKey(config: NexusConfig): string {
   const fromConfig = resolveEnvVars(config.models.openrouter.api_key || '');
   if (fromConfig) return fromConfig;
   return process.env.OPENROUTER_API_KEY || process.env.OPENROUTING_API_KEY || '';
+}
+
+export function resolveAssistantKey(config: NexusConfig): string {
+  const fromConfig = resolveEnvVars(config.assistant.api_key || '');
+  if (fromConfig) return fromConfig;
+  return process.env.ASSISTANT_API_KEY || '';
 }
 
 export function getNexusDir(): string {

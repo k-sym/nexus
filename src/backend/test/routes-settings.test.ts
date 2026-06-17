@@ -80,3 +80,48 @@ test('PUT /api/settings round-trips github.enabled and never persists the derive
     await app.close();
   }
 });
+
+test('settings masks and preserves assistant api key', async () => {
+  const original = loadConfig();
+  const app = makeApp();
+  try {
+    delete process.env.GITHUB_TOKEN;
+    __primeTokenCache(null);
+    const configWithAssistant = {
+      ...original,
+      assistant: {
+        url: 'https://assistant.example.test/v1',
+        api_key: 'assistant-secret',
+      },
+    };
+    saveConfig(configWithAssistant);
+
+    const get = await app.inject({ method: 'GET', url: '/api/settings' });
+    assert.equal(get.statusCode, 200);
+    assert.equal(get.json().assistant.url, 'https://assistant.example.test/v1');
+    assert.equal(get.json().assistant.api_key, '••••••••');
+    assert.equal(JSON.stringify(get.json()).includes('assistant-secret'), false);
+
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: {
+        ...get.json(),
+        assistant: {
+          url: 'https://assistant.example.test/updated',
+          api_key: '••••••••',
+        },
+      },
+    });
+    assert.equal(put.statusCode, 200);
+    assert.equal(put.json().assistant.url, 'https://assistant.example.test/updated');
+    assert.equal(put.json().assistant.api_key, '••••••••');
+
+    const persisted = loadConfig();
+    assert.equal(persisted.assistant.url, 'https://assistant.example.test/updated');
+    assert.equal(persisted.assistant.api_key, 'assistant-secret');
+  } finally {
+    saveConfig(original);
+    await app.close();
+  }
+});

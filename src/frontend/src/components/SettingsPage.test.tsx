@@ -6,6 +6,7 @@ vi.mock('../api', () => ({
   api: {
     settings: {
       get: vi.fn(async () => ({
+        assistant: { url: 'https://assistant.example.test/v1', api_key: '${ASSISTANT_API_KEY}' },
         models: { local: { base_url: '', api_key: '' } },
         memory: { auto_inject: { enabled: true, max_memories: 5, token_budget: 1000 } },
         jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
@@ -32,5 +33,14 @@ describe('SettingsPage', () => {
 
     expect(scrollContainer).toHaveClass('h-full', 'overflow-y-auto');
     expect(scrollContainer).not.toHaveClass('max-w-2xl', 'mx-auto');
+  });
+
+  it('renders assistant URL and key settings', async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Assistant' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('https://assistant.example.test/v1')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('${ASSISTANT_API_KEY}')).toBeInTheDocument();
   });
 });

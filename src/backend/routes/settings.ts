@@ -28,6 +28,10 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         ...config.models,
         openrouter: { api_key: maskSecret(config.models.openrouter.api_key) },
       },
+      assistant: {
+        ...config.assistant,
+        api_key: maskSecret(config.assistant.api_key),
+      },
       // Derived, read-only signal so the UI can show "token detected" without
       // ever receiving the secret. Reflects the resolver (GITHUB_TOKEN or a
       // `gh auth token` fallback); the token value itself is never sent.
@@ -47,12 +51,20 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const apiKey = !incomingKey || incomingKey === MASK
       ? current.models.openrouter.api_key
       : incomingKey;
+    const incomingAssistantKey = incoming.assistant?.api_key;
+    const assistantKey = !incomingAssistantKey || incomingAssistantKey === MASK
+      ? current.assistant.api_key
+      : incomingAssistantKey;
 
     const merged: NexusConfig = {
       ...current,
       ...incoming,
       jira: incoming.jira ?? current.jira,
       github: incoming.github ?? current.github,
+      assistant: {
+        url: incoming.assistant?.url ?? current.assistant.url,
+        api_key: assistantKey,
+      },
       models: {
         openrouter: { api_key: apiKey },
         local: {
@@ -71,6 +83,10 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       models: {
         ...merged.models,
         openrouter: { api_key: maskSecret(merged.models.openrouter.api_key) },
+      },
+      assistant: {
+        ...merged.assistant,
+        api_key: maskSecret(merged.assistant.api_key),
       },
       github_token_detected: !!(await resolveGitHubToken()),
     };

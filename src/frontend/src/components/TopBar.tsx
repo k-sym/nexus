@@ -1,6 +1,6 @@
-import { Gauge, Ticket, Gear, Brain } from '@phosphor-icons/react';
+import { ChatCircle, Gauge, Ticket, Gear, Brain } from '@phosphor-icons/react';
 
-export type GlobalView = 'dashboard' | 'tickets' | 'braindump';
+export type GlobalView = 'dashboard' | 'tickets' | 'braindump' | 'assistant';
 export type ManageView = 'settings';
 
 interface TopBarProps {
@@ -38,6 +38,7 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
       <button onClick={() => onSelectGlobal('dashboard')} className={item(view === 'dashboard')}><Gauge size={16} weight={view === 'dashboard' ? 'fill' : 'regular'} /> Dashboard</button>
       <button onClick={() => onSelectGlobal('tickets')} className={item(view === 'tickets')}><Ticket size={16} weight={view === 'tickets' ? 'fill' : 'regular'} /> Tickets</button>
       <button onClick={() => onSelectGlobal('braindump')} className={item(view === 'braindump')}><Brain size={16} weight={view === 'braindump' ? 'fill' : 'regular'} /> Braindump</button>
+      <button onClick={() => onSelectGlobal('assistant')} className={item(view === 'assistant')}><ChatCircle size={16} weight={view === 'assistant' ? 'fill' : 'regular'} /> Assistant</button>
 
       {/* Management group, right-aligned */}
       <div className="ml-auto flex items-center gap-1.5">
