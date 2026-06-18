@@ -10,6 +10,7 @@ import type { Project, TaskPriority } from '@nexus/shared';
 import { parseGitHubRepo, detectGitRemote } from './repo.js';
 import { fetchOpenIssues } from './client.js';
 import { resolveGitHubToken } from './token.js';
+import { ActivityEvent } from '../activity/events.js';
 
 const THROTTLE_MS = 3 * 60 * 1000; // at most one network sync per project per 3 min
 const lastSyncAt = new Map<string, number>();
@@ -77,6 +78,7 @@ export interface SyncOptions {
   token?: string;
   fetchImpl?: typeof fetch;
   now?: () => number;
+  emit?: (event: ActivityEvent) => void;
 }
 
 /**
@@ -107,18 +109,37 @@ export async function syncGitHubIssues(
 ): Promise<SyncResult> {
   const now = opts.now ?? (() => Date.now());
   const fetchImpl = opts.fetchImpl ?? fetch;
+  const emit = opts.emit;
+  const operationId = crypto.randomUUID();
 
   const ref = parseGitHubRepo(project.git_remote || '');
   if (!ref) return { created: 0, total: 0, skippedThrottle: false };
 
+  emit?.({
+    type: 'start',
+    operationId,
+    kind: 'github_sync',
+    title: `GitHub sync · ${project.name}`,
+    projectId: project.id,
+  });
+
   const last = lastSyncAt.get(project.id);
   if (last !== undefined && now() - last < THROTTLE_MS) {
+    emit?.({
+      type: 'stop',
+      operationId,
+      kind: 'github_sync',
+      title: `GitHub sync · ${project.name}`,
+      status: 'succeeded',
+      diagnostics: { skippedThrottle: true },
+    });
     return { created: 0, total: 0, skippedThrottle: true };
   }
   lastSyncAt.set(project.id, now());
 
-  const token = opts.token ?? await resolveGitHubToken();
-  const issues = await fetchOpenIssues(ref, token, fetchImpl);
+  try {
+    const token = opts.token ?? await resolveGitHubToken();
+    const issues = await fetchOpenIssues(ref, token, fetchImpl);
 
   const existing = db.prepare(
     "SELECT 1 FROM tasks WHERE project_id = ? AND external_source = 'github' AND external_id = ?",
@@ -142,7 +163,26 @@ export async function syncGitHubIssues(
       created++;
     }
   });
-  insertNew(issues);
-
-  return { created, total: issues.length, skippedThrottle: false };
+    insertNew(issues);
+    const result = { created, total: issues.length, skippedThrottle: false };
+    emit?.({
+      type: 'stop',
+      operationId,
+      kind: 'github_sync',
+      title: `GitHub sync · ${project.name}`,
+      status: 'succeeded',
+      diagnostics: result,
+    });
+    return result;
+  } catch (err: any) {
+    emit?.({
+      type: 'stop',
+      operationId,
+      kind: 'github_sync',
+      title: `GitHub sync · ${project.name}`,
+      status: 'failed',
+      error: err?.message ?? 'GitHub sync failed',
+    });
+    throw err;
+  }
 }
