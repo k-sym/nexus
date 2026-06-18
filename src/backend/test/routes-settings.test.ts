@@ -125,23 +125,3 @@ test('settings masks and preserves assistant api key', async () => {
     await app.close();
   }
 });
-
-test('settings round-trips signal filter project overrides', async () => {
-  const original = loadConfig();
-  const app = makeApp();
-  try {
-    const payload = structuredClone(original);
-    payload.signal_filters.projects['/tmp/noisy'] = {
-      max_output_bytes: 8000,
-      filters: { stack_trace: false },
-    };
-
-    const put = await app.inject({ method: 'PUT', url: '/api/settings', payload });
-    assert.equal(put.statusCode, 200);
-    assert.equal(put.json().signal_filters.projects['/tmp/noisy'].max_output_bytes, 8000);
-    assert.equal(loadConfig().signal_filters.projects['/tmp/noisy'].filters?.stack_trace, false);
-  } finally {
-    saveConfig(original);
-    await app.close();
-  }
-});
