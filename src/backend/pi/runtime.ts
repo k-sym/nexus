@@ -10,7 +10,7 @@
 import { mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import type { AgentSession } from '@earendil-works/pi-coding-agent';
+import type { AgentSession, ExtensionFactory } from '@earendil-works/pi-coding-agent';
 import {
   AuthStorage,
   ModelRegistry,
@@ -23,7 +23,7 @@ type ResourceLoaderOptions = {
   agentDir: string;
   settingsManager: unknown;
   noExtensions?: boolean;
-  extensionFactories?: unknown[];
+  extensionFactories?: ExtensionFactory[];
 };
 
 /**
@@ -64,12 +64,12 @@ export function cwdSlug(repoPath: string): string {
 }
 
 export function buildResourceLoaderOptions(
-  options: Pick<ResourceLoaderOptions, 'cwd' | 'agentDir' | 'settingsManager'>,
+  options: Pick<ResourceLoaderOptions, 'cwd' | 'agentDir' | 'settingsManager' | 'extensionFactories'>,
 ): ResourceLoaderOptions {
   return {
     ...options,
     noExtensions: true,
-    extensionFactories: [anthropicMessagesBridge],
+    extensionFactories: [anthropicMessagesBridge, ...(options.extensionFactories ?? [])],
   };
 }
 
@@ -148,12 +148,14 @@ export class PiRuntime {
     // (avoids top-level CJS resolution failures in tsx when the workspace
     // doesn't set type:module).
     const { SessionManager, SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
+    const { createSignalFilterExtension } = await import('../signal-filters/extension.js');
     const sessionManager = SessionManager.create(cwd, this.sessionDirFor(cwd), { id: threadId });
     const settingsManager = SettingsManager.inMemory();
     const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
+      extensionFactories: [createSignalFilterExtension(cwd)],
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({
