@@ -736,6 +736,42 @@ test('GET /api/threads/:threadId preserves image attachments from Pi user entrie
   }
 });
 
+test('GET /api/threads/:threadId returns raw tool output with signal-filter savings', async () => {
+  const raw = [
+    ...Array.from({ length: 500 }, (_, index) => `✓ passes case ${index + 1}`),
+    'Tests: 500 passed',
+  ].join('\n');
+  const runtime = {
+    readMessages: async () => [
+      { type: 'message', id: 'a1', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'npm test' } }] } },
+      { type: 'message', id: 't1', message: { role: 'toolResult', toolCallId: 'call-1', toolName: 'bash', isError: false, content: [{ type: 'text', text: raw }] } },
+    ],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+    assert.equal(res.statusCode, 200);
+    const message = res.json().messages.find((item: any) => item.role === 'toolResult');
+    assert.equal(message.content, raw);
+    assert.equal(message.signal_filter.input_bytes, Buffer.byteLength(raw));
+    assert.ok(message.signal_filter.output_bytes < message.signal_filter.input_bytes);
+    assert.equal(
+      message.signal_filter.saved_bytes,
+      message.signal_filter.input_bytes - message.signal_filter.output_bytes,
+    );
+    assert.ok(message.signal_filter.applied_filters.includes('test_output'));
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/threads/:threadId falls back to DB messages when no Pi session exists', async () => {
   const runtime = {
     readMessages: async () => [],
@@ -952,10 +988,16 @@ test('POST /api/threads/:id/abort returns no_run when nothing is in flight', asy
 test('archiveThreadToMemory summarizes, stores memory, deletes the thread, and drops pi session files', async () => {
   const stored: any[] = [];
   const dropped: Array<{ threadId: string; cwd: string }> = [];
+  const noisyTestOutput = [
+    ...Array.from({ length: 500 }, (_, index) => `✓ passes case ${index + 1}`),
+    'Tests: 500 passed',
+  ].join('\n');
   const { archiveThreadToMemory } = await import('../sessions/archive');
   const { app, db, dir } = makeApp({
     readMessages: async () => [
       { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'We need archive sessions.' }] } },
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'npm test' } }] } },
+      { type: 'message', message: { role: 'toolResult', toolCallId: 'call-1', toolName: 'bash', isError: false, content: [{ type: 'text', text: noisyTestOutput }] } },
       { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Decision: archive writes memory before deleting.' }] } },
     ],
     dropSession: (threadId: string, cwd: string) => dropped.push({ threadId, cwd }),
@@ -968,8 +1010,26 @@ test('archiveThreadToMemory summarizes, stores memory, deletes the thread, and d
     const result = await archiveThreadToMemory(db, app.pi, 'thread-1', {
       summarize: async (input) => {
         assert.match(input.transcript, /archive sessions/);
+        assert.match(input.transcript, /TOOL bash \(npm test\)/);
+        assert.match(input.transcript, /Tests: 500 passed/);
+        assert.doesNotMatch(input.transcript, /passes case 499/);
+        assert.ok(input.transcript.length < 30_000);
         return 'Archive sessions should preserve decisions in memory before deleting the source chat.';
       },
+      resolveFilters: () => ({
+        enabled: true,
+        min_input_bytes: 1,
+        max_output_bytes: 12_000,
+        filters: {
+          ansi: true,
+          progress: true,
+          repeated_lines: true,
+          package_manager: true,
+          test_output: true,
+          stack_trace: true,
+          diff_context: true,
+        },
+      }),
       storeMemory: async (input) => {
         stored.push(input);
         return { id: 'memory-1' };

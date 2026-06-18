@@ -3,6 +3,8 @@ import type { ChatThread, Project } from '@nexus/shared';
 import type { PiRuntime } from '../pi/runtime.js';
 import { loadConfig, resolveEnvVars } from '../config.js';
 import { addMemory, type MemoryInput } from '../memory/index.js';
+import { resolveSignalFilterConfig, type ResolvedSignalFilterConfig } from '../signal-filters/config.js';
+import { projectToolResultMessages } from '../signal-filters/messages.js';
 
 export class ArchiveThreadError extends Error {
   constructor(readonly statusCode: number, message: string) {
@@ -19,6 +21,7 @@ interface TranscriptMessage {
 interface ArchiveDeps {
   summarize?: (input: { thread: ChatThread; project: Project; transcript: string }) => Promise<string>;
   storeMemory?: (input: MemoryInput) => Promise<{ id: string } | null>;
+  resolveFilters?: (repoPath: string) => ResolvedSignalFilterConfig;
 }
 
 export async function archiveThreadToMemory(
@@ -33,7 +36,9 @@ export async function archiveThreadToMemory(
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(thread.project_id) as Project | undefined;
   if (!project) throw new ArchiveThreadError(404, 'Project not found');
 
-  const transcript = await loadTranscript(db, pi, thread.id, project.repo_path);
+  const resolveFilters = deps.resolveFilters
+    ?? ((repoPath: string) => resolveSignalFilterConfig(loadConfig(), repoPath));
+  const transcript = await loadTranscript(db, pi, thread.id, project.repo_path, resolveFilters);
   if (!hasMeaningfulTranscript(transcript)) {
     throw new ArchiveThreadError(400, 'Session has no meaningful chat history to archive');
   }
@@ -66,22 +71,52 @@ async function loadTranscript(
   pi: Pick<PiRuntime, 'readMessages'>,
   threadId: string,
   cwd: string,
+  resolveFilters: (repoPath: string) => ResolvedSignalFilterConfig,
 ): Promise<string> {
   let messages: TranscriptMessage[] = [];
   try {
-    messages = entriesToTranscriptMessages(await pi.readMessages(threadId, cwd));
+    const entries = await pi.readMessages(threadId, cwd);
+    try {
+      messages = entriesToTranscriptMessages(entries, cwd, resolveFilters(cwd));
+    } catch {
+      messages = entriesToTranscriptMessages(entries);
+    }
   } catch (err: any) {
     console.error(`[archive] failed to read pi session ${threadId}:`, err?.message);
   }
   if (messages.length === 0) messages = dbTranscriptMessages(db, threadId);
-  return messages.map((message) => `${message.role.toUpperCase()}: ${message.text}`).join('\n\n').slice(0, 30000);
+  return messages
+    .map((message) => `${message.role.startsWith('TOOL ') ? message.role : message.role.toUpperCase()}: ${message.text}`)
+    .join('\n\n')
+    .slice(0, 30000);
 }
 
-function entriesToTranscriptMessages(entries: unknown[]): TranscriptMessage[] {
+function entriesToTranscriptMessages(
+  entries: unknown[],
+  cwd = '',
+  config?: ResolvedSignalFilterConfig,
+): TranscriptMessage[] {
+  const sourceMessages = (entries as Array<{ message?: unknown }>).map((entry) => entry.message).filter(Boolean);
+  const projection = config
+    ? projectToolResultMessages(sourceMessages, cwd, config)
+    : { messages: sourceMessages, resultsByToolCallId: new Map() };
   const messages: TranscriptMessage[] = [];
-  for (const entry of entries as Array<{ message?: { role?: string; content?: unknown } }>) {
-    const message = entry.message;
+  for (const message of projection.messages as Array<{
+    role?: string;
+    content?: unknown;
+    toolCallId?: string;
+    toolName?: string;
+  }>) {
     if (!message?.role) continue;
+    if (message.role === 'toolResult') {
+      const projected = projection.resultsByToolCallId.get(String(message.toolCallId));
+      const text = projected?.filteredText ?? contentToText(message.content).trim();
+      if (!text) continue;
+      const command = projected?.context.command;
+      const label = `TOOL ${message.toolName ?? 'unknown'}${command ? ` (${command})` : ''}`;
+      messages.push({ role: label, text });
+      continue;
+    }
     const text = contentToText(message.content).trim();
     if (text) messages.push({ role: message.role, text });
   }

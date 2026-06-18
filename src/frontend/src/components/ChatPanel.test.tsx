@@ -542,4 +542,64 @@ describe('ChatPanel', () => {
     const image = await screen.findByAltText('screen.png');
     expect(image).toHaveAttribute('src', 'data:image/png;base64,abc123');
   });
+
+  it('shows signal-filter savings and reveals raw tool output in details mode', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({
+            thread: { id: 't1' },
+            messages: [
+              {
+                id: 'tool-1',
+                role: 'toolResult',
+                toolName: 'bash',
+                content: 'RAW_TOOL_OUTPUT',
+                timestamp: 1,
+                signal_filter: {
+                  input_bytes: 1000,
+                  output_bytes: 320,
+                  saved_bytes: 680,
+                  saved_percent: 68,
+                  applied_filters: ['test_output', 'repeated_lines'],
+                },
+              },
+              {
+                id: 'tool-2',
+                role: 'toolResult',
+                toolName: 'read',
+                content: 'UNCHANGED_OUTPUT',
+                timestamp: 2,
+              },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+
+    const indicator = await screen.findByText('Model context: 68% smaller');
+    expect(indicator).toHaveAttribute('title', 'Applied filters: test_output, repeated_lines');
+    expect(screen.queryByText('RAW_TOOL_OUTPUT')).not.toBeInTheDocument();
+    expect(screen.getAllByText(/Model context:.*smaller/)).toHaveLength(1);
+
+    fireEvent.keyDown(window, { key: 'o', ctrlKey: true });
+    expect(await screen.findByText('RAW_TOOL_OUTPUT')).toBeInTheDocument();
+    expect(screen.getByText('UNCHANGED_OUTPUT')).toBeInTheDocument();
+  });
 });

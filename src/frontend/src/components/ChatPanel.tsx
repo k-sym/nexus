@@ -673,10 +673,25 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
           </div>
         )}
         {isTool ? (
-          <span>
-            <code className="text-faint">{msg.toolName}</code>
-            {msg.isError ? ' (error)' : ''}
-          </span>
+          <div>
+            <span>
+              <code className="text-faint">{msg.toolName}</code>
+              {msg.isError ? ' (error)' : ''}
+            </span>
+            {msg.signal_filter && msg.signal_filter.saved_bytes > 0 && (
+              <span
+                className="ml-2 text-[10px] text-emerald-400/80"
+                title={`Applied filters: ${msg.signal_filter.applied_filters.join(', ')}`}
+              >
+                Model context: {msg.signal_filter.saved_percent}% smaller
+              </span>
+            )}
+            {detailsExpanded && msg.content && (
+              <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-400/80">
+                {msg.content}
+              </pre>
+            )}
+          </div>
         ) : (
           <p className="whitespace-pre-wrap">{msg.content}</p>
         )}

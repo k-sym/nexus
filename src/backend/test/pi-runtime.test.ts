@@ -138,14 +138,19 @@ test('PiRuntime.dropSession is a no-op for a thread that has no file on disk', a
 
 test('buildResourceLoaderOptions includes the Anthropic Messages bridge factory', async () => {
   const { SettingsManager } = await import('@earendil-works/pi-coding-agent');
+  const customFactory = () => {};
+  const inputFactories = [customFactory];
   const options = buildResourceLoaderOptions({
     cwd: '/tmp/project',
     agentDir: '/tmp/nexus-agent',
     settingsManager: SettingsManager.inMemory(),
+    extensionFactories: inputFactories,
   });
 
   assert.equal(options.noExtensions, true);
-  assert.ok(options.extensionFactories?.length, 'expected at least one inline extension factory');
+  assert.equal(options.extensionFactories?.length, 2);
+  assert.strictEqual(options.extensionFactories?.[1], customFactory);
+  assert.deepEqual(inputFactories, [customFactory], 'input extension array remains unchanged');
 });
 
 test('PiRuntime.findModel exposes model input capabilities', () => {
