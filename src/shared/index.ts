@@ -102,6 +102,31 @@ export interface ChatThread {
   archived_at: string | null;
 }
 
+export interface SignalFilterFlags {
+  ansi: boolean;
+  progress: boolean;
+  repeated_lines: boolean;
+  package_manager: boolean;
+  test_output: boolean;
+  stack_trace: boolean;
+  diff_context: boolean;
+}
+
+export interface SignalFilterProjectOverride {
+  enabled?: boolean;
+  min_input_bytes?: number;
+  max_output_bytes?: number;
+  filters?: Partial<SignalFilterFlags>;
+}
+
+export interface SignalFilterConfig {
+  enabled: boolean;
+  min_input_bytes: number;
+  max_output_bytes: number;
+  filters: SignalFilterFlags;
+  projects: Record<string, SignalFilterProjectOverride>;
+}
+
 export interface NexusConfig {
   server: { port: number };
   models: {
@@ -123,6 +148,7 @@ export interface NexusConfig {
     /** Supports ${ASSISTANT_API_KEY}; raw values are masked by settings routes. */
     api_key: string;
   };
+  signal_filters: SignalFilterConfig;
   memory: {
     // The standalone @nexus/memory-daemon (markdown-canonical vault + index).
     daemon_url: string;

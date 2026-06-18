@@ -29,6 +29,21 @@ const DEFAULT_CONFIG: NexusConfig = {
     url: '',
     api_key: '${ASSISTANT_API_KEY}',
   },
+  signal_filters: {
+    enabled: true,
+    min_input_bytes: 4096,
+    max_output_bytes: 12000,
+    filters: {
+      ansi: true,
+      progress: true,
+      repeated_lines: true,
+      package_manager: true,
+      test_output: true,
+      stack_trace: true,
+      diff_context: true,
+    },
+    projects: {},
+  },
   memory: {
     daemon_url: 'http://127.0.0.1:4100',
     auto_inject: {
