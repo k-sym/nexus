@@ -151,6 +151,25 @@ function runMigrations(db: Database.Database) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS operations (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      status TEXT NOT NULL,
+      title TEXT NOT NULL DEFAULT '',
+      project_id TEXT,
+      task_id TEXT,
+      thread_id TEXT,
+      provider TEXT,
+      model TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      duration_ms INTEGER DEFAULT 0,
+      usage_json TEXT,
+      last_event TEXT,
+      error TEXT,
+      diagnostics_json TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_chat_threads_project ON chat_threads(project_id);
@@ -161,6 +180,11 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
     CREATE INDEX IF NOT EXISTS idx_braindump_status ON braindump_ideas(status);
     CREATE INDEX IF NOT EXISTS idx_assistant_messages_created ON assistant_messages(created_at);
+    CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status);
+    CREATE INDEX IF NOT EXISTS idx_operations_kind ON operations(kind);
+    CREATE INDEX IF NOT EXISTS idx_operations_started_at ON operations(started_at);
+    CREATE INDEX IF NOT EXISTS idx_operations_project_id ON operations(project_id);
+    CREATE INDEX IF NOT EXISTS idx_operations_thread_id ON operations(thread_id);
   `);
 
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
