@@ -113,6 +113,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
   const pi = fastify.pi;
   const concurrency = fastify.chatConcurrency;
+  (fastify as any).activeChatStreams = activeStreams;
 
   fastify.get('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
@@ -175,8 +176,8 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       reply.code(404);
       return { error: 'Thread not found' };
     }
-    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(thread.project_id) as
-      | { repo_path: string }
+    const project = db.prepare('SELECT name, repo_path FROM projects WHERE id = ?').get(thread.project_id) as
+      | { name: string; repo_path: string }
       | undefined;
     const cwd = project?.repo_path || process.cwd();
     const attachmentsResult = validateChatAttachments(body.attachments, body.images);
@@ -279,6 +280,19 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       }
     };
 
+    const operationId = uuid();
+    let streamError: string | undefined;
+    fastify.activity.bus.emit({
+      type: 'start',
+      operationId,
+      kind: 'chat_turn',
+      title: `${project?.name ?? 'unknown'} / ${thread.title}`,
+      projectId: thread.project_id,
+      threadId,
+      provider: selectedModel?.provider ?? 'default',
+      model: selectedModel?.id ?? body.modelKey ?? 'default',
+    });
+
     const persistUserTurn = db.prepare(
       'INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, message_type, structured_json, thinking, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
@@ -311,15 +325,35 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           await session.prompt(promptContent);
         }
         const contextUsage = safeContextUsage(session);
-        if (contextUsage) write({ type: 'context_usage', usage: contextUsage });
+        if (contextUsage) {
+          write({ type: 'context_usage', usage: contextUsage });
+          fastify.activity.bus.emit({
+            type: 'update',
+            operationId,
+            kind: 'chat_turn',
+            title: `${project?.name ?? 'unknown'} / ${thread.title}`,
+            usage: contextUsage,
+            lastEvent: 'context_usage',
+          });
+        }
         subscription();
       }
       write({ kind: 'done' });
     } catch (err: any) {
-      write({ kind: 'error', error: err?.message || 'prompt failed' });
+      const isAbort = err?.name === 'AbortError';
+      streamError = isAbort ? 'aborted' : (err?.message || 'prompt failed');
+      write({ kind: 'error', error: streamError });
     } finally {
       activeStreams.delete(threadId);
       concurrency.clear(thread.project_id, modelKey);
+      fastify.activity.bus.emit({
+        type: 'stop',
+        operationId,
+        kind: 'chat_turn',
+        title: `${project?.name ?? 'unknown'} / ${thread.title}`,
+        status: streamError === 'aborted' ? 'cancelled' : streamError ? 'failed' : 'succeeded',
+        error: streamError,
+      });
       reply.raw.end();
     }
   });
@@ -364,9 +398,42 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
   fastify.post('/api/threads/:threadId/archive', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    const project = thread
+      ? (db.prepare('SELECT name FROM projects WHERE id = ?').get(thread.project_id) as { name: string } | undefined)
+      : undefined;
+    const operationId = uuid();
+    fastify.activity.bus.emit({
+      type: 'start',
+      operationId,
+      kind: 'memory_archive',
+      title: `${project?.name ?? 'unknown'} / ${thread?.title ?? threadId}`,
+      projectId: thread?.project_id ?? null,
+      threadId,
+      provider: 'local',
+      model: 'llama-3.1',
+    });
     try {
-      return await archiveThreadToMemory(db, pi, threadId);
+      const result = await archiveThreadToMemory(db, pi, threadId);
+      fastify.activity.bus.emit({
+        type: 'stop',
+        operationId,
+        kind: 'memory_archive',
+        title: `${project?.name ?? 'unknown'} / ${thread?.title ?? threadId}`,
+        status: 'succeeded',
+        diagnostics: { memoryId: result.memoryId },
+      });
+      return result;
     } catch (err: any) {
+      const message = err instanceof ArchiveThreadError ? err.message : (err?.message || 'Archive failed');
+      fastify.activity.bus.emit({
+        type: 'stop',
+        operationId,
+        kind: 'memory_archive',
+        title: `${project?.name ?? 'unknown'} / ${thread?.title ?? threadId}`,
+        status: 'failed',
+        error: message,
+      });
       if (err instanceof ArchiveThreadError) {
         reply.code(err.statusCode);
         return { error: err.message };
