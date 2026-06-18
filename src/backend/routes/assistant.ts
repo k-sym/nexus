@@ -109,6 +109,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig) {
     const controller = new AbortController();
     activeAssistantAbort = controller;
     let assistantText = '';
+    const operationId = uuid();
+    fastify.activity?.bus.emit({
+      type: 'start',
+      operationId,
+      kind: 'assistant_stream',
+      title: 'Assistant',
+      provider: 'assistant',
+      model: 'assistant',
+    });
 
     try {
       const response = await fetch(assistantEndpoint(url), {
@@ -149,9 +158,25 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig) {
       }
       if (assistantText) appendMessage(db, 'assistant', assistantText);
       write({ type: 'complete' });
+      fastify.activity?.bus.emit({
+        type: 'stop',
+        operationId,
+        kind: 'assistant_stream',
+        title: 'Assistant',
+        status: 'succeeded',
+      });
     } catch (err: any) {
-      const message = err?.name === 'AbortError' ? 'Assistant request aborted.' : err?.message || 'Assistant request failed.';
+      const isAbort = err?.name === 'AbortError';
+      const message = isAbort ? 'Assistant request aborted.' : err?.message || 'Assistant request failed.';
       write({ type: 'error', error: message });
+      fastify.activity?.bus.emit({
+        type: 'stop',
+        operationId,
+        kind: 'assistant_stream',
+        title: 'Assistant',
+        status: isAbort ? 'cancelled' : 'failed',
+        error: message,
+      });
     } finally {
       if (activeAssistantAbort === controller) activeAssistantAbort = null;
       reply.raw.end();

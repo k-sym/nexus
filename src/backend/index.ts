@@ -24,8 +24,10 @@ import { registerBraindumpRoutes } from './routes/braindump.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
+import { registerActivityRoutes } from './routes/activity.js';
 import { initMemorySystem } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
+import { ActivityManager } from './activity/manager.js';
 import { PiRuntime } from './pi/runtime.js';
 import { ConcurrencyTracker } from './pi/concurrency.js';
 import { ModelCurationStore } from './pi/model-curation.js';
@@ -46,7 +48,9 @@ async function main() {
   }
 
   await initMemorySystem(db);
-  startJiraSync(db);
+  const activityManager = new ActivityManager(db);
+  const stopActivityListening = activityManager.startListening();
+  startJiraSync(db, activityManager);
 
   const app = Fastify({ logger: false });
 
@@ -62,6 +66,7 @@ async function main() {
   app.decorate('chatConcurrency', new ConcurrencyTracker());
   app.decorate('modelCuration', modelCuration);
   app.decorate('oauthFlows', new OAuthFlowManager(pi.auth));
+  app.decorate('activity', activityManager);
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
@@ -75,6 +80,7 @@ async function main() {
   app.register(registerNotificationRoutes);
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
+  app.register(registerActivityRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 

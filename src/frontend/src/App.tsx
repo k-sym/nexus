@@ -18,8 +18,10 @@ import ProjectModal from './components/ProjectModal';
 import TaskModal from './components/TaskModal';
 import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
+import ActivityConsole from './components/ActivityConsole';
+import type { ActivityResponse } from './api';
 
-type GlobalView = 'dashboard' | 'tickets' | 'braindump' | 'assistant' | 'settings';
+type GlobalView = 'dashboard' | 'activity' | 'tickets' | 'braindump' | 'assistant' | 'settings';
 
 /** A task-seeded first turn handed to ChatPanel once the run-task chat opens. */
 interface TaskSeed {
@@ -53,6 +55,8 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
+  const [activity, setActivity] = useState<ActivityResponse | null>(null);
+  const [activityLoading, setActivityLoading] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [taskPicker, setTaskPicker] = useState<{ taskId: string; title: string } | null>(null);
   const [taskSeed, setTaskSeed] = useState<TaskSeed | null>(null);
@@ -81,6 +85,23 @@ export default function App() {
     const interval = setInterval(loadStatus, 15000);
     return () => clearInterval(interval);
   }, [loadStatus]);
+
+  const loadActivity = useCallback(async () => {
+    setActivityLoading(true);
+    try {
+      setActivity(await api.activity.list());
+    } catch (err) {
+      console.error('Failed to load activity:', err);
+    } finally {
+      setActivityLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadActivity();
+    const interval = setInterval(loadActivity, 15000);
+    return () => clearInterval(interval);
+  }, [loadActivity]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -397,6 +418,33 @@ export default function App() {
     selectThread(projectId, thread.id);
   };
 
+  const handleAbortActivity = useCallback(async (id: string) => {
+    try {
+      await api.activity.abort(id);
+      await loadActivity();
+    } catch (err) {
+      console.error('Failed to abort operation:', err);
+    }
+  }, [loadActivity]);
+
+  const handleRetryActivity = useCallback(async (id: string) => {
+    try {
+      await api.activity.retry(id);
+      await loadActivity();
+    } catch (err) {
+      console.error('Failed to retry operation:', err);
+    }
+  }, [loadActivity]);
+
+  const handleCopyActivityDiagnostics = useCallback(async (id: string) => {
+    try {
+      const d = await api.activity.diagnostics(id);
+      await navigator.clipboard.writeText(JSON.stringify(d, null, 2));
+    } catch (err) {
+      console.error('Failed to copy diagnostics:', err);
+    }
+  }, []);
+
   const handleSessionActivityChange = useCallback((threadId: string, active: boolean) => {
     setActiveSessionIds((current) => {
       const next = new Set(current);
@@ -410,6 +458,7 @@ export default function App() {
   const commands: Command[] = useMemo(() => {
     const cmds: Command[] = [
       { id: 'view-dashboard', label: 'Dashboard', hint: 'View', keywords: 'mission control', run: () => selectGlobal('dashboard') },
+      { id: 'view-activity', label: 'Activity Console', hint: 'View', keywords: 'operations running recent', run: () => selectGlobal('activity') },
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
       { id: 'view-braindump', label: 'Braindump', hint: 'View', keywords: 'ideas capture', run: () => selectGlobal('braindump') },
       { id: 'view-assistant', label: 'Assistant', hint: 'View', keywords: 'hermes openclaw remote chat', run: () => selectGlobal('assistant') },
@@ -433,6 +482,22 @@ export default function App() {
     if (globalView === 'settings') return <SettingsPage />;
     if (globalView === 'dashboard')
       return <MissionControl status={status} loading={statusLoading} onRefresh={loadStatus} onSelectAgent={() => {}} />;
+    if (globalView === 'activity')
+      return (
+        <ActivityConsole
+          operations={activity}
+          loading={activityLoading}
+          projects={projects}
+          tasks={tasks}
+          threads={threadMetas}
+          onRefresh={loadActivity}
+          onSelectProject={focusProject}
+          onSelectThread={selectThread}
+          onAbort={handleAbortActivity}
+          onRetry={handleRetryActivity}
+          onCopyDiagnostics={handleCopyActivityDiagnostics}
+        />
+      );
     if (globalView === 'tickets')
       return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
     if (globalView === 'braindump')

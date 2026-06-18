@@ -47,6 +47,41 @@ export interface ModelsResponse {
   customized: boolean;
 }
 
+export type OperationKind = 'chat_turn' | 'assistant_stream' | 'jira_sync' | 'github_sync' | 'memory_archive' | 'memory_index';
+export type OperationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface Operation {
+  id: string;
+  kind: OperationKind;
+  status: OperationStatus;
+  title: string;
+  project_id: string | null;
+  task_id: string | null;
+  thread_id: string | null;
+  provider: string | null;
+  model: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number;
+  usage?: unknown;
+  last_event: string | null;
+  error: string | null;
+  diagnostics?: unknown;
+}
+
+export interface ActivityResponse {
+  running: Operation[];
+  recent: Operation[];
+  counts: Record<string, number>;
+}
+
+function qs(params: Record<string, string | number | undefined>): string {
+  const sp = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined) sp.set(k, String(v));
+  const s = sp.toString();
+  return s ? `?${s}` : '';
+}
+
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
   // Only send a JSON content-type when there's actually a body — otherwise
   // Fastify rejects no-body DELETE/POST requests with 400 ("body cannot be empty").
@@ -145,5 +180,14 @@ export const api = {
     create: (projectId: string, data: { content: string; category?: string; agent_id?: string }) =>
       fetchJson<any>(`/api/projects/${projectId}/memories`, { method: 'POST', body: JSON.stringify(data) }),
     delete: (id: string) => fetchJson<void>(`/api/memories/${id}`, { method: 'DELETE' }),
+  },
+  activity: {
+    list: (params?: { status?: string; kind?: string; limit?: number }) =>
+      fetchJson<ActivityResponse>(`/api/activity${qs(params ?? {})}`),
+    get: (id: string) => fetchJson<Operation>(`/api/activity/${id}`),
+    abort: (id: string) => fetchJson<{ ok: boolean }>(`/api/activity/${id}/abort`, { method: 'POST' }),
+    retry: (id: string) => fetchJson<{ ok: boolean }>(`/api/activity/${id}/retry`, { method: 'POST' }),
+    diagnostics: (id: string) =>
+      fetchJson<{ diagnostics?: unknown; lastEvent?: string; error?: string }>(`/api/activity/${id}/diagnostics`),
   },
 };

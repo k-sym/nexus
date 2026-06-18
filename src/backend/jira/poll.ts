@@ -10,6 +10,8 @@ import { loadConfig } from '../config.js';
 import { fetchJiraTickets, type JiraQueryConfig } from './client.js';
 import { syncTickets, type IncomingTicket, type SyncResult } from '../tickets/sync.js';
 import { insertNotification } from '../notifications/index.js';
+import { ActivityEvent } from '../activity/events.js';
+import { ActivityManager } from '../activity/manager.js';
 
 type JiraConfig = NexusConfig['jira'];
 type FetchTickets = (cfg: JiraQueryConfig, token: string) => Promise<IncomingTicket[]>;
@@ -24,8 +26,17 @@ export async function runJiraSyncOnce(
   jira: JiraConfig,
   token: string | undefined,
   fetchTickets: FetchTickets = (cfg, tok) => fetchJiraTickets(cfg, tok),
+  emit?: (event: ActivityEvent) => void,
 ): Promise<SyncResult | null> {
   if (!jira.enabled || !token) return null;
+
+  const operationId = crypto.randomUUID();
+  emit?.({
+    type: 'start',
+    operationId,
+    kind: 'jira_sync',
+    title: 'Jira sync',
+  });
 
   try {
     const tickets = await fetchTickets({ user: jira.user, instance: jira.instance, project: jira.project }, token);
@@ -39,6 +50,14 @@ export async function runJiraSyncOnce(
       return null;
     }
     const res = syncTickets(db, tickets, { source: 'nexus', replaceAll: true });
+    emit?.({
+      type: 'stop',
+      operationId,
+      kind: 'jira_sync',
+      title: 'Jira sync',
+      status: 'succeeded',
+      diagnostics: { inserted: res.inserted, updated: res.updated, removed: res.removed },
+    });
     if (res.inserted + res.updated + res.removed > 0) {
       insertNotification(db, {
         level: 'info',
@@ -48,7 +67,16 @@ export async function runJiraSyncOnce(
     }
     return res;
   } catch (err) {
-    insertNotification(db, { level: 'error', title: 'Jira sync failed', message: (err as Error).message });
+    const message = (err as Error).message;
+    emit?.({
+      type: 'stop',
+      operationId,
+      kind: 'jira_sync',
+      title: 'Jira sync',
+      status: 'failed',
+      error: message,
+    });
+    insertNotification(db, { level: 'error', title: 'Jira sync failed', message });
     return null;
   }
 }
@@ -57,7 +85,7 @@ export async function runJiraSyncOnce(
  * Start the poll. Reads config + JIRA_TOKEN once; if dormant, logs a single line
  * and does nothing. Otherwise runs immediately, then every poll_minutes.
  */
-export function startJiraSync(db: Database.Database): { stop: () => void } {
+export function startJiraSync(db: Database.Database, activity?: ActivityManager): { stop: () => void } {
   const jira = loadConfig().jira;
   const token = process.env.JIRA_TOKEN;
 
@@ -71,8 +99,9 @@ export function startJiraSync(db: Database.Database): { stop: () => void } {
   }
 
   const everyMs = Math.max(1, jira.poll_minutes) * 60_000;
+  const emit = activity?.bus.emit.bind(activity.bus);
   console.log(`[jira] poll started — ${jira.project} every ${jira.poll_minutes}m`);
-  void runJiraSyncOnce(db, jira, token);
-  const timer = setInterval(() => void runJiraSyncOnce(db, jira, token), everyMs);
+  void runJiraSyncOnce(db, jira, token, undefined, emit);
+  const timer = setInterval(() => void runJiraSyncOnce(db, jira, token, undefined, emit), everyMs);
   return { stop: () => clearInterval(timer) };
 }

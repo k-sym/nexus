@@ -195,7 +195,9 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     // git_remote gets detected from repo_path and persisted before syncing.
     const project = await ensureProjectGitRemote(db, existing);
     try {
-      const { created, total } = await syncGitHubIssues(db, project);
+      const { created, total } = await syncGitHubIssues(db, project, {
+        emit: fastify.activity?.bus.emit.bind(fastify.activity.bus),
+      });
       clearSyncError(id);
       return { created, total };
     } catch (err) {
