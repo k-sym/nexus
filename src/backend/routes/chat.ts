@@ -205,6 +205,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           }
           activeStreams.delete(busy.threadId);
         }
+        pi.questions?.cancelThread(busy.threadId, 'Cancelled by another thread');
         await new Promise((r) => setTimeout(r, ABORT_GRACE_MS));
         concurrency.clear(thread.project_id, modelKey);
       } else {
@@ -344,6 +345,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       write({ kind: 'done' });
     } catch (err: any) {
       const isAbort = err?.name === 'AbortError';
+      if (isAbort) pi.questions?.cancelThread(threadId, 'Stream aborted');
       streamError = isAbort ? 'aborted' : (err?.message || 'prompt failed');
       write({ kind: 'error', error: streamError });
     } finally {
@@ -369,6 +371,23 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       await existing.session.abort();
     } catch (err: any) {
       console.error(`[chat] failed to abort active thread ${threadId}:`, err?.message);
+    }
+    pi.questions?.cancelThread(threadId, 'Stream aborted');
+    return { ok: true };
+  });
+
+  fastify.post('/api/threads/:threadId/questions/:toolCallId/answer', async (request, reply) => {
+    const { threadId, toolCallId } = request.params as { threadId: string; toolCallId: string };
+    const thread = db.prepare('SELECT id FROM chat_threads WHERE id = ?').get(threadId);
+    if (!thread) {
+      reply.code(404);
+      return { error: 'Thread not found' };
+    }
+
+    const result = pi.questions.answer(threadId, toolCallId, request.body);
+    if (!result.ok) {
+      reply.code(result.status);
+      return { error: result.error };
     }
     return { ok: true };
   });
