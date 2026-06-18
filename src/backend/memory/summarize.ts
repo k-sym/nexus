@@ -13,6 +13,9 @@ import type { Project } from '@nexus/shared';
 import type { PiRuntime } from '../pi/runtime.js';
 import { addMemory } from './index.js';
 import { writeTaskSummary } from './obsidian.js';
+import { loadConfig } from '../config.js';
+import { resolveSignalFilterConfig, type ResolvedSignalFilterConfig } from '../signal-filters/config.js';
+import { projectToolResultMessages } from '../signal-filters/messages.js';
 
 interface TaskRow {
   id: string;
@@ -21,6 +24,10 @@ interface TaskRow {
   status: string;
   thread_id: string | null;
   model_key: string | null;
+}
+
+interface TaskSummaryDeps {
+  resolveFilters?: (repoPath: string) => ResolvedSignalFilterConfig;
 }
 
 /**
@@ -130,6 +137,7 @@ export async function summarizeTaskThread(
   db: Database.Database,
   pi: PiRuntime,
   task: TaskRow,
+  deps: TaskSummaryDeps = {},
 ): Promise<boolean> {
   if (!task.thread_id) return false;
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(task.project_id) as
@@ -142,6 +150,14 @@ export async function summarizeTaskThread(
     entries = await pi.readMessages(task.thread_id, project.repo_path);
   } catch (err: any) {
     console.error(`[summarize] failed to read thread ${task.thread_id}:`, err?.message);
+  }
+
+  try {
+    const resolveFilters = deps.resolveFilters
+      ?? ((repoPath: string) => resolveSignalFilterConfig(loadConfig(), repoPath));
+    entries = projectTaskSummaryEntries(entries, project.repo_path, resolveFilters(project.repo_path));
+  } catch {
+    // Fail open to the original entries. Extraction below still excludes tool results.
   }
 
   let output = extractAssistantText(entries);
@@ -167,4 +183,20 @@ export async function summarizeTaskThread(
   }
   console.log(`[summarize] task ${task.id} ("${task.title}") summarized to memory + Obsidian`);
   return true;
+}
+
+function projectTaskSummaryEntries(
+  entries: unknown[],
+  repoPath: string,
+  config: ResolvedSignalFilterConfig,
+): unknown[] {
+  const wrapped = entries as Array<{ message?: unknown }>;
+  const sourceMessages = wrapped.map((entry) => entry.message).filter(Boolean);
+  const projected = projectToolResultMessages(sourceMessages, repoPath, config).messages;
+  let messageIndex = 0;
+  return wrapped.map((entry) => {
+    if (!entry.message) return entry;
+    const message = projected[messageIndex++];
+    return message === entry.message ? entry : { ...entry, message };
+  });
 }

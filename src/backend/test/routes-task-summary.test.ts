@@ -61,6 +61,7 @@ function insertTask(db: Database.Database, overrides: Record<string, unknown> = 
 }
 
 test('extractAssistantText pulls assistant text blocks and ignores user/tool messages', () => {
+  const rawToolSpam = `SECRET_LOG_SPAM\n${'passing output\n'.repeat(2000)}`;
   const entries = [
     { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'do it' }] } },
     { type: 'message', message: { role: 'assistant', content: [
@@ -68,10 +69,12 @@ test('extractAssistantText pulls assistant text blocks and ignores user/tool mes
       { type: 'text', text: 'I decided to use a queue.' },
       { type: 'toolCall', name: 'Edit' },
     ] } },
-    { type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: 'ok' }] } },
+    { type: 'message', message: { role: 'toolResult', content: [{ type: 'text', text: rawToolSpam }] } },
     { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Done.' }] } },
   ];
-  assert.equal(extractAssistantText(entries), 'I decided to use a queue.\n\nDone.');
+  const extracted = extractAssistantText(entries);
+  assert.equal(extracted, 'I decided to use a queue.\n\nDone.');
+  assert.doesNotMatch(extracted, /SECRET_LOG_SPAM/);
 });
 
 test('PUT /api/tasks/:id persists thread_id, model_key and status on the in_progress transition', async () => {
