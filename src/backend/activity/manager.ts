@@ -23,9 +23,7 @@ export class ActivityManager {
     this.update = db.prepare(
       `UPDATE operations SET usage_json = ?, last_event = ?, error = ?, diagnostics_json = ? WHERE id = ?`,
     );
-    this.finish = db.prepare(
-      `UPDATE operations SET status = ?, completed_at = ?, duration_ms = ?, usage_json = ?, last_event = ?, error = ?, diagnostics_json = ? WHERE id = ?`,
-    );
+    // finish is built dynamically in handleStop so unspecified fields are preserved.
     this.sweep = db.prepare(
       `UPDATE operations SET status = 'cancelled', completed_at = ?, duration_ms = COALESCE(duration_ms, 0), error = COALESCE(error, '') || ' · process restarted' WHERE status = 'running'`,
     );
@@ -86,16 +84,29 @@ export class ActivityManager {
     const started = this.running.get(event.operationId)?.startedAt;
     const durationMs = started ? Date.now() - started : event.durationMs ?? 0;
     const now = new Date().toISOString();
-    this.finish.run(
-      event.status ?? 'succeeded',
-      now,
-      durationMs,
-      event.usage ? JSON.stringify(event.usage) : null,
-      event.lastEvent ?? null,
-      event.error ?? null,
-      event.diagnostics ? JSON.stringify(event.diagnostics) : null,
-      event.operationId,
-    );
+
+    const fields: string[] = ['status = ?', 'completed_at = ?', 'duration_ms = ?'];
+    const params: (string | number | null)[] = [event.status ?? 'succeeded', now, durationMs];
+
+    if (event.usage !== undefined) {
+      fields.push('usage_json = ?');
+      params.push(event.usage ? JSON.stringify(event.usage) : null);
+    }
+    if (event.lastEvent !== undefined) {
+      fields.push('last_event = ?');
+      params.push(event.lastEvent ?? null);
+    }
+    if (event.error !== undefined) {
+      fields.push('error = ?');
+      params.push(event.error ?? null);
+    }
+    if (event.diagnostics !== undefined) {
+      fields.push('diagnostics_json = ?');
+      params.push(event.diagnostics ? JSON.stringify(event.diagnostics) : null);
+    }
+    params.push(event.operationId);
+
+    this.db.prepare(`UPDATE operations SET ${fields.join(', ')} WHERE id = ?`).run(...params);
     this.running.delete(event.operationId);
   }
 
