@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   QuestionBroker,
+  createQuestionExtension,
   formatQuestionResult,
   normalizeQuestionRequest,
   validateQuestionAnswers,
@@ -182,4 +183,51 @@ test('question broker abort signals cancel registration and format results deter
   assert.equal(formatQuestionResult({
     status: 'answered', toolCallId: 'call-2', answers: [{ questionId: 'scope', selected: ['small'] }],
   }, validRequest()), 'Scope: Small\n\n{"toolCallId":"call-2","answers":[{"questionId":"scope","selected":["small"]}]}');
+});
+
+test('question extension registers a structured tool and waits for its broker answer', async () => {
+  const broker = new QuestionBroker();
+  let tool: any;
+  createQuestionExtension('thread-1', broker)({
+    registerTool(value: unknown) { tool = value; },
+  } as any);
+
+  assert.equal(tool.name, 'question');
+  assert.ok(tool.description.length > 0);
+  assert.equal(tool.parameters.type, 'object');
+
+  let settled = false;
+  const pending = tool.execute('call-1', validInput, undefined, undefined, {}).then((value: unknown) => {
+    settled = true;
+    return value;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+
+  assert.deepEqual(broker.answer('thread-1', 'call-1', {
+    answers: [{ questionId: 'scope', selected: ['small'] }],
+  }), { ok: true });
+  assert.deepEqual(await pending, {
+    content: [{
+      type: 'text',
+      text: 'Scope: Small\n\n{"toolCallId":"call-1","answers":[{"questionId":"scope","selected":["small"]}]}',
+    }],
+    details: {
+      status: 'answered',
+      toolCallId: 'call-1',
+      answers: [{ questionId: 'scope', selected: ['small'] }],
+    },
+  });
+});
+
+test('question extension reports invalid arguments as a tool error', async () => {
+  const broker = new QuestionBroker();
+  let tool: any;
+  createQuestionExtension('thread-1', broker)({
+    registerTool(value: unknown) { tool = value; },
+  } as any);
+
+  const result = await tool.execute('call-1', { questions: [] }, undefined, undefined, {});
+  assert.equal(result.isError, true);
+  assert.match(result.content[0].text, /questions must be a non-empty array/);
 });

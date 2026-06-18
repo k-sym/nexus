@@ -1,3 +1,6 @@
+import type { ExtensionFactory } from '@earendil-works/pi-coding-agent';
+import { Type } from 'typebox';
+
 export type ValidationResult<T> =
   | { ok: true; value: T }
   | { ok: false; error: string };
@@ -275,4 +278,50 @@ export class QuestionBroker {
   private key(threadId: string, toolCallId: string): string {
     return `${threadId}:${toolCallId}`;
   }
+}
+
+const QuestionOptionSchema = Type.Object({
+  value: Type.String({ description: 'Stable value returned when the option is selected' }),
+  label: Type.String({ description: 'Short user-facing option label' }),
+  description: Type.Optional(Type.String({ description: 'Optional explanation of the option' })),
+});
+
+const QuestionSchema = Type.Object({
+  id: Type.String({ description: 'Stable identifier for this question' }),
+  header: Type.String({ description: 'Short heading shown above the question' }),
+  question: Type.String({ description: 'The question to ask the user' }),
+  options: Type.Array(QuestionOptionSchema, { minItems: 2 }),
+  multiple: Type.Optional(Type.Boolean({ description: 'Allow more than one option to be selected' })),
+  allowOther: Type.Optional(Type.Boolean({ description: 'Allow a custom text answer' })),
+});
+
+const QuestionRequestSchema = Type.Object({
+  questions: Type.Array(QuestionSchema, { minItems: 1 }),
+});
+
+export function createQuestionExtension(threadId: string, broker: QuestionBroker): ExtensionFactory {
+  return (pi) => {
+    pi.registerTool({
+      name: 'question',
+      label: 'Question',
+      description: 'Ask the user one or more structured questions and wait for their answers before continuing.',
+      parameters: QuestionRequestSchema,
+      async execute(toolCallId, params, signal) {
+        const request = normalizeQuestionRequest(params);
+        if (!request.ok) {
+          return {
+            content: [{ type: 'text', text: `Invalid question request: ${request.error}` }],
+            details: { status: 'cancelled', toolCallId, error: request.error } satisfies QuestionToolResult,
+            isError: true,
+          };
+        }
+
+        const result = await broker.register(threadId, toolCallId, request.value, signal);
+        return {
+          content: [{ type: 'text', text: formatQuestionResult(result, request.value) }],
+          details: result,
+        };
+      },
+    });
+  };
 }
