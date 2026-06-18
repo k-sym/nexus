@@ -16,6 +16,9 @@ import { v4 as uuid } from 'uuid';
 import { ChatThread } from '@nexus/shared';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
+import { loadConfig } from '../config.js';
+import { resolveSignalFilterConfig } from '../signal-filters/config.js';
+import { projectToolResultMessages, type SignalProjection } from '../signal-filters/messages.js';
 
 const ABORT_GRACE_MS = 200;
 
@@ -150,7 +153,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | undefined;
     const cwd = project?.repo_path || process.cwd();
     const entries = await pi.readMessages(threadId, cwd);
-    return { thread, cwd, messages: entries.length > 0 ? flattenEntries(entries) : dbMessages(db, threadId) };
+    return { thread, cwd, messages: entries.length > 0 ? flattenEntries(entries, cwd) : dbMessages(db, threadId) };
   });
 
   // Backwards-compat alias — the old route returned just the messages.
@@ -163,7 +166,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | undefined;
     const cwd = project?.repo_path || process.cwd();
     const entries = await pi.readMessages(threadId, cwd);
-    return entries.length > 0 ? flattenEntries(entries) : dbMessages(db, threadId);
+    return entries.length > 0 ? flattenEntries(entries, cwd) : dbMessages(db, threadId);
   });
 
   fastify.post('/api/threads/:threadId/messages/stream', { bodyLimit: CHAT_STREAM_BODY_LIMIT_BYTES }, async (request, reply) => {
@@ -481,7 +484,15 @@ function safeContextUsage(session: Partial<Pick<AgentSession, 'getContextUsage'>
  * toolResult message. Tool calls and thinking blocks are extracted from
  * the assistant message's `content` array.
  */
-function flattenEntries(entries: unknown[]): unknown[] {
+export function flattenEntries(entries: unknown[], repoPath = process.cwd()): unknown[] {
+  let projections = new Map<string, SignalProjection>();
+  try {
+    const messages = (entries as Array<{ message?: unknown }>).map((entry) => entry.message).filter(Boolean);
+    const config = resolveSignalFilterConfig(loadConfig(), repoPath);
+    projections = projectToolResultMessages(messages, repoPath, config).resultsByToolCallId;
+  } catch {
+    // Telemetry is best-effort; history always returns raw output.
+  }
   const out: unknown[] = [];
   for (const e of entries as any[]) {
     if (e.type !== 'message') continue;
@@ -530,6 +541,10 @@ function flattenEntries(entries: unknown[]): unknown[] {
         timestamp: m.timestamp ?? e.timestamp,
       });
     } else if (m.role === 'toolResult') {
+      const projection = projections.get(String(m.toolCallId));
+      const savedBytes = projection
+        ? Math.max(0, projection.stats.inputBytes - projection.stats.outputBytes)
+        : 0;
       out.push({
         id: e.id,
         role: 'toolResult',
@@ -538,6 +553,15 @@ function flattenEntries(entries: unknown[]): unknown[] {
         content: extractText(m.content),
         isError: m.isError,
         timestamp: m.timestamp ?? e.timestamp,
+        ...(projection && savedBytes > 0 ? {
+          signal_filter: {
+            input_bytes: projection.stats.inputBytes,
+            output_bytes: projection.stats.outputBytes,
+            saved_bytes: savedBytes,
+            saved_percent: Math.round((savedBytes / projection.stats.inputBytes) * 100),
+            applied_filters: projection.appliedFilters,
+          },
+        } : {}),
       });
     }
   }

@@ -42,6 +42,14 @@ export interface ContextUsage {
   percent: number | null;
 }
 
+export interface SignalFilterTelemetry {
+  input_bytes: number;
+  output_bytes: number;
+  saved_bytes: number;
+  saved_percent: number;
+  applied_filters: string[];
+}
+
 export interface StreamMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'toolResult';
@@ -61,6 +69,7 @@ export interface StreamMessage {
   isError?: boolean;
   timestamp: number;
   isStreaming?: boolean;
+  signal_filter?: SignalFilterTelemetry;
 }
 
 export interface StreamState {

@@ -736,6 +736,42 @@ test('GET /api/threads/:threadId preserves image attachments from Pi user entrie
   }
 });
 
+test('GET /api/threads/:threadId returns raw tool output with signal-filter savings', async () => {
+  const raw = [
+    ...Array.from({ length: 500 }, (_, index) => `✓ passes case ${index + 1}`),
+    'Tests: 500 passed',
+  ].join('\n');
+  const runtime = {
+    readMessages: async () => [
+      { type: 'message', id: 'a1', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'npm test' } }] } },
+      { type: 'message', id: 't1', message: { role: 'toolResult', toolCallId: 'call-1', toolName: 'bash', isError: false, content: [{ type: 'text', text: raw }] } },
+    ],
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+    assert.equal(res.statusCode, 200);
+    const message = res.json().messages.find((item: any) => item.role === 'toolResult');
+    assert.equal(message.content, raw);
+    assert.equal(message.signal_filter.input_bytes, Buffer.byteLength(raw));
+    assert.ok(message.signal_filter.output_bytes < message.signal_filter.input_bytes);
+    assert.equal(
+      message.signal_filter.saved_bytes,
+      message.signal_filter.input_bytes - message.signal_filter.output_bytes,
+    );
+    assert.ok(message.signal_filter.applied_filters.includes('test_output'));
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/threads/:threadId falls back to DB messages when no Pi session exists', async () => {
   const runtime = {
     readMessages: async () => [],
