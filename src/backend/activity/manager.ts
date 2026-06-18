@@ -12,7 +12,6 @@ export class ActivityManager {
   private readonly running = new Map<string, RunningOperation>();
   private readonly insert: Database.Statement;
   private readonly update: Database.Statement;
-  private readonly finish: Database.Statement;
   private readonly sweep: Database.Statement;
 
   constructor(private readonly db: Database.Database) {
@@ -23,7 +22,6 @@ export class ActivityManager {
     this.update = db.prepare(
       `UPDATE operations SET usage_json = ?, last_event = ?, error = ?, diagnostics_json = ? WHERE id = ?`,
     );
-    // finish is built dynamically in handleStop so unspecified fields are preserved.
     this.sweep = db.prepare(
       `UPDATE operations SET status = 'cancelled', completed_at = ?, duration_ms = COALESCE(duration_ms, 0), error = COALESCE(error, '') || ' · process restarted' WHERE status = 'running'`,
     );

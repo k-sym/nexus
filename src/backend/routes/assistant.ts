@@ -110,7 +110,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig) {
     activeAssistantAbort = controller;
     let assistantText = '';
     const operationId = uuid();
-    fastify.activity.bus.emit({
+    fastify.activity?.bus.emit({
       type: 'start',
       operationId,
       kind: 'assistant_stream',
@@ -158,7 +158,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig) {
       }
       if (assistantText) appendMessage(db, 'assistant', assistantText);
       write({ type: 'complete' });
-      fastify.activity.bus.emit({
+      fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
         kind: 'assistant_stream',
@@ -169,7 +169,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig) {
       const isAbort = err?.name === 'AbortError';
       const message = isAbort ? 'Assistant request aborted.' : err?.message || 'Assistant request failed.';
       write({ type: 'error', error: message });
-      fastify.activity.bus.emit({
+      fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
         kind: 'assistant_stream',

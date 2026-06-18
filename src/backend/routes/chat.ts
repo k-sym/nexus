@@ -282,7 +282,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     const operationId = uuid();
     let streamError: string | undefined;
-    fastify.activity.bus.emit({
+    fastify.activity?.bus.emit({
       type: 'start',
       operationId,
       kind: 'chat_turn',
@@ -327,7 +327,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         const contextUsage = safeContextUsage(session);
         if (contextUsage) {
           write({ type: 'context_usage', usage: contextUsage });
-          fastify.activity.bus.emit({
+          fastify.activity?.bus.emit({
             type: 'update',
             operationId,
             kind: 'chat_turn',
@@ -346,7 +346,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     } finally {
       activeStreams.delete(threadId);
       concurrency.clear(thread.project_id, modelKey);
-      fastify.activity.bus.emit({
+      fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
         kind: 'chat_turn',
@@ -403,7 +403,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       ? (db.prepare('SELECT name FROM projects WHERE id = ?').get(thread.project_id) as { name: string } | undefined)
       : undefined;
     const operationId = uuid();
-    fastify.activity.bus.emit({
+    fastify.activity?.bus.emit({
       type: 'start',
       operationId,
       kind: 'memory_archive',
@@ -415,7 +415,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     });
     try {
       const result = await archiveThreadToMemory(db, pi, threadId);
-      fastify.activity.bus.emit({
+      fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
         kind: 'memory_archive',
@@ -426,7 +426,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       return result;
     } catch (err: any) {
       const message = err instanceof ArchiveThreadError ? err.message : (err?.message || 'Archive failed');
-      fastify.activity.bus.emit({
+      fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
         kind: 'memory_archive',

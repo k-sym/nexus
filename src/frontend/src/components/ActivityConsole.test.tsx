@@ -3,10 +3,11 @@ import { describe, it, expect, vi } from 'vitest';
 import ActivityConsole from './ActivityConsole';
 import type { ActivityResponse, Operation } from '../api';
 import type { Project, Task } from '@nexus/shared';
+import type { ThreadMeta } from './Sidebar';
 
 const projects: Project[] = [{ id: 'p1', slug: 'demo', name: 'Demo', description: '', repo_path: '/tmp/demo', config_json: '{}', git_remote: '', created_at: '', updated_at: '' }];
 const tasks: Task[] = [];
-const threads = [];
+const threads: ThreadMeta[] = [];
 
 function makeOp(overrides: Partial<Operation>): Operation {
   return {

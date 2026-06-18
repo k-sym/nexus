@@ -196,7 +196,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     const project = await ensureProjectGitRemote(db, existing);
     try {
       const { created, total } = await syncGitHubIssues(db, project, {
-        emit: fastify.activity.bus.emit.bind(fastify.activity.bus),
+        emit: fastify.activity?.bus.emit.bind(fastify.activity.bus),
       });
       clearSyncError(id);
       return { created, total };
