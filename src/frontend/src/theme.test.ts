@@ -32,10 +32,11 @@ describe('theme palette contract', () => {
     expect(app).toContain('ambient-shell surface-canvas');
   });
 
-  it('keeps the starfield visibly animated and glow-forward', () => {
+  it('keeps the starfield opt-in animated with gradient-based glow', () => {
     expect(css).toContain('@keyframes ambient-twinkle');
     expect(css).toContain('2.6px');
-    expect(css).toContain('drop-shadow(0 0 9px');
+    expect(css).toContain('rgba(190, 242, 255, 0.07) 7px');
+    expect(css).toContain('.ambient-animate .ambient-shell::after');
     expect(css).toContain('ambient-drift 22s');
   });
 
