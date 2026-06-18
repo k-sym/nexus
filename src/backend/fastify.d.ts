@@ -4,6 +4,7 @@ import type { PiRuntime } from './pi/runtime.js';
 import type { ConcurrencyTracker } from './pi/concurrency.js';
 import type { ModelCurationStore } from './pi/model-curation.js';
 import type { OAuthFlowManager } from './pi/oauth-flows.js';
+import type { ActivityManager } from './activity/manager.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -12,6 +13,8 @@ declare module 'fastify' {
     chatConcurrency: ConcurrencyTracker;
     modelCuration: ModelCurationStore;
     oauthFlows: OAuthFlowManager;
+    activity: ActivityManager;
+    activeChatStreams?: Map<string, { session: { abort: () => Promise<void> } }>;
   }
 }
 
