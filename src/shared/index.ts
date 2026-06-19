@@ -51,6 +51,90 @@ export interface Task {
   external_id: string | null;
 }
 
+export interface GitDiffSummary {
+  files: number;
+  hunks: number;
+  added: number;
+  deleted: number;
+  staged_files: string[];
+  unstaged_files: string[];
+  untracked_files: string[];
+}
+
+export interface GitDiffFile {
+  path: string;
+  old_path: string | null;
+  new_path: string | null;
+  status: 'modified' | 'added' | 'deleted' | 'renamed' | 'unknown';
+  added: number;
+  deleted: number;
+  staged: boolean;
+  hunks: GitDiffHunk[];
+}
+
+export interface GitDiffHunk {
+  id: string;
+  file: string;
+  header: string;
+  diff: string;
+  prompt: string;
+  staged: boolean;
+  old_start: number | null;
+  new_start: number | null;
+  old_lines: number | null;
+  new_lines: number | null;
+}
+
+export type GitDiffState =
+  | {
+      ok: true;
+      repo_path: string;
+      git_remote: string;
+      has_changes: boolean;
+      summary: GitDiffSummary;
+      files: GitDiffFile[];
+      hunks: GitDiffHunk[];
+    }
+  | {
+      ok: false;
+      reason: 'not_git_repo' | 'git_error';
+      message: string;
+      repo_path?: string;
+      git_remote?: string;
+    };
+
+export type ReviewAction = 'ask_reviewer' | 'explain_change' | 'spawn_fix_task' | 'assign_reviewer' | 'attach_to_chat';
+
+export interface ReviewActionRequest {
+  task_id?: string;
+  action: ReviewAction;
+  hunk_id?: string;
+  note?: string;
+}
+
+export interface ReviewActionResult {
+  ok: true;
+  action: ReviewAction;
+  task?: {
+    id: string;
+    project_id: string;
+    title: string;
+    status: TaskStatus;
+    assigned_agent: string | null;
+    model_key: string | null;
+  };
+  thread?: {
+    id: string;
+    project_id: string;
+    title: string;
+  };
+  seed?: {
+    threadId: string;
+    prompt: string;
+    modelKey: string | null;
+  };
+}
+
 /** A Jira ticket mirrored into Nexus (Jira stays canonical). */
 export interface Ticket {
   key: string;

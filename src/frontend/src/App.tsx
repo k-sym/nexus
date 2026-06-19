@@ -19,7 +19,8 @@ import TaskModal from './components/TaskModal';
 import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
 import ActivityConsole from './components/ActivityConsole';
-import type { ActivityResponse } from './api';
+import DiffReviewPanel from './components/DiffReviewPanel';
+import type { ActivityResponse, ReviewActionResult } from './api';
 
 type GlobalView = 'dashboard' | 'activity' | 'tickets' | 'braindump' | 'assistant' | 'settings';
 
@@ -52,6 +53,7 @@ export default function App() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [diffReviewTask, setDiffReviewTask] = useState<Task | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -314,6 +316,25 @@ export default function App() {
     }
   };
 
+  const handleOpenDiffReview = (task: Task) => {
+    setDiffReviewTask(task);
+  };
+
+  const handleDiffTaskCreated = async (created: ReviewActionResult['task']) => {
+    if (created && activeProjectId) await loadTasks(activeProjectId);
+  };
+
+  const handleDiffTaskAssigned = async (updated: ReviewActionResult['task']) => {
+    if (!updated || !activeProjectId) return;
+    setTasks((current) => current.map((task) => (task.id === updated.id ? { ...task, assigned_agent: updated.assigned_agent } : task)));
+  };
+
+  const handleDiffChatSeed = (seed: NonNullable<ReviewActionResult['seed']>) => {
+    if (!activeProjectId || !seed.threadId) return;
+    setTaskSeed({ threadId: seed.threadId, prompt: seed.prompt, modelKey: seed.modelKey ?? '' });
+    selectThread(activeProjectId, seed.threadId);
+  };
+
   /**
    * "Run task" from the picker: create a chat thread titled after the task,
    * link it (thread_id + model_key) and flip the card to in_progress, then
@@ -548,6 +569,7 @@ export default function App() {
               onAddTask={(status) => setTaskModalColumn(status)}
               onOpenTask={handleOpenTask}
               onDeleteTask={handleDeleteTask}
+              onOpenDiffReview={handleOpenDiffReview}
             />
           ) : subView === 'chat' ? (
             <div className="flex h-full min-h-0">
@@ -618,6 +640,17 @@ export default function App() {
 
       <DaemonToasts status={status} />
       <NotificationToasts />
+
+      {diffReviewTask && activeProjectId && (
+        <DiffReviewPanel
+          projectId={activeProjectId}
+          task={{ id: diffReviewTask.id, title: diffReviewTask.title }}
+          onClose={() => setDiffReviewTask(null)}
+          onTaskCreated={(created) => void handleDiffTaskCreated(created)}
+          onTaskAssigned={(updated) => void handleDiffTaskAssigned(updated)}
+          onChatSeed={handleDiffChatSeed}
+        />
+      )}
 
       {showProjectModal && (
         <ProjectModal
