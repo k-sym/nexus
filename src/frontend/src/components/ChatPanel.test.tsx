@@ -29,6 +29,130 @@ beforeEach(() => {
 });
 
 describe('ChatPanel', () => {
+  it('submits a native question answer without starting a continuation turn', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet-4-5', name: 'Sonnet 4.5', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({
+            thread: { id: 't1' },
+            messages: [{
+              id: 'assistant-1', role: 'assistant', content: '', timestamp: 1,
+              tool_calls: [{
+                id: 'call-1', name: 'question', status: 'running',
+                args: { questions: [{
+                  id: 'scope', header: 'Scope', question: 'Which scope?', allowOther: false,
+                  options: [{ value: 'small', label: 'Small' }, { value: 'full', label: 'Full' }],
+                }] },
+              }],
+            }],
+          }),
+        } as Response;
+      }
+      if (url === '/api/threads/t1/questions/call-1/answer') {
+        return { ok: true, json: async () => ({ ok: true }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+    global.fetch = fetchMock;
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await userEvent.click(await screen.findByRole('radio', { name: 'Full' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+      '/api/threads/t1/questions/call-1/answer',
+      expect.objectContaining({ method: 'POST' }),
+    ));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Submit answers' })).not.toBeInTheDocument());
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/messages/stream'))).toHaveLength(0);
+  });
+
+  it('renders an incomplete persisted native question as unavailable', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{
+          id: 'assistant-1', role: 'assistant', content: '', timestamp: 1,
+          tool_calls: [{
+            id: 'call-1', name: 'question', status: 'completed',
+            args: { questions: [{
+              id: 'scope', header: 'Scope', question: 'Which scope?', allowOther: false,
+              options: [{ value: 'small', label: 'Small' }, { value: 'full', label: 'Full' }],
+            }] },
+          }],
+        }] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ busy: false }) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    expect(await screen.findByText('This question is no longer active')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit answers' })).not.toBeInTheDocument();
+  });
+
+  it('renders a terminal fallback question and submits one readable continuation turn', async () => {
+    const encoder = new TextEncoder();
+    const ask = JSON.stringify({ questions: [{
+      id: 'scope', header: 'Scope', question: 'Which scope?', allowOther: false,
+      options: [{ value: 'small', label: 'Small' }, { value: 'full', label: 'Full' }],
+    }] });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet-4-5', name: 'Sonnet 4.5', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `Choose a scope.\n\n\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        return { ok: true, status: 200, body: new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(`${JSON.stringify({ kind: 'done' })}\n`)); controller.close(); } }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+    global.fetch = fetchMock;
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    expect(await screen.findByText('Choose a scope.')).toBeInTheDocument();
+    expect(screen.queryByText(/```ask/)).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('radio', { name: 'Full' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/messages/stream'))).toHaveLength(1));
+    const streamCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/messages/stream'))!;
+    expect(JSON.parse(String((streamCall[1] as RequestInit).body))).toMatchObject({ content: 'Scope: Full' });
+  });
+
+  it('keeps ordinary Markdown and malformed or non-terminal ask fences as text', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [
+          { id: 'a1', role: 'assistant', content: 'A. Small\nB. Full', timestamp: 1 },
+          { id: 'a2', role: 'assistant', content: '```ask\n{broken}\n```', timestamp: 2 },
+          { id: 'a3', role: 'assistant', content: '```ask\n{"questions":[]}\n```\nAfterward', timestamp: 3 },
+        ] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ busy: false }) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    expect(await screen.findByText(/A\. Small/)).toBeInTheDocument();
+    expect(screen.getByText(/\{broken\}/)).toBeInTheDocument();
+    expect(screen.getByText(/Afterward/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Submit answers' })).not.toBeInTheDocument();
+  });
+
   it('shows the empty state when no thread is selected', () => {
     render(
       <ChatPanel

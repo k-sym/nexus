@@ -1,5 +1,7 @@
 import { WarningCircle, Check, Spinner } from '@phosphor-icons/react';
 import { useState } from 'react';
+import { QuestionCard } from './QuestionCard';
+import { normalizeQuestionRequest, parseQuestionResult, type QuestionAnswer, type QuestionToolResult } from '../lib/questions';
 
 /** Local copy of the tool-call shape produced by the pi runtime's event
  *  stream. The shared types module used to export this; since it was
@@ -9,25 +11,43 @@ export interface ToolCallInfo {
   id: string;
   name: string;
   args: Record<string, unknown>;
-  status: 'running' | 'completed' | 'error';
+  status: 'running' | 'completed' | 'error' | 'interrupted';
   result?: string;
   is_error?: boolean;
-  details?: Record<string, unknown>;
+  details?: unknown;
   partial_output?: string;
 }
 
 interface ToolCallTimelineProps {
   toolCalls: ToolCallInfo[];
   detailsExpanded?: boolean;
+  questionState?: Record<string, { submitting?: boolean; error?: string; result?: QuestionToolResult }>;
+  onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
 }
 
-export function ToolCallTimeline({ toolCalls, detailsExpanded }: ToolCallTimelineProps) {
+export function ToolCallTimeline({ toolCalls, detailsExpanded, questionState, onAnswerQuestion }: ToolCallTimelineProps) {
   if (toolCalls.length === 0) return null;
   return (
     <div className="flex flex-col gap-1 my-1.5">
-      {toolCalls.map((tc) => (
-        <ToolCallBlock key={tc.id} toolCall={tc} detailsExpanded={detailsExpanded} />
-      ))}
+      {toolCalls.map((tc) => {
+        const request = tc.name === 'question' ? normalizeQuestionRequest(tc.args) : null;
+        if (request) {
+          const state = questionState?.[tc.id];
+          const result = state?.result ?? parseQuestionResult(tc.details) ?? parseQuestionResult(tc.result);
+          return (
+            <QuestionCard
+              key={tc.id}
+              request={request}
+              answeredResult={result ?? undefined}
+              unavailable={tc.status === 'interrupted' || tc.status === 'error' || (tc.status === 'completed' && !result)}
+              submitting={state?.submitting}
+              error={state?.error}
+              onSubmit={(answers) => onAnswerQuestion?.(tc.id, answers) ?? Promise.resolve()}
+            />
+          );
+        }
+        return <ToolCallBlock key={tc.id} toolCall={tc} detailsExpanded={detailsExpanded} />;
+      })}
     </div>
   );
 }
@@ -95,7 +115,8 @@ function buildHeader(tc: ToolCallInfo): { header: string; statusLine?: string } 
       const content = str(args.content) || '';
       const lines = content.split('\n').length;
       const size = formatSize(new Blob([content]).size);
-      const diffText = typeof tc.details?.diff === 'string' ? tc.details.diff : tc.result || '';
+      const details = tc.details as Record<string, unknown> | undefined;
+      const diffText = typeof details?.diff === 'string' ? details.diff : tc.result || '';
       const isNewFile = diffText.includes('--- /dev/null');
       const action = isNewFile ? 'created' : 'overwritten';
       return {
@@ -200,7 +221,8 @@ function ToolContent({ toolCall }: { toolCall: ToolCallInfo }) {
   if (toolCall.result === undefined || toolCall.result === '') return null;
 
   if (toolCall.name === 'Edit' || toolCall.name === 'Write') {
-    const diffText = typeof toolCall.details?.diff === 'string' ? toolCall.details.diff : '';
+    const details = toolCall.details as Record<string, unknown> | undefined;
+    const diffText = typeof details?.diff === 'string' ? details.diff : '';
     if (diffText && isDiff(diffText)) {
       return <SplitDiff diffText={diffText} />;
     }
