@@ -194,6 +194,16 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     // Check if this project+model combination is already streaming
     const modelKey = body.modelKey || 'default';
     const busy = concurrency.get(thread.project_id, modelKey);
+    if (busy?.threadId === threadId) {
+      reply.code(409);
+      return {
+        kind: 'thread_busy',
+        error: 'This thread already has a run in progress',
+        activeThreadId: busy.threadId,
+        activeTitle: busy.title,
+        modelKey: busy.modelKey,
+      };
+    }
     if (busy && busy.threadId !== threadId) {
       if (confirmCancel) {
         const existing = activeStreams.get(busy.threadId);

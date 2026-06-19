@@ -484,11 +484,17 @@ export function usePiStream() {
       }
       if (res.status === 409) {
         const body = await res.json().catch(() => ({}));
-        throw new ChatBusyError(
-          body.activeThreadId ?? '',
-          body.activeTitle ?? 'busy thread',
-          body.modelKey,
-        );
+        if (body.kind === 'model_busy') {
+          throw new ChatBusyError(
+            body.activeThreadId ?? '',
+            body.activeTitle ?? 'busy thread',
+            body.modelKey,
+          );
+        }
+        const error = body.error ?? body.message ?? `HTTP ${res.status}`;
+        dispatch({ type: 'STREAM_ERROR', error });
+        opts.onError?.(error);
+        return null;
       }
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({}));

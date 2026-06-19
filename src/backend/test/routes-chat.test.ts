@@ -364,7 +364,6 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
       payload: { content: 'first', modelKey: 'anthropic/sonnet' },
     });
     await firstPromptStarted.promise;
-
     const second = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-2/messages/stream',
@@ -377,6 +376,76 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
     const firstRes = await first;
     assert.equal(firstRes.statusCode, 200);
   } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects same-thread re-entry without aborting or prompting again', async () => {
+  const firstPromptStarted = deferred<void>();
+  const releaseFirstPrompt = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        firstPromptStarted.resolve();
+        await releaseFirstPrompt.promise;
+      }
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+
+    assert.equal(second.statusCode, 409);
+    assert.deepEqual(second.json(), {
+      kind: 'thread_busy',
+      error: 'This thread already has a run in progress',
+      activeThreadId: 'thread-1',
+      activeTitle: 'T1',
+      modelKey: 'anthropic/sonnet',
+    });
+    assert.equal(promptCalls, 1);
+    assert.equal(abortCalls, 0);
+    assert.equal(sessionForCalls, 1);
+
+    releaseFirstPrompt.resolve();
+    assert.equal((await first).statusCode, 200);
+  } finally {
+    releaseFirstPrompt.resolve();
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
