@@ -288,7 +288,7 @@ test('question answer route returns 404 before consulting the broker when the th
 test('POST /api/threads/:id/messages/stream returns 409 when a *different* thread in the same project is busy', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
-    concurrency.set('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
+    concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
@@ -310,7 +310,7 @@ test('POST /api/threads/:id/messages/stream returns 409 when a *different* threa
 test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy thread in the same project', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
-    concurrency.set('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
+    concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
@@ -377,6 +377,206 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
     const firstRes = await first;
     assert.equal(firstRes.statusCode, 200);
   } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('two simultaneous confirm-cancel requests cannot both start the replacement model run', async () => {
+  const firstPromptStarted = deferred<void>();
+  const firstAbortSeen = deferred<void>();
+  const replacementPromptStarted = deferred<void>();
+  const releaseReplacement = deferred<void>();
+  let replacementSessionForCalls = 0;
+  let replacementPromptCalls = 0;
+
+  const firstSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      firstPromptStarted.resolve();
+      await firstAbortSeen.promise;
+    },
+    abort: async () => firstAbortSeen.resolve(),
+  };
+  const replacementSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      replacementPromptCalls += 1;
+      replacementPromptStarted.resolve();
+      await releaseReplacement.promise;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async (threadId: string) => {
+      if (threadId === 'thread-1') return firstSession;
+      replacementSessionForCalls += 1;
+      return replacementSession;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  db.prepare(
+    'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run('thread-3', 'proj-1', 'T3', new Date().toISOString(), new Date().toISOString());
+
+  let first: ReturnType<typeof app.inject> | undefined;
+  let second: ReturnType<typeof app.inject> | undefined;
+  let third: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    second = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+    third = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-3/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'third', modelKey: 'anthropic/sonnet' },
+    });
+
+    await replacementPromptStarted.promise;
+    const firstCompletedReplacement = await Promise.race([
+      second.then((response) => response),
+      third.then((response) => response),
+    ]);
+    assert.equal(firstCompletedReplacement.statusCode, 409);
+    assert.equal(replacementSessionForCalls, 1);
+    assert.equal(replacementPromptCalls, 1);
+
+    releaseReplacement.resolve();
+    const responses = await Promise.all([first, second, third]);
+    assert.deepEqual(responses.slice(1).map((response) => response.statusCode).sort(), [200, 409]);
+  } finally {
+    firstAbortSeen.resolve();
+    releaseReplacement.resolve();
+    await Promise.allSettled([first, second, third].filter(Boolean));
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('confirm-cancel returns 409 when the previous owner has not released the model slot', async () => {
+  const firstPromptStarted = deferred<void>();
+  const releaseFirstPrompt = deferred<void>();
+  let replacementSessionForCalls = 0;
+  let abortCalls = 0;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      firstPromptStarted.resolve();
+      await releaseFirstPrompt.promise;
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async (threadId: string) => {
+      if (threadId !== 'thread-1') replacementSessionForCalls += 1;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  let first: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const replacement = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'replacement', modelKey: 'anthropic/sonnet' },
+    });
+    assert.equal(replacement.statusCode, 409);
+    assert.equal(replacement.json().kind, 'model_busy');
+    assert.equal(abortCalls, 1);
+    assert.equal(replacementSessionForCalls, 0);
+  } finally {
+    releaseFirstPrompt.resolve();
+    await Promise.allSettled([first].filter(Boolean));
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('different threads atomically claim a project model before session setup', async () => {
+  const sessionForStarted = deferred<void>();
+  const releaseSessionFor = deferred<void>();
+  let sessionForCalls = 0;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      sessionForStarted.resolve();
+      await releaseSessionFor.promise;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  let first: ReturnType<typeof app.inject> | undefined;
+  let second: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await sessionForStarted.promise;
+    second = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+    const secondResponse = await second;
+    assert.equal(secondResponse.statusCode, 409);
+    assert.equal(secondResponse.json().kind, 'model_busy');
+    assert.equal(sessionForCalls, 1);
+
+    releaseSessionFor.resolve();
+    assert.equal((await first).statusCode, 200);
+  } finally {
+    releaseSessionFor.resolve();
+    await Promise.allSettled([first, second].filter(Boolean));
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -600,6 +800,7 @@ test('POST /api/threads/:id/messages/stream stops after session setup when the c
   const sessionForStarted = deferred<void>();
   const duplicateSessionForStarted = deferred<void>();
   const disconnectObserved = deferred<void>();
+  const clientClosed = deferred<void>();
   const releaseSessionFor = deferred<void>();
   let sessionForCalls = 0;
   let promptCalls = 0;
@@ -644,10 +845,12 @@ test('POST /api/threads/:id/messages/stream stops after session setup when the c
       headers: { 'content-type': 'application/json' },
     });
     clientRequest.on('error', () => {});
+    clientRequest.on('close', () => clientClosed.resolve());
     clientRequest.end(JSON.stringify({ content: 'first', modelKey: 'anthropic/sonnet' }));
     await sessionForStarted.promise;
 
     clientRequest.destroy();
+    await clientClosed.promise;
     await disconnectObserved.promise;
     const whileSetupPending = app.inject({
       method: 'POST',

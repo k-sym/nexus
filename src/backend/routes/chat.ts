@@ -238,11 +238,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           } catch (err: any) {
             console.error(`[chat] failed to abort active thread ${busy.threadId}:`, err?.message);
           }
-          activeStreams.delete(busy.threadId);
         }
         pi.questions?.cancelThread(busy.threadId, 'Cancelled by another thread');
-        await new Promise((r) => setTimeout(r, ABORT_GRACE_MS));
-        concurrency.clear(thread.project_id, modelKey);
+        await concurrency.waitForRelease(thread.project_id, modelKey, busy, ABORT_GRACE_MS);
       } else {
         reply.code(409);
         return {
@@ -283,6 +281,20 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       return threadBusyResponse(threadId, threadRunClaims.get(threadId)!);
     }
     const releaseThreadClaim = () => releaseThreadRun(threadId, threadClaimOwner);
+    const modelClaimOwner = concurrency.claim(thread.project_id, modelKey, threadId, thread.title);
+    if (!modelClaimOwner) {
+      releaseThreadClaim();
+      const active = concurrency.get(thread.project_id, modelKey);
+      reply.code(409);
+      return active?.threadId === threadId
+        ? threadBusyResponse(threadId, active)
+        : {
+            kind: 'model_busy',
+            activeThreadId: active?.threadId,
+            activeTitle: active?.title,
+            modelKey: active?.modelKey ?? modelKey,
+          };
+    }
     let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> | undefined;
     let responseCompleted = false;
     let clientDisconnected = false;
@@ -329,7 +341,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         }
       }
 
-      concurrency.set(thread.project_id, modelKey, threadId, thread.title);
       db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(
         new Date().toISOString(),
         body.modelKey || null,
@@ -426,7 +437,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     } finally {
       responseCompleted = true;
       activeStreams.delete(threadId);
-      concurrency.clear(thread.project_id, modelKey);
       fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
@@ -442,6 +452,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       reply.raw.removeListener('close', abortOnResponseClose);
       request.raw.removeListener('aborted', abortOnResponseClose);
       if (disconnectAbort) await disconnectAbort;
+      concurrency.release(thread.project_id, modelKey, modelClaimOwner);
       releaseThreadClaim();
     }
   });
