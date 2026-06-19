@@ -11,6 +11,7 @@ interface KanbanBoardProps {
    *  parent decides based on `task.thread_id`. */
   onOpenTask: (task: Task) => void;
   onDeleteTask: (taskId: string) => void;
+  onOpenDiffReview?: (task: Task) => void;
 }
 
 const PRIORITY_CLASSES: Record<string, string> = {
@@ -20,7 +21,7 @@ const PRIORITY_CLASSES: Record<string, string> = {
   urgent: 'kanban-priority-urgent',
 };
 
-export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, onAddTask, onOpenTask, onDeleteTask }: KanbanBoardProps) {
+export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, onAddTask, onOpenTask, onDeleteTask, onOpenDiffReview }: KanbanBoardProps) {
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     e.dataTransfer.setData('taskId', taskId);
     e.dataTransfer.effectAllowed = 'move';
@@ -101,12 +102,22 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
                         </span>
                       )}
                     </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
-                      className="text-faint/40 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      ✕
-                    </button>
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      {(['review', 'deploy'] as TaskStatus[]).includes(task.status) && onOpenDiffReview && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onOpenDiffReview(task); }}
+                          className="text-[10px] text-faint hover:text-[var(--text-primary)] border border-subtle rounded px-1.5 py-1 transition-colors"
+                        >
+                          Diff
+                        </button>
+                      )}
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDeleteTask(task.id); }}
+                        className="text-faint/40 hover:text-red-400 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        ✕
+                      </button>
+                    </div>
                   </div>
                 </div>
               ))}

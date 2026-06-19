@@ -5,7 +5,8 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
+export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
 
@@ -114,6 +115,12 @@ export const api = {
       fetchJson<Task>(`/api/projects/${id}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
     githubSync: (id: string) =>
       fetchJson<{ created: number; total: number }>(`/api/projects/${id}/github/sync`, { method: 'POST' }),
+    gitDiff: (id: string) => fetchJson<GitDiffState>(`/api/projects/${id}/git/diff`),
+    reviewAction: (id: string, data: ReviewActionRequest) =>
+      fetchJson<ReviewActionResult>(`/api/projects/${id}/review-actions`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
   },
   tasks: {
     update: (id: string, data: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'assigned_agent' | 'due_date' | 'model_key' | 'thread_id'>>) =>

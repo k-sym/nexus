@@ -3,7 +3,8 @@ import { v4 as uuid } from 'uuid';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { Project, Task, TaskStatus } from '@nexus/shared';
+import { Project, Task, TaskStatus, type ReviewActionRequest, type ReviewActionResult } from '@nexus/shared';
+import { buildReviewActionPrompt, buildReviewActionTitle, getProjectGitDiff, reviewActionPlan } from '../git/diff.js';
 import { summarizeTaskThread } from '../memory/summarize.js';
 import { insertNotification } from '../notifications/index.js';
 import { detectGitRemote } from '../github/repo.js';
@@ -94,6 +95,131 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
     return row as Project;
+  });
+
+  fastify.get('/api/projects/:id/git/diff', async (request) => {
+    const { id } = request.params as { id: string };
+    const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
+    if (!row) {
+      const err = new Error('Project not found') as any;
+      err.statusCode = 404;
+      throw err;
+    }
+    return await getProjectGitDiff(row);
+  });
+
+  fastify.post('/api/projects/:id/review-actions', async (request) => {
+    const { id: projectId } = request.params as { id: string };
+    const body = request.body as ReviewActionRequest;
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
+    if (!project) {
+      const err = new Error('Project not found') as any;
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const diff = await getProjectGitDiff(project);
+    if (!diff.ok) return diff;
+
+    const sourceTask = body.task_id
+      ? (db.prepare('SELECT * FROM tasks WHERE id = ? AND project_id = ?').get(body.task_id, projectId) as Task | undefined)
+      : null;
+    if (body.task_id && !sourceTask) {
+      const err = new Error('Task not found') as any;
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const hunk = body.hunk_id ? diff.hunks.find((item) => item.id === body.hunk_id) : null;
+    if (body.hunk_id && !hunk) {
+      const err = new Error('Hunk not found in current diff') as any;
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const plan = reviewActionPlan(body.action);
+    const now = new Date().toISOString();
+
+    if (body.action === 'assign_reviewer') {
+      if (!sourceTask) {
+        const err = new Error('task_id is required for assign_reviewer') as any;
+        err.statusCode = 400;
+        throw err;
+      }
+      if (!hunk) {
+        const err = new Error('hunk_id is required for assign_reviewer') as any;
+        err.statusCode = 400;
+        throw err;
+      }
+      // Assigning a reviewer routes the persona but leaves the card where it is
+      // (a Deploy card stays in Deploy); it does not pull the task back to Review.
+      db.prepare('UPDATE tasks SET assigned_agent = ?, updated_at = ? WHERE id = ?').run(plan.assigned_agent, now, sourceTask.id);
+      const updated = db.prepare('SELECT id, project_id, title, status, assigned_agent, model_key FROM tasks WHERE id = ?').get(sourceTask.id) as ReviewActionResult['task'];
+      return { ok: true, action: body.action, task: updated };
+    }
+
+    if (body.action === 'attach_to_chat') {
+      if (!sourceTask) {
+        const err = new Error('task_id is required for attach_to_chat') as any;
+        err.statusCode = 400;
+        throw err;
+      }
+      if (!hunk) {
+        const err = new Error('hunk_id is required for attach_to_chat') as any;
+        err.statusCode = 400;
+        throw err;
+      }
+      const title = `Diff review: ${hunk.file}`;
+      // Reuse an open thread for this file so repeated clicks reseed one thread
+      // instead of spawning a new one each time.
+      const existing = db.prepare('SELECT id, project_id, title FROM chat_threads WHERE project_id = ? AND title = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1').get(projectId, title) as ReviewActionResult['thread'] | undefined;
+      let thread: NonNullable<ReviewActionResult['thread']>;
+      if (existing) {
+        db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(now, existing.id);
+        thread = existing;
+      } else {
+        thread = { id: uuid(), project_id: projectId, title };
+        db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)').run(thread.id, thread.project_id, thread.title, now, now, null);
+      }
+      return {
+        ok: true,
+        action: body.action,
+        thread,
+        seed: {
+          threadId: thread.id,
+          prompt: buildReviewActionPrompt(project, sourceTask, body.action, hunk, body.note),
+          modelKey: sourceTask.model_key ?? null,
+        },
+      };
+    }
+
+    if (!hunk) {
+      const err = new Error('hunk_id is required') as any;
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const title = buildReviewActionTitle(body.action, hunk);
+    const description = buildReviewActionPrompt(project, sourceTask ?? null, body.action, hunk, body.note);
+    const task = {
+      id: uuid(),
+      project_id: projectId,
+      title,
+      description,
+      status: plan.status,
+      priority: sourceTask?.priority ?? 'medium',
+      assigned_agent: plan.assigned_agent,
+      due_date: null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    db.prepare('INSERT INTO tasks (id, project_id, title, description, status, priority, assigned_agent, due_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(task.id, task.project_id, task.title, task.description, task.status, task.priority, task.assigned_agent, task.due_date, task.created_at, task.updated_at);
+    db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, projectId);
+
+    const saved = db.prepare('SELECT id, project_id, title, status, assigned_agent, model_key FROM tasks WHERE id = ?').get(task.id) as ReviewActionResult['task'];
+    return { ok: true, action: body.action, task: saved };
   });
 
   fastify.post('/api/projects', async (request) => {
