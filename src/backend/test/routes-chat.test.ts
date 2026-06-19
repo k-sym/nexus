@@ -8,7 +8,7 @@ import Database from 'better-sqlite3';
 import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import { ConcurrencyTracker } from '../pi/concurrency';
 import { QuestionBroker, type QuestionRequest } from '../pi/questions';
-import { registerChatRoutes } from '../routes/chat';
+import { flattenEntries, registerChatRoutes } from '../routes/chat';
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -19,6 +19,64 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+test('question history associates a matching result with its assistant tool call', () => {
+  const details = {
+    status: 'answered',
+    toolCallId: 'call-1',
+    answers: [{ questionId: 'scope', selected: ['small'] }],
+  };
+  const messages = flattenEntries([
+    {
+      type: 'message',
+      id: 'assistant-1',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'call-1',
+          name: 'question',
+          arguments: { questions: [] },
+        }],
+      },
+    },
+    {
+      type: 'message',
+      id: 'result-1',
+      message: {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'question',
+        isError: false,
+        content: [{ type: 'text', text: `Scope: Small\n\n${JSON.stringify(details)}` }],
+        details,
+      },
+    },
+  ]) as any[];
+
+  assert.deepEqual(messages[0].tool_calls[0], {
+    id: 'call-1',
+    name: 'question',
+    args: { questions: [] },
+    status: 'completed',
+    result: `Scope: Small\n\n${JSON.stringify(details)}`,
+    details,
+  });
+});
+
+test('question history marks a tool call without a result interrupted', () => {
+  const messages = flattenEntries([{
+    type: 'message',
+    id: 'assistant-1',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'call-1', name: 'question', arguments: { questions: [] } }],
+    },
+  }]) as any[];
+
+  assert.equal(messages[0].tool_calls[0].status, 'interrupted');
+  assert.equal(messages[0].tool_calls[0].result, undefined);
+});
 
 function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-chat-test-'));

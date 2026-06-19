@@ -56,6 +56,32 @@ describe('streamReducer', () => {
     expect(next.status).toBe('tool_call');
   });
 
+  it('preserves question arguments and completed result details', () => {
+    const args = { questions: [{ id: 'scope', question: 'Which scope?' }] };
+    const details = {
+      status: 'answered',
+      toolCallId: 'call-1',
+      answers: [{ questionId: 'scope', selected: ['small'] }],
+    };
+    const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
+    const called = streamReducer(start, {
+      type: 'TOOL_CALL_START',
+      toolCall: { id: 'call-1', name: 'question', args },
+    });
+    const completed = streamReducer(called, {
+      type: 'TOOL_CALL_UPDATE',
+      id: 'call-1',
+      patch: { status: 'completed', result: 'Scope: Small', details },
+    });
+
+    expect(completed.streamingMessage?.toolCalls?.[0]).toMatchObject({
+      args,
+      status: 'completed',
+      result: 'Scope: Small',
+      details,
+    });
+  });
+
   it('STREAM_COMPLETE finalizes the message', () => {
     const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
     const delta = streamReducer(start, { type: 'TEXT_DELTA', delta: 'hi' });
@@ -99,6 +125,43 @@ describe('streamReducer', () => {
 });
 
 describe('usePiStream', () => {
+  it('preserves question tool result details from stream events', async () => {
+    const details = {
+      status: 'answered',
+      toolCallId: 'call-1',
+      answers: [{ questionId: 'scope', selected: ['small'] }],
+    };
+    const encoder = new TextEncoder();
+    const events = [
+      { event: { type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'question', args: { questions: [] } } },
+      { event: { type: 'tool_execution_end', toolCallId: 'call-1', toolName: 'question', isError: false, result: { content: [{ type: 'text', text: 'Scope: Small' }], details } } },
+      { kind: 'done' },
+    ];
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(controller) {
+          for (const event of events) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          controller.close();
+        },
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'hi');
+    });
+
+    expect(result.current.state.messages[1].toolCalls?.[0]).toMatchObject({
+      id: 'call-1',
+      args: { questions: [] },
+      status: 'completed',
+      result: 'Scope: Small',
+      details,
+    });
+  });
+
   it('shows assistant error event messages from the stream', async () => {
     const encoder = new TextEncoder();
     const body = new ReadableStream({

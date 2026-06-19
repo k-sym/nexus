@@ -60,8 +60,9 @@ export interface StreamMessage {
     id: string;
     name: string;
     args: Record<string, unknown>;
-    status: 'running' | 'completed' | 'error';
+    status: 'running' | 'completed' | 'error' | 'interrupted';
     result?: string;
+    details?: unknown;
     is_error?: boolean;
   }>;
   toolName?: string;
@@ -419,6 +420,7 @@ export function usePiStream() {
         patch: {
           status: ev.isError ? 'error' : 'completed',
           result,
+          details: ev.result?.details,
           is_error: ev.isError,
         },
       });

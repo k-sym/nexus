@@ -512,6 +512,13 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
   } catch {
     // Telemetry is best-effort; history always returns raw output.
   }
+  const toolResults = new Map<string, any>();
+  for (const entry of entries as any[]) {
+    const message = entry?.type === 'message' ? entry.message : undefined;
+    if (message?.role === 'toolResult' && message.toolCallId) {
+      toolResults.set(String(message.toolCallId), message);
+    }
+  }
   const out: unknown[] = [];
   for (const e of entries as any[]) {
     if (e.type !== 'message') continue;
@@ -534,12 +541,25 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
         if (block.type === 'text') text += block.text;
         else if (block.type === 'thinking') thinking += block.thinking;
         else if (block.type === 'toolCall') {
-          toolCalls.push({
+          const call: Record<string, unknown> = {
             id: block.id,
             name: block.name,
             args: block.arguments,
             status: 'completed',
-          });
+          };
+          if (block.name === 'question') {
+            const result = toolResults.get(String(block.id));
+            if (!result) {
+              call.status = 'interrupted';
+            } else {
+              const resultText = extractText(result.content);
+              call.status = result.isError ? 'error' : 'completed';
+              call.result = resultText;
+              const details = result.details ?? parseTrailingJson(resultText);
+              if (details !== undefined) call.details = details;
+            }
+          }
+          toolCalls.push(call);
         }
       }
       const isError = m.stopReason === 'error' || !!m.errorMessage;
@@ -585,6 +605,19 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
     }
   }
   return out;
+}
+
+function parseTrailingJson(text: string): unknown {
+  const candidates = [text.trim(), text.slice(text.lastIndexOf('\n\n') + 2).trim()];
+  for (const candidate of candidates) {
+    if (!candidate.startsWith('{')) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined;
 }
 
 function validateChatAttachments(
