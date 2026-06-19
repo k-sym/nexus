@@ -126,7 +126,7 @@ function extractMessageSnapshot(message: any): Partial<StreamMessage> | undefine
         id: block.id,
         name: block.name,
         args: block.arguments ?? {},
-        status: 'completed',
+        status: 'running',
       });
     }
   }
@@ -282,7 +282,17 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
           ...current,
           content: action.message.content ?? current.content,
           thinking: action.message.thinking ?? current.thinking,
-          toolCalls: action.message.toolCalls ?? current.toolCalls,
+          toolCalls: action.message.toolCalls
+            ? [
+                ...action.message.toolCalls.map((snapshot) => {
+                  const live = current.toolCalls?.find((toolCall) => toolCall.id === snapshot.id);
+                  return live ? { ...snapshot, ...live } : snapshot;
+                }),
+                ...(current.toolCalls ?? []).filter(
+                  (live) => !action.message?.toolCalls?.some((snapshot) => snapshot.id === live.id),
+                ),
+              ]
+            : current.toolCalls,
           timestamp: action.message.timestamp ?? current.timestamp,
         },
       };
@@ -355,7 +365,7 @@ export function usePiStream() {
     activeThreadRef.current = threadId;
   }, []);
 
-  const routeEvent = useCallback((ev: any, threadId: string): ContextUsage | null => {
+  const routeEvent = useCallback((ev: any, threadId: string, onError?: (message: string) => void): ContextUsage | null => {
     // Only dispatch events if they belong to the active thread
     if (activeThreadRef.current !== threadId) {
       return null;
@@ -389,13 +399,13 @@ export function usePiStream() {
           (typeof ame.error === 'string' ? ame.error : undefined) ??
           (ame.reason === 'aborted' ? 'Aborted' : ame.reason ?? 'Error');
         dispatch({ type: 'STREAM_ERROR', error: reason });
+        onError?.(reason);
       }
     } else if (type === 'message_end') {
       if (ev.message?.role === 'assistant' && (ev.message.stopReason === 'error' || ev.message.errorMessage)) {
-        dispatch({
-          type: 'STREAM_ERROR',
-          error: formatProviderError(ev.message.errorMessage) || 'Provider returned an error.',
-        });
+        const error = formatProviderError(ev.message.errorMessage) || 'Provider returned an error.';
+        dispatch({ type: 'STREAM_ERROR', error });
+        onError?.(error);
         return null;
       }
       dispatch({ type: 'MESSAGE_END', message: extractMessageSnapshot(ev.message) });
@@ -427,7 +437,9 @@ export function usePiStream() {
     } else if (type === 'agent_end' || type === 'done') {
       dispatch({ type: 'STREAM_COMPLETE' });
     } else if (type === 'error') {
-      dispatch({ type: 'STREAM_ERROR', error: ev.message ?? 'Unknown error' });
+      const error = ev.message ?? 'Unknown error';
+      dispatch({ type: 'STREAM_ERROR', error });
+      onError?.(error);
     }
     return null;
   }, []);
@@ -436,7 +448,7 @@ export function usePiStream() {
     async (
       threadId: string,
       text: string,
-      opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[] } = {},
+      opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[]; onError?: (message: string) => void } = {},
     ): Promise<ContextUsage | null> => {
       activeThreadRef.current = threadId;
       const attachments = opts.attachments ?? opts.images ?? [];
@@ -467,6 +479,7 @@ export function usePiStream() {
           return null;
         }
         dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
+        opts.onError?.((err as Error).message);
         return null;
       }
       if (res.status === 409) {
@@ -479,7 +492,9 @@ export function usePiStream() {
       }
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({}));
-        dispatch({ type: 'STREAM_ERROR', error: body.error ?? body.message ?? `HTTP ${res.status}` });
+        const error = body.error ?? body.message ?? `HTTP ${res.status}`;
+        dispatch({ type: 'STREAM_ERROR', error });
+        opts.onError?.(error);
         return null;
       }
       const reader = res.body.getReader();
@@ -507,11 +522,13 @@ export function usePiStream() {
               return lastContextUsage;
             }
             if (parsed?.kind === 'error') {
-              dispatch({ type: 'STREAM_ERROR', error: parsed.error ?? 'stream error' });
+              const error = parsed.error ?? 'stream error';
+              dispatch({ type: 'STREAM_ERROR', error });
+              opts.onError?.(error);
               return lastContextUsage;
             }
             const inner = parsed?.event ?? parsed;
-            const usage = routeEvent(inner, threadId);
+            const usage = routeEvent(inner, threadId, opts.onError);
             if (usage) lastContextUsage = usage;
           }
         }
@@ -521,6 +538,7 @@ export function usePiStream() {
           return lastContextUsage;
         }
         dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
+        opts.onError?.((err as Error).message);
       } finally {
         abortRef.current = null;
       }

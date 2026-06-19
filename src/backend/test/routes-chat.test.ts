@@ -1215,6 +1215,97 @@ test('question cleanup cancels a pending question when its active stream is abor
   }
 });
 
+test('question cleanup aborts the active session when the response closes during prompt', async () => {
+  const questions = new QuestionBroker();
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const sessionAborted = deferred<void>();
+  let abortCalls = 0;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => {
+      abortCalls += 1;
+      promptStopped.resolve();
+      sessionAborted.resolve();
+    },
+  };
+  const runtime = {
+    questions,
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir, concurrency } = makeApp(runtime);
+  const pending = questions.register('thread-1', 'call-1', questionRequest);
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'ask me' },
+      payloadAsStream: true,
+    });
+    await promptStarted.promise;
+
+    response.raw.res.destroy();
+    await Promise.race([
+      sessionAborted.promise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('session was not aborted after response close')), 100)),
+    ]);
+
+    assert.equal(abortCalls, 1);
+    assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).status, 404);
+    assert.equal((await pending).status, 'cancelled');
+    assert.equal(concurrency.get('proj-1', 'default'), undefined);
+  } finally {
+    promptStopped.resolve();
+    questions.cancelThread('thread-1', 'test cleanup');
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a normally completed response does not abort its session', async () => {
+  let abortCalls = 0;
+  const runtime = {
+    questions: new QuestionBroker(),
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async () => {},
+      abort: async () => { abortCalls += 1; },
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'complete normally' },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(abortCalls, 0);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('question cleanup cancels a pending question when confirm-cancel aborts a conflicting stream', async () => {
   const questions = new QuestionBroker();
   const firstPromptStarted = deferred<void>();

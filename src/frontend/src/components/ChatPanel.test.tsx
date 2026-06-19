@@ -29,6 +29,42 @@ beforeEach(() => {
 });
 
 describe('ChatPanel', () => {
+  it('disables the composer and ignores Enter while a turn is running', async () => {
+    let streamCalls = 0;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        streamCalls += 1;
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({ start() {} }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const input = screen.getByTestId('chat-input');
+    await userEvent.type(input, 'first prompt');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => expect(input).toBeDisabled());
+    expect(screen.queryByTestId('send-button')).not.toBeInTheDocument();
+    fireEvent.change(input, { target: { value: 'second prompt' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(streamCalls).toBe(1);
+  });
+
   it('submits a native question answer without starting a continuation turn', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
@@ -130,6 +166,68 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/messages/stream'))).toHaveLength(1));
     const streamCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/messages/stream'))!;
     expect(JSON.parse(String((streamCall[1] as RequestInit).body))).toMatchObject({ content: 'Scope: Full' });
+  });
+
+  it('disables one fallback card immediately while its continuation is in flight', async () => {
+    const ask = JSON.stringify({ questions: [{
+      id: 'scope', header: 'Scope', question: 'Which scope?', allowOther: false,
+      options: [{ value: 'small', label: 'Small' }, { value: 'full', label: 'Full' }],
+    }] });
+    let streamCalls = 0;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        streamCalls += 1;
+        return { ok: true, status: 200, body: new ReadableStream({ start() {} }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await userEvent.click(await screen.findByRole('radio', { name: 'Full' }));
+    const submitButton = screen.getByRole('button', { name: 'Submit answers' });
+    await userEvent.click(submitButton);
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Submitting…' })).toBeDisabled());
+    await userEvent.click(screen.getByRole('button', { name: 'Submitting…' }));
+    expect(streamCalls).toBe(1);
+  });
+
+  it('shows a fallback continuation error on its card and allows retry', async () => {
+    const ask = JSON.stringify({ questions: [{
+      id: 'scope', header: 'Scope', question: 'Which scope?', allowOther: false,
+      options: [{ value: 'small', label: 'Small' }, { value: 'full', label: 'Full' }],
+    }] });
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        return { ok: false, status: 503, body: null, json: async () => ({ error: 'Continuation unavailable' }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await userEvent.click(await screen.findByRole('radio', { name: 'Full' }));
+    const submitButton = screen.getByRole('button', { name: 'Submit answers' });
+    const card = submitButton.closest('form')!;
+    await userEvent.click(submitButton);
+
+    await waitFor(() => expect(within(card).getByRole('alert')).toHaveTextContent('Continuation unavailable'));
+    expect(within(card).getByRole('button', { name: 'Submit answers' })).toBeEnabled();
   });
 
   it('keeps ordinary Markdown and malformed or non-terminal ask fences as text', async () => {

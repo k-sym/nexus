@@ -146,7 +146,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
   const [draggingAttachments, setDraggingAttachments] = useState(false);
   const [questionSubmissions, setQuestionSubmissions] = useState<QuestionSubmissionState>({});
-  const [fallbackResults, setFallbackResults] = useState<Record<string, QuestionToolResult>>({});
+  const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const activeModel = models.find((model) => `${model.provider}/${model.id}` === activeModelId);
@@ -244,7 +244,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     // Clear messages and model immediately when switching threads
     setLoadedMessages([]);
     setQuestionSubmissions({});
-    setFallbackResults({});
+    setFallbackSubmissions({});
     setModel('', '');
     
     let cancelled = false;
@@ -320,16 +320,23 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   }, [loadedMessages, state.messages, state.streamingMessage]);
 
   const submit = useCallback(
-    async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[] } = {}) => {
+    async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; onError?: (message: string) => void } = {}) => {
       if (!threadId) return;
       setError(null);
       const attachments = opts.attachments ?? pendingAttachments;
+      let streamError: string | null = null;
       try {
         const contextUsage = await startStream(threadId, text, {
           confirmCancel: opts.confirmCancel,
           modelKey: opts.modelKey ?? activeModelId,
           attachments,
+          onError: (message) => {
+            streamError = message;
+            setError(message);
+            opts.onError?.(message);
+          },
         });
+        if (streamError) return false;
         onThreadsChanged?.();
         const msgs = await fetchThreadMessages(threadId);
         if (msgs.length > 0) {
@@ -390,23 +397,43 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     request: QuestionRequest,
     answers: QuestionAnswer[],
   ) => {
-    const submitted = await submit(buildQuestionAnswerSummary(request, answers));
-    if (!submitted) return;
-    setFallbackResults((current) => ({
+    setFallbackSubmissions((current) => ({
       ...current,
-      [messageId]: { status: 'answered', toolCallId: `fallback:${messageId}`, answers },
+      [messageId]: { ...current[messageId], submitting: true, error: undefined },
+    }));
+    const submitted = await submit(buildQuestionAnswerSummary(request, answers), {
+      onError: (error) => {
+        setFallbackSubmissions((current) => ({
+          ...current,
+          [messageId]: { ...current[messageId], submitting: false, error },
+        }));
+      },
+    });
+    if (!submitted) {
+      setFallbackSubmissions((current) => ({
+        ...current,
+        [messageId]: { ...current[messageId], submitting: false },
+      }));
+      return;
+    }
+    setFallbackSubmissions((current) => ({
+      ...current,
+      [messageId]: {
+        submitting: false,
+        result: { status: 'answered', toolCallId: `fallback:${messageId}`, answers },
+      },
     }));
   }, [submit]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if ((!text && pendingAttachments.length === 0) || !threadId || imageModelBlocked) return;
+    if (state.isRunning || (!text && pendingAttachments.length === 0) || !threadId || imageModelBlocked) return;
     const attachments = pendingAttachments;
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, imageModelBlocked, pendingAttachments, submit]);
+  }, [input, threadId, imageModelBlocked, pendingAttachments, state.isRunning, submit]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -579,7 +606,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               msg={m}
               detailsExpanded={detailsExpanded}
               questionState={questionSubmissions}
-              fallbackResult={fallbackResults[m.id]}
+              fallbackState={fallbackSubmissions[m.id]}
               onAnswerQuestion={answerNativeQuestion}
               onAnswerFallback={answerFallbackQuestion}
             />
@@ -655,6 +682,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         <div className="flex gap-2 items-end">
           <textarea
             value={input}
+            disabled={isRunning}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
@@ -697,14 +725,14 @@ function MessageBubble({
   msg,
   detailsExpanded,
   questionState,
-  fallbackResult,
+  fallbackState,
   onAnswerQuestion,
   onAnswerFallback,
 }: {
   msg: StreamMessage;
   detailsExpanded: boolean;
   questionState: QuestionSubmissionState;
-  fallbackResult?: QuestionToolResult;
+  fallbackState?: QuestionSubmissionState[string];
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onAnswerFallback: (messageId: string, request: QuestionRequest, answers: QuestionAnswer[]) => Promise<void>;
 }) {
@@ -792,7 +820,9 @@ function MessageBubble({
             {fallback.preamble && <p className="whitespace-pre-wrap">{fallback.preamble}</p>}
             <QuestionCard
               request={fallback.request}
-              answeredResult={fallbackResult}
+              answeredResult={fallbackState?.result}
+              submitting={fallbackState?.submitting}
+              error={fallbackState?.error}
               onSubmit={(answers) => onAnswerFallback(msg.id, fallback.request, answers)}
             />
           </div>

@@ -125,6 +125,80 @@ describe('streamReducer', () => {
 });
 
 describe('usePiStream', () => {
+  it('keeps a question running when message_end arrives before tool_execution_end', async () => {
+    const encoder = new TextEncoder();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(streamController) {
+          controller = streamController;
+        },
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    let streamPromise!: Promise<unknown>;
+    act(() => {
+      streamPromise = result.current.startStream('thread-1', 'hi');
+    });
+    act(() => {
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'tool_execution_start',
+          toolCallId: 'call-1',
+          toolName: 'question',
+          args: { questions: [{ id: 'scope', question: 'Which scope?' }] },
+        },
+      })}\n`));
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [{
+              type: 'toolCall',
+              id: 'call-1',
+              name: 'question',
+              arguments: { questions: [{ id: 'scope', question: 'Which scope?' }] },
+            }],
+            timestamp: 123,
+          },
+        },
+      })}\n`));
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.streamingMessage?.toolCalls?.[0]).toMatchObject({
+        id: 'call-1',
+        status: 'running',
+      });
+    });
+
+    act(() => {
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'tool_execution_end',
+          toolCallId: 'call-1',
+          isError: false,
+          result: { content: [{ type: 'text', text: 'Scope: Small' }] },
+        },
+      })}\n`));
+      controller.enqueue(encoder.encode(`${JSON.stringify({ kind: 'done' })}\n`));
+      controller.close();
+    });
+    await act(async () => {
+      await streamPromise;
+    });
+
+    expect(result.current.state.messages[1].toolCalls?.[0]).toMatchObject({
+      id: 'call-1',
+      status: 'completed',
+      result: 'Scope: Small',
+    });
+  });
+
   it('preserves question tool result details from stream events', async () => {
     const details = {
       status: 'answered',

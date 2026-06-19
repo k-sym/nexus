@@ -320,6 +320,7 @@ export function createQuestionExtension(threadId: string, broker: QuestionBroker
         return {
           content: [{ type: 'text', text: formatQuestionResult(result, request.value) }],
           details: result,
+          ...(result.status === 'cancelled' ? { isError: true } : {}),
         };
       },
     });

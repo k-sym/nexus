@@ -231,3 +231,23 @@ test('question extension reports invalid arguments as a tool error', async () =>
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /questions must be a non-empty array/);
 });
+
+test('question extension reports broker cancellation as a tool error', async () => {
+  const broker = new QuestionBroker();
+  let tool: any;
+  createQuestionExtension('thread-1', broker)({
+    registerTool(value: unknown) { tool = value; },
+  } as any);
+
+  const pending = tool.execute('call-1', validInput, undefined, undefined, {});
+  await Promise.resolve();
+  broker.cancelThread('thread-1', 'Client disconnected');
+
+  const result = await pending;
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.details, {
+    status: 'cancelled',
+    toolCallId: 'call-1',
+    error: 'Client disconnected',
+  });
+});

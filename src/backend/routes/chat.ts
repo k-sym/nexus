@@ -286,6 +286,19 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     const operationId = uuid();
     let streamError: string | undefined;
+    let promptInFlight = false;
+    let responseCompleted = false;
+    let clientDisconnected = false;
+    const abortOnResponseClose = () => {
+      if (responseCompleted || !promptInFlight || clientDisconnected || !session) return;
+      clientDisconnected = true;
+      pi.questions?.cancelThread(threadId, 'Client disconnected');
+      void session.abort().catch((err: any) => {
+        console.error(`[chat] failed to abort disconnected thread ${threadId}:`, err?.message);
+      });
+    };
+    reply.raw.once('close', abortOnResponseClose);
+    request.raw.once('aborted', abortOnResponseClose);
     fastify.activity?.bus.emit({
       type: 'start',
       operationId,
@@ -323,10 +336,21 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       if (session) {
         activeStreams.set(threadId, { session });
         const subscription = session.subscribe((ev) => write(ev));
-        if (images.length > 0) {
-          await session.prompt(promptContent, { images });
-        } else {
-          await session.prompt(promptContent);
+        promptInFlight = true;
+        try {
+          if (images.length > 0) {
+            await session.prompt(promptContent, { images });
+          } else {
+            await session.prompt(promptContent);
+          }
+        } finally {
+          promptInFlight = false;
+          subscription();
+        }
+        if (clientDisconnected) {
+          const error = new Error('Client disconnected');
+          error.name = 'AbortError';
+          throw error;
         }
         const contextUsage = safeContextUsage(session);
         if (contextUsage) {
@@ -340,7 +364,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
             lastEvent: 'context_usage',
           });
         }
-        subscription();
       }
       write({ kind: 'done' });
     } catch (err: any) {
@@ -349,6 +372,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       streamError = isAbort ? 'aborted' : (err?.message || 'prompt failed');
       write({ kind: 'error', error: streamError });
     } finally {
+      responseCompleted = true;
+      reply.raw.removeListener('close', abortOnResponseClose);
+      request.raw.removeListener('aborted', abortOnResponseClose);
       activeStreams.delete(threadId);
       concurrency.clear(thread.project_id, modelKey);
       fastify.activity?.bus.emit({
