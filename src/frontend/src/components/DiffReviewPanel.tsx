@@ -33,6 +33,7 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
+  const [notes, setNotes] = useState<Record<string, string>>({});
 
   const load = async () => {
     setLoading(true);
@@ -50,11 +51,20 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
     void load();
   }, [projectId]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const runAction = async (action: ReviewActionRequest['action'], hunkId: string) => {
     if (!task) return;
     setRunning(`${action}:${hunkId}`);
     try {
-      const result = await api.projects.reviewAction(projectId, { action, task_id: task.id, hunk_id: hunkId });
+      const note = notes[hunkId]?.trim() || undefined;
+      const result = await api.projects.reviewAction(projectId, { action, task_id: task.id, hunk_id: hunkId, note });
       if (result.task && action === 'assign_reviewer') onTaskAssigned(result.task);
       else if (result.task) onTaskCreated(result.task);
       if (result.seed) onChatSeed(result.seed);
@@ -102,6 +112,14 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
                     </div>
                     <div className="p-4 space-y-4">
                       <pre className="bg-black/30 border border-subtle rounded-lg p-3 overflow-x-auto text-[11px] text-muted leading-relaxed">{hunk.diff}</pre>
+                      <textarea
+                        value={notes[hunk.id] ?? ''}
+                        onChange={(e) => setNotes((current) => ({ ...current, [hunk.id]: e.target.value }))}
+                        placeholder="Optional note for the follow-up task or chat (e.g. what to focus on)…"
+                        rows={2}
+                        aria-label={`Note for ${hunk.file}`}
+                        className="w-full surface-glass border border-subtle rounded-lg p-2 text-[11px] text-primary placeholder:text-faint resize-y"
+                      />
                       <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">
                         {ACTIONS.map((action) => (
                           <ActionButton

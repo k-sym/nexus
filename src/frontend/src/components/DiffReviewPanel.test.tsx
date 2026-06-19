@@ -39,6 +39,24 @@ describe('DiffReviewPanel', () => {
     reviewAction.mockRestore();
   });
 
+  it('forwards a typed note with the action', async () => {
+    vi.spyOn(api.projects, 'gitDiff').mockResolvedValue(diffState);
+    const reviewAction = vi.spyOn(api.projects, 'reviewAction').mockResolvedValue({ ok: true, action: 'spawn_fix_task', task: { id: 'task-new', project_id: 'project-1', title: 'Fix hunk', status: 'todo', assigned_agent: 'Developer', model_key: null } });
+    render(<DiffReviewPanel projectId="project-1" task={{ id: 'task-1', title: 'Source' } as any} onClose={vi.fn()} onTaskCreated={vi.fn()} onTaskAssigned={vi.fn()} onChatSeed={vi.fn()} />);
+    await userEvent.type(await screen.findByLabelText('Note for src/a.ts'), 'focus on edge cases');
+    await userEvent.click(screen.getByRole('button', { name: /Spawn fix task/ }));
+    expect(reviewAction).toHaveBeenCalledWith('project-1', { action: 'spawn_fix_task', task_id: 'task-1', hunk_id: 'hunk-1', note: 'focus on edge cases' });
+  });
+
+  it('closes on Escape', async () => {
+    vi.spyOn(api.projects, 'gitDiff').mockResolvedValue(diffState);
+    const onClose = vi.fn();
+    render(<DiffReviewPanel projectId="project-1" task={{ id: 'task-1', title: 'Source' } as any} onClose={onClose} onTaskCreated={vi.fn()} onTaskAssigned={vi.fn()} onChatSeed={vi.fn()} />);
+    await screen.findByText('src/a.ts');
+    await userEvent.keyboard('{Escape}');
+    expect(onClose).toHaveBeenCalled();
+  });
+
   it('renders git error state', async () => {
     vi.spyOn(api.projects, 'gitDiff').mockResolvedValue({ ok: false, reason: 'not_git_repo', message: 'Not a git repository', repo_path: '/repo', git_remote: '' });
     render(<DiffReviewPanel projectId="project-1" task={null} onClose={vi.fn()} onTaskCreated={vi.fn()} onTaskAssigned={vi.fn()} onChatSeed={vi.fn()} />);

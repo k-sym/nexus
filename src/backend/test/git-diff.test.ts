@@ -295,3 +295,71 @@ test('POST /api/projects/:id/review-actions creates a chat seed for attach_to_ch
   }
 });
 
+test('POST /api/projects/:id/review-actions keeps the source task status when assigning a reviewer', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'nexus-route-assign-keep-'));
+  try {
+    runGit(repo, ['init']);
+    runGit(repo, ['config', 'user.email', 'a@example.com']);
+    runGit(repo, ['config', 'user.name', 'A Person']);
+    writeFileSync(join(repo, 'a.txt'), 'old\n');
+    runGit(repo, ['add', 'a.txt']);
+    runGit(repo, ['commit', '-m', 'initial']);
+    writeFileSync(join(repo, 'a.txt'), 'new\n');
+
+    const { app, db, dir } = makeRouteApp(repo);
+    try {
+      const now = new Date().toISOString();
+      db.prepare('INSERT INTO tasks (id, project_id, title, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('task-deploy', 'project-a', 'Deploy me', 'deploy', 'medium', now, now);
+      const diff = await app.inject({ method: 'GET', url: '/api/projects/project-a/git/diff' });
+      const hunkId = (diff.json() as any).hunks[0].id;
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/projects/project-a/review-actions',
+        payload: { task_id: 'task-deploy', action: 'assign_reviewer', hunk_id: hunkId },
+      });
+      assert.equal(res.statusCode, 200);
+      assert.equal((res.json() as any).task.assigned_agent, 'Reviewer');
+      const task = db.prepare('SELECT status, assigned_agent FROM tasks WHERE id = ?').get('task-deploy') as any;
+      assert.equal(task.status, 'deploy');
+      assert.equal(task.assigned_agent, 'Reviewer');
+    } finally {
+      await app.close();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/projects/:id/review-actions reuses an open chat thread for repeated attach_to_chat', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'nexus-route-chat-dedupe-'));
+  try {
+    runGit(repo, ['init']);
+    runGit(repo, ['config', 'user.email', 'a@example.com']);
+    runGit(repo, ['config', 'user.name', 'A Person']);
+    writeFileSync(join(repo, 'a.txt'), 'old\n');
+    runGit(repo, ['add', 'a.txt']);
+    runGit(repo, ['commit', '-m', 'initial']);
+    writeFileSync(join(repo, 'a.txt'), 'new\n');
+
+    const { app, db, dir } = makeRouteApp(repo);
+    try {
+      const diff = await app.inject({ method: 'GET', url: '/api/projects/project-a/git/diff' });
+      const hunkId = (diff.json() as any).hunks[0].id;
+      const payload = { task_id: 'task-a', action: 'attach_to_chat', hunk_id: hunkId };
+      const first = await app.inject({ method: 'POST', url: '/api/projects/project-a/review-actions', payload });
+      const second = await app.inject({ method: 'POST', url: '/api/projects/project-a/review-actions', payload });
+      assert.equal((first.json() as any).thread.id, (second.json() as any).thread.id);
+      const count = db.prepare('SELECT COUNT(*) AS n FROM chat_threads WHERE project_id = ?').get('project-a') as any;
+      assert.equal(count.n, 1);
+    } finally {
+      await app.close();
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+

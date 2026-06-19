@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { Project, Task, TaskStatus, type ReviewActionRequest, type ReviewActionResult } from '@nexus/shared';
-import { buildReviewActionPrompt, getProjectGitDiff, reviewActionPlan } from '../git/diff.js';
+import { buildReviewActionPrompt, buildReviewActionTitle, getProjectGitDiff, reviewActionPlan } from '../git/diff.js';
 import { summarizeTaskThread } from '../memory/summarize.js';
 import { insertNotification } from '../notifications/index.js';
 import { detectGitRemote } from '../github/repo.js';
@@ -151,7 +151,9 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
         err.statusCode = 400;
         throw err;
       }
-      db.prepare('UPDATE tasks SET assigned_agent = ?, status = ?, updated_at = ? WHERE id = ?').run(plan.assigned_agent, plan.status, now, sourceTask.id);
+      // Assigning a reviewer routes the persona but leaves the card where it is
+      // (a Deploy card stays in Deploy); it does not pull the task back to Review.
+      db.prepare('UPDATE tasks SET assigned_agent = ?, updated_at = ? WHERE id = ?').run(plan.assigned_agent, now, sourceTask.id);
       const updated = db.prepare('SELECT id, project_id, title, status, assigned_agent, model_key FROM tasks WHERE id = ?').get(sourceTask.id) as ReviewActionResult['task'];
       return { ok: true, action: body.action, task: updated };
     }
@@ -167,15 +169,18 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
         err.statusCode = 400;
         throw err;
       }
-      const thread = {
-        id: uuid(),
-        project_id: projectId,
-        title: `Diff review: ${hunk.file}`,
-        created_at: now,
-        updated_at: now,
-        archived_at: null,
-      };
-      db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)').run(thread.id, thread.project_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at);
+      const title = `Diff review: ${hunk.file}`;
+      // Reuse an open thread for this file so repeated clicks reseed one thread
+      // instead of spawning a new one each time.
+      const existing = db.prepare('SELECT id, project_id, title FROM chat_threads WHERE project_id = ? AND title = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1').get(projectId, title) as ReviewActionResult['thread'] | undefined;
+      let thread: NonNullable<ReviewActionResult['thread']>;
+      if (existing) {
+        db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(now, existing.id);
+        thread = existing;
+      } else {
+        thread = { id: uuid(), project_id: projectId, title };
+        db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)').run(thread.id, thread.project_id, thread.title, now, now, null);
+      }
       return {
         ok: true,
         action: body.action,
@@ -194,7 +199,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
-    const title = body.action === 'spawn_fix_task' ? `Fix hunk in ${hunk.file}` : body.action === 'explain_change' ? `Explain hunk in ${hunk.file}` : `Review hunk in ${hunk.file}`;
+    const title = buildReviewActionTitle(body.action, hunk);
     const description = buildReviewActionPrompt(project, sourceTask ?? null, body.action, hunk, body.note);
     const task = {
       id: uuid(),
