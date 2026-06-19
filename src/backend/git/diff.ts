@@ -1,5 +1,12 @@
-import { execFileSync } from 'node:child_process';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { GitDiffFile, GitDiffHunk, GitDiffState, GitDiffSummary, Project, ReviewAction, ReviewActionResult, Task } from '@nexus/shared';
+
+const execFileAsync = promisify(execFile);
+
+// `git diff --unified=80` produces large payloads; the default 1 MB child-process
+// buffer overflows on real diffs, so give git plenty of headroom.
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 
 type ParsedDiff = {
   files: GitDiffFile[];
@@ -14,9 +21,9 @@ interface GitCommandResult {
   stderr: string;
 }
 
-function runGit(cwd: string, args: string[]): GitCommandResult {
+async function runGit(cwd: string, args: string[]): Promise<GitCommandResult> {
   try {
-    const stdout = execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const { stdout } = await execFileAsync('git', args, { cwd, encoding: 'utf8', maxBuffer: GIT_MAX_BUFFER });
     return { ok: true, stdout, stderr: '' };
   } catch (err: any) {
     const raw = String(err?.stderr || err?.message || '').trim();
@@ -27,6 +34,41 @@ function runGit(cwd: string, args: string[]): GitCommandResult {
 
 function cleanStatusPath(raw: string): string {
   return raw.replace(/^"|"$/g, '').replace(/\\/g, '/');
+}
+
+/**
+ * Decode a path as it appears in `git diff` headers. When a path contains
+ * unusual characters (non-ASCII, spaces with quotePath on, control chars) git
+ * wraps it in double quotes and C-escapes the bytes. We reconstruct the raw
+ * byte stream and decode it as UTF-8 so e.g. `"caf\303\251.ts"` -> `café.ts`.
+ * Unquoted paths are returned as-is.
+ */
+function unquoteGitPath(raw: string): string {
+  const s = raw.trim();
+  if (s.length < 2 || !s.startsWith('"') || !s.endsWith('"')) return s;
+  const body = s.slice(1, -1);
+  const simple: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '\\': 92, '"': 34 };
+  const bytes: number[] = [];
+  for (let i = 0; i < body.length; i += 1) {
+    if (body[i] !== '\\') {
+      bytes.push(...Buffer.from(body[i], 'utf8'));
+      continue;
+    }
+    const next = body[i + 1];
+    if (next in simple) {
+      bytes.push(simple[next]);
+      i += 1;
+      continue;
+    }
+    const oct = body.slice(i + 1, i + 4).match(/^[0-7]{1,3}/);
+    if (oct) {
+      bytes.push(parseInt(oct[0], 8));
+      i += oct[0].length;
+      continue;
+    }
+    bytes.push(92); // stray backslash
+  }
+  return Buffer.from(bytes).toString('utf8');
 }
 
 function parseStatus(stdout: string) {
@@ -134,13 +176,15 @@ function parseOneDiff(output: string, staged: boolean): ParsedDiff {
     if (!current) continue;
 
     if (line.startsWith('--- ')) {
-      current.old_path = line.slice(4) !== '/dev/null' ? line.slice(4).replace(/^a\//, '') : current.old_path;
+      const raw = line.slice(4);
+      if (raw !== '/dev/null') current.old_path = unquoteGitPath(raw).replace(/^a\//, '');
       current.status = statusFromPaths(current.old_path, current.new_path);
       continue;
     }
 
     if (line.startsWith('+++ ')) {
-      current.new_path = line.slice(4) !== '/dev/null' ? line.slice(4).replace(/^b\//, '') : current.new_path;
+      const raw = line.slice(4);
+      if (raw !== '/dev/null') current.new_path = unquoteGitPath(raw).replace(/^b\//, '');
       current.path = current.new_path || current.old_path || current.path;
       current.status = statusFromPaths(current.old_path, current.new_path);
       continue;
@@ -170,13 +214,13 @@ export function parseGitDiff(output: string, staged: boolean): GitDiffHunk[] {
   return parseOneDiff(output, staged).hunks;
 }
 
-export function getProjectGitDiff(project: Pick<Project, 'id' | 'repo_path' | 'git_remote'>): GitDiffState {
+export async function getProjectGitDiff(project: Pick<Project, 'id' | 'repo_path' | 'git_remote'>): Promise<GitDiffState> {
   const repoPath = project.repo_path;
   if (!repoPath) {
     return { ok: false, reason: 'not_git_repo', message: 'Project repo_path is empty', repo_path: repoPath, git_remote: project.git_remote };
   }
 
-  const repoCheck = runGit(repoPath, ['rev-parse', '--is-inside-work-tree']);
+  const repoCheck = await runGit(repoPath, ['rev-parse', '--is-inside-work-tree']);
   if (!repoCheck.ok) {
     return {
       ok: false,
@@ -187,9 +231,11 @@ export function getProjectGitDiff(project: Pick<Project, 'id' | 'repo_path' | 'g
     };
   }
 
-  const status = parseStatus(runGit(repoPath, ['status', '--porcelain=v1', '-z']).stdout);
-  const stagedDiff = runGit(repoPath, ['diff', '--cached', '--no-ext-diff', '--unified=80']);
-  const unstagedDiff = runGit(repoPath, ['diff', '--no-ext-diff', '--unified=80']);
+  const status = parseStatus((await runGit(repoPath, ['status', '--porcelain=v1', '-z'])).stdout);
+  const [stagedDiff, unstagedDiff] = await Promise.all([
+    runGit(repoPath, ['diff', '--cached', '--no-ext-diff', '--unified=80']),
+    runGit(repoPath, ['diff', '--no-ext-diff', '--unified=80']),
+  ]);
 
   if (!stagedDiff.ok || !unstagedDiff.ok) {
     const failed = !stagedDiff.ok ? stagedDiff : unstagedDiff;

@@ -105,7 +105,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       err.statusCode = 404;
       throw err;
     }
-    return getProjectGitDiff(row);
+    return await getProjectGitDiff(row);
   });
 
   fastify.post('/api/projects/:id/review-actions', async (request) => {
@@ -118,7 +118,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
-    const diff = getProjectGitDiff(project);
+    const diff = await getProjectGitDiff(project);
     if (!diff.ok) return diff;
 
     const sourceTask = body.task_id

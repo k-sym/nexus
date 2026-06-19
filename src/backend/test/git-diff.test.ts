@@ -40,7 +40,23 @@ index 3333333..4444444 100644
   assert.equal(parsed[1].id, 'unstaged:0:src/b.ts:-10:+10');
 });
 
-test('getProjectGitDiff returns structured staged and unstaged tracked diffs', () => {
+test('parseGitDiff decodes git C-quoted non-ascii paths', () => {
+  // git emits non-ASCII paths quoted with octal-escaped UTF-8 bytes.
+  const diff = `diff --git "a/caf\\303\\251.ts" "b/caf\\303\\251.ts"
+index 1111111..2222222 100644
+--- "a/caf\\303\\251.ts"
++++ "b/caf\\303\\251.ts"
+@@ -1,1 +1,2 @@
+ const a = 1;
++const b = 2;
+`;
+  const parsed = parseGitDiff(diff, true);
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].file, 'café.ts');
+  assert.equal(parsed[0].id, 'staged:0:café.ts:-1:+1');
+});
+
+test('getProjectGitDiff returns structured staged and unstaged tracked diffs', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-git-diff-'));
   try {
     runGit(dir, ['init']);
@@ -61,7 +77,7 @@ test('getProjectGitDiff returns structured staged and unstaged tracked diffs', (
 
     writeFileSync(join(dir, 'untracked.txt'), 'skip me\n');
 
-    const state = getProjectGitDiff({ id: 'p', repo_path: dir, git_remote: '' } as any);
+    const state = await getProjectGitDiff({ id: 'p', repo_path: dir, git_remote: '' } as any);
     assert.equal(state.ok, true);
     if (!state.ok) throw new Error('expected ok diff state');
     assert.equal(state.has_changes, true);
@@ -74,10 +90,10 @@ test('getProjectGitDiff returns structured staged and unstaged tracked diffs', (
   }
 });
 
-test('getProjectGitDiff returns not_git_repo for non-git paths', () => {
+test('getProjectGitDiff returns not_git_repo for non-git paths', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-not-git-'));
   try {
-    const state = getProjectGitDiff({ id: 'p', repo_path: dir, git_remote: '' } as any);
+    const state = await getProjectGitDiff({ id: 'p', repo_path: dir, git_remote: '' } as any);
     assert.deepEqual(state, {
       ok: false,
       reason: 'not_git_repo',
