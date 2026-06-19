@@ -12,7 +12,7 @@ The section shows:
 
 - local services, effective ports/URLs, and whether each endpoint is loopback-only;
 - the Nexus database, canonical Obsidian vault, disposable memory index, config, and Pi credential file paths;
-- memory namespaces, auto-injection state and limits, and session archival behavior;
+- memory namespaces, auto-injection state and limits, and the current manual session archival behavior;
 - each supported secret's configured source and detection state, never its value;
 - configured remote provider destinations and the categories of content sent to them;
 - the telemetry stance: Nexus contains no application analytics or telemetry integration, while configured model and issue providers receive the requests necessary to provide their service.
@@ -67,10 +67,11 @@ Add a concise **Trust and privacy** section near the architecture/configuration 
 - what is stored in `~/.nexus/nexus.db`, the Obsidian vault, its `.index` database, `config.yaml`, and `auth.json`;
 - exact secret sources, including the possibility of masked literals in config;
 - what leaves the machine for model, assistant, Jira, and GitHub calls;
-- namespaces, auto-injection, archival, disabling, clearing, and rebuilding memory;
+- namespaces, auto-injection, manual archival, disabling, clearing, and rebuilding memory;
 - the explicit no-application-telemetry stance without making broader claims about third-party providers.
 
 Existing contradictory secret-storage text is corrected rather than duplicated.
+The existing 48-hour automatic-archival claim is also corrected: current archival is user-triggered, writes a summary into `nexus` memory, and removes the hot thread only after memory storage succeeds.
 
 ## Error handling and safety
 
