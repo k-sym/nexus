@@ -4,6 +4,7 @@ import Fastify from 'fastify';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { request as httpRequest } from 'node:http';
 import Database from 'better-sqlite3';
 import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import { ConcurrencyTracker } from '../pi/concurrency';
@@ -446,6 +447,298 @@ test('POST /api/threads/:id/messages/stream rejects same-thread re-entry without
     assert.equal((await first).statusCode, 200);
   } finally {
     releaseFirstPrompt.resolve();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects same-thread re-entry with a different model', async () => {
+  const firstPromptStarted = deferred<void>();
+  const releaseFirstPrompt = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        firstPromptStarted.resolve();
+        await releaseFirstPrompt.promise;
+      }
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second' },
+    });
+
+    assert.equal(second.statusCode, 409);
+    assert.deepEqual(second.json(), {
+      kind: 'thread_busy',
+      error: 'This thread already has a run in progress',
+      activeThreadId: 'thread-1',
+      activeTitle: 'T1',
+      modelKey: 'anthropic/sonnet',
+    });
+    assert.equal(promptCalls, 1);
+    assert.equal(abortCalls, 0);
+    assert.equal(sessionForCalls, 1);
+
+    releaseFirstPrompt.resolve();
+    assert.equal((await first).statusCode, 200);
+  } finally {
+    releaseFirstPrompt.resolve();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream claims the thread before awaiting session setup', async () => {
+  const sessionForStarted = deferred<void>();
+  const secondSessionForStarted = deferred<void>();
+  const releaseSessionFor = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      sessionForStarted.resolve();
+      if (sessionForCalls === 2) secondSessionForStarted.resolve();
+      await releaseSessionFor.promise;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  let first: ReturnType<typeof app.inject> | undefined;
+  let second: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await sessionForStarted.promise;
+
+    second = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+    const outcome = await Promise.race([
+      second.then((response) => ({ kind: 'response' as const, response })),
+      secondSessionForStarted.promise.then(() => ({ kind: 'duplicate_session' as const })),
+    ]);
+
+    assert.equal(outcome.kind, 'response');
+    assert.equal(sessionForCalls, 1);
+    const secondResponse = outcome.kind === 'response' ? outcome.response : undefined;
+    assert.ok(secondResponse);
+    assert.equal(secondResponse.statusCode, 409);
+    assert.equal(secondResponse.json().kind, 'thread_busy');
+    assert.equal(promptCalls, 0);
+    assert.equal(abortCalls, 0);
+
+    releaseSessionFor.resolve();
+    assert.equal((await first).statusCode, 200);
+    assert.equal(promptCalls, 1);
+  } finally {
+    releaseSessionFor.resolve();
+    await Promise.allSettled([first, second].filter(Boolean));
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream stops after session setup when the client disconnects during setup', async () => {
+  const sessionForStarted = deferred<void>();
+  const duplicateSessionForStarted = deferred<void>();
+  const disconnectObserved = deferred<void>();
+  const releaseSessionFor = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    questions: { cancelThread: () => disconnectObserved.resolve() },
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      sessionForStarted.resolve();
+      if (sessionForCalls === 2) duplicateSessionForStarted.resolve();
+      await releaseSessionFor.promise;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  let clientRequest: ReturnType<typeof httpRequest> | undefined;
+  try {
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    assert.ok(address && typeof address !== 'string');
+    clientRequest = httpRequest({
+      host: '127.0.0.1',
+      port: address.port,
+      method: 'POST',
+      path: '/api/threads/thread-1/messages/stream',
+      headers: { 'content-type': 'application/json' },
+    });
+    clientRequest.on('error', () => {});
+    clientRequest.end(JSON.stringify({ content: 'first', modelKey: 'anthropic/sonnet' }));
+    await sessionForStarted.promise;
+
+    clientRequest.destroy();
+    await disconnectObserved.promise;
+    const whileSetupPending = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second' },
+    });
+    const outcome = await Promise.race([
+      whileSetupPending.then((response) => ({ kind: 'response' as const, response })),
+      duplicateSessionForStarted.promise.then(() => ({ kind: 'duplicate_session' as const })),
+    ]);
+    assert.equal(outcome.kind, 'response');
+    assert.equal(outcome.kind === 'response' ? outcome.response.statusCode : undefined, 409);
+
+    releaseSessionFor.resolve();
+    await Promise.allSettled([whileSetupPending]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(promptCalls, 0);
+    assert.equal(abortCalls, 1);
+  } finally {
+    releaseSessionFor.resolve();
+    clientRequest?.destroy();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream retains its claim while a disconnected prompt terminates', async () => {
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const abortStarted = deferred<void>();
+  const releaseAbort = deferred<void>();
+  let promptCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        promptStarted.resolve();
+        await promptStopped.promise;
+      }
+    },
+    abort: async () => {
+      abortStarted.resolve();
+      await releaseAbort.promise;
+      promptStopped.resolve();
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+      payloadAsStream: true,
+    });
+    await promptStarted.promise;
+    first.raw.res.destroy();
+    await abortStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second' },
+    });
+    assert.equal(second.statusCode, 409);
+    assert.equal(second.json().kind, 'thread_busy');
+    assert.equal(promptCalls, 1);
+
+    releaseAbort.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const third = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'third' },
+    });
+    assert.equal(third.statusCode, 200);
+    assert.equal(promptCalls, 2);
+  } finally {
+    releaseAbort.resolve();
+    promptStopped.resolve();
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
