@@ -7,6 +7,7 @@
  */
 import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea } from '@nexus/shared';
 import { apiFetch } from './api-base';
+import type { QuestionAnswer } from './lib/questions';
 
 export type AgentHealth = 'online' | 'ready' | 'offline';
 
@@ -132,6 +133,11 @@ export const api = {
       fetchJson<ChatThread>(`/api/threads/${threadId}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
     archiveThread: (threadId: string) => fetchJson<{ memoryId: string | null }>(`/api/threads/${threadId}/archive`, { method: 'POST' }),
     deleteThread: (threadId: string) => fetchJson<void>(`/api/threads/${threadId}`, { method: 'DELETE' }),
+    answerQuestion: (threadId: string, toolCallId: string, answers: QuestionAnswer[]) =>
+      fetchJson<{ ok: true }>(
+        `/api/threads/${encodeURIComponent(threadId)}/questions/${encodeURIComponent(toolCallId)}/answer`,
+        { method: 'POST', body: JSON.stringify({ answers }) },
+      ),
   },
   models: {
     list: () => fetchJson<ModelsResponse>(`/api/models`),

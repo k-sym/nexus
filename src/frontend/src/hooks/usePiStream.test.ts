@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi } from 'vitest';
-import { INITIAL_STATE, streamReducer, usePiStream } from './usePiStream';
+import { ChatBusyError, INITIAL_STATE, streamReducer, usePiStream } from './usePiStream';
 
 describe('streamReducer', () => {
   it('START_STREAM seeds a user + empty assistant bubble', () => {
@@ -56,6 +56,32 @@ describe('streamReducer', () => {
     expect(next.status).toBe('tool_call');
   });
 
+  it('preserves question arguments and completed result details', () => {
+    const args = { questions: [{ id: 'scope', question: 'Which scope?' }] };
+    const details = {
+      status: 'answered',
+      toolCallId: 'call-1',
+      answers: [{ questionId: 'scope', selected: ['small'] }],
+    };
+    const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
+    const called = streamReducer(start, {
+      type: 'TOOL_CALL_START',
+      toolCall: { id: 'call-1', name: 'question', args },
+    });
+    const completed = streamReducer(called, {
+      type: 'TOOL_CALL_UPDATE',
+      id: 'call-1',
+      patch: { status: 'completed', result: 'Scope: Small', details },
+    });
+
+    expect(completed.streamingMessage?.toolCalls?.[0]).toMatchObject({
+      args,
+      status: 'completed',
+      result: 'Scope: Small',
+      details,
+    });
+  });
+
   it('STREAM_COMPLETE finalizes the message', () => {
     const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
     const delta = streamReducer(start, { type: 'TEXT_DELTA', delta: 'hi' });
@@ -99,6 +125,170 @@ describe('streamReducer', () => {
 });
 
 describe('usePiStream', () => {
+  it('surfaces same-thread busy responses as normal errors without throwing a conflict', async () => {
+    const onError = vi.fn();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      body: null,
+      json: async () => ({
+        kind: 'thread_busy',
+        error: 'This thread already has a run in progress',
+        activeThreadId: 'thread-1',
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    let response: unknown;
+    await act(async () => {
+      response = await result.current.startStream('thread-1', 'second', { onError });
+    });
+
+    expect(response).toBeNull();
+    expect(result.current.state).toMatchObject({
+      status: 'error',
+      error: 'This thread already has a run in progress',
+    });
+    expect(onError).toHaveBeenCalledWith('This thread already has a run in progress');
+  });
+
+  it('keeps different-thread model busy responses on the confirmable conflict path', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      body: null,
+      json: async () => ({
+        kind: 'model_busy',
+        activeThreadId: 'thread-2',
+        activeTitle: 'Other thread',
+        modelKey: 'anthropic/sonnet',
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    let thrown: unknown;
+    await act(async () => {
+      try {
+        await result.current.startStream('thread-1', 'second');
+      } catch (error) {
+        thrown = error;
+      }
+    });
+
+    expect(thrown).toEqual(new ChatBusyError('thread-2', 'Other thread', 'anthropic/sonnet'));
+  });
+
+  it('keeps a question running when message_end arrives before tool_execution_end', async () => {
+    const encoder = new TextEncoder();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(streamController) {
+          controller = streamController;
+        },
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    let streamPromise!: Promise<unknown>;
+    act(() => {
+      streamPromise = result.current.startStream('thread-1', 'hi');
+    });
+    act(() => {
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'tool_execution_start',
+          toolCallId: 'call-1',
+          toolName: 'question',
+          args: { questions: [{ id: 'scope', question: 'Which scope?' }] },
+        },
+      })}\n`));
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'message_end',
+          message: {
+            role: 'assistant',
+            content: [{
+              type: 'toolCall',
+              id: 'call-1',
+              name: 'question',
+              arguments: { questions: [{ id: 'scope', question: 'Which scope?' }] },
+            }],
+            timestamp: 123,
+          },
+        },
+      })}\n`));
+    });
+
+    await waitFor(() => {
+      expect(result.current.state.streamingMessage?.toolCalls?.[0]).toMatchObject({
+        id: 'call-1',
+        status: 'running',
+      });
+    });
+
+    act(() => {
+      controller.enqueue(encoder.encode(`${JSON.stringify({
+        event: {
+          type: 'tool_execution_end',
+          toolCallId: 'call-1',
+          isError: false,
+          result: { content: [{ type: 'text', text: 'Scope: Small' }] },
+        },
+      })}\n`));
+      controller.enqueue(encoder.encode(`${JSON.stringify({ kind: 'done' })}\n`));
+      controller.close();
+    });
+    await act(async () => {
+      await streamPromise;
+    });
+
+    expect(result.current.state.messages[1].toolCalls?.[0]).toMatchObject({
+      id: 'call-1',
+      status: 'completed',
+      result: 'Scope: Small',
+    });
+  });
+
+  it('preserves question tool result details from stream events', async () => {
+    const details = {
+      status: 'answered',
+      toolCallId: 'call-1',
+      answers: [{ questionId: 'scope', selected: ['small'] }],
+    };
+    const encoder = new TextEncoder();
+    const events = [
+      { event: { type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'question', args: { questions: [] } } },
+      { event: { type: 'tool_execution_end', toolCallId: 'call-1', toolName: 'question', isError: false, result: { content: [{ type: 'text', text: 'Scope: Small' }], details } } },
+      { kind: 'done' },
+    ];
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(controller) {
+          for (const event of events) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          controller.close();
+        },
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'hi');
+    });
+
+    expect(result.current.state.messages[1].toolCalls?.[0]).toMatchObject({
+      id: 'call-1',
+      args: { questions: [] },
+      status: 'completed',
+      result: 'Scope: Small',
+      details,
+    });
+  });
+
   it('shows assistant error event messages from the stream', async () => {
     const encoder = new TextEncoder();
     const body = new ReadableStream({

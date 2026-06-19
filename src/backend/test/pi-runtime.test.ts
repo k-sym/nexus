@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { PiRuntime, buildResourceLoaderOptions, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
+import { PiRuntime, buildResourceLoaderOptions, buildSessionExtensionFactories, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
+import { QuestionBroker } from '../pi/questions';
 import { buildModelCatalog } from '../routes/pi';
 
 test('cwdSlug encodes repo paths safely', () => {
@@ -151,6 +152,26 @@ test('buildResourceLoaderOptions includes the Anthropic Messages bridge factory'
   assert.equal(options.extensionFactories?.length, 2);
   assert.strictEqual(options.extensionFactories?.[1], customFactory);
   assert.deepEqual(inputFactories, [customFactory], 'input extension array remains unchanged');
+});
+
+test('question extension factory is installed after the Anthropic bridge and before signal filtering', async () => {
+  const broker = new QuestionBroker();
+  const signalFactory = () => {};
+  const sessionFactories = buildSessionExtensionFactories('thread-1', '/tmp/project', broker, () => signalFactory);
+  const options = buildResourceLoaderOptions({
+    cwd: '/tmp/project',
+    agentDir: '/tmp/nexus-agent',
+    settingsManager: {},
+    extensionFactories: sessionFactories,
+  });
+
+  assert.equal(options.extensionFactories?.length, 3);
+  let tool: any;
+  await options.extensionFactories?.[1]?.({
+    registerTool(value: unknown) { tool = value; },
+  } as any);
+  assert.equal(tool?.name, 'question');
+  assert.strictEqual(options.extensionFactories?.[2], signalFactory);
 });
 
 test('PiRuntime.findModel exposes model input capabilities', () => {

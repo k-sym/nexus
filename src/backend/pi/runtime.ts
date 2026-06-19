@@ -17,6 +17,8 @@ import {
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
 import anthropicMessagesBridge from '@blackbelt-technology/pi-anthropic-messages';
+import { QuestionBroker, createQuestionExtension } from './questions.js';
+import { createSignalFilterExtension } from '../signal-filters/extension.js';
 
 type ResourceLoaderOptions = {
   cwd: string;
@@ -73,11 +75,21 @@ export function buildResourceLoaderOptions(
   };
 }
 
+export function buildSessionExtensionFactories(
+  threadId: string,
+  cwd: string,
+  questions: QuestionBroker,
+  signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
+): ExtensionFactory[] {
+  return [createQuestionExtension(threadId, questions), signalFactoryBuilder(cwd)];
+}
+
 export class PiRuntime {
   readonly auth: AuthStorage;
   readonly models: ModelRegistry;
   /** Internal path config. Exposed read-only for the orchestrator's headless sessions. */
   readonly paths: PiRuntimePaths;
+  readonly questions = new QuestionBroker();
   private readonly sessions = new Map<string, AgentSession>();
   private readonly sessionPromises = new Map<string, Promise<AgentSession>>();
   private readonly sessionModels = new Map<string, string>();
@@ -148,14 +160,13 @@ export class PiRuntime {
     // (avoids top-level CJS resolution failures in tsx when the workspace
     // doesn't set type:module).
     const { SessionManager, SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
-    const { createSignalFilterExtension } = await import('../signal-filters/extension.js');
     const sessionManager = SessionManager.create(cwd, this.sessionDirFor(cwd), { id: threadId });
     const settingsManager = SettingsManager.inMemory();
     const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
-      extensionFactories: [createSignalFilterExtension(cwd)],
+      extensionFactories: buildSessionExtensionFactories(threadId, cwd, this.questions),
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({
@@ -181,6 +192,7 @@ export class PiRuntime {
     this.sessions.delete(key);
     this.sessionPromises.delete(key);
     this.sessionModels.delete(key);
+    this.questions.cancelThread(threadId, 'Session dropped');
     const sessionDir = this.sessionDirFor(cwd);
     try {
       for (const name of readdirSync(sessionDir)) {

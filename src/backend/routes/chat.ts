@@ -26,6 +26,12 @@ interface ActiveStream {
   session: Pick<AgentSession, 'abort'>;
 }
 
+interface ThreadRunClaim {
+  owner: symbol;
+  title: string;
+  modelKey: string;
+}
+
 interface ChatImageAttachment {
   type: 'image';
   data: string;
@@ -116,7 +122,27 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
   const pi = fastify.pi;
   const concurrency = fastify.chatConcurrency;
+  const threadRunClaims = new Map<string, ThreadRunClaim>();
   (fastify as any).activeChatStreams = activeStreams;
+
+  const threadBusyResponse = (threadId: string, claim: Pick<ThreadRunClaim, 'title' | 'modelKey'>) => ({
+    kind: 'thread_busy',
+    error: 'This thread already has a run in progress',
+    activeThreadId: threadId,
+    activeTitle: claim.title,
+    modelKey: claim.modelKey,
+  });
+
+  const claimThreadRun = (threadId: string, title: string, modelKey: string): symbol | undefined => {
+    if (threadRunClaims.has(threadId)) return undefined;
+    const owner = Symbol(threadId);
+    threadRunClaims.set(threadId, { owner, title, modelKey });
+    return owner;
+  };
+
+  const releaseThreadRun = (threadId: string, owner: symbol): void => {
+    if (threadRunClaims.get(threadId)?.owner === owner) threadRunClaims.delete(threadId);
+  };
 
   fastify.get('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
@@ -193,7 +219,16 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
     // Check if this project+model combination is already streaming
     const modelKey = body.modelKey || 'default';
+    const existingThreadClaim = threadRunClaims.get(threadId);
+    if (existingThreadClaim) {
+      reply.code(409);
+      return threadBusyResponse(threadId, existingThreadClaim);
+    }
     const busy = concurrency.get(thread.project_id, modelKey);
+    if (busy?.threadId === threadId) {
+      reply.code(409);
+      return threadBusyResponse(threadId, busy);
+    }
     if (busy && busy.threadId !== threadId) {
       if (confirmCancel) {
         const existing = activeStreams.get(busy.threadId);
@@ -203,10 +238,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           } catch (err: any) {
             console.error(`[chat] failed to abort active thread ${busy.threadId}:`, err?.message);
           }
-          activeStreams.delete(busy.threadId);
         }
-        await new Promise((r) => setTimeout(r, ABORT_GRACE_MS));
-        concurrency.clear(thread.project_id, modelKey);
+        pi.questions?.cancelThread(busy.threadId, 'Cancelled by another thread');
+        await concurrency.waitForRelease(thread.project_id, modelKey, busy, ABORT_GRACE_MS);
       } else {
         reply.code(409);
         return {
@@ -238,35 +272,80 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     const savedAttachments = saveFileAttachments(attachments, cwd);
     const promptContent = promptWithFileReferences(body.content, savedAttachments);
 
-    let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> | undefined;
-    try {
-      session = await pi.sessionFor(threadId, cwd);
-    } catch (err: any) {
-      reply.code(500);
-      return { error: err?.message || 'failed to create session' };
+    // This claim is deliberately synchronous and precedes sessionFor/setModel.
+    // Reaching it after the confirm-cancel awaits also rechecks the thread in
+    // case another request started while the conflicting run was being aborted.
+    const threadClaimOwner = claimThreadRun(threadId, thread.title, modelKey);
+    if (!threadClaimOwner) {
+      reply.code(409);
+      return threadBusyResponse(threadId, threadRunClaims.get(threadId)!);
     }
+    const releaseThreadClaim = () => releaseThreadRun(threadId, threadClaimOwner);
+    const modelClaimOwner = concurrency.claim(thread.project_id, modelKey, threadId, thread.title);
+    if (!modelClaimOwner) {
+      releaseThreadClaim();
+      const active = concurrency.get(thread.project_id, modelKey);
+      reply.code(409);
+      return active?.threadId === threadId
+        ? threadBusyResponse(threadId, active)
+        : {
+            kind: 'model_busy',
+            activeThreadId: active?.threadId,
+            activeTitle: active?.title,
+            modelKey: active?.modelKey ?? modelKey,
+          };
+    }
+    let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> | undefined;
+    let responseCompleted = false;
+    let clientDisconnected = false;
+    let disconnectAbort: Promise<void> | undefined;
+    const abortDisconnectedSession = () => {
+      if (!clientDisconnected || !session || disconnectAbort) return;
+      disconnectAbort = session.abort().catch((err: any) => {
+        console.error(`[chat] failed to abort disconnected thread ${threadId}:`, err?.message);
+      });
+    };
+    const abortOnResponseClose = () => {
+      if (responseCompleted || clientDisconnected) return;
+      clientDisconnected = true;
+      pi.questions?.cancelThread(threadId, 'Client disconnected');
+      abortDisconnectedSession();
+    };
+    reply.raw.once('close', abortOnResponseClose);
+    request.raw.once('aborted', abortOnResponseClose);
 
-    if (body.modelKey && selectedModel) {
-      const currentModel = pi.getSessionModel(threadId, cwd);
-      if (currentModel !== body.modelKey) {
-        try {
-          await session.setModel(selectedModel);
-          pi.setSessionModel(threadId, cwd, body.modelKey);
-        } catch (err: any) {
-          const message = err?.message || 'failed to select model';
-          console.error(`[chat] setModel failed for ${body.modelKey}:`, message);
-          reply.code(400);
-          return { error: message };
+    try {
+      try {
+        session = await pi.sessionFor(threadId, cwd);
+      } catch (err: any) {
+        reply.code(500);
+        return { error: err?.message || 'failed to create session' };
+      }
+      abortDisconnectedSession();
+      if (clientDisconnected) return;
+
+      if (body.modelKey && selectedModel) {
+        const currentModel = pi.getSessionModel(threadId, cwd);
+        if (currentModel !== body.modelKey) {
+          try {
+            await session.setModel(selectedModel);
+            pi.setSessionModel(threadId, cwd, body.modelKey);
+          } catch (err: any) {
+            const message = err?.message || 'failed to select model';
+            console.error(`[chat] setModel failed for ${body.modelKey}:`, message);
+            reply.code(400);
+            return { error: message };
+          }
+          abortDisconnectedSession();
+          if (clientDisconnected) return;
         }
       }
-    }
 
-    concurrency.set(thread.project_id, modelKey, threadId, thread.title);
-    db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(
-      new Date().toISOString(),
-      body.modelKey || null,
-      threadId,
-    );
+      db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(
+        new Date().toISOString(),
+        body.modelKey || null,
+        threadId,
+      );
 
     reply.hijack();
     reply.raw.writeHead(200, {
@@ -322,10 +401,19 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       if (session) {
         activeStreams.set(threadId, { session });
         const subscription = session.subscribe((ev) => write(ev));
-        if (images.length > 0) {
-          await session.prompt(promptContent, { images });
-        } else {
-          await session.prompt(promptContent);
+        try {
+          if (images.length > 0) {
+            await session.prompt(promptContent, { images });
+          } else {
+            await session.prompt(promptContent);
+          }
+        } finally {
+          subscription();
+        }
+        if (clientDisconnected) {
+          const error = new Error('Client disconnected');
+          error.name = 'AbortError';
+          throw error;
         }
         const contextUsage = safeContextUsage(session);
         if (contextUsage) {
@@ -339,16 +427,16 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
             lastEvent: 'context_usage',
           });
         }
-        subscription();
       }
       write({ kind: 'done' });
     } catch (err: any) {
       const isAbort = err?.name === 'AbortError';
+      if (isAbort) pi.questions?.cancelThread(threadId, 'Stream aborted');
       streamError = isAbort ? 'aborted' : (err?.message || 'prompt failed');
       write({ kind: 'error', error: streamError });
     } finally {
+      responseCompleted = true;
       activeStreams.delete(threadId);
-      concurrency.clear(thread.project_id, modelKey);
       fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
@@ -358,6 +446,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         error: streamError,
       });
       reply.raw.end();
+    }
+    } finally {
+      responseCompleted = true;
+      reply.raw.removeListener('close', abortOnResponseClose);
+      request.raw.removeListener('aborted', abortOnResponseClose);
+      if (disconnectAbort) await disconnectAbort;
+      concurrency.release(thread.project_id, modelKey, modelClaimOwner);
+      releaseThreadClaim();
     }
   });
 
@@ -369,6 +465,23 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       await existing.session.abort();
     } catch (err: any) {
       console.error(`[chat] failed to abort active thread ${threadId}:`, err?.message);
+    }
+    pi.questions?.cancelThread(threadId, 'Stream aborted');
+    return { ok: true };
+  });
+
+  fastify.post('/api/threads/:threadId/questions/:toolCallId/answer', async (request, reply) => {
+    const { threadId, toolCallId } = request.params as { threadId: string; toolCallId: string };
+    const thread = db.prepare('SELECT id FROM chat_threads WHERE id = ?').get(threadId);
+    if (!thread) {
+      reply.code(404);
+      return { error: 'Thread not found' };
+    }
+
+    const result = pi.questions.answer(threadId, toolCallId, request.body);
+    if (!result.ok) {
+      reply.code(result.status);
+      return { error: result.error };
     }
     return { ok: true };
   });
@@ -493,6 +606,13 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
   } catch {
     // Telemetry is best-effort; history always returns raw output.
   }
+  const toolResults = new Map<string, any>();
+  for (const entry of entries as any[]) {
+    const message = entry?.type === 'message' ? entry.message : undefined;
+    if (message?.role === 'toolResult' && message.toolCallId) {
+      toolResults.set(String(message.toolCallId), message);
+    }
+  }
   const out: unknown[] = [];
   for (const e of entries as any[]) {
     if (e.type !== 'message') continue;
@@ -515,12 +635,25 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
         if (block.type === 'text') text += block.text;
         else if (block.type === 'thinking') thinking += block.thinking;
         else if (block.type === 'toolCall') {
-          toolCalls.push({
+          const call: Record<string, unknown> = {
             id: block.id,
             name: block.name,
             args: block.arguments,
             status: 'completed',
-          });
+          };
+          if (block.name === 'question') {
+            const result = toolResults.get(String(block.id));
+            if (!result) {
+              call.status = 'interrupted';
+            } else {
+              const resultText = extractText(result.content);
+              call.status = result.isError ? 'error' : 'completed';
+              call.result = resultText;
+              const details = result.details ?? parseTrailingJson(resultText);
+              if (details !== undefined) call.details = details;
+            }
+          }
+          toolCalls.push(call);
         }
       }
       const isError = m.stopReason === 'error' || !!m.errorMessage;
@@ -566,6 +699,19 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
     }
   }
   return out;
+}
+
+function parseTrailingJson(text: string): unknown {
+  const candidates = [text.trim(), text.slice(text.lastIndexOf('\n\n') + 2).trim()];
+  for (const candidate of candidates) {
+    if (!candidate.startsWith('{')) continue;
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return undefined;
 }
 
 function validateChatAttachments(

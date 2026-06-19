@@ -4,10 +4,12 @@ import Fastify from 'fastify';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { request as httpRequest } from 'node:http';
 import Database from 'better-sqlite3';
 import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import { ConcurrencyTracker } from '../pi/concurrency';
-import { registerChatRoutes } from '../routes/chat';
+import { QuestionBroker, type QuestionRequest } from '../pi/questions';
+import { flattenEntries, registerChatRoutes } from '../routes/chat';
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -18,6 +20,64 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
+
+test('question history associates a matching result with its assistant tool call', () => {
+  const details = {
+    status: 'answered',
+    toolCallId: 'call-1',
+    answers: [{ questionId: 'scope', selected: ['small'] }],
+  };
+  const messages = flattenEntries([
+    {
+      type: 'message',
+      id: 'assistant-1',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'toolCall',
+          id: 'call-1',
+          name: 'question',
+          arguments: { questions: [] },
+        }],
+      },
+    },
+    {
+      type: 'message',
+      id: 'result-1',
+      message: {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'question',
+        isError: false,
+        content: [{ type: 'text', text: `Scope: Small\n\n${JSON.stringify(details)}` }],
+        details,
+      },
+    },
+  ]) as any[];
+
+  assert.deepEqual(messages[0].tool_calls[0], {
+    id: 'call-1',
+    name: 'question',
+    args: { questions: [] },
+    status: 'completed',
+    result: `Scope: Small\n\n${JSON.stringify(details)}`,
+    details,
+  });
+});
+
+test('question history marks a tool call without a result interrupted', () => {
+  const messages = flattenEntries([{
+    type: 'message',
+    id: 'assistant-1',
+    message: {
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'call-1', name: 'question', arguments: { questions: [] } }],
+    },
+  }]) as any[];
+
+  assert.equal(messages[0].tool_calls[0].status, 'interrupted');
+  assert.equal(messages[0].tool_calls[0].result, undefined);
+});
 
 function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-chat-test-'));
@@ -100,10 +160,135 @@ const pdfAttachment = {
   size: 9,
 };
 
+const questionRequest: QuestionRequest = {
+  questions: [{
+    id: 'scope',
+    header: 'Scope',
+    question: 'Which scope?',
+    options: [
+      { value: 'small', label: 'Small' },
+      { value: 'full', label: 'Full' },
+    ],
+    multiple: false,
+    allowOther: true,
+  }],
+};
+
+const validQuestionAnswer = {
+  answers: [{ questionId: 'scope', selected: ['small'] }],
+};
+
+test('question answer route resolves a pending question', async () => {
+  const { app, db, dir, runtime } = makeApp();
+  try {
+    const result = runtime.questions.register('thread-1', 'call-1', questionRequest);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/questions/call-1/answer',
+      payload: validQuestionAnswer,
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), { ok: true });
+    assert.deepEqual(await result, {
+      status: 'answered',
+      toolCallId: 'call-1',
+      answers: validQuestionAnswer.answers,
+    });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question answer route rejects invalid answers without resolving the question', async () => {
+  const { app, db, dir, runtime } = makeApp();
+  try {
+    const result = runtime.questions.register('thread-1', 'call-1', questionRequest);
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/questions/call-1/answer',
+      payload: { answers: [{ questionId: 'scope', selected: ['unknown'] }] },
+    });
+    assert.equal(invalid.statusCode, 400);
+
+    const valid = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/questions/call-1/answer',
+      payload: validQuestionAnswer,
+    });
+    assert.equal(valid.statusCode, 200);
+    assert.equal((await result).status, 'answered');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question answer route returns 404 for unknown, cross-thread, and duplicate submissions', async () => {
+  const { app, db, dir, runtime } = makeApp(undefined, { includeSecondThread: true });
+  try {
+    const result = runtime.questions.register('thread-1', 'call-1', questionRequest);
+    const unknown = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/questions/missing/answer',
+      payload: validQuestionAnswer,
+    });
+    assert.equal(unknown.statusCode, 404);
+
+    const crossThread = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/questions/call-1/answer',
+      payload: validQuestionAnswer,
+    });
+    assert.equal(crossThread.statusCode, 404);
+
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/questions/call-1/answer',
+      payload: validQuestionAnswer,
+    });
+    assert.equal(first.statusCode, 200);
+    await result;
+
+    const duplicate = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/questions/call-1/answer',
+      payload: validQuestionAnswer,
+    });
+    assert.equal(duplicate.statusCode, 404);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question answer route returns 404 before consulting the broker when the thread does not exist', async () => {
+  const { app, db, dir, runtime } = makeApp();
+  try {
+    const result = runtime.questions.register('missing-thread', 'call-1', questionRequest);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/missing-thread/questions/call-1/answer',
+      payload: validQuestionAnswer,
+    });
+    assert.equal(res.statusCode, 404);
+    runtime.questions.cancelThread('missing-thread', 'test cleanup');
+    assert.equal((await result).status, 'cancelled');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream returns 409 when a *different* thread in the same project is busy', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
-    concurrency.set('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
+    concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
@@ -125,7 +310,7 @@ test('POST /api/threads/:id/messages/stream returns 409 when a *different* threa
 test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy thread in the same project', async () => {
   const { app, db, dir, concurrency } = makeApp();
   try {
-    concurrency.set('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
+    concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
@@ -180,7 +365,6 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
       payload: { content: 'first', modelKey: 'anthropic/sonnet' },
     });
     await firstPromptStarted.promise;
-
     const second = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-2/messages/stream',
@@ -193,6 +377,571 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
     const firstRes = await first;
     assert.equal(firstRes.statusCode, 200);
   } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('two simultaneous confirm-cancel requests cannot both start the replacement model run', async () => {
+  const firstPromptStarted = deferred<void>();
+  const firstAbortSeen = deferred<void>();
+  const replacementPromptStarted = deferred<void>();
+  const releaseReplacement = deferred<void>();
+  let replacementSessionForCalls = 0;
+  let replacementPromptCalls = 0;
+
+  const firstSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      firstPromptStarted.resolve();
+      await firstAbortSeen.promise;
+    },
+    abort: async () => firstAbortSeen.resolve(),
+  };
+  const replacementSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      replacementPromptCalls += 1;
+      replacementPromptStarted.resolve();
+      await releaseReplacement.promise;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async (threadId: string) => {
+      if (threadId === 'thread-1') return firstSession;
+      replacementSessionForCalls += 1;
+      return replacementSession;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  db.prepare(
+    'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+  ).run('thread-3', 'proj-1', 'T3', new Date().toISOString(), new Date().toISOString());
+
+  let first: ReturnType<typeof app.inject> | undefined;
+  let second: ReturnType<typeof app.inject> | undefined;
+  let third: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    second = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+    third = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-3/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'third', modelKey: 'anthropic/sonnet' },
+    });
+
+    await replacementPromptStarted.promise;
+    const firstCompletedReplacement = await Promise.race([
+      second.then((response) => response),
+      third.then((response) => response),
+    ]);
+    assert.equal(firstCompletedReplacement.statusCode, 409);
+    assert.equal(replacementSessionForCalls, 1);
+    assert.equal(replacementPromptCalls, 1);
+
+    releaseReplacement.resolve();
+    const responses = await Promise.all([first, second, third]);
+    assert.deepEqual(responses.slice(1).map((response) => response.statusCode).sort(), [200, 409]);
+  } finally {
+    firstAbortSeen.resolve();
+    releaseReplacement.resolve();
+    await Promise.allSettled([first, second, third].filter(Boolean));
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('confirm-cancel returns 409 when the previous owner has not released the model slot', async () => {
+  const firstPromptStarted = deferred<void>();
+  const releaseFirstPrompt = deferred<void>();
+  let replacementSessionForCalls = 0;
+  let abortCalls = 0;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      firstPromptStarted.resolve();
+      await releaseFirstPrompt.promise;
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async (threadId: string) => {
+      if (threadId !== 'thread-1') replacementSessionForCalls += 1;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  let first: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const replacement = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'replacement', modelKey: 'anthropic/sonnet' },
+    });
+    assert.equal(replacement.statusCode, 409);
+    assert.equal(replacement.json().kind, 'model_busy');
+    assert.equal(abortCalls, 1);
+    assert.equal(replacementSessionForCalls, 0);
+  } finally {
+    releaseFirstPrompt.resolve();
+    await Promise.allSettled([first].filter(Boolean));
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('different threads atomically claim a project model before session setup', async () => {
+  const sessionForStarted = deferred<void>();
+  const releaseSessionFor = deferred<void>();
+  let sessionForCalls = 0;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      sessionForStarted.resolve();
+      await releaseSessionFor.promise;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  let first: ReturnType<typeof app.inject> | undefined;
+  let second: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await sessionForStarted.promise;
+    second = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+    const secondResponse = await second;
+    assert.equal(secondResponse.statusCode, 409);
+    assert.equal(secondResponse.json().kind, 'model_busy');
+    assert.equal(sessionForCalls, 1);
+
+    releaseSessionFor.resolve();
+    assert.equal((await first).statusCode, 200);
+  } finally {
+    releaseSessionFor.resolve();
+    await Promise.allSettled([first, second].filter(Boolean));
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects same-thread re-entry without aborting or prompting again', async () => {
+  const firstPromptStarted = deferred<void>();
+  const releaseFirstPrompt = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        firstPromptStarted.resolve();
+        await releaseFirstPrompt.promise;
+      }
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+
+    assert.equal(second.statusCode, 409);
+    assert.deepEqual(second.json(), {
+      kind: 'thread_busy',
+      error: 'This thread already has a run in progress',
+      activeThreadId: 'thread-1',
+      activeTitle: 'T1',
+      modelKey: 'anthropic/sonnet',
+    });
+    assert.equal(promptCalls, 1);
+    assert.equal(abortCalls, 0);
+    assert.equal(sessionForCalls, 1);
+
+    releaseFirstPrompt.resolve();
+    assert.equal((await first).statusCode, 200);
+  } finally {
+    releaseFirstPrompt.resolve();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects same-thread re-entry with a different model', async () => {
+  const firstPromptStarted = deferred<void>();
+  const releaseFirstPrompt = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        firstPromptStarted.resolve();
+        await releaseFirstPrompt.promise;
+      }
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second' },
+    });
+
+    assert.equal(second.statusCode, 409);
+    assert.deepEqual(second.json(), {
+      kind: 'thread_busy',
+      error: 'This thread already has a run in progress',
+      activeThreadId: 'thread-1',
+      activeTitle: 'T1',
+      modelKey: 'anthropic/sonnet',
+    });
+    assert.equal(promptCalls, 1);
+    assert.equal(abortCalls, 0);
+    assert.equal(sessionForCalls, 1);
+
+    releaseFirstPrompt.resolve();
+    assert.equal((await first).statusCode, 200);
+  } finally {
+    releaseFirstPrompt.resolve();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream claims the thread before awaiting session setup', async () => {
+  const sessionForStarted = deferred<void>();
+  const secondSessionForStarted = deferred<void>();
+  const releaseSessionFor = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      sessionForStarted.resolve();
+      if (sessionForCalls === 2) secondSessionForStarted.resolve();
+      await releaseSessionFor.promise;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  let first: ReturnType<typeof app.inject> | undefined;
+  let second: ReturnType<typeof app.inject> | undefined;
+  try {
+    first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await sessionForStarted.promise;
+
+    second = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+    const outcome = await Promise.race([
+      second.then((response) => ({ kind: 'response' as const, response })),
+      secondSessionForStarted.promise.then(() => ({ kind: 'duplicate_session' as const })),
+    ]);
+
+    assert.equal(outcome.kind, 'response');
+    assert.equal(sessionForCalls, 1);
+    const secondResponse = outcome.kind === 'response' ? outcome.response : undefined;
+    assert.ok(secondResponse);
+    assert.equal(secondResponse.statusCode, 409);
+    assert.equal(secondResponse.json().kind, 'thread_busy');
+    assert.equal(promptCalls, 0);
+    assert.equal(abortCalls, 0);
+
+    releaseSessionFor.resolve();
+    assert.equal((await first).statusCode, 200);
+    assert.equal(promptCalls, 1);
+  } finally {
+    releaseSessionFor.resolve();
+    await Promise.allSettled([first, second].filter(Boolean));
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream stops after session setup when the client disconnects during setup', async () => {
+  const sessionForStarted = deferred<void>();
+  const duplicateSessionForStarted = deferred<void>();
+  const disconnectObserved = deferred<void>();
+  const clientClosed = deferred<void>();
+  const releaseSessionFor = deferred<void>();
+  let sessionForCalls = 0;
+  let promptCalls = 0;
+  let abortCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+    },
+    abort: async () => {
+      abortCalls += 1;
+    },
+  };
+  const runtime = {
+    questions: { cancelThread: () => disconnectObserved.resolve() },
+    readMessages: async () => [],
+    sessionFor: async () => {
+      sessionForCalls += 1;
+      sessionForStarted.resolve();
+      if (sessionForCalls === 2) duplicateSessionForStarted.resolve();
+      await releaseSessionFor.promise;
+      return session;
+    },
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  let clientRequest: ReturnType<typeof httpRequest> | undefined;
+  try {
+    await app.listen({ host: '127.0.0.1', port: 0 });
+    const address = app.server.address();
+    assert.ok(address && typeof address !== 'string');
+    clientRequest = httpRequest({
+      host: '127.0.0.1',
+      port: address.port,
+      method: 'POST',
+      path: '/api/threads/thread-1/messages/stream',
+      headers: { 'content-type': 'application/json' },
+    });
+    clientRequest.on('error', () => {});
+    clientRequest.on('close', () => clientClosed.resolve());
+    clientRequest.end(JSON.stringify({ content: 'first', modelKey: 'anthropic/sonnet' }));
+    await sessionForStarted.promise;
+
+    clientRequest.destroy();
+    await clientClosed.promise;
+    await disconnectObserved.promise;
+    const whileSetupPending = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second' },
+    });
+    const outcome = await Promise.race([
+      whileSetupPending.then((response) => ({ kind: 'response' as const, response })),
+      duplicateSessionForStarted.promise.then(() => ({ kind: 'duplicate_session' as const })),
+    ]);
+    assert.equal(outcome.kind, 'response');
+    assert.equal(outcome.kind === 'response' ? outcome.response.statusCode : undefined, 409);
+
+    releaseSessionFor.resolve();
+    await Promise.allSettled([whileSetupPending]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(promptCalls, 0);
+    assert.equal(abortCalls, 1);
+  } finally {
+    releaseSessionFor.resolve();
+    clientRequest?.destroy();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream retains its claim while a disconnected prompt terminates', async () => {
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const abortStarted = deferred<void>();
+  const releaseAbort = deferred<void>();
+  let promptCalls = 0;
+
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptCalls += 1;
+      if (promptCalls === 1) {
+        promptStarted.resolve();
+        await promptStopped.promise;
+      }
+    },
+    abort: async () => {
+      abortStarted.resolve();
+      await releaseAbort.promise;
+      promptStopped.resolve();
+    },
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+      payloadAsStream: true,
+    });
+    await promptStarted.promise;
+    first.raw.res.destroy();
+    await abortStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'second' },
+    });
+    assert.equal(second.statusCode, 409);
+    assert.equal(second.json().kind, 'thread_busy');
+    assert.equal(promptCalls, 1);
+
+    releaseAbort.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const third = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'third' },
+    });
+    assert.equal(third.statusCode, 200);
+    assert.equal(promptCalls, 2);
+  } finally {
+    releaseAbort.resolve();
+    promptStopped.resolve();
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -978,6 +1727,252 @@ test('POST /api/threads/:id/abort returns no_run when nothing is in flight', asy
     const res = await app.inject({ method: 'POST', url: '/api/threads/thread-1/abort' });
     assert.equal(res.json().ok, false);
     assert.equal(res.json().reason, 'no_run');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question cleanup cancels a pending question when its active stream is aborted', async () => {
+  const questions = new QuestionBroker();
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => promptStopped.resolve(),
+  };
+  const runtime = {
+    questions,
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const pending = questions.register('thread-1', 'call-1', questionRequest);
+    const stream = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'ask me' },
+    });
+    await promptStarted.promise;
+
+    const abort = await app.inject({ method: 'POST', url: '/api/threads/thread-1/abort' });
+    assert.deepEqual(abort.json(), { ok: true });
+    await stream;
+
+    const lateAnswer = questions.answer('thread-1', 'call-1', validQuestionAnswer);
+    assert.deepEqual(lateAnswer, { ok: false, status: 404, error: 'Question not found' });
+    assert.equal((await pending).status, 'cancelled');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question cleanup aborts the active session when the response closes during prompt', async () => {
+  const questions = new QuestionBroker();
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const sessionAborted = deferred<void>();
+  let abortCalls = 0;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => {
+      abortCalls += 1;
+      promptStopped.resolve();
+      sessionAborted.resolve();
+    },
+  };
+  const runtime = {
+    questions,
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir, concurrency } = makeApp(runtime);
+  const pending = questions.register('thread-1', 'call-1', questionRequest);
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'ask me' },
+      payloadAsStream: true,
+    });
+    await promptStarted.promise;
+
+    response.raw.res.destroy();
+    await Promise.race([
+      sessionAborted.promise,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('session was not aborted after response close')), 100)),
+    ]);
+
+    assert.equal(abortCalls, 1);
+    assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).status, 404);
+    assert.equal((await pending).status, 'cancelled');
+    assert.equal(concurrency.get('proj-1', 'default'), undefined);
+  } finally {
+    promptStopped.resolve();
+    questions.cancelThread('thread-1', 'test cleanup');
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a normally completed response does not abort its session', async () => {
+  let abortCalls = 0;
+  const runtime = {
+    questions: new QuestionBroker(),
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async () => {},
+      abort: async () => { abortCalls += 1; },
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'complete normally' },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(abortCalls, 0);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question cleanup cancels a pending question when confirm-cancel aborts a conflicting stream', async () => {
+  const questions = new QuestionBroker();
+  const firstPromptStarted = deferred<void>();
+  const firstPromptStopped = deferred<void>();
+  const firstSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      firstPromptStarted.resolve();
+      await firstPromptStopped.promise;
+    },
+    abort: async () => firstPromptStopped.resolve(),
+  };
+  const secondSession = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    questions,
+    readMessages: async () => [],
+    sessionFor: async (threadId: string) => threadId === 'thread-1' ? firstSession : secondSession,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  try {
+    const pending = questions.register('thread-1', 'call-1', questionRequest);
+    const first = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+    });
+    await firstPromptStarted.promise;
+
+    const second = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-2/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'second', modelKey: 'anthropic/sonnet' },
+    });
+    assert.equal(second.statusCode, 200);
+    await first;
+
+    assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).ok, false);
+    assert.equal((await pending).status, 'cancelled');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question cleanup cancels a pending question when the stream aborts internally', async () => {
+  const questions = new QuestionBroker();
+  const abortError = new Error('aborted');
+  abortError.name = 'AbortError';
+  const runtime = {
+    questions,
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async () => { throw abortError; },
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const pending = questions.register('thread-1', 'call-1', questionRequest);
+    const stream = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'ask me' },
+    });
+    assert.equal(stream.statusCode, 200);
+
+    assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).ok, false);
+    assert.equal((await pending).status, 'cancelled');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('question cleanup cancels a pending question when the thread is deleted', async () => {
+  const { app, db, dir, runtime } = makeApp();
+  try {
+    const pending = runtime.questions.register('thread-1', 'call-1', questionRequest);
+    const res = await app.inject({ method: 'DELETE', url: '/api/threads/thread-1' });
+    assert.equal(res.statusCode, 200);
+
+    assert.equal(runtime.questions.answer('thread-1', 'call-1', validQuestionAnswer).ok, false);
+    assert.equal((await pending).status, 'cancelled');
   } finally {
     await app.close();
     db.close();

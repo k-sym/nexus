@@ -18,9 +18,12 @@ import { Stop } from '@phosphor-icons/react';
 import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
+import { api } from '../api';
+import { buildQuestionAnswerSummary, parseTerminalAskBlock, type QuestionAnswer, type QuestionRequest, type QuestionToolResult } from '../lib/questions';
 import { ModelSelector } from './ModelSelector';
 import { ToolCallTimeline } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
+import { QuestionCard } from './QuestionCard';
 
 interface ChatPanelProps {
   projectId: string;
@@ -61,6 +64,12 @@ const EXTENSION_MIME_TYPES: Record<string, string> = {
   '.xls': 'application/vnd.ms-excel',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 };
+
+type QuestionSubmissionState = Record<string, {
+  submitting?: boolean;
+  error?: string;
+  result?: QuestionToolResult;
+}>;
 
 function formatCompactTokens(tokens: number): string {
   if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}m`;
@@ -136,6 +145,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
   const [draggingAttachments, setDraggingAttachments] = useState(false);
+  const [questionSubmissions, setQuestionSubmissions] = useState<QuestionSubmissionState>({});
+  const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const activeModel = models.find((model) => `${model.provider}/${model.id}` === activeModelId);
@@ -232,6 +243,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     
     // Clear messages and model immediately when switching threads
     setLoadedMessages([]);
+    setQuestionSubmissions({});
+    setFallbackSubmissions({});
     setModel('', '');
     
     let cancelled = false;
@@ -307,16 +320,23 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   }, [loadedMessages, state.messages, state.streamingMessage]);
 
   const submit = useCallback(
-    async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[] } = {}) => {
+    async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; onError?: (message: string) => void } = {}) => {
       if (!threadId) return;
       setError(null);
       const attachments = opts.attachments ?? pendingAttachments;
+      let streamError: string | null = null;
       try {
         const contextUsage = await startStream(threadId, text, {
           confirmCancel: opts.confirmCancel,
           modelKey: opts.modelKey ?? activeModelId,
           attachments,
+          onError: (message) => {
+            streamError = message;
+            setError(message);
+            opts.onError?.(message);
+          },
         });
+        if (streamError) return false;
         onThreadsChanged?.();
         const msgs = await fetchThreadMessages(threadId);
         if (msgs.length > 0) {
@@ -325,6 +345,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         }
         setPendingAttachments([]);
         setAttachmentWarning(null);
+        return true;
       } catch (err) {
         if (err instanceof ChatBusyError) {
           setPendingConfirm({
@@ -334,24 +355,85 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             pendingAttachments: attachments,
           });
           onBusyConflict(err.activeThreadId, err.activeTitle);
-          return;
+          return false;
         }
         if (attachments.length > 0) setPendingAttachments(attachments);
         setError(err instanceof Error ? err.message : String(err));
+        return false;
       }
     },
     [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, pendingAttachments, fetchThreadMessages, dispatch],
   );
 
+  const answerNativeQuestion = useCallback(async (toolCallId: string, answers: QuestionAnswer[]) => {
+    if (!threadId) return;
+    setQuestionSubmissions((current) => ({
+      ...current,
+      [toolCallId]: { ...current[toolCallId], submitting: true, error: undefined },
+    }));
+    try {
+      await api.chat.answerQuestion(threadId, toolCallId, answers);
+      setQuestionSubmissions((current) => ({
+        ...current,
+        [toolCallId]: {
+          submitting: false,
+          result: { status: 'answered', toolCallId, answers },
+        },
+      }));
+    } catch (err) {
+      setQuestionSubmissions((current) => ({
+        ...current,
+        [toolCallId]: {
+          ...current[toolCallId],
+          submitting: false,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      }));
+    }
+  }, [threadId]);
+
+  const answerFallbackQuestion = useCallback(async (
+    messageId: string,
+    request: QuestionRequest,
+    answers: QuestionAnswer[],
+  ) => {
+    setFallbackSubmissions((current) => ({
+      ...current,
+      [messageId]: { ...current[messageId], submitting: true, error: undefined },
+    }));
+    const submitted = await submit(buildQuestionAnswerSummary(request, answers), {
+      onError: (error) => {
+        setFallbackSubmissions((current) => ({
+          ...current,
+          [messageId]: { ...current[messageId], submitting: false, error },
+        }));
+      },
+    });
+    if (!submitted) {
+      setFallbackSubmissions((current) => ({
+        ...current,
+        [messageId]: { ...current[messageId], submitting: false },
+      }));
+      return;
+    }
+    setFallbackSubmissions((current) => ({
+      ...current,
+      [messageId]: {
+        submitting: false,
+        result: { status: 'answered', toolCallId: `fallback:${messageId}`, answers },
+      },
+    }));
+  }, [submit]);
+
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if ((!text && pendingAttachments.length === 0) || !threadId || imageModelBlocked) return;
+    if (state.isRunning || (!text && pendingAttachments.length === 0) || !threadId || imageModelBlocked) return;
     const attachments = pendingAttachments;
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, imageModelBlocked, pendingAttachments, submit]);
+  }, [input, threadId, imageModelBlocked, pendingAttachments, state.isRunning, submit]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -518,9 +600,27 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         {isEmpty ? (
           <p className="text-faint text-sm">Send a message to start.</p>
         ) : (
-          visible.map((m) => <MessageBubble key={m.id} msg={m} detailsExpanded={detailsExpanded} />)
+          visible.map((m) => (
+            <MessageBubble
+              key={m.id}
+              msg={m}
+              detailsExpanded={detailsExpanded}
+              questionState={questionSubmissions}
+              fallbackState={fallbackSubmissions[m.id]}
+              onAnswerQuestion={answerNativeQuestion}
+              onAnswerFallback={answerFallbackQuestion}
+            />
+          ))
         )}
-        {streaming && <MessageBubble msg={streaming} detailsExpanded={detailsExpanded} />}
+        {streaming && (
+          <MessageBubble
+            msg={streaming}
+            detailsExpanded={detailsExpanded}
+            questionState={questionSubmissions}
+            onAnswerQuestion={answerNativeQuestion}
+            onAnswerFallback={answerFallbackQuestion}
+          />
+        )}
         <div ref={messagesEndRef} />
       </div>
 
@@ -582,6 +682,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         <div className="flex gap-2 items-end">
           <textarea
             value={input}
+            disabled={isRunning}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
@@ -620,10 +721,27 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   );
 }
 
-function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsExpanded: boolean }) {
+function MessageBubble({
+  msg,
+  detailsExpanded,
+  questionState,
+  fallbackState,
+  onAnswerQuestion,
+  onAnswerFallback,
+}: {
+  msg: StreamMessage;
+  detailsExpanded: boolean;
+  questionState: QuestionSubmissionState;
+  fallbackState?: QuestionSubmissionState[string];
+  onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
+  onAnswerFallback: (messageId: string, request: QuestionRequest, answers: QuestionAnswer[]) => Promise<void>;
+}) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'toolResult';
   const isThinking = msg.isStreaming === true && !msg.content && !!msg.thinking;
+  const fallback = !isUser && !isTool && msg.isStreaming !== true
+    ? parseTerminalAskBlock(msg.content)
+    : null;
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
@@ -645,7 +763,12 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
         )}
         {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
           <div className="mb-2">
-            <ToolCallTimeline toolCalls={msg.toolCalls as any} detailsExpanded={detailsExpanded} />
+            <ToolCallTimeline
+              toolCalls={msg.toolCalls as any}
+              detailsExpanded={detailsExpanded}
+              questionState={questionState}
+              onAnswerQuestion={onAnswerQuestion}
+            />
           </div>
         )}
         {isUser && msg.attachments && msg.attachments.length > 0 && (
@@ -691,6 +814,17 @@ function MessageBubble({ msg, detailsExpanded }: { msg: StreamMessage; detailsEx
                 {msg.content}
               </pre>
             )}
+          </div>
+        ) : fallback ? (
+          <div className="space-y-3">
+            {fallback.preamble && <p className="whitespace-pre-wrap">{fallback.preamble}</p>}
+            <QuestionCard
+              request={fallback.request}
+              answeredResult={fallbackState?.result}
+              submitting={fallbackState?.submitting}
+              error={fallbackState?.error}
+              onSubmit={(answers) => onAnswerFallback(msg.id, fallback.request, answers)}
+            />
           </div>
         ) : (
           <p className="whitespace-pre-wrap">{msg.content}</p>
