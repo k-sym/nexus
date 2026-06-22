@@ -686,14 +686,59 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
     // Telemetry is best-effort; history always returns raw output.
   }
   const toolResults = new Map<string, any>();
-  for (const entry of entries as any[]) {
+  const runStarts = new Map<string, AgentRunStart>();
+  const runEndsByAssistant = new Map<string, AgentRunEnd>();
+  const runEndIndexes = new Map<string, { index: number; event: AgentRunEnd }>();
+  const sourceEntries = entries as any[];
+  for (const [index, entry] of sourceEntries.entries()) {
     const message = entry?.type === 'message' ? entry.message : undefined;
     if (message?.role === 'toolResult' && message.toolCallId) {
       toolResults.set(String(message.toolCallId), message);
     }
+    if (entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE) {
+      const data = entry.data as AgentRunStart | AgentRunEnd | undefined;
+      if (data?.event === 'start') runStarts.set(data.runId, data);
+      if (data?.event === 'end') {
+        runEndIndexes.set(data.runId, { index, event: data });
+        if (data.assistantEntryId) runEndsByAssistant.set(data.assistantEntryId, data);
+      }
+    }
+  }
+  const runStartsByAssistant = new Map<string, AgentRunStart>();
+  const normalizedEntries: any[] = [];
+  for (let index = 0; index < sourceEntries.length; index += 1) {
+    const entry = sourceEntries[index];
+    const data = entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE
+      ? entry.data as AgentRunStart | AgentRunEnd | undefined
+      : undefined;
+    if (data?.event === 'start') {
+      const end = runEndIndexes.get(data.runId);
+      const endIndex = end?.index ?? sourceEntries.length;
+      const segment = sourceEntries.slice(index + 1, endIndex);
+      normalizedEntries.push(...segment.filter((candidate) => candidate?.type === 'message' && candidate.message?.role === 'user'));
+      const assistants = segment.filter((candidate) => candidate?.type === 'message' && candidate.message?.role === 'assistant');
+      const lastAssistant = assistants.at(-1);
+      if (lastAssistant) {
+        const synthetic = {
+          ...lastAssistant,
+          message: {
+            ...lastAssistant.message,
+            content: assistants.flatMap((candidate) => candidate.message?.content ?? []),
+            timestamp: assistants[0].message?.timestamp ?? lastAssistant.message?.timestamp,
+          },
+        };
+        runStartsByAssistant.set(String(synthetic.id), data);
+        if (end && !end.event.assistantEntryId) runEndsByAssistant.set(String(synthetic.id), end.event);
+        normalizedEntries.push(synthetic);
+      }
+      index = endIndex;
+      continue;
+    }
+    if (data?.event === 'end') continue;
+    normalizedEntries.push(entry);
   }
   const out: unknown[] = [];
-  for (const e of entries as any[]) {
+  for (const e of normalizedEntries) {
     if (e.type !== 'message') continue;
     const m = e.message;
     if (!m) continue;
@@ -714,23 +759,21 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
         if (block.type === 'text') text += block.text;
         else if (block.type === 'thinking') thinking += block.thinking;
         else if (block.type === 'toolCall') {
+          const result = toolResults.get(String(block.id));
+          const resultText = result ? extractText(result.content) : undefined;
           const call: Record<string, unknown> = {
             id: block.id,
             name: block.name,
             args: block.arguments,
-            status: 'completed',
+            status: result ? (result.isError ? 'failed' : 'succeeded') : 'interrupted',
+            queuedAt: m.timestamp ?? e.timestamp,
+            partialOutput: '',
           };
-          if (block.name === 'question') {
-            const result = toolResults.get(String(block.id));
-            if (!result) {
-              call.status = 'interrupted';
-            } else {
-              const resultText = extractText(result.content);
-              call.status = result.isError ? 'error' : 'completed';
-              call.result = resultText;
-              const details = result.details ?? parseTrailingJson(resultText);
-              if (details !== undefined) call.details = details;
-            }
+          if (result) {
+            call.result = resultText;
+            call.completedAt = result.timestamp;
+            const details = result.details ?? (block.name === 'question' ? parseTrailingJson(resultText ?? '') : undefined);
+            if (details !== undefined) call.details = details;
           }
           toolCalls.push(call);
         }
@@ -739,6 +782,22 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
       if (isError && !text) {
         text = formatProviderError(m.errorMessage) || 'Provider returned an error with no message.';
       }
+      const runEnd = runEndsByAssistant.get(String(e.id));
+      const runStart = runStartsByAssistant.get(String(e.id)) ?? (runEnd ? runStarts.get(runEnd.runId) : undefined);
+      const run = runStart ? {
+        runId: runStart.runId,
+        threadId: runStart.threadId,
+        status: runEnd?.status ?? 'interrupted',
+        phase: 'finalizing',
+        startedAt: Date.parse(runStart.startedAt),
+        lastEventAt: runEnd ? Date.parse(runEnd.completedAt) : (m.timestamp ?? e.timestamp),
+        completedAt: runEnd ? Date.parse(runEnd.completedAt) : undefined,
+        provider: runStart.provider ?? m.provider,
+        model: runStart.model ?? m.model,
+        abortSource: runEnd?.abortSource,
+        error: runEnd?.error,
+        tools: toolCalls,
+      } : undefined;
       out.push({
         id: e.id,
         role: 'assistant',
@@ -751,6 +810,7 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
         stopReason: m.stopReason,
         errorMessage: m.errorMessage,
         timestamp: m.timestamp ?? e.timestamp,
+        ...(run ? { run } : {}),
       });
     } else if (m.role === 'toolResult') {
       const projection = projections.get(String(m.toolCallId));

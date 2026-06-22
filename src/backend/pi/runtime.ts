@@ -11,6 +11,7 @@ import { mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { AgentSession, ExtensionFactory } from '@earendil-works/pi-coding-agent';
+import { AGENT_RUN_CUSTOM_TYPE } from '@nexus/shared';
 import {
   AuthStorage,
   ModelRegistry,
@@ -241,6 +242,9 @@ export class PiRuntime {
     const match = infos.find((s) => s.id === threadId);
     if (!match) return [];
     const sm = SessionManager.open(match.path, sessionDir, cwd);
-    return sm.getEntries().filter((e) => e.type === 'message');
+    return sm.getEntries().filter((entry) =>
+      entry.type === 'message'
+      || (entry.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE),
+    );
   }
 }

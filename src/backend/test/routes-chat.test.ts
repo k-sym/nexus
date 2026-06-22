@@ -76,7 +76,10 @@ test('question history associates a matching result with its assistant tool call
     id: 'call-1',
     name: 'question',
     args: { questions: [] },
-    status: 'completed',
+    status: 'succeeded',
+    queuedAt: undefined,
+    completedAt: undefined,
+    partialOutput: '',
     result: `Scope: Small\n\n${JSON.stringify(details)}`,
     details,
   });
@@ -94,6 +97,84 @@ test('question history marks a tool call without a result interrupted', () => {
 
   assert.equal(messages[0].tool_calls[0].status, 'interrupted');
   assert.equal(messages[0].tool_calls[0].result, undefined);
+});
+
+test('tool history derives success from matching results and interrupts missing results', () => {
+  const messages = flattenEntries([
+    {
+      type: 'custom',
+      id: 'run-start',
+      customType: 'nexus.agent_run',
+      data: { event: 'start', runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' },
+    },
+    {
+      type: 'message',
+      id: 'assistant-1',
+      message: {
+        role: 'assistant',
+        timestamp: 100,
+        content: [
+          { type: 'toolCall', id: 'call-1', name: 'Bash', arguments: { command: 'npm test' } },
+          { type: 'toolCall', id: 'call-2', name: 'Write', arguments: { path: '/tmp/a', content: 'done' } },
+          { type: 'text', text: 'Both operations succeeded.' },
+        ],
+      },
+    },
+    {
+      type: 'message',
+      id: 'result-1',
+      message: {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'Bash',
+        isError: false,
+        timestamp: 200,
+        content: [{ type: 'text', text: 'tests passed' }],
+      },
+    },
+    {
+      type: 'custom',
+      id: 'run-end',
+      customType: 'nexus.agent_run',
+      data: {
+        event: 'end',
+        runId: 'run-1',
+        threadId: 'thread-1',
+        assistantEntryId: 'assistant-1',
+        completedAt: '2026-06-22T10:00:10.000Z',
+        status: 'interrupted',
+        abortSource: 'frontend',
+      },
+    },
+  ]) as any[];
+
+  const assistant = messages.find((message) => message.role === 'assistant');
+  assert.equal(assistant.tool_calls[0].status, 'succeeded');
+  assert.equal(assistant.tool_calls[0].result, 'tests passed');
+  assert.equal(assistant.tool_calls[1].status, 'interrupted');
+  assert.equal(assistant.tool_calls[1].result, undefined);
+  assert.equal(assistant.run.runId, 'run-1');
+  assert.equal(assistant.run.status, 'interrupted');
+  assert.equal(assistant.run.abortSource, 'frontend');
+});
+
+test('run history reloads multiple assistant/tool messages as one logical run card', () => {
+  const messages = flattenEntries([
+    { type: 'custom', id: 'start', customType: 'nexus.agent_run', data: { event: 'start', runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' } },
+    { type: 'message', id: 'user-1', message: { role: 'user', content: 'work', timestamp: 1 } },
+    { type: 'message', id: 'assistant-1', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'Read', arguments: { path: '/a' } }], timestamp: 2 } },
+    { type: 'message', id: 'tool-1', message: { role: 'toolResult', toolCallId: 'call-1', toolName: 'Read', isError: false, content: [{ type: 'text', text: 'contents' }], timestamp: 3 } },
+    { type: 'message', id: 'assistant-2', message: { role: 'assistant', content: [{ type: 'text', text: 'Finished.' }], timestamp: 4 } },
+    { type: 'custom', id: 'end', customType: 'nexus.agent_run', data: { event: 'end', runId: 'run-1', threadId: 'thread-1', assistantEntryId: 'assistant-2', completedAt: '2026-06-22T10:00:10.000Z', status: 'completed' } },
+  ]) as any[];
+
+  assert.equal(messages.filter((message) => message.role === 'assistant').length, 1);
+  assert.equal(messages.filter((message) => message.role === 'toolResult').length, 0);
+  const assistant = messages.find((message) => message.role === 'assistant');
+  assert.equal(assistant.content, 'Finished.');
+  assert.equal(assistant.tool_calls[0].id, 'call-1');
+  assert.equal(assistant.tool_calls[0].status, 'succeeded');
+  assert.equal(assistant.run.runId, 'run-1');
 });
 
 function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean } = {}) {
