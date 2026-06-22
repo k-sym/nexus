@@ -5,7 +5,7 @@ import { readdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import type { AppContext } from "../context.js";
 import { oplog } from "../db/index.js";
-import { ingestFile } from "./ingest.js";
+import { ingestFile, removeFile } from "./ingest.js";
 
 function walkMarkdown(dir: string, out: string[] = []): string[] {
   let entries;
@@ -29,17 +29,32 @@ export interface ReindexStats {
   updated: number;
   noop: number;
   removed: number;
+  reindexed: number;
+  queued: number;
 }
 
-export async function reindexAll(ctx: AppContext): Promise<ReindexStats> {
-  const stats: ReindexStats = { scanned: 0, inserted: 0, updated: 0, noop: 0, removed: 0 };
+export async function reindexAll(
+  ctx: AppContext,
+  options: { force?: boolean } = {},
+): Promise<ReindexStats> {
+  const stats: ReindexStats = {
+    scanned: 0,
+    inserted: 0,
+    updated: 0,
+    noop: 0,
+    removed: 0,
+    reindexed: 0,
+    queued: 0,
+  };
   const files = walkMarkdown(ctx.cfg.vaultPath);
 
   for (const f of files) {
-    const res = await ingestFile(ctx, f);
+    const res = await ingestFile(ctx, f, options);
     stats.scanned++;
     if (!res) continue;
     stats[res.action === "insert" ? "inserted" : res.action === "update" ? "updated" : "noop"]++;
+    if (res.action !== "noop") stats.queued++;
+    if (options.force && res.action !== "insert") stats.reindexed++;
   }
 
   // Soft-delete memories whose backing file is gone.
@@ -48,8 +63,7 @@ export async function reindexAll(ctx: AppContext): Promise<ReindexStats> {
     .all() as Array<{ id: string; file_path: string }>;
   for (const row of live) {
     if (!existsSync(row.file_path)) {
-      ctx.db.prepare("UPDATE memories SET deleted_at = ? WHERE id = ?").run(new Date().toISOString(), row.id);
-      stats.removed++;
+      if (removeFile(ctx, row.file_path)) stats.removed++;
     }
   }
 

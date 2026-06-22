@@ -2,6 +2,14 @@
 // so there is a single writer/owner of the index — clients only speak HTTP to :4100.
 import type { DaemonConfig } from "./config.js";
 import type { RecallResponse, ScopeFilter } from "./retrieval/types.js";
+import type { ClearNexusResult } from "./maintenance.js";
+import type { ReindexStats } from "./sync/reindex.js";
+
+export interface ClearNexusOperationResult extends ClearNexusResult {
+  ok: boolean;
+  reconciliation: ReindexStats | null;
+  reconciliationError?: string;
+}
 
 export interface StoreInput {
   namespace: string;
@@ -62,5 +70,13 @@ export class MemoryClient {
 
   health(): Promise<unknown> {
     return this.req("GET", "/health");
+  }
+
+  rebuildIndex(): Promise<ReindexStats> {
+    return this.req("POST", "/operations/rebuild-index");
+  }
+
+  clearNexusMemory(confirmation: string): Promise<ClearNexusOperationResult> {
+    return this.req("POST", "/operations/clear-nexus", { confirmation });
   }
 }

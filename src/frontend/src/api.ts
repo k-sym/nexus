@@ -77,6 +77,49 @@ export interface ActivityResponse {
   counts: Record<string, number>;
 }
 
+export type SecretSource = 'environment' | 'config-env-reference' | 'config-literal' | 'pi-auth-file' | 'gh-cli' | 'absent' | 'unknown';
+
+export interface TrustSecret {
+  configured: boolean;
+  source: SecretSource;
+  location?: string;
+  credentialType?: 'api_key' | 'oauth';
+}
+
+export interface TrustSnapshot {
+  services: Array<{ name: string; url: string; loopback: boolean }>;
+  storage: Array<{ name: string; path: string; role: 'canonical' | 'rebuildable' | 'application' | 'credentials' | 'configuration' }>;
+  secrets: Record<string, TrustSecret>;
+  memory: {
+    namespaces: string[];
+    autoInject: { enabled: boolean; maxMemories: number; tokenBudget: number };
+    archive: { mode: 'manual'; destination: string; removesHotThreadAfterSuccess: true };
+  };
+  outbound: Array<{ name: string; destination: string; sends: string[]; enabled: boolean }>;
+  telemetry: { applicationTelemetry: false; statement: string };
+}
+
+export interface ReindexResult {
+  scanned: number;
+  inserted: number;
+  updated: number;
+  noop: number;
+  removed: number;
+  reindexed: number;
+  queued: number;
+}
+
+export interface ClearNexusResult {
+  namespace: 'nexus';
+  deleted: number;
+  failed: number;
+  paths: string[];
+  failures: Array<{ path: string; error: string }>;
+  ok?: boolean;
+  reconciliation?: ReindexResult | null;
+  reconciliationError?: string;
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined) sp.set(k, String(v));
@@ -162,6 +205,14 @@ export const api = {
   settings: {
     get: () => fetchJson<any>(`/api/settings`),
     update: (config: any) => fetchJson<any>(`/api/settings`, { method: 'PUT', body: JSON.stringify(config) }),
+  },
+  trust: {
+    get: () => fetchJson<TrustSnapshot>('/api/trust'),
+    rebuildMemory: () => fetchJson<ReindexResult>('/api/trust/memory/rebuild', { method: 'POST' }),
+    clearNexusMemory: (confirmation: string) => fetchJson<ClearNexusResult>('/api/trust/memory/clear-nexus', {
+      method: 'POST',
+      body: JSON.stringify({ confirmation }),
+    }),
   },
   missionControl: {
     get: () => fetchJson<MissionStatus>(`/api/mission-control`),

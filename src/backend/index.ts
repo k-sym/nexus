@@ -25,6 +25,7 @@ import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
+import { registerTrustRoutes } from './routes/trust.js';
 import { initMemorySystem } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { ActivityManager } from './activity/manager.js';
@@ -81,6 +82,7 @@ async function main() {
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
   app.register(registerActivityRoutes);
+  app.register(registerTrustRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 

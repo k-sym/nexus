@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import { PiAuthSection } from './PiAuthSection';
 import { ModelCurationSection } from './ModelCurationSection';
+import { TrustPrivacySection } from './TrustPrivacySection';
 import { getBackgroundMotion, setBackgroundMotion, type BackgroundMotion } from '../appearance';
 
 const MOTION_OPTIONS: { mode: BackgroundMotion; label: string }[] = [
@@ -315,6 +316,8 @@ export default function SettingsPage() {
               for public repositories. Changes apply on the next backend restart.
             </p>
           </Section>
+
+          <TrustPrivacySection />
         </div>
       </div>
     </div>

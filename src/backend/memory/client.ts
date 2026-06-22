@@ -52,6 +52,35 @@ export interface DaemonScope {
   scope?: 'isolated' | 'cross';
 }
 
+export interface ReindexStats {
+  scanned: number;
+  inserted: number;
+  updated: number;
+  noop: number;
+  removed: number;
+  reindexed: number;
+  queued: number;
+}
+
+export interface ClearNexusFailure { path: string; error: string }
+export interface ClearNexusResult {
+  namespace: 'nexus';
+  deleted: number;
+  failed: number;
+  paths: string[];
+  failures: ClearNexusFailure[];
+  ok?: boolean;
+  reconciliation?: ReindexStats | null;
+  reconciliationError?: string;
+}
+
+export class DaemonRequestError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = 'DaemonRequestError';
+  }
+}
+
 function daemonUrl(): string {
   return process.env.MEMORY_DAEMON_URL || loadConfig().memory.daemon_url || 'http://127.0.0.1:4100';
 }
@@ -69,7 +98,16 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
     headers: body ? { 'Content-Type': 'application/json' } : {},
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`memory-daemon ${method} ${path} -> ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    // Status is enough for callers to preserve validation/conflict semantics.
+    // Deliberately do not forward an arbitrary daemon body or stack trace.
+    const message = res.status === 409
+      ? 'Memory maintenance already running'
+      : res.status === 400
+        ? 'Memory daemon rejected request'
+        : 'Memory daemon request failed';
+    throw new DaemonRequestError(res.status, message);
+  }
   return (res.status === 204 ? null : await res.json()) as T;
 }
 
@@ -91,5 +129,11 @@ export const daemon = {
   },
   health() {
     return req<DaemonHealth>('GET', '/health');
+  },
+  rebuildIndex() {
+    return req<ReindexStats>('POST', '/operations/rebuild-index');
+  },
+  clearNexusMemory(confirmation: string) {
+    return req<ClearNexusResult>('POST', '/operations/clear-nexus', { confirmation });
   },
 };
