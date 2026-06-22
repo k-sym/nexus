@@ -10,6 +10,19 @@ import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import { ConcurrencyTracker } from '../pi/concurrency';
 import { QuestionBroker, type QuestionRequest } from '../pi/questions';
 import { flattenEntries, registerChatRoutes } from '../routes/chat';
+import type { AgentRunWireEvent } from '@nexus/shared';
+
+const runContractFixture: AgentRunWireEvent = {
+  kind: 'run_start',
+  run: {
+    runId: 'run-1',
+    threadId: 'thread-1',
+    startedAt: '2026-06-22T10:00:00.000Z',
+    provider: 'openrouter',
+    model: 'moonshotai/kimi-k2.7-code',
+  },
+};
+void runContractFixture;
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
