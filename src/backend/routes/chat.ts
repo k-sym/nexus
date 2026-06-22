@@ -476,7 +476,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           });
         }
       }
-      write({ kind: 'done' });
     } catch (err: any) {
       const isAbort = err?.name === 'AbortError';
       if (isAbort) pi.questions?.cancelThread(threadId, 'Stream aborted');
@@ -495,7 +494,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         terminalStatus = 'failed';
         abortSource = 'runtime';
       }
-      write({ kind: 'error', error: streamError });
     } finally {
       responseCompleted = true;
       const leaf = session?.sessionManager?.getLeafEntry();

@@ -9,6 +9,11 @@
  */
 import { useCallback, useReducer, useRef } from 'react';
 import { apiFetch } from '../api-base';
+import {
+  agentRunReducer,
+  type AgentRunAction,
+  type AgentRunView,
+} from '../chat/agent-run-state';
 
 /** Granular tool execution phase for richer status display. */
 export type ToolPhase =
@@ -71,6 +76,7 @@ export interface StreamMessage {
   timestamp: number;
   isStreaming?: boolean;
   signal_filter?: SignalFilterTelemetry;
+  run?: AgentRunView;
 }
 
 export interface StreamState {
@@ -80,6 +86,7 @@ export interface StreamState {
   status: 'idle' | 'thinking' | 'tool_call' | 'responding' | 'error';
   error: string | null;
   contextUsage: ContextUsage | null;
+  activeRun: AgentRunView | null;
 }
 
 export type StreamAction =
@@ -93,7 +100,8 @@ export type StreamAction =
   | { type: 'CONTEXT_USAGE'; usage: ContextUsage | null }
   | { type: 'STREAM_COMPLETE' }
   | { type: 'STREAM_ERROR'; error: string }
-  | { type: 'ABORT_STREAM' }
+  | { type: 'ABORT_STREAM'; source?: 'user' | 'frontend' }
+  | { type: 'RUN_ACTION'; action: AgentRunAction }
   | { type: 'RESET'; contextUsage?: ContextUsage | null };
 
 export const INITIAL_STATE: StreamState = {
@@ -103,6 +111,7 @@ export const INITIAL_STATE: StreamState = {
   status: 'idle',
   error: null,
   contextUsage: null,
+  activeRun: null,
 };
 
 const ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -301,6 +310,17 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
     case 'CONTEXT_USAGE':
       return { ...state, contextUsage: action.usage };
 
+    case 'RUN_ACTION': {
+      const activeRun = agentRunReducer(state.activeRun, action.action);
+      return {
+        ...state,
+        activeRun,
+        streamingMessage: state.streamingMessage && activeRun
+          ? { ...state.streamingMessage, run: activeRun }
+          : state.streamingMessage,
+      };
+    }
+
     case 'STREAM_COMPLETE': {
       const m = state.streamingMessage;
       if (!m) {
@@ -314,7 +334,7 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
         ...state,
         isRunning: false,
         status: 'idle',
-        messages: [...state.messages, { ...m, isStreaming: false }],
+        messages: [...state.messages, { ...m, run: state.activeRun ?? m.run, isStreaming: false }],
         streamingMessage: null,
       };
     }
@@ -324,17 +344,31 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
 
     case 'ABORT_STREAM': {
       const current = state.streamingMessage;
+      const at = Date.now();
+      const activeRun = state.activeRun
+        ? agentRunReducer(state.activeRun, {
+            type: 'RUN_ENDED',
+            run: {
+              runId: state.activeRun.runId,
+              threadId: state.activeRun.threadId,
+              completedAt: new Date(at).toISOString(),
+              status: 'cancelled',
+              abortSource: action.source ?? 'frontend',
+            },
+          })
+        : null;
       const hasContent = current && (current.content || current.thinking || (current.toolCalls && current.toolCalls.length > 0));
       if (hasContent) {
         return {
           ...state,
           isRunning: false,
           status: 'idle',
-          messages: [...state.messages, { ...current, isStreaming: false }],
+          activeRun,
+          messages: [...state.messages, { ...current, run: activeRun ?? current.run, isStreaming: false }],
           streamingMessage: null,
         };
       }
-      return { ...state, isRunning: false, status: 'idle' };
+      return { ...state, activeRun, isRunning: false, status: 'idle' };
     }
 
     case 'RESET':
@@ -372,6 +406,16 @@ export function usePiStream() {
     }
     
     const type = ev?.type;
+    const now = Date.now();
+    if (ev?.kind === 'run_start') {
+      dispatch({ type: 'RUN_ACTION', action: { type: 'RUN_STARTED', run: ev.run } });
+      return null;
+    }
+    if (ev?.kind === 'run_end') {
+      dispatch({ type: 'RUN_ACTION', action: { type: 'RUN_ENDED', run: ev.run } });
+      dispatch({ type: 'STREAM_COMPLETE' });
+      return null;
+    }
     if (type === 'context_usage') {
       const usage = normalizeContextUsage(ev.usage);
       dispatch({ type: 'CONTEXT_USAGE', usage });
@@ -384,14 +428,21 @@ export function usePiStream() {
     if (type === 'message_update') {
       const ame = ev.assistantMessageEvent;
       if (!ame) return null;
-      if (ame.type === 'thinking_delta') dispatch({ type: 'THINKING_DELTA', delta: ame.delta });
+      if (ame.type === 'thinking_delta') {
+        dispatch({ type: 'THINKING_DELTA', delta: ame.delta });
+        dispatch({ type: 'RUN_ACTION', action: { type: 'MODEL_RESPONDING', at: now } });
+      }
       else if (ame.type === 'thinking_end') {
         const thinking = extractThinkingEventContent(ame);
         if (thinking) dispatch({ type: 'MESSAGE_END', message: { thinking } });
       }
-      else if (ame.type === 'text_delta') dispatch({ type: 'TEXT_DELTA', delta: ame.delta });
+      else if (ame.type === 'text_delta') {
+        dispatch({ type: 'TEXT_DELTA', delta: ame.delta });
+        dispatch({ type: 'RUN_ACTION', action: { type: 'MODEL_RESPONDING', at: now } });
+      }
       else if (ame.type === 'toolcall_end') {
         dispatch({ type: 'TOOL_CALL_START', toolCall: { id: ame.toolCall.id, name: ame.toolCall.name, args: ame.toolCall.arguments ?? {} } });
+        dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_QUEUED', id: ame.toolCall.id, name: ame.toolCall.name, args: ame.toolCall.arguments ?? {}, at: now } });
       } else if (ame.type === 'error') {
         const reason =
           ame.message ??
@@ -414,12 +465,14 @@ export function usePiStream() {
         type: 'TOOL_CALL_START',
         toolCall: { id: ev.toolCallId, name: ev.toolName, args: ev.args ?? {} },
       });
+      dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_STARTED', id: ev.toolCallId, name: ev.toolName, args: ev.args ?? {}, at: now } });
     } else if (type === 'tool_execution_update') {
       const partial = (ev.partialResult?.content ?? [])
         .map((c: { text?: string }) => c.text ?? '')
         .join('');
       dispatch({ type: 'TOOL_CALL_UPDATE', id: ev.toolCallId, patch: { status: 'running' } });
       dispatch({ type: 'TOOL_PARTIAL_OUTPUT', id: ev.toolCallId, partialOutput: partial });
+      dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_OUTPUT', id: ev.toolCallId, output: partial, at: now } });
     } else if (type === 'tool_execution_end') {
       const result = (ev.result?.content ?? [])
         .map((c: { text?: string }) => c.text ?? '')
@@ -434,7 +487,8 @@ export function usePiStream() {
           is_error: ev.isError,
         },
       });
-    } else if (type === 'agent_end' || type === 'done') {
+      dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_FINISHED', id: ev.toolCallId, result, details: ev.result?.details, isError: !!ev.isError, at: now } });
+    } else if (type === 'done') {
       dispatch({ type: 'STREAM_COMPLETE' });
     } else if (type === 'error') {
       const error = ev.message ?? 'Unknown error';
@@ -507,6 +561,8 @@ export function usePiStream() {
       const decoder = new TextDecoder();
       let buf = '';
       let lastContextUsage: ContextUsage | null = null;
+      let sawRunStart = false;
+      let sawRunEnd = false;
       try {
         for (;;) {
           const { value, done } = await reader.read();
@@ -523,6 +579,12 @@ export function usePiStream() {
             } catch {
               continue;
             }
+            if (parsed?.kind === 'run_start') sawRunStart = true;
+            if (parsed?.kind === 'run_end') {
+              sawRunEnd = true;
+              routeEvent(parsed, threadId, opts.onError);
+              return lastContextUsage;
+            }
             if (parsed?.kind === 'done') {
               dispatch({ type: 'STREAM_COMPLETE' });
               return lastContextUsage;
@@ -537,6 +599,10 @@ export function usePiStream() {
             const usage = routeEvent(inner, threadId, opts.onError);
             if (usage) lastContextUsage = usage;
           }
+        }
+        if (sawRunStart && !sawRunEnd) {
+          dispatch({ type: 'RUN_ACTION', action: { type: 'RUN_INTERRUPTED', at: Date.now(), error: 'Stream disconnected' } });
+          dispatch({ type: 'STREAM_COMPLETE' });
         }
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
@@ -553,11 +619,19 @@ export function usePiStream() {
     [routeEvent],
   );
 
-  const abortStream = useCallback(async () => {
+  const abortStream = useCallback(async (source: 'user' | 'frontend' = 'frontend') => {
+    const threadId = activeThreadRef.current;
     if (abortRef.current) {
+      if (threadId) {
+        await apiFetch(`/api/threads/${threadId}/abort`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source }),
+        }).catch(() => undefined);
+      }
       abortRef.current.abort();
     }
-    dispatch({ type: 'ABORT_STREAM' });
+    dispatch({ type: 'ABORT_STREAM', source });
   }, []);
 
   return { state, startStream, abortStream, dispatch, setActiveThread };
