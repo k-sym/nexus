@@ -24,6 +24,7 @@ import { ToolCallTimeline } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { AgentRunCard } from './AgentRunCard';
+import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 
 interface ChatPanelProps {
   projectId: string;
@@ -147,7 +148,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [draggingAttachments, setDraggingAttachments] = useState(false);
   const [questionSubmissions, setQuestionSubmissions] = useState<QuestionSubmissionState>({});
   const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const streamContentVersion = [
+    loadedMessages.length,
+    state.messages.length,
+    state.streamingMessage?.content.length ?? 0,
+    state.streamingMessage?.run?.lastEventAt ?? 0,
+    state.streamingMessage?.run?.tools.reduce((total, tool) => total + tool.partialOutput.length, 0) ?? 0,
+  ].join(':');
+  const { containerRef: messagesRef, isFollowing, onScroll, jumpToLatest } = useFollowAtBottom(streamContentVersion);
 
   const activeModel = models.find((model) => `${model.provider}/${model.id}` === activeModelId);
   const pendingImages = pendingAttachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
@@ -309,15 +317,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, []);
-
-  // Auto-scroll on any visible-message change. (jsdom doesn't implement
-  // scrollIntoView; the optional-chained guard keeps tests green.)
-  useEffect(() => {
-    const el = messagesEndRef.current;
-    if (el && typeof el.scrollIntoView === 'function') {
-      el.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [loadedMessages, state.messages, state.streamingMessage]);
 
   const submit = useCallback(
     async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; onError?: (message: string) => void } = {}) => {
@@ -586,7 +585,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="chat-messages">
+      <div
+        ref={messagesRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto p-4 space-y-3"
+        data-testid="chat-messages"
+      >
         {isEmpty ? (
           <p className="text-faint text-sm">Send a message to start.</p>
         ) : (
@@ -613,8 +617,17 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             onStop={() => void abortStream('user')}
           />
         )}
-        <div ref={messagesEndRef} />
       </div>
+
+      {!isFollowing && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          className="absolute bottom-28 right-6 z-10 rounded-full border border-subtle surface-elevated px-3 py-1.5 text-xs text-primary shadow-lg"
+        >
+          Jump to latest
+        </button>
+      )}
 
       {error && (
         <div className="px-4 py-2 border-t border-subtle text-xs text-red-300" role="alert">

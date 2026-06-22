@@ -429,6 +429,11 @@ body {
   .ambient-particle-layer {
     animation: none !important;
   }
+
+  .agent-run-card .animate-spin,
+  .agent-run-card .animate-pulse {
+    animation: none !important;
+  }
 }
 
 /* ───── Frameless window title bar (Electron, titleBarStyle: hiddenInset) ─────
