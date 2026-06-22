@@ -13,6 +13,19 @@ vi.mock('../api', () => ({
       })),
       update: vi.fn(async (config) => config),
     },
+    trust: {
+      get: vi.fn(async () => ({
+        services: [], storage: [], secrets: {}, outbound: [],
+        memory: {
+          namespaces: ['nexus'],
+          autoInject: { enabled: true, maxMemories: 5, tokenBudget: 1000 },
+          archive: { mode: 'manual', destination: 'nexus', removesHotThreadAfterSuccess: true },
+        },
+        telemetry: { applicationTelemetry: false, statement: 'No application telemetry' },
+      })),
+      rebuildMemory: vi.fn(),
+      clearNexusMemory: vi.fn(),
+    },
   },
 }));
 
@@ -42,5 +55,11 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('heading', { name: 'Assistant' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://assistant.example.test/v1')).toBeInTheDocument();
     expect(screen.getByDisplayValue('${ASSISTANT_API_KEY}')).toBeInTheDocument();
+  });
+
+  it('mounts trust and privacy separately from editable settings', async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole('heading', { name: 'Trust & Privacy' })).toBeInTheDocument();
   });
 });

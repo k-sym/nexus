@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import type { AppContext } from "../context.js";
 import { contentHash } from "./hash.js";
 import { ingestFile, removeFile } from "./ingest.js";
+import { maintenanceCoordinatorFor } from "../maintenance.js";
 
 const DEBOUNCE_MS = 300;
 
@@ -38,6 +39,7 @@ function isEcho(ctx: AppContext, filePath: string): boolean {
 
 export function startWatcher(ctx: AppContext): FSWatcher {
   const timers = new Map<string, NodeJS.Timeout>();
+  const coordinator = maintenanceCoordinatorFor(ctx);
 
   const schedule = (filePath: string, fn: () => void | Promise<void>) => {
     const prev = timers.get(filePath);
@@ -46,8 +48,7 @@ export function startWatcher(ctx: AppContext): FSWatcher {
       filePath,
       setTimeout(() => {
         timers.delete(filePath);
-        Promise.resolve()
-          .then(fn)
+        coordinator.runMutation(async () => fn())
           .catch((err) => console.error(`[watcher] ${filePath}: ${(err as Error).message}`));
       }, DEBOUNCE_MS),
     );

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveGitHubToken, __resetTokenCache, type GhRunner } from '../github/token';
+import { resolveGitHubToken, resolveGitHubTokenStatus, __resetTokenCache, type GhRunner } from '../github/token';
 
 // A live GITHUB_TOKEN in the dev shell (or .env) would mask the gh-fallback
 // path under test; clear it so the fallback assertions hold regardless of env.
@@ -59,4 +59,33 @@ test('returns undefined and caches null when all candidates fail', async () => {
   // Cached as null: a second call doesn't re-shell every candidate.
   assert.equal(await resolveGitHubToken(runGh), undefined);
   assert.equal(calls, afterFirst);
+});
+
+test('token status reports environment precedence without returning the token', async () => {
+  __resetTokenCache();
+  process.env.GITHUB_TOKEN = 'environment-secret';
+  try {
+    const status = await resolveGitHubTokenStatus(async () => {
+      throw new Error('gh should not run');
+    });
+    assert.deepEqual(status, { configured: true, source: 'environment' });
+    assert.equal(JSON.stringify(status).includes('environment-secret'), false);
+  } finally {
+    delete process.env.GITHUB_TOKEN;
+  }
+});
+
+test('token status reports gh-cli fallback and absence', async () => {
+  delete process.env.GITHUB_TOKEN;
+  __resetTokenCache();
+  assert.deepEqual(
+    await resolveGitHubTokenStatus(async () => ({ stdout: 'cli-secret\n', stderr: '' })),
+    { configured: true, source: 'gh-cli' },
+  );
+
+  __resetTokenCache();
+  assert.deepEqual(
+    await resolveGitHubTokenStatus(async () => { throw new Error('missing'); }),
+    { configured: false, source: 'absent' },
+  );
 });

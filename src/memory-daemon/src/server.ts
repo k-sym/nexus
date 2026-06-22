@@ -2,10 +2,12 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type { AppContext } from "./context.js";
 import { registerMemoryRoutes } from "./routes/memory.js";
+import { registerOperationRoutes, type OperationDependencies } from "./routes/operations.js";
 
-export function buildServer(ctx: AppContext): FastifyInstance {
+export function buildServer(ctx: AppContext, operationDependencies?: OperationDependencies): FastifyInstance {
   const app = Fastify({ logger: false });
   registerMemoryRoutes(app, ctx);
+  registerOperationRoutes(app, ctx, operationDependencies);
 
   app.get("/health", async () => {
     const models = await ctx.models.health();

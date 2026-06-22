@@ -30,7 +30,11 @@ export interface IngestResult {
 }
 
 /** Read the file at `filePath` and upsert its memory row (+ index its content). */
-export async function ingestFile(ctx: AppContext, filePath: string): Promise<IngestResult | null> {
+export async function ingestFile(
+  ctx: AppContext,
+  filePath: string,
+  options: { force?: boolean } = {},
+): Promise<IngestResult | null> {
   let raw: string;
   let mtime: number;
   try {
@@ -61,7 +65,7 @@ export async function ingestFile(ctx: AppContext, filePath: string): Promise<Ing
     .prepare("SELECT id, content_hash, created_at, deleted_at FROM memories WHERE id = ?")
     .get(id) as { id: string; content_hash: string; created_at: string; deleted_at: string | null } | undefined;
 
-  if (existing && existing.content_hash === hash && existing.deleted_at === null) {
+  if (!options.force && existing && existing.content_hash === hash && existing.deleted_at === null) {
     return { id, action: "noop" };
   }
 
@@ -117,6 +121,7 @@ export async function ingestFile(ctx: AppContext, filePath: string): Promise<Ing
   oplog(ctx.db, action === "insert" ? "ingest" : "update", { memory_id: id, source: scope.source });
 
   // Instant + local: FTS + chunk/sentence rows -> keyword-searchable immediately.
+  if (options.force) ctx.db.prepare("DELETE FROM facts WHERE memory_id = ?").run(id);
   buildSegments(ctx, id, title, body);
   // Instant chunk vectors when the embedder is up; the deep_index job backfills + does
   // sentences. Embedder downtime degrades gracefully (FTS still works).
@@ -140,6 +145,7 @@ export function removeFile(ctx: AppContext, filePath: string): string | null {
   dropVectors(ctx, row.id);
   ctx.db.prepare("DELETE FROM sentences WHERE memory_id = ?").run(row.id);
   ctx.db.prepare("DELETE FROM chunks WHERE memory_id = ?").run(row.id);
+  ctx.db.prepare("DELETE FROM facts WHERE memory_id = ?").run(row.id);
   deleteFts(ctx.db, row.id);
   oplog(ctx.db, "delete", { memory_id: row.id });
   return row.id;

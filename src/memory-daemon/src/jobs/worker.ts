@@ -5,6 +5,7 @@ import { claim, complete, enqueue, fail, type Job } from "./queue.js";
 import { embedPending } from "../index/indexer.js";
 import { extractTriples } from "../kg/extract.js";
 import { ModelError } from "../models/client.js";
+import { maintenanceCoordinatorFor } from "../maintenance.js";
 
 const IDLE_POLL_MS = 250;
 
@@ -42,10 +43,10 @@ export function startWorker(ctx: AppContext): Worker {
 
   const tick = async () => {
     if (stopped) return;
-    let ranSomething = false;
-    const job = claim(ctx.db);
-    if (job) {
-      ranSomething = true;
+    const ranSomething = await maintenanceCoordinatorFor(ctx).runWorker(async () => {
+      if (stopped) return false;
+      const job = claim(ctx.db);
+      if (!job) return false;
       try {
         await handle(ctx, job);
         complete(ctx.db, job.id);
@@ -56,7 +57,8 @@ export function startWorker(ctx: AppContext): Worker {
         const outcome = fail(ctx.db, job, (err as Error).message, { retryable });
         if (outcome === "dead") console.error(`[worker] job ${job.id} (${job.type}) DEAD: ${(err as Error).message}`);
       }
-    }
+      return true;
+    });
     if (stopped) return;
     // Drain quickly when busy; back off to a poll interval when idle.
     timer = setTimeout(() => void tick(), ranSomething ? 0 : IDLE_POLL_MS);

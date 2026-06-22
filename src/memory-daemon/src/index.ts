@@ -21,14 +21,15 @@ async function main() {
 
   oplog(db, "boot", { detail: `vault=${cfg.vaultPath}` });
 
-  // Reset any jobs stuck in PROCESSING from a previous crash, then start the worker.
+  // Reset any jobs stuck in PROCESSING from a previous crash. Reconcile the vault
+  // before starting the worker so boot-time indexing cannot race queued derived work.
   const recovered = recoverGhostJobs(db);
   if (recovered > 0) console.log(`[nexus-memory] ghost recovery: ${recovered} job(s) reset to PENDING`);
-  const worker = startWorker(ctx);
 
   // Rebuild the index from the canonical vault, then watch for deltas.
   const stats = await reindexAll(ctx);
   console.log(`[nexus-memory] reindex: ${JSON.stringify(stats)}`);
+  const worker = startWorker(ctx);
   const watcher = startWatcher(ctx);
 
   const app = buildServer(ctx);

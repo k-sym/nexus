@@ -42,14 +42,29 @@ async function resolveViaGh(runGh: GhRunner): Promise<string | null> {
   return null;
 }
 
+async function resolveViaGhCached(runGh: GhRunner): Promise<string | null> {
+  if (cachedGhToken === undefined) cachedGhToken = await resolveViaGh(runGh);
+  return cachedGhToken;
+}
+
 export async function resolveGitHubToken(runGh: GhRunner = defaultRunGh): Promise<string | undefined> {
   const fromEnv = process.env.GITHUB_TOKEN;
   if (typeof fromEnv === 'string' && fromEnv.length > 0) return fromEnv;
 
-  if (cachedGhToken === undefined) {
-    cachedGhToken = await resolveViaGh(runGh);
+  return (await resolveViaGhCached(runGh)) ?? undefined;
+}
+
+export async function resolveGitHubTokenStatus(runGh: GhRunner = defaultRunGh): Promise<{
+  configured: boolean;
+  source: 'environment' | 'gh-cli' | 'absent';
+}> {
+  if (typeof process.env.GITHUB_TOKEN === 'string' && process.env.GITHUB_TOKEN.length > 0) {
+    return { configured: true, source: 'environment' };
   }
-  return cachedGhToken ?? undefined;
+  const token = await resolveViaGhCached(runGh);
+  return token
+    ? { configured: true, source: 'gh-cli' }
+    : { configured: false, source: 'absent' };
 }
 
 /** Test-only: clear the cached CLI lookup so the next call re-resolves. */

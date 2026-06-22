@@ -6,6 +6,7 @@ import { storeMemory, ingestFile, removeFile } from "../sync/ingest.js";
 import { writeMemoryFile } from "../sync/writer.js";
 import { recall, formatContext } from "../retrieval/recall.js";
 import type { ScopeFilter } from "../retrieval/types.js";
+import { maintenanceCoordinatorFor } from "../maintenance.js";
 
 interface StoreBody {
   namespace?: string;
@@ -26,20 +27,22 @@ function scopeFromQuery(q: Record<string, unknown>): ScopeFilter {
 }
 
 export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): void {
+  const coordinator = maintenanceCoordinatorFor(ctx);
   // Create
   app.post("/memories", async (req, reply) => {
     const b = (req.body ?? {}) as StoreBody;
     if (!b.body || !b.namespace || !b.source) {
       return reply.code(400).send({ error: "namespace, source, and body are required" });
     }
-    const res = await storeMemory(ctx, {
-      namespace: b.namespace,
+    const { body, namespace, source } = b;
+    const res = await coordinator.runMutation(() => storeMemory(ctx, {
+      namespace,
       project: b.project ?? null,
       category: b.category ?? null,
-      source: b.source,
+      source,
       title: b.title,
-      body: b.body,
-    });
+      body,
+    }));
     return reply.code(201).send(res);
   });
 
@@ -83,8 +86,10 @@ export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): voi
     if (typeof req.body?.title === "string") fm.title = req.body.title;
     const body = typeof req.body?.body === "string" ? req.body.body : row.body;
 
-    writeMemoryFile(ctx, row.file_path, fm, body);
-    const res = await ingestFile(ctx, row.file_path);
+    const res = await coordinator.runMutation(async () => {
+      writeMemoryFile(ctx, row.file_path, fm, body);
+      return ingestFile(ctx, row.file_path);
+    });
     return reply.send(res);
   });
 
@@ -94,12 +99,14 @@ export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): voi
       .prepare("SELECT file_path FROM memories WHERE id = ? AND deleted_at IS NULL")
       .get(req.params.id) as { file_path: string } | undefined;
     if (!row) return reply.code(404).send({ error: "not found" });
-    try {
-      unlinkSync(row.file_path);
-    } catch {
-      /* already gone */
-    }
-    removeFile(ctx, row.file_path);
+    await coordinator.runMutation(async () => {
+      try {
+        unlinkSync(row.file_path);
+      } catch {
+        /* already gone */
+      }
+      removeFile(ctx, row.file_path);
+    });
     return reply.send({ id: req.params.id, deleted: true });
   });
 

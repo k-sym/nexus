@@ -10,6 +10,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 
 - [What It Does](#what-it-does)
 - [Architecture](#architecture)
+- [Trust and Privacy](#trust-and-privacy)
 - [Quick Start](#quick-start)
 - [The Local Model Stack](#the-local-model-stack)
 - [Configuration](#configuration)
@@ -42,7 +43,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Personas** | YAML-defined agent personalities that bind a provider + model + system prompt + tools. Assign different ones to coding, review, deploy, etc. |
 | **Multi-provider agents** | Spawns Claude Code / Codex / OpenCode as CLI subprocesses; calls OpenRouter and any local OpenAI-compatible server (omlx, LM Studio, llama.cpp, …) over HTTP. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
-| **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and 48-hour archival to Obsidian. |
+| **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and manual archival into memory. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
 | **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira sync that changed tickets, or a sync failure. Backed by a `notifications` table the frontend polls. |
 | **Mission Control** | A single dashboard aggregating daemon health, the agent roster with per-provider health, and an activity feed. |
@@ -94,6 +95,57 @@ The backend runs the Fastify HTTP API, the orchestrator polling loop, and the Ji
 | `src/memory-daemon` | `@nexus/memory-daemon` | Standalone memory daemon (vault + index + retrieval), HTTP :4100 + MCP |
 | `src/frontend` | `@nexus/frontend` | React dashboard |
 | `electron` | `nexus-electron` | Electron shell that boots the services + loads the UI |
+
+---
+
+## Trust and Privacy
+
+Nexus has no application analytics or telemetry integration. Its backend and memory daemon listen on loopback by default, and the packaged app bundles the frontend rather than exposing a frontend server. In development, Vite also listens on port `5173`. Configured model, assistant, Jira, and GitHub providers still receive the requests required to perform their service; their own privacy and telemetry policies apply.
+
+### Local services and storage
+
+| Component or data | Default location | Boundary |
+|---|---|---|
+| Backend API | `127.0.0.1:4173` | Local Fastify service; owns application workflows and `nexus.db` |
+| Memory daemon | `127.0.0.1:4100` | Local vault/index owner; backend and MCP clients call it over HTTP |
+| Frontend dev server | `127.0.0.1:5173` | Development only; production assets are bundled into Electron |
+| Local generation / embedding / reranking | `127.0.0.1:4001` / `:4002` / `:4003` | Optional local model services used by memory retrieval/indexing |
+| Projects, tasks, hot sessions, mirrored tickets | `~/.nexus/nexus.db` | Local application state |
+| Memories and archived-session summaries | configured Obsidian vault (default `~/Obsidian/Nexus/`) | Canonical Markdown |
+| Memory search, vectors, and knowledge graph | `<vault>/.index/nexus-memory.db` | Disposable index, rebuildable from canonical Markdown |
+| Nexus configuration | `~/.nexus/config.yaml` | Non-secret settings, environment references, and any literal model/assistant keys entered in Settings |
+| Pi provider API keys and OAuth credentials | `~/.nexus/auth.json` | Local credential file managed by the Pi runtime |
+
+Ports and paths can be changed in configuration. **Settings → Trust & Privacy** shows the effective trust-relevant values and credential sources without returning raw secrets to the browser.
+
+### Secrets
+
+- Pi provider API keys and OAuth credentials are stored in `~/.nexus/auth.json`.
+- OpenRouter, local-model, and assistant keys support `${ENV_VAR}` interpolation in `config.yaml`. If a literal key is entered in Settings, it is stored in `config.yaml` and masked when Settings reads it back.
+- `JIRA_TOKEN` is read from the process environment. Nexus also loads the nearest local `.env` file at startup without overwriting variables already exported by the shell.
+- GitHub issue sync prefers `GITHUB_TOKEN`, then falls back to `gh auth token`; the GitHub CLI owns the fallback credential storage.
+
+### What leaves the machine
+
+| Destination | Data sent when enabled or used |
+|---|---|
+| Configured model providers | Prompts, conversation context, selected attachments/images, tool results, and any recalled memory injected into the prompt |
+| Configured assistant endpoint | Assistant conversation messages and the configured bearer credential |
+| Jira Cloud | The configured account email, API token, project/search query, and issue requests |
+| GitHub | Repository owner/name, issue API requests, and a token when one is available |
+
+Model and memory-model calls remain on the machine only when their configured endpoints are loopback addresses; remote configured endpoints receive the request data listed above. Nexus does not send the Obsidian vault or `nexus.db` wholesale; only content needed for the specific provider request is included.
+
+### Memory boundaries and controls
+
+Memory uses namespaces: `nexus` for Nexus project memory, `global` for shared memory, and separate namespaces for external agents. Auto-injection can be disabled or limited in Settings; when enabled, relevant memories are added to provider prompts up to the configured count and token budget.
+
+Session archival is manual. A successful archive summarizes the session into canonical `nexus` memory and only then removes the hot thread from `nexus.db`; a failed memory write leaves the thread intact.
+
+Settings provides two maintenance controls:
+
+- **Rebuild index** re-scans canonical Markdown and regenerates disposable retrieval state without deleting vault files.
+- **Clear Nexus memory** permanently deletes canonical files in the `nexus` namespace after the exact confirmation phrase `CLEAR NEXUS MEMORY`. It preserves `global`, external-agent namespaces, and unrelated vault files.
 
 ---
 
@@ -294,6 +346,7 @@ All config lives under `~/.nexus/`:
 ```
 ~/.nexus/
 ├── config.yaml          # Global settings
+├── auth.json            # Pi provider API keys and OAuth credentials
 ├── personas/            # Agent YAML configs (one file per persona)
 │   ├── developer.yaml
 │   ├── reviewer.yaml
@@ -361,12 +414,9 @@ codex:
   command: "codex"
   args: []
 
-chat:
-  hot_storage_hours: 48          # archive chats older than this to Obsidian
-  archive_path: "Projects/{project_slug}/Sessions"
 ```
 
-Environment variables are interpolated with `${VAR}` syntax. Secrets are read from exported environment variables or a local `.env` file, never written to `config.yaml`: the OpenRouter key from `OPENROUTER_API_KEY` (or `OPENROUTING_API_KEY`), the Jira API token from `JIRA_TOKEN`, and the Hermes key from `HERMES_API_KEY`.
+Environment variables are interpolated with `${VAR}` syntax, and Nexus loads the nearest local `.env` file without replacing already-exported values. Environment references are preferred for OpenRouter, local-model, and assistant keys; literal values entered in Settings are stored in `config.yaml` and masked on read. Pi provider API keys and OAuth credentials live in `~/.nexus/auth.json`. Jira uses `JIRA_TOKEN`; GitHub uses `GITHUB_TOKEN` or `gh auth token`.
 
 ---
 
@@ -479,7 +529,7 @@ Each project has a sessions interface:
 - **Question cards**: when an agent emits an ` ```ask ``` ` block, it renders as a structured question card (single/multi/custom answers); your reply is fed back as the next turn (`POST /api/threads/:threadId/answer`).
 - **Live streaming**: replies stream in token-by-token (`POST /api/threads/:threadId/messages/stream`, NDJSON). This is provider-agnostic — Claude (`stream-json`), Codex (`--json`), OpenCode (`--format json`), and HTTP providers (OpenAI SSE) each go through a normalizing adapter, so you see the agent working rather than a blank wait. The non-streaming `POST .../messages` remains for non-UI callers. Claude Code turns are bounded by an **idle** timeout (no streamed activity), not a wall-clock cap — see `claude_code.idle_timeout_seconds`.
 - **Claude session capture & resume**: Claude Code turns run with `--output-format stream-json` under a self-assigned `--session-id`, so Nexus captures the resumable session id per thread (surfaced live the moment a turn starts). A chip under the chat header lets you **copy** `claude --resume <id>` or **open a macOS Terminal** already resumed into that session — useful if a turn stalls. In-app turns also continue the same session (`--resume`), so the thread is one continuous conversation shared with the terminal. (One writer at a time — hand off, don't drive both at once.)
-- Conversations older than **48 hours** are auto-archived as markdown to the Obsidian vault, then purged from the hot SQLite store.
+- Archival is user-triggered. Nexus summarizes the conversation into canonical `nexus` memory, then removes the hot SQLite thread only after memory storage succeeds.
 
 ### Tickets (Jira mirror)
 
@@ -498,8 +548,8 @@ it gets populated:
   remains for an external sync agent (e.g. an OpenClaw cron) to push the current set in. Both paths share
   the same upsert.
 
-> **`JIRA_TOKEN`** is your Jira API token; like all secrets it's read from the environment, never stored
-> in `config.yaml`. The **account email** must be the one that owns the token — with the wrong email the
+> **`JIRA_TOKEN`** is your Jira API token; it is read from the environment and is not stored in
+> `config.yaml`. The **account email** must be the one that owns the token — with the wrong email the
 > Jira search endpoint returns an empty result (HTTP 200) rather than an auth error, so it just looks like
 > "no tickets." The instance host accepts either `your-company.atlassian.net` or a full `https://…` URL.
 
