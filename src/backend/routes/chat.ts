@@ -13,7 +13,14 @@ import { FastifyInstance } from 'fastify';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { v4 as uuid } from 'uuid';
-import { ChatThread } from '@nexus/shared';
+import {
+  AGENT_RUN_CUSTOM_TYPE,
+  type AgentRunAbortSource,
+  type AgentRunEnd,
+  type AgentRunStart,
+  type AgentRunTerminalStatus,
+  type ChatThread,
+} from '@nexus/shared';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
 import { loadConfig } from '../config.js';
@@ -24,6 +31,19 @@ const ABORT_GRACE_MS = 200;
 
 interface ActiveStream {
   session: Pick<AgentSession, 'abort'>;
+  runId: string;
+  abortSource?: AgentRunAbortSource;
+}
+
+type ChatSession = Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> & {
+  sessionManager?: Pick<AgentSession['sessionManager'], 'appendCustomEntry' | 'getLeafId' | 'getLeafEntry'>;
+};
+
+const CLIENT_ABORT_SOURCES = new Set<AgentRunAbortSource>(['user', 'frontend']);
+
+function omitEvent<T extends { event: string }>(value: T): Omit<T, 'event'> {
+  const { event: _event, ...rest } = value;
+  return rest;
 }
 
 interface ThreadRunClaim {
@@ -295,7 +315,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
             modelKey: active?.modelKey ?? modelKey,
           };
     }
-    let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> | undefined;
+    let session: ChatSession | undefined;
     let responseCompleted = false;
     let clientDisconnected = false;
     let disconnectAbort: Promise<void> | undefined;
@@ -363,7 +383,20 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     };
 
     const operationId = uuid();
+    const runId = operationId;
+    const startEvent: AgentRunStart = {
+      event: 'start',
+      runId,
+      threadId,
+      startedAt: new Date().toISOString(),
+      provider: selectedModel?.provider ?? 'default',
+      model: selectedModel?.id ?? body.modelKey ?? 'default',
+    };
+    session.sessionManager?.appendCustomEntry(AGENT_RUN_CUSTOM_TYPE, startEvent);
+    write({ kind: 'run_start', run: omitEvent(startEvent) });
     let streamError: string | undefined;
+    let terminalStatus: AgentRunTerminalStatus = 'completed';
+    let abortSource: AgentRunAbortSource | undefined;
     fastify.activity?.bus.emit({
       type: 'start',
       operationId,
@@ -399,8 +432,17 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         console.error('[chat] persistUserTurn failed:', err?.message);
       }
       if (session) {
-        activeStreams.set(threadId, { session });
-        const subscription = session.subscribe((ev) => write(ev));
+        activeStreams.set(threadId, { session, runId });
+        const subscription = session.subscribe((ev) => {
+          write(ev);
+          fastify.activity?.bus.emit({
+            type: 'update',
+            operationId,
+            kind: 'chat_turn',
+            title: `${project?.name ?? 'unknown'} / ${thread.title}`,
+            lastEvent: ev.type,
+          });
+        });
         try {
           if (images.length > 0) {
             await session.prompt(promptContent, { images });
@@ -414,6 +456,12 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           const error = new Error('Client disconnected');
           error.name = 'AbortError';
           throw error;
+        }
+        const completedAbortSource = activeStreams.get(threadId)?.abortSource;
+        if (completedAbortSource) {
+          terminalStatus = 'cancelled';
+          abortSource = completedAbortSource;
+          streamError = 'aborted';
         }
         const contextUsage = safeContextUsage(session);
         if (contextUsage) {
@@ -433,9 +481,36 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       const isAbort = err?.name === 'AbortError';
       if (isAbort) pi.questions?.cancelThread(threadId, 'Stream aborted');
       streamError = isAbort ? 'aborted' : (err?.message || 'prompt failed');
+      const explicitSource = activeStreams.get(threadId)?.abortSource;
+      if (isAbort && explicitSource) {
+        terminalStatus = 'cancelled';
+        abortSource = explicitSource;
+      } else if (isAbort && clientDisconnected) {
+        terminalStatus = 'interrupted';
+        abortSource = 'frontend';
+      } else if (err?.name === 'TimeoutError' || err?.code === 'UND_ERR_HEADERS_TIMEOUT') {
+        terminalStatus = 'failed';
+        abortSource = 'timeout';
+      } else {
+        terminalStatus = 'failed';
+        abortSource = 'runtime';
+      }
       write({ kind: 'error', error: streamError });
     } finally {
       responseCompleted = true;
+      const leaf = session?.sessionManager?.getLeafEntry();
+      const endEvent: AgentRunEnd = {
+        event: 'end',
+        runId,
+        threadId,
+        assistantEntryId: leaf?.type === 'message' ? session?.sessionManager?.getLeafId() ?? undefined : undefined,
+        completedAt: new Date().toISOString(),
+        status: terminalStatus,
+        abortSource,
+        error: streamError,
+      };
+      session?.sessionManager?.appendCustomEntry(AGENT_RUN_CUSTOM_TYPE, endEvent);
+      write({ kind: 'run_end', run: omitEvent(endEvent) });
       activeStreams.delete(threadId);
       fastify.activity?.bus.emit({
         type: 'stop',
@@ -457,10 +532,16 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.post('/api/threads/:threadId/abort', async (request) => {
+  fastify.post('/api/threads/:threadId/abort', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
     const existing = activeStreams.get(threadId);
     if (!existing) return { ok: false, reason: 'no_run' };
+    const source = ((request.body ?? {}) as { source?: AgentRunAbortSource }).source ?? 'user';
+    if (!CLIENT_ABORT_SOURCES.has(source)) {
+      reply.code(400);
+      return { ok: false, error: 'source must be user or frontend' };
+    }
+    existing.abortSource = source;
     try {
       await existing.session.abort();
     } catch (err: any) {

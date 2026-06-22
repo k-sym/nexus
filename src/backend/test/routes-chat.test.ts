@@ -34,6 +34,10 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function parseNdjson(body: string): any[] {
+  return body.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+
 test('question history associates a matching result with its assistant tool call', () => {
   const details = {
     status: 'answered',
@@ -1335,6 +1339,58 @@ test('POST /api/threads/:id/messages/stream emits context usage after prompting'
   }
 });
 
+test('POST /api/threads/:id/messages/stream emits and persists matching run boundaries', async () => {
+  const customEntries: Array<{ customType: string; data: unknown }> = [];
+  let leafId = 'assistant-entry-1';
+  const session = {
+    sessionManager: {
+      appendCustomEntry: (customType: string, data: unknown) => {
+        customEntries.push({ customType, data });
+        return `custom-${customEntries.length}`;
+      },
+      getLeafId: () => leafId,
+      getLeafEntry: () => ({ type: 'message' }),
+    },
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'test-provider', id: 'test-model' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'plain text', modelKey: 'test-provider/test-model' },
+    });
+
+    assert.equal(res.statusCode, 200);
+    const events = parseNdjson(res.body);
+    const start = events.find((event) => event.kind === 'run_start');
+    const end = events.find((event) => event.kind === 'run_end');
+    assert.ok(start);
+    assert.ok(end);
+    assert.equal(end.run.runId, start.run.runId);
+    assert.equal(end.run.status, 'completed');
+    assert.equal(end.run.assistantEntryId, leafId);
+    assert.equal(customEntries.length, 2);
+    assert.equal(customEntries[0].customType, 'nexus.agent_run');
+    assert.equal(customEntries[1].customType, 'nexus.agent_run');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream keeps Anthropic OAuth on the Pi session path', async () => {
   let sessionForCalled = false;
   let promptCalled = false;
@@ -1740,6 +1796,100 @@ test('POST /api/threads/:id/abort returns no_run when nothing is in flight', asy
     const res = await app.inject({ method: 'POST', url: '/api/threads/thread-1/abort' });
     assert.equal(res.json().ok, false);
     assert.equal(res.json().reason, 'no_run');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/abort records a user-cancelled terminal run', async () => {
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const session = {
+    sessionManager: {
+      appendCustomEntry: () => 'custom-entry',
+      getLeafId: () => 'assistant-entry',
+      getLeafEntry: () => ({ type: 'message' }),
+    },
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => promptStopped.resolve(),
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const stream = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'cancel me' },
+    });
+    await promptStarted.promise;
+
+    const abort = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/abort',
+      payload: { source: 'user' },
+    });
+    assert.equal(abort.statusCode, 200);
+
+    const terminal = parseNdjson((await stream).body).find((event) => event.kind === 'run_end');
+    assert.equal(terminal.run.status, 'cancelled');
+    assert.equal(terminal.run.abortSource, 'user');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/abort rejects an untrusted abort source', async () => {
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => promptStopped.resolve(),
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const stream = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'keep running' },
+    });
+    await promptStarted.promise;
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/abort',
+      payload: { source: 'database' },
+    });
+    assert.equal(invalid.statusCode, 400);
+    await app.inject({ method: 'POST', url: '/api/threads/thread-1/abort', payload: { source: 'user' } });
+    await stream;
   } finally {
     await app.close();
     db.close();
