@@ -14,7 +14,6 @@
  *   - Session resume: pi owns sessions natively; no terminal hand-off
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Stop } from '@phosphor-icons/react';
 import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
@@ -24,6 +23,7 @@ import { ModelSelector } from './ModelSelector';
 import { ToolCallTimeline } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
+import { AgentRunCard } from './AgentRunCard';
 
 interface ChatPanelProps {
   projectId: string;
@@ -442,16 +442,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     }
   };
 
-  const handleAbort = useCallback(async () => {
-    if (!threadId) return;
-    try {
-      await apiFetch(`/api/threads/${threadId}/abort`, { method: 'POST' });
-    } catch {
-      /* ignore */
-    }
-    await abortStream();
-  }, [threadId, abortStream]);
-
   const confirmCancelOther = useCallback(async () => {
     if (!pendingConfirm) return;
     const text = pendingConfirm.pendingText;
@@ -609,6 +599,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               fallbackState={fallbackSubmissions[m.id]}
               onAnswerQuestion={answerNativeQuestion}
               onAnswerFallback={answerFallbackQuestion}
+              onStop={() => void abortStream('user')}
             />
           ))
         )}
@@ -619,6 +610,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             questionState={questionSubmissions}
             onAnswerQuestion={answerNativeQuestion}
             onAnswerFallback={answerFallbackQuestion}
+            onStop={() => void abortStream('user')}
           />
         )}
         <div ref={messagesEndRef} />
@@ -693,17 +685,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           />
           <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
             <ContextUsageLabel usage={state.contextUsage} />
-            {isRunning ? (
-              <button
-                type="button"
-                onClick={handleAbort}
-                data-testid="abort-button"
-                className="px-3 py-2 surface-elevated text-muted rounded-lg hover:text-[var(--text-primary)] transition-colors"
-                title="Stop the current generation"
-              >
-                <Stop className="w-5 h-5 mx-auto" weight="fill" />
-              </button>
-            ) : (
+            {!isRunning && (
               <button
                 type="button"
                 onClick={handleSend}
@@ -728,6 +710,7 @@ function MessageBubble({
   fallbackState,
   onAnswerQuestion,
   onAnswerFallback,
+  onStop,
 }: {
   msg: StreamMessage;
   detailsExpanded: boolean;
@@ -735,6 +718,7 @@ function MessageBubble({
   fallbackState?: QuestionSubmissionState[string];
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onAnswerFallback: (messageId: string, request: QuestionRequest, answers: QuestionAnswer[]) => Promise<void>;
+  onStop: () => void;
 }) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'toolResult';
@@ -742,6 +726,21 @@ function MessageBubble({
   const fallback = !isUser && !isTool && msg.isStreaming !== true
     ? parseTerminalAskBlock(msg.content)
     : null;
+  if (!isUser && !isTool && msg.run) {
+    return (
+      <div className="flex justify-start">
+        <AgentRunCard
+          run={msg.run}
+          content={msg.content}
+          thinking={msg.thinking}
+          detailsExpanded={detailsExpanded}
+          onStop={onStop}
+          questionState={questionState}
+          onAnswerQuestion={onAnswerQuestion}
+        />
+      </div>
+    );
+  }
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div
