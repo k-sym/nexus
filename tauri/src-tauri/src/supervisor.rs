@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 use crate::node::resolve_node;
+use crate::health::{probe, wait_for_health, degraded_models};
 
 /// Env for spawned services: inherit, enrich PATH, force OS-cert trust.
 pub fn spawn_env(node: &str) -> Vec<(String, String)> {
@@ -85,9 +87,6 @@ pub fn spawn_npm(cwd: &Path, args: &[&str]) -> std::io::Result<Child> {
     spawn(cmd, &node)
 }
 
-use crate::health::{probe, wait_for_health, degraded_models};
-use std::time::Duration;
-
 const DAEMON_HEALTH: &str = "http://127.0.0.1:4100/health";
 const BACKEND_HEALTH: &str = "http://127.0.0.1:4173/api/health";
 const FRONTEND_URL: &str = "http://localhost:5173/";
@@ -128,16 +127,16 @@ pub struct BootResult {
 /// Full boot: daemon (optional) -> models -> backend -> (dev) vite. Calls
 /// `emit(key, state, detail)` after each transition to feed the splash.
 pub fn boot<E: Fn(&str, &str, Option<&str>)>(is_dev: bool, emit: E) -> BootResult {
-    use crate::node::resolve_node;
     let repo_root = repo_root();
     let mut children = Vec::new();
 
     // Preflight: prod needs a system node before we spawn compiled services.
-    let node_missing = !is_dev && resolve_node().is_none();
+    let node_opt = resolve_node();
+    let node_missing = !is_dev && node_opt.is_none();
     if node_missing {
         return BootResult { ready: false, degraded: vec![], node_missing: true, children };
     }
-    let node = resolve_node().unwrap_or_else(|| "node".into());
+    let node = node_opt.unwrap_or_else(|| "node".into());
 
     // Daemon (optional, non-gating).
     emit("memory", "starting", Some("checking…"));
