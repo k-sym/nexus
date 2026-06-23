@@ -24,6 +24,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
   - [Sessions](#sessions)
   - [Tickets (Jira mirror)](#tickets-jira-mirror)
   - [Mission Control](#mission-control)
+  - [Missions](#missions)
 - [Model Routing](#model-routing)
 - [API Reference](#api-reference)
 - [Project Layout](#project-layout)
@@ -39,6 +40,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Projects** | Link existing local git repos. NEXUS adds a `project_docs/` structure for specs, plans, and uploads. |
 | **Kanban** | 5-column board (Triage → To Do → In Progress → Review → Deploy) with drag-and-drop. |
 | **Orchestrator** | Watches for tasks entering "In Progress" and dispatches them to the right agent automatically. |
+| **Missions** | Bounded, recurring or self-paced autonomous jobs against a project's tasks/tickets. Hard ceilings (iterations / wall-clock / token budget / run window), a per-iteration audit ledger, and pause/resume/stop controls. Off by default; can never run unbounded. |
 | **Providers** | First-class registry of agent backends: Claude Code / Codex / OpenCode (CLI), any OpenAI-compatible HTTP endpoint (OpenRouter, local servers), and remote Hermes agents. CRUD + connectivity test in the UI. |
 | **Personas** | YAML-defined agent personalities that bind a provider + model + system prompt + tools. Assign different ones to coding, review, deploy, etc. |
 | **Multi-provider agents** | Spawns Claude Code / Codex / OpenCode as CLI subprocesses; calls OpenRouter and any local OpenAI-compatible server (omlx, LM Studio, llama.cpp, …) over HTTP. |
@@ -84,7 +86,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 └─────────────────────────────────────────────────────────┘
 ```
 
-The backend runs the Fastify HTTP API, the orchestrator polling loop, and the Jira polling loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/providers/tickets; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Electron app for production.
+The backend runs the Fastify HTTP API, the orchestrator polling loop, the Jira polling loop, and the mission scheduler loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/providers/tickets; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Electron app for production.
 
 ### Packages
 
@@ -561,6 +563,55 @@ The landing dashboard. A single `GET /api/mission-control` call aggregates:
 - **Agent roster** — every persona with a per-provider health probe,
 - **Activity feed** — running and recent agent runs.
 
+### Missions
+
+> Not to be confused with **Mission Control** (the landing dashboard, above). A **mission** is a bounded,
+> recurring or self-paced autonomous job.
+
+Missions run a project-bound job on a schedule with hard ceilings, a full per-iteration audit trail, and
+explicit pause/resume/stop control. Where the orchestrator *reacts* to a task entering **In Progress**, a
+mission runs *itself* on a cadence until it hits a configured limit or drains its backlog — the building
+block for bounded "overnight" autonomous work.
+
+A single in-backend **scheduler** (5s tick, alongside the orchestrator and Jira poll) wakes, claims every
+`active` mission whose `next_run_at` is due, and runs one iteration through a handler keyed by the
+mission's `kind`. Bounds are evaluated **before and again after** every iteration, so a mission can never
+overshoot. Due-ness is persisted (`next_run_at`), so the loop is restart-safe.
+
+- **Off by default.** A mission is created **paused** with no scheduled run; it only starts after an
+  explicit **Resume**. The scheduler only ever touches `active` missions, and `stopped` is terminal
+  (both pause and resume reject a stopped mission).
+- **Always bounded.** Create/update is rejected (HTTP 400) unless the mission has a terminating ceiling —
+  at least one of `max_iterations` / `max_wall_clock_seconds`, **or** `backlog_drain` pacing (which
+  self-terminates when work runs out). A mission cannot be configured to run forever.
+
+**Pacing** — how the next run is scheduled:
+
+| Pacing | Next run |
+|---|---|
+| `fixed` | every `interval_seconds` |
+| `self_paced` | the handler chooses the delay per iteration |
+| `backlog_drain` | runs until the handler reports no work left, then stops with reason `drained` |
+
+**Ceilings & window:** `max_iterations`, `max_wall_clock_seconds`, `max_tokens`, plus an optional
+local-time **run window** (`HH:MM`–`HH:MM`, may wrap midnight) that defers a due run to the next time the
+window opens.
+
+**Kinds** — the pluggable handler a mission runs each iteration:
+
+| Kind | What it does |
+|---|---|
+| `echo` | deterministic built-in (testing / demo); no side effects |
+| `triage_tickets` | mirrors un-triaged Jira/GitHub tickets into `triage` tasks for the project; backlog-drains |
+| `review_stale_tasks` | reports tasks idle past a threshold (pure read — it *proposes*, never mutates tasks) |
+| `assistant_turn` | *(planned, separate gate)* drives an LLM session in the project repo — the only model-calling kind, with mandatory guardrails |
+
+**Audit ledger.** Every executed iteration writes a `mission_runs` row — intent, selected work, result
+summary, tokens used, errors, the next scheduled run, and the stop reason — and emits a `mission_tick`
+event into the Activity feed. The **Missions** top-bar view shows the mission list with live status, a
+create form, and the per-mission run ledger with controls. Drive it from there or via the
+[Missions API](#missions-1).
+
 ---
 
 ## Model Routing
@@ -662,6 +713,19 @@ Base URL: `http://127.0.0.1:4173`
 |---|---|---|
 | GET | `/api/mission-control` | Aggregated dashboard: daemon health, agent roster + provider health, activity |
 
+### Missions
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/projects/:projectId/missions` | List a project's missions |
+| POST | `/api/projects/:projectId/missions` | Create a mission — starts **paused**; rejects an unbounded config with 400 |
+| GET | `/api/missions/:id` | Get a mission |
+| PUT | `/api/missions/:id` | Update (allowed only while paused; 409 otherwise) |
+| DELETE | `/api/missions/:id` | Delete |
+| POST | `/api/missions/:id/resume` | Activate a paused mission (sets `started_at`, schedules the next run) |
+| POST | `/api/missions/:id/pause` | Pause an active mission (clears `next_run_at`) |
+| POST | `/api/missions/:id/stop` | Stop a mission — terminal, `stop_reason = manual` |
+| GET | `/api/missions/:id/runs` | Per-iteration audit ledger (`mission_runs`) |
+
 ### Settings
 | Method | Path | Description |
 |---|---|---|
@@ -699,12 +763,18 @@ nexus/
 │   │   │   ├── memory.ts
 │   │   │   ├── tickets.ts       # Jira mirror + /jira/sync
 │   │   │   ├── notifications.ts # in-app notifications API
+│   │   │   ├── missions.ts      # bounded recurring missions (CRUD + controls + runs)
 │   │   │   ├── status.ts        # /mission-control
 │   │   │   └── orchestrator.ts  # /agents/*
 │   │   ├── orchestrator/
 │   │   │   ├── index.ts         # Polling loop + dispatch
 │   │   │   ├── providers.ts     # Claude Code / Codex / OpenCode / OpenAI-compatible
 │   │   │   └── context.ts       # Prompt builder + memory injection
+│   │   ├── missions/
+│   │   │   ├── runner.ts        # scheduler loop + single-iteration runner
+│   │   │   ├── bounds.ts        # ceilings, run-window, next-run scheduling (pure)
+│   │   │   ├── store.ts         # missions / mission_runs DB access
+│   │   │   └── handlers/        # echo, triage_tickets, review_stale_tasks (+ registry)
 │   │   ├── memory/
 │   │   │   └── client.ts        # thin HTTP client to @nexus/memory-daemon (:4100)
 │   │   ├── jira/
@@ -756,7 +826,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 
 ### Tables
 
-`projects`, `tasks`, `personas`, `providers`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`.
+`projects`, `tasks`, `personas`, `providers`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`, `missions`, `mission_runs`.
 
 (There is no `memories` table — memory lives in the daemon's own index, not `nexus.db`.)
 
