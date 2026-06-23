@@ -5,6 +5,7 @@ import { join } from 'path';
 import fs from 'fs';
 import { getDb } from '../db';
 import { triageTicketsHandler } from '../missions/handlers/triage-tickets';
+import { reviewStaleTasksHandler } from '../missions/handlers/review-stale-tasks';
 import type { Mission } from '@nexus/shared';
 
 function freshDb() {
@@ -27,6 +28,25 @@ function mission(db: any): Mission {
     stopped_at: null, stop_reason: null, created_at: '', updated_at: '',
   };
 }
+
+test('review_stale_tasks flags tasks older than the stale threshold', async () => {
+  const { db, cleanup } = freshDb();
+  const old = new Date(Date.now() - 10 * 86400_000).toISOString();
+  db.prepare("INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at) VALUES ('t1','p1','Stale','', 'in_progress','medium', ?, ?)").run(old, old);
+  db.prepare("INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at) VALUES ('t2','p1','Fresh','', 'in_progress','medium', ?, ?)").run(new Date().toISOString(), new Date().toISOString());
+
+  const m = { id: 'm', project_id: 'p1', title: 'review', description: '', kind: 'review_stale_tasks',
+    config_json: JSON.stringify({ stale_days: 3 }), pacing: 'fixed', interval_seconds: 86400,
+    max_iterations: 30, max_wall_clock_seconds: null, max_tokens: null, run_window_start: null,
+    run_window_end: null, status: 'active', iteration_count: 0, tokens_used: 0, next_run_at: null,
+    started_at: new Date().toISOString(), last_run_at: null, stopped_at: null, stop_reason: null,
+    created_at: '', updated_at: '' };
+  const out = await reviewStaleTasksHandler({ db, mission: m, runNumber: 1, signal: new AbortController().signal, deps: {} } as never);
+  cleanup();
+  assert.equal(out.status, 'succeeded');
+  assert.deepEqual(out.selectedWork, ['t1']);
+  assert.match(out.summary, /1 stale task/);
+});
 
 test('triage_tickets creates a task for an un-triaged ticket then drains', async () => {
   const { db, cleanup } = freshDb();
