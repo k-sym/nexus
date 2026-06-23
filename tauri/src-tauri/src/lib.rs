@@ -2,9 +2,16 @@ pub mod node;
 pub mod health;
 pub mod supervisor;
 
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Mutex,
+};
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
+
+/// Set to `true` by the SIGTERM handler; a watcher thread polls this and calls
+/// `AppHandle::exit(0)` in normal context so the real teardown runs via `RunEvent::Exit`.
+static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Managed state: children spawned by `supervisor::boot`.
 /// Stored here so the exit handler and `on_window_event` can group-kill on close.
@@ -20,17 +27,22 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            // ── SIGTERM handler: forward to Tauri's clean shutdown path ──
-            // This ensures RunEvent::Exit (and kill_spawned) fires even when
-            // the process is killed with SIGTERM (e.g. kill <pid> from the CLI
-            // or tauri:dev's ctrl-c parent shutdown).
+            // ── SIGTERM handler + watcher thread ─────────────────────────
+            // The signal handler only sets an atomic flag (async-signal-safe).
+            // A watcher thread polls the flag and calls AppHandle::exit(0) in
+            // normal thread context, which triggers RunEvent::Exit → kill_spawned.
+            unsafe {
+                libc::signal(libc::SIGTERM, sigterm_handler as *const () as libc::sighandler_t);
+            }
             {
-                let sig_handle = handle.clone();
-                unsafe {
-                    libc::signal(libc::SIGTERM, sigterm_handler as *const () as libc::sighandler_t);
-                }
-                // Store handle globally so the signal handler can use it.
-                *SIGTERM_HANDLE.lock().unwrap() = Some(sig_handle);
+                let shutdown_handle = handle.clone();
+                std::thread::spawn(move || loop {
+                    if SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                        shutdown_handle.exit(0); // normal context → RunEvent::Exit → kill_spawned
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                });
             }
 
             // ── 1) Splash window ──────────────────────────────────────────
@@ -190,25 +202,16 @@ pub fn run() {
     });
 }
 
-/// Globally shared AppHandle so the async-signal-safe SIGTERM handler can
-/// schedule a clean shutdown via `AppHandle::exit(0)`.
-static SIGTERM_HANDLE: std::sync::Mutex<Option<tauri::AppHandle>> =
-    std::sync::Mutex::new(None);
-
-/// SIGTERM signal handler: call `kill_spawned` then `AppHandle::exit(0)` to
-/// tear down Tauri cleanly and trigger `RunEvent::Exit`.
+/// SIGTERM signal handler: sets `SHUTDOWN_REQUESTED` so the watcher thread
+/// (spawned in `setup`) can call `AppHandle::exit(0)` in normal thread context,
+/// which triggers `RunEvent::Exit` → `kill_spawned`.
 ///
 /// # Safety
-/// Only async-signal-safe calls are made: we grab the pre-stored handle and
-/// call `exit(0)` which is itself async-signal-safe. The Mutex lock is not
-/// strictly signal-safe but is acceptable for a spike on Linux/macOS.
+/// This handler performs ONLY an atomic store, which is async-signal-safe.
+/// All blocking work (Mutex lock, process-group kill, `waitpid`) is deferred
+/// to the watcher thread that polls `SHUTDOWN_REQUESTED` in normal context.
 extern "C" fn sigterm_handler(_: libc::c_int) {
-    if let Ok(guard) = SIGTERM_HANDLE.try_lock() {
-        if let Some(ref handle) = *guard {
-            kill_spawned(handle);
-            handle.exit(0);
-        }
-    }
+    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 /// Kill every spawned service group. Safe to call multiple times (Vec is cleared).
