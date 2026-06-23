@@ -167,6 +167,64 @@ test('assistant_turn: abort pre-check → failed with error "aborted", does not 
   }
 });
 
+// ── Test 3b: in-flight abort → failed with error "aborted", does not throw ────
+
+test('assistant_turn: in-flight abort → failed with error "aborted", does not throw', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'nexus-at-test-'));
+  try {
+    const controller = new AbortController();
+
+    // Deferred: resolves when the test calls rejectPrompt.
+    let rejectPrompt!: (err: Error) => void;
+    const pendingPrompt = new Promise<void>((_resolve, reject) => {
+      rejectPrompt = reject;
+    });
+
+    let abortCalled = false;
+
+    // Fake session: prompt() hangs until abort() rejects the deferred promise.
+    const abortableSession = {
+      prompt: async (_text: string) => pendingPrompt,
+      getContextUsage: () => ({ tokens: 0, contextWindow: 200000, percent: 0 }),
+      abort: async () => {
+        abortCalled = true;
+        rejectPrompt(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      },
+    };
+
+    const abortablePi = { sessionFor: async () => abortableSession } as any;
+
+    const db = makeDb('proj-1', repoDir);
+    const mission = makeMission({ project_id: 'proj-1' });
+
+    // Start the handler (does not await yet) then abort shortly after.
+    const handlerPromise = assistantTurnHandler({
+      db,
+      mission,
+      runNumber: 1,
+      signal: controller.signal,
+      deps: { pi: abortablePi, concurrency: makeGrantingConcurrency() },
+    });
+
+    // Defer the abort by one microtask so the handler can reach
+    // signal.addEventListener before the abort fires.
+    await Promise.resolve();
+    // Trigger the abort — the handler's abort listener calls session.abort(),
+    // which rejects the pending prompt with an AbortError.
+    controller.abort();
+
+    // Handler must resolve (not reject) to a failed outcome.
+    const outcome = await handlerPromise;
+
+    assert.equal(outcome.status, 'failed', `expected failed, got: ${outcome.status}`);
+    assert.equal(outcome.error, 'aborted', `expected error "aborted", got: ${outcome.error}`);
+    assert.equal(abortCalled, true, 'session.abort() should have been called during in-flight abort');
+    db.close();
+  } finally {
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
 // ── Test 4: no prompt in config → failed ─────────────────────────────────────
 
 test('assistant_turn: missing prompt → failed with appropriate error', async () => {
