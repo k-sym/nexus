@@ -132,7 +132,15 @@ pub fn run() {
                         .inner_size(1400.0, 900.0)
                         .min_inner_size(900.0, 600.0)
                         // macOS hiddenInset / traffic-light overlay title bar.
-                        .title_bar_style(tauri::TitleBarStyle::Overlay);
+                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        // Hide the window title text so it doesn't show through
+                        // the overlay title bar over the in-app TopBar.
+                        .hidden_title(true)
+                        // The Kanban board uses native HTML5 drag-and-drop
+                        // (draggable + dataTransfer). Tauri's OS-level drag-drop
+                        // handler is ON by default and swallows those DOM events,
+                        // so disable it to let in-page HTML5 DnD work.
+                        .disable_drag_drop_handler();
 
                     if !is_dev {
                         // Prod only: inject the API base-URL so the bundled

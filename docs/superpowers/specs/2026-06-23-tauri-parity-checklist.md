@@ -66,9 +66,13 @@ buffered streamed bodies — this is the single most important check.
 
 ## Divergence log (fill as you find them)
 
-| # | Surface | What's wrong | Console error (verbatim) | Severity (blocker/annoyance/cosmetic) |
-|---|---------|--------------|--------------------------|----------------------------------------|
-|   |         |              |                          |                                        |
+| # | Surface | What's wrong | Console error (verbatim) | Severity | Resolution |
+|---|---------|--------------|--------------------------|----------|------------|
+| 1 | Window titlebar | Can't drag the window; content bleeds into top-left under traffic lights; faint "Nexus" title shows over the logo | `start_dragging not allowed on window "main" … URL: local` (dev console, during diagnosis) | annoyance | **VERIFIED FIXED.** Four parts: (a) `TopBar` now detects Tauri (not just Electron UA) → applies `mac-traffic-lights` padding (fixes bleed); (b) `data-tauri-drag-region="deep"` on the header so any non-interactive click drags (bare attr only drags direct hits → was hit-or-miss); (c) `core:window:allow-start-dragging` permission added (drag was silently denied); (d) capability `remote.urls` grants it to the dev Vite URL (dev webview is a "remote" origin — prod local protocol wouldn't need it); plus `hidden_title(true)` removes the title text. |
+| 2 | Kanban drag | Can't drag a task card between columns (native HTML5 DnD) | (none) | blocker-ish | **VERIFIED FIXED.** Tauri's OS-level drag-drop handler (ON by default) swallowed the DOM drag events → `.disable_drag_drop_handler()` on the main window restores HTML5 DnD. (Method is `disable_drag_drop_handler()`, not `drag_drop_enabled(false)`.) |
+
+**Streaming verdict (top risk): PASS** — assistant view streams incrementally, `/new` clears, abort works.
+**All 7 views: render as expected.**
 
 ## Verdict (fill at the end)
 - Overall feel as a daily driver: ___

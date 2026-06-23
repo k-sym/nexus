@@ -16,17 +16,26 @@ const item = (active: boolean) =>
   }`;
 
 export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPalette }: TopBarProps) {
-  // The Electron window hides the native title bar (titleBarStyle: hiddenInset),
-  // so the TopBar doubles as the drag handle; on macOS it also has to clear the
-  // traffic-light buttons drawn over the top-left. Browser ("web") mode has
-  // neither, so gate on the Electron user-agent.
+  // Desktop shells hide the native title bar (Electron: titleBarStyle hiddenInset;
+  // Tauri: TitleBarStyle::Overlay), so the TopBar doubles as the drag handle and,
+  // on macOS, must clear the traffic-light buttons drawn over the top-left. Browser
+  // ("web") mode has neither. Electron drags via CSS `-webkit-app-region` (the
+  // `titlebar-drag` class); Tauri ignores that and drags via the
+  // `data-tauri-drag-region` attribute instead (added below, inert outside Tauri).
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const isElectron = /Electron/i.test(ua);
+  const isTauri =
+    typeof window !== 'undefined' &&
+    ('__TAURI_INTERNALS__' in window || (window as { isTauri?: boolean }).isTauri === true);
+  const isDesktop = isElectron || isTauri;
   const isMac = /Mac/i.test(ua);
-  const chrome = `${isElectron ? ' titlebar-drag' : ''}${isElectron && isMac ? ' mac-traffic-lights' : ''}`;
+  const chrome = `${isDesktop ? ' titlebar-drag' : ''}${isDesktop && isMac ? ' mac-traffic-lights' : ''}`;
 
   return (
-    <header className={`h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-subtle surface-glass${chrome}`}>
+    <header
+      data-tauri-drag-region="deep"
+      className={`h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-subtle surface-glass${chrome}`}
+    >
       <div className="flex items-center gap-2 pr-1">
         <div className="w-6 h-6 rounded accent-button flex items-center justify-center text-[11px] font-bold">N</div>
         <span className="font-semibold text-sm tracking-wide hidden md:inline">NEXUS</span>
