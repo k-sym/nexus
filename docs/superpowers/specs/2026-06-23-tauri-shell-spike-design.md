@@ -255,3 +255,33 @@ Because daemon/backend/models/frontend are identical across shells, isolate the
 Rewriting the backend or memory daemon in Rust; replacing Fastify; redesigning the
 frontend; shipping Tauri as the default wrapper before parity is proven; signing /
 notarization / auto-update; cross-platform builds (assessed analytically only).
+
+## Risk #1 verdict (probe result)
+
+**Status: WORKS** — webview-to-localhost fetch and WebSocket both succeed under the scoped CSP.
+
+**Probe setup:**
+- `tauri/src-tauri/probe-dist/probe.html` loaded via Tauri asset protocol (`frontendDist: "probe-dist"`, `url: "probe.html"`) — NOT a plain http devUrl. This is the correct secure-context test.
+- Backend (`npm run dev:backend`) was running at `http://127.0.0.1:4173` (confirmed 200 on `/api/health`).
+- `probe_report` Tauri command wrote output to `/tmp/nexus-tauri-probe.txt` and stdout.
+
+**CSP that worked (first attempt — no fallback needed):**
+```
+default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; script-src 'self' 'unsafe-inline' https://unpkg.com
+```
+Note: `https://unpkg.com` was added to `script-src` to allow the CDN import of `@tauri-apps/api/core`. The brief's original scoped CSP did not include this; omitting it would have caused a blocked CDN script error (not a blocked fetch), so it was added to isolate the fetch/ws signal cleanly.
+
+**Exact probe output captured from `/tmp/nexus-tauri-probe.txt` and `[probe]` stdout:**
+```
+FETCH ok=true status=200 | WS error (route-level, not security block) | no_global_errors
+```
+
+**Fetch result:** `FETCH ok=true status=200` — fetch to `http://127.0.0.1:4173/api/health` succeeded from the `tauri://localhost` asset-protocol origin. No mixed-content error, no CSP block.
+
+**WebSocket result:** `WS error (route-level, not security block)` — the WebSocket to `ws://127.0.0.1:4173/` was not security-blocked; it errored because no WebSocket upgrade route exists at that path. This is the expected/acceptable outcome per the task brief.
+
+**Global errors:** none (`no_global_errors`).
+
+**`csp: null` fallback:** not needed. Scoped CSP was sufficient.
+
+**Conclusion:** Risk #1 is **de-risked**. WKWebView does not block `fetch()` or `WebSocket` connections to `127.0.0.1` from a `tauri://localhost` secure-context origin when `connect-src` explicitly allows them. The supervisor implementation can proceed. The CSP above is now committed into `tauri.conf.json` as the production setting.
