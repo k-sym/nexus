@@ -126,21 +126,44 @@ pub struct BootResult {
 
 /// Full boot: daemon (optional) -> models -> backend -> (dev) vite. Calls
 /// `emit(key, state, detail)` after each transition to feed the splash.
-pub fn boot<E: Fn(&str, &str, Option<&str>)>(is_dev: bool, emit: E) -> BootResult {
-    let repo_root = repo_root();
+///
+/// `root` is the path from which service directories are resolved:
+/// - dev:  repo root (`CARGO_MANIFEST_DIR/../..`)
+/// - prod: Tauri resource dir (contains `services/` and `node/`)
+pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: bool, emit: E) -> BootResult {
     let mut children = Vec::new();
 
-    // Preflight: prod needs a system node before we spawn compiled services.
-    let node_opt = resolve_node();
-    let node_missing = !is_dev && node_opt.is_none();
+    // In prod, use the bundled node. In dev, fall back to resolve_node().
+    let (node, node_missing) = if is_dev {
+        let n = resolve_node().unwrap_or_else(|| "node".into());
+        (n, false)
+    } else {
+        // Prod: prefer bundled node from resources; fall back to resolve_node().
+        let bundled = root.join("node/bin/node");
+        if bundled.exists() {
+            (bundled.to_string_lossy().into_owned(), false)
+        } else {
+            match resolve_node() {
+                Some(n) => (n, false),
+                None => (String::new(), true),
+            }
+        }
+    };
+
     if node_missing {
         return BootResult { ready: false, degraded: vec![], node_missing: true, children };
     }
-    let node = node_opt.unwrap_or_else(|| "node".into());
+
+    // In prod: services/{backend,daemon} under resource dir.
+    // In dev:  src/{backend,memory-daemon} under repo root.
+    let (daemon_dir, backend_dir) = if is_dev {
+        (root.join("src/memory-daemon"), root.join("src/backend"))
+    } else {
+        (root.join("services/daemon"), root.join("services/backend"))
+    };
 
     // Daemon (optional, non-gating).
     emit("memory", "starting", Some("checking…"));
-    let daemon_dir = repo_root.join("src/memory-daemon");
     let (mstate, mchild) = ensure_service("memory", DAEMON_HEALTH, &|| {
         if is_dev { spawn_npm(&daemon_dir, &["start"]) }
         else { spawn_node(&node, &daemon_dir.join("dist/src/index.js"), &daemon_dir) }
@@ -161,7 +184,6 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(is_dev: bool, emit: E) -> BootResul
 
     // Backend (gating).
     emit("backend", "starting", Some("checking…"));
-    let backend_dir = repo_root.join("src/backend");
     let (bstate, bchild) = ensure_service("backend", BACKEND_HEALTH, &|| {
         if is_dev { spawn_npm(&backend_dir, &["run","dev"]) }
         else { spawn_node(&node, &backend_dir.join("dist/index.js"), &backend_dir) }
@@ -173,7 +195,7 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(is_dev: bool, emit: E) -> BootResul
     // Vite (dev only; gating in dev).
     let frontend_ok = if is_dev {
         emit("frontend", "starting", Some("checking…"));
-        let fe = repo_root.join("src/frontend");
+        let fe = root.join("src/frontend");
         let (fstate, fchild) = ensure_service("frontend", FRONTEND_URL, &|| spawn_npm(&fe, &["run","dev"]));
         let ok = !matches!(fstate, ServiceState::Failed(_));
         emit("frontend", state_label(&fstate), state_detail(&fstate));
@@ -191,12 +213,6 @@ fn state_detail(s: &ServiceState) -> Option<&str> {
     if let ServiceState::Failed(m) = s { Some(m.as_str()) } else { None }
 }
 
-/// Repo root in dev (CARGO_MANIFEST_DIR = tauri/src-tauri -> ../../). Prod
-/// override happens in lib.rs via resource_dir (Task 10).
-fn repo_root() -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()
-        .unwrap_or_else(|_| std::path::PathBuf::from("."))
-}
 
 #[cfg(test)]
 mod tests {

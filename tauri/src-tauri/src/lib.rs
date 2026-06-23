@@ -62,11 +62,23 @@ pub fn run() {
             .build()?;
 
             // ── 2) Boot on a worker thread so the UI stays responsive ─────
+            // Resolve the root from which service dirs are found:
+            // - dev:  repo root (CARGO_MANIFEST_DIR/../..)
+            // - prod: Tauri resource dir (contains services/ and node/)
+            let root: std::path::PathBuf = if is_dev {
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../..")
+                    .canonicalize()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            } else {
+                app.path().resource_dir().expect("Tauri resource_dir unavailable")
+            };
+
             std::thread::spawn(move || {
                 let emit_handle = handle.clone();
 
                 let result: supervisor::BootResult =
-                    supervisor::boot(is_dev, move |key, state, detail| {
+                    supervisor::boot(root, is_dev, move |key, state, detail| {
                         eprintln!("[boot] {} {} {:?}", key, state, detail);
                         let _ = emit_handle.emit(
                             "boot://status",

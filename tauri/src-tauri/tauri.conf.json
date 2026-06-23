@@ -3,11 +3,22 @@
   "productName": "Nexus (Tauri)",
   "version": "0.1.0",
   "identifier": "it.resolve.nexus.tauri",
-  "build": { "beforeDevCommand": "cp ../../tauri/splash.html ../../src/frontend/dist/splash.html", "beforeBuildCommand": "cp ../../tauri/splash.html ../../src/frontend/dist/splash.html", "frontendDist": "../../src/frontend/dist" },
+  "build": { "beforeDevCommand": "cp splash.html ../src/frontend/dist/splash.html", "beforeBuildCommand": "cp splash.html ../src/frontend/dist/splash.html", "frontendDist": "../../src/frontend/dist" },
   "app": {
     "withGlobalTauri": true,
     "windows": [],
     "security": { "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; script-src 'self' 'unsafe-inline'" }
   },
-  "bundle": { "active": true, "targets": ["app"], "icon": ["icons/icon.icns", "icons/icon.png"] }
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
+    "resources": {
+      "../../.stage/services": "services",
+      "../../.stage/node": "node"
+    },
+    "macOS": {
+      "entitlements": "entitlements.plist"
+    }
+  }
 }
