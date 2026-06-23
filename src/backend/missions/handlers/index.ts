@@ -1,8 +1,8 @@
 import type { MissionKind } from '@nexus/shared';
-import type { MissionHandler } from '../types';
-import { echoHandler } from './echo';
-import { triageTicketsHandler } from './triage-tickets';
-import { reviewStaleTasksHandler } from './review-stale-tasks';
+import type { MissionHandler } from '../types.js';
+import { echoHandler } from './echo.js';
+import { triageTicketsHandler } from './triage-tickets.js';
+import { reviewStaleTasksHandler } from './review-stale-tasks.js';
 
 const registry = new Map<MissionKind, MissionHandler>([
   ['echo', echoHandler],

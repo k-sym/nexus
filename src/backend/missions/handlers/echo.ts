@@ -1,4 +1,4 @@
-import type { MissionHandler } from '../types';
+import type { MissionHandler } from '../types.js';
 
 /**
  * Deterministic built-in handler. Reads `config.message` and echoes it.

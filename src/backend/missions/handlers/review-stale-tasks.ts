@@ -1,4 +1,4 @@
-import type { MissionHandler } from '../types';
+import type { MissionHandler } from '../types.js';
 
 interface TaskRow { id: string; title: string; updated_at: string; }
 

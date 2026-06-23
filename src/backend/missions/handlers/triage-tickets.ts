@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import type { MissionHandler } from '../types';
+import type { MissionHandler } from '../types.js';
 
 interface TicketRow { key: string; summary: string; priority: string | null; }
 
