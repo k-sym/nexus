@@ -176,6 +176,77 @@ export interface BraindumpIdea {
   updated_at: string;
 }
 
+export type MissionStatus = 'paused' | 'active' | 'stopped';
+export type MissionPacing = 'fixed' | 'self_paced' | 'backlog_drain';
+export type MissionStopReason =
+  | 'manual'
+  | 'max_iterations'
+  | 'max_wall_clock'
+  | 'token_budget'
+  | 'drained'
+  | 'error';
+export type MissionKind = 'echo' | 'triage_tickets' | 'review_stale_tasks' | 'assistant_turn';
+export type MissionRunStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
+
+export interface Mission {
+  id: string;
+  project_id: string;
+  title: string;
+  description: string;
+  kind: MissionKind;
+  config_json: string;
+  pacing: MissionPacing;
+  interval_seconds: number;
+  max_iterations: number | null;
+  max_wall_clock_seconds: number | null;
+  max_tokens: number | null;
+  run_window_start: string | null; // 'HH:MM' local
+  run_window_end: string | null;   // 'HH:MM' local
+  status: MissionStatus;
+  iteration_count: number;
+  tokens_used: number;
+  next_run_at: string | null;
+  started_at: string | null;
+  last_run_at: string | null;
+  stopped_at: string | null;
+  stop_reason: MissionStopReason | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface MissionRun {
+  id: string;
+  mission_id: string;
+  run_number: number;
+  started_at: string;
+  completed_at: string | null;
+  status: MissionRunStatus;
+  intent: string;
+  selected_work_json: string | null;
+  result_summary: string;
+  tokens_used: number;
+  error: string | null;
+  next_run_at: string | null;
+  stop_reason: MissionStopReason | null;
+  created_at: string;
+}
+
+export interface CreateMissionInput {
+  title: string;
+  description?: string;
+  kind?: MissionKind;
+  config?: Record<string, unknown>;
+  pacing?: MissionPacing;
+  interval_seconds?: number;
+  max_iterations?: number | null;
+  max_wall_clock_seconds?: number | null;
+  max_tokens?: number | null;
+  run_window_start?: string | null;
+  run_window_end?: string | null;
+}
+
+export type UpdateMissionInput = Partial<CreateMissionInput>;
+
 /** A chat thread — one conversation per row, linked to a project. */
 export interface ChatThread {
   id: string;
