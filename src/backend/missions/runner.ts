@@ -3,7 +3,7 @@ import type Database from 'better-sqlite3';
 import type { Mission, MissionRun, MissionStopReason } from '@nexus/shared';
 import { evaluateBounds, computeNextRunAt, isWithinRunWindow, clampToWindow } from './bounds';
 import { getHandler } from './handlers';
-import { getMission, updateMissionFields, insertMissionRun, completeMissionRun } from './store';
+import { getMission, updateMissionFields, insertMissionRun, completeMissionRun, claimDueMissions } from './store';
 import type { MissionRunnerDeps, MissionRunContext } from './types';
 
 function stopMission(db: Database.Database, mission: Mission, reason: MissionStopReason, now: Date): Mission {
@@ -124,4 +124,45 @@ export async function runMissionOnce(
   const finalMission = getMission(db, mission.id)!;
   const finalRun = db.prepare('SELECT * FROM mission_runs WHERE id = ?').get(run.id) as MissionRun;
   return { mission: finalMission, run: finalRun };
+}
+
+const DEFAULT_TICK_MS = 5_000;
+
+/**
+ * Single in-process scheduler. Each tick claims due active missions (by persisted
+ * next_run_at) and runs them. An in-memory guard prevents a mission from overlapping
+ * itself if an iteration runs longer than the tick interval. Restart-safe: due-ness
+ * lives in the DB, so a backend restart resumes from next_run_at.
+ */
+export function startMissionScheduler(
+  db: Database.Database,
+  deps: MissionRunnerDeps,
+  opts: { tickMs?: number } = {},
+): { stop: () => void } {
+  const tickMs = opts.tickMs ?? DEFAULT_TICK_MS;
+  const running = new Set<string>();
+  let stopped = false;
+
+  const tick = async () => {
+    if (stopped) return;
+    let due: Mission[] = [];
+    try {
+      due = claimDueMissions(db, new Date().toISOString());
+    } catch (err) {
+      console.error('[missions] failed to query due missions:', err);
+      return;
+    }
+    for (const mission of due) {
+      if (running.has(mission.id)) continue;
+      running.add(mission.id);
+      void runMissionOnce(db, mission, deps)
+        .catch((err) => console.error(`[missions] mission ${mission.id} crashed:`, err))
+        .finally(() => running.delete(mission.id));
+    }
+  };
+
+  void tick();
+  const timer = setInterval(() => void tick(), tickMs);
+  console.log(`[missions] scheduler started — tick ${tickMs}ms`);
+  return { stop: () => { stopped = true; clearInterval(timer); } };
 }

@@ -5,7 +5,8 @@ import { join } from 'path';
 import fs from 'fs';
 import { getDb } from '../db';
 import { insertMission, getMission, listMissionRuns } from '../missions/store';
-import { runMissionOnce } from '../missions/runner';
+import { runMissionOnce, startMissionScheduler } from '../missions/runner';
+import { insertMission as _insertMission } from '../missions/store';
 
 function freshDb() {
   const base = join(tmpdir(), `nexus-mrun-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
@@ -77,4 +78,32 @@ test('runMissionOnce stops with reason drained for backlog_drain when handler re
   assert.equal(mission.stop_reason, 'drained');
   assert.equal(run.stop_reason, 'drained');
   assert.equal(run.next_run_at, null);
+});
+
+test('startMissionScheduler runs due missions and skips paused ones', async () => {
+  const { db, cleanup } = freshDb();
+  const past = new Date(Date.now() - 1000).toISOString();
+  const active = _insertMission(db, {
+    project_id: 'p1', title: 'due', description: '', kind: 'echo', config_json: '{}',
+    pacing: 'fixed', interval_seconds: 600, max_iterations: 10, max_wall_clock_seconds: null,
+    max_tokens: null, run_window_start: null, run_window_end: null, status: 'active',
+    next_run_at: past, started_at: past,
+  });
+  const paused = _insertMission(db, {
+    project_id: 'p1', title: 'paused', description: '', kind: 'echo', config_json: '{}',
+    pacing: 'fixed', interval_seconds: 600, max_iterations: 10, max_wall_clock_seconds: null,
+    max_tokens: null, run_window_start: null, run_window_end: null, status: 'paused',
+    next_run_at: past, started_at: null,
+  });
+
+  const sched = startMissionScheduler(db, {}, { tickMs: 20 });
+  await new Promise((r) => setTimeout(r, 80));
+  sched.stop();
+
+  const activeAfter = getMission(db, active.id)!;
+  const pausedAfter = getMission(db, paused.id)!;
+  cleanup();
+
+  assert.ok(activeAfter.iteration_count >= 1, 'active mission ran at least once');
+  assert.equal(pausedAfter.iteration_count, 0, 'paused mission never ran');
 });
