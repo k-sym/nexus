@@ -26,6 +26,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerTrustRoutes } from './routes/trust.js';
+import { registerMissionRoutes } from './routes/missions.js';
 import { initMemorySystem } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMissionScheduler } from './missions/runner.js';
@@ -85,6 +86,7 @@ async function main() {
   app.register(registerPiRoutes);
   app.register(registerActivityRoutes);
   app.register(registerTrustRoutes);
+  app.register(registerMissionRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
