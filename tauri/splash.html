@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Nexus — starting</title>
+    <style>
+      :root {
+        --canvas: #0a0a0f;
+        --panel: #18181b;
+        --border: #27272a;
+        --text: #e4e4e7;
+        --muted: #71717a;
+        --accent: #6366f1;
+        --green: #22c55e;
+        --amber: #f59e0b;
+        --red: #ef4444;
+        --grey: #3f3f46;
+      }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; }
+      body {
+        background: var(--canvas);
+        color: var(--text);
+        font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+        padding: 28px 30px;
+        user-select: none;
+        -webkit-app-region: drag;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 4px;
+      }
+      .brand .mark {
+        width: 26px; height: 26px;
+        border-radius: 7px;
+        background: linear-gradient(135deg, var(--accent), #4f46e5);
+        display: grid; place-items: center;
+        font-weight: 700; color: #fff; font-size: 14px;
+      }
+      .brand .title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+      .subtitle {
+        color: var(--muted);
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin: 2px 0 18px 36px;
+      }
+      .rows { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 9px 12px;
+        border-radius: 8px;
+        border: 1px solid transparent;
+      }
+      .row.active { background: var(--panel); border-color: var(--border); }
+      .dot {
+        width: 9px; height: 9px; border-radius: 50%;
+        background: var(--grey);
+        flex: none;
+        transition: background 0.2s ease;
+      }
+      .dot.spin { box-shadow: 0 0 0 0 rgba(99,102,241,0.5); animation: pulse 1.2s infinite; background: var(--accent); }
+      .dot.up, .dot.reused { background: var(--green); }
+      .dot.warn { background: var(--amber); }
+      .dot.failed { background: var(--red); }
+      @keyframes pulse {
+        0% { box-shadow: 0 0 0 0 rgba(99,102,241,0.5); }
+        70% { box-shadow: 0 0 0 5px rgba(99,102,241,0); }
+        100% { box-shadow: 0 0 0 0 rgba(99,102,241,0); }
+      }
+      .label { flex: 1; font-weight: 500; }
+      .state { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; text-align: right; }
+      .state.failed { color: var(--red); }
+      .state.warn { color: var(--amber); }
+      .state.up, .state.reused { color: var(--green); }
+      .foot {
+        margin-top: 16px;
+        color: var(--muted);
+        font-size: 11px;
+        min-height: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="brand">
+      <div class="mark">N</div>
+      <div class="title">Nexus</div>
+    </div>
+    <div class="subtitle">Starting services</div>
+
+    <div class="rows" id="rows"></div>
+
+    <div class="foot" id="foot">Initialising…</div>
+
+    <script>
+      // Service rows, in boot order. `models` is derived (not a spawned service).
+      const ORDER = [
+        { key: 'memory', label: 'Memory daemon', sub: ':4100' },
+        { key: 'backend', label: 'Backend API', sub: ':4173' },
+        { key: 'frontend', label: 'Frontend', sub: ':5173' },
+        { key: 'models', label: 'Local model stack', sub: '4001 · 4002 · 4003' },
+      ];
+
+      const STATE_TEXT = {
+        pending: 'waiting',
+        starting: 'starting…',
+        spawning: 'launching…',
+        up: 'ready',
+        reused: 'reused',
+        warn: 'degraded',
+        failed: 'failed',
+        skipped: '—',
+      };
+
+      const rowsEl = document.getElementById('rows');
+      const footEl = document.getElementById('foot');
+      const els = {};
+
+      for (const svc of ORDER) {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.innerHTML =
+          '<span class="dot"></span>' +
+          '<span class="label">' + svc.label + ' <span style="color:var(--muted);font-weight:400">' + svc.sub + '</span></span>' +
+          '<span class="state">waiting</span>';
+        rowsEl.appendChild(row);
+        els[svc.key] = { row, dot: row.querySelector('.dot'), state: row.querySelector('.state') };
+      }
+
+      function dotClass(state) {
+        if (state === 'starting' || state === 'spawning') return 'spin';
+        if (state === 'up' || state === 'reused') return state;
+        if (state === 'warn') return 'warn';
+        if (state === 'failed') return 'failed';
+        return '';
+      }
+
+      function renderStatus(payload) {
+        // Single-service update: { key, state, detail }
+        if (payload.key) {
+          const el = els[payload.key];
+          if (el) {
+            const state = payload.state || 'pending';
+            el.dot.className = 'dot ' + dotClass(state);
+            el.state.className = 'state ' + (['up', 'reused', 'warn', 'failed'].includes(state) ? state : '');
+            el.state.textContent = payload.detail || STATE_TEXT[state] || state;
+            el.row.classList.toggle('active', state !== 'pending');
+          }
+        }
+        if (payload.message) {
+          footEl.textContent = payload.message;
+        }
+      }
+
+      // Subscribe to boot status events emitted by the Rust supervisor.
+      // window.__TAURI__ is injected by Tauri when app.withGlobalTauri = true
+      // in tauri.conf.json — no CDN or bundler needed.
+      function subscribe() {
+        if (window.__TAURI__ && window.__TAURI__.event) {
+          window.__TAURI__.event.listen('boot://status', function(event) {
+            renderStatus(event.payload);
+          });
+        } else {
+          // Retry briefly in case the Tauri IPC is not yet initialised.
+          setTimeout(subscribe, 50);
+        }
+      }
+      subscribe();
+    </script>
+  </body>
+</html>

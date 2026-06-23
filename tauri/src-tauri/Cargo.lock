@@ -1916,6 +1916,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "nexus-tauri"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
