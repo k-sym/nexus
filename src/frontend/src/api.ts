@@ -31,7 +31,6 @@ export interface MissionStatus {
     sampledAt?: string;
     error?: string;
   }>;
-  activity: { running: any[]; recent: any[] };
 }
 
 export interface NotificationItem {

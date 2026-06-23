@@ -32,7 +32,7 @@ function makeApp() {
   };
 }
 
-test('GET /api/mission-control includes activity rows without task ids', async () => {
+test('GET /api/mission-control omits dashboard activity rows', async () => {
   const { app, db, cleanup } = makeApp();
   try {
     const now = new Date().toISOString();
@@ -54,18 +54,7 @@ test('GET /api/mission-control includes activity rows without task ids', async (
     const res = await app.inject({ method: 'GET', url: '/api/mission-control' });
 
     assert.equal(res.statusCode, 200);
-    const activity = res.json().activity;
-    assert.deepEqual(
-      activity.recent.map((row: { id: string; task_id: string | null; task_title: string | null }) => ({
-        id: row.id,
-        task_id: row.task_id,
-        task_title: row.task_title,
-      })),
-      [
-        { id: 'run-chat', task_id: null, task_title: null },
-        { id: 'run-task', task_id: 'task-1', task_title: 'Task-backed run' },
-      ],
-    );
+    assert.equal(Object.hasOwn(res.json(), 'activity'), false);
   } finally {
     await app.close();
     cleanup();
