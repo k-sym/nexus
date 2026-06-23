@@ -1,10 +1,10 @@
 import { randomUUID } from 'crypto';
 import type Database from 'better-sqlite3';
 import type { Mission, MissionRun, MissionStopReason } from '@nexus/shared';
-import { evaluateBounds, computeNextRunAt, isWithinRunWindow, clampToWindow } from './bounds';
-import { getHandler } from './handlers';
-import { getMission, updateMissionFields, insertMissionRun, completeMissionRun, claimDueMissions } from './store';
-import type { MissionRunnerDeps, MissionRunContext } from './types';
+import { evaluateBounds, computeNextRunAt, isWithinRunWindow, clampToWindow } from './bounds.js';
+import { getHandler } from './handlers/index.js';
+import { getMission, updateMissionFields, insertMissionRun, completeMissionRun, claimDueMissions } from './store.js';
+import type { MissionRunnerDeps, MissionRunContext } from './types.js';
 
 function stopMission(db: Database.Database, mission: Mission, reason: MissionStopReason, now: Date): Mission {
   updateMissionFields(db, mission.id, {

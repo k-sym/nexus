@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3';
 import type { Mission, MissionKind, MissionRunStatus } from '@nexus/shared';
-import type { ActivityEvent } from '../activity/events';
+import type { ActivityEvent } from '../activity/events.js';
 
 export interface MissionRunnerDeps {
   emit?: (event: ActivityEvent) => void;
