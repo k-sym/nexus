@@ -53,6 +53,8 @@ pub fn resolve_node() -> Option<String> {
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn parse_major_handles_v_prefix_and_minor() {
         assert_eq!(parse_major("v22.22.3"), Some(22));
@@ -64,6 +66,7 @@ mod tests {
 
     #[test]
     fn candidates_include_nexus_node_first_when_set() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("NEXUS_NODE", "/custom/node");
         let c = node_candidates();
         assert_eq!(c.first().map(String::as_str), Some("/custom/node"));
@@ -72,6 +75,7 @@ mod tests {
 
     #[test]
     fn candidates_include_path_and_homebrew() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::remove_var("NEXUS_NODE");
         let c = node_candidates();
         assert!(c.iter().any(|x| x == "node"));
