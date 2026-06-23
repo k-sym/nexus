@@ -20,13 +20,16 @@
     "stage:node": "node scripts/fetch-node-runtime.cjs",
     "prepackage": "npm run build && npm run stage:services && npm run stage:node",
     "pack": "npm run prepackage && electron-builder --dir",
-    "dist": "npm run prepackage && electron-builder"
+    "dist": "npm run prepackage && electron-builder",
+    "tauri:dev": "npm run --workspace=tauri dev",
+    "tauri:build": "npm run prepackage && npm run --workspace=tauri build"
   },
   "workspaces": [
     "src/shared",
     "src/backend",
     "src/frontend",
-    "electron"
+    "electron",
+    "tauri"
   ],
   "devDependencies": {
     "concurrently": "^9.1.0",

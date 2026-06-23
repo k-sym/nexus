@@ -1,0 +1,12 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nexus (Tauri)",
+  "version": "0.1.0",
+  "identifier": "it.resolve.nexus.tauri",
+  "build": { "beforeDevCommand": "", "beforeBuildCommand": "", "frontendDist": "../../src/frontend/dist" },
+  "app": {
+    "windows": [{ "title": "Nexus", "width": 1400, "height": 900, "visible": true }],
+    "security": { "csp": null }
+  },
+  "bundle": { "active": true, "targets": ["app"], "icon": ["icons/icon.icns", "icons/icon.png"] }
+}
