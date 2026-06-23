@@ -12,6 +12,7 @@ import NotificationToasts from './components/NotificationToasts';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import AssistantView from './components/AssistantView';
+import MissionsView from './components/MissionsView';
 import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
 import ProjectModal from './components/ProjectModal';
@@ -22,7 +23,7 @@ import ActivityConsole from './components/ActivityConsole';
 import DiffReviewPanel from './components/DiffReviewPanel';
 import type { ActivityResponse, ReviewActionResult } from './api';
 
-type GlobalView = 'dashboard' | 'activity' | 'tickets' | 'braindump' | 'assistant' | 'settings';
+type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'settings';
 
 /** A task-seeded first turn handed to ChatPanel once the run-task chat opens. */
 interface TaskSeed {
@@ -523,6 +524,8 @@ export default function App() {
       return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
     if (globalView === 'braindump')
       return <BraindumpView projects={projects} onTriage={handleTriageIdea} />;
+    if (globalView === 'missions')
+      return <MissionsView projects={projects} />;
     if (globalView === 'assistant')
       return <AssistantView />;
 
