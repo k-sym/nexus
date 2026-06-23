@@ -80,3 +80,46 @@ test('PUT rejects stripping the last ceiling (max_iterations -> null) on a fixed
   await app.close();
   cleanup();
 });
+
+test('resume activates a paused mission and sets next_run_at; pause clears it', async () => {
+  const { app, cleanup } = buildApp();
+  await app.ready();
+  const created = (await app.inject({ method: 'POST', url: '/api/projects/p1/missions',
+    payload: { title: 'm', kind: 'echo', pacing: 'fixed', interval_seconds: 600, max_iterations: 5 } })).json();
+
+  const resumed = (await app.inject({ method: 'POST', url: `/api/missions/${created.id}/resume` })).json();
+  assert.equal(resumed.status, 'active');
+  assert.ok(resumed.next_run_at);
+  assert.ok(resumed.started_at);
+
+  const paused = (await app.inject({ method: 'POST', url: `/api/missions/${created.id}/pause` })).json();
+  assert.equal(paused.status, 'paused');
+  assert.equal(paused.next_run_at, null);
+
+  await app.close();
+  cleanup();
+});
+
+test('stop marks the mission stopped with reason manual', async () => {
+  const { app, cleanup } = buildApp();
+  await app.ready();
+  const created = (await app.inject({ method: 'POST', url: '/api/projects/p1/missions',
+    payload: { title: 'm', kind: 'echo', pacing: 'fixed', interval_seconds: 600, max_iterations: 5 } })).json();
+  const stopped = (await app.inject({ method: 'POST', url: `/api/missions/${created.id}/stop` })).json();
+  assert.equal(stopped.status, 'stopped');
+  assert.equal(stopped.stop_reason, 'manual');
+  await app.close();
+  cleanup();
+});
+
+test('GET runs returns the ledger (empty initially)', async () => {
+  const { app, cleanup } = buildApp();
+  await app.ready();
+  const created = (await app.inject({ method: 'POST', url: '/api/projects/p1/missions',
+    payload: { title: 'm', kind: 'echo', pacing: 'fixed', interval_seconds: 600, max_iterations: 5 } })).json();
+  const runs = await app.inject({ method: 'GET', url: `/api/missions/${created.id}/runs` });
+  assert.equal(runs.statusCode, 200);
+  assert.deepEqual(runs.json(), []);
+  await app.close();
+  cleanup();
+});

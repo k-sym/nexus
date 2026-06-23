@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { CreateMissionInput, MissionPacing, MissionKind } from '@nexus/shared';
 import {
-  insertMission, getMission, listMissionsForProject, updateMissionFields, deleteMission,
+  insertMission, getMission, listMissionsForProject, updateMissionFields, deleteMission, listMissionRuns,
 } from '../missions/store.js';
 
 const VALID_KINDS: MissionKind[] = ['echo', 'triage_tickets', 'review_stale_tasks', 'assistant_turn'];
@@ -112,5 +112,44 @@ export async function registerMissionRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
     deleteMission(db, id);
     return { success: true };
+  });
+
+  fastify.post('/api/missions/:id/resume', async (request) => {
+    const { id } = request.params as { id: string };
+    const mission = getMission(db, id);
+    if (!mission) throw httpError('mission not found', 404);
+    if (mission.status === 'stopped') throw httpError('stopped mission cannot resume', 409);
+    const now = new Date().toISOString();
+    updateMissionFields(db, id, {
+      status: 'active',
+      started_at: mission.started_at ?? now,
+      next_run_at: now,
+      stop_reason: null,
+      stopped_at: null,
+    });
+    return getMission(db, id)!;
+  });
+
+  fastify.post('/api/missions/:id/pause', async (request) => {
+    const { id } = request.params as { id: string };
+    const mission = getMission(db, id);
+    if (!mission) throw httpError('mission not found', 404);
+    updateMissionFields(db, id, { status: 'paused', next_run_at: null });
+    return getMission(db, id)!;
+  });
+
+  fastify.post('/api/missions/:id/stop', async (request) => {
+    const { id } = request.params as { id: string };
+    const mission = getMission(db, id);
+    if (!mission) throw httpError('mission not found', 404);
+    updateMissionFields(db, id, {
+      status: 'stopped', stop_reason: 'manual', stopped_at: new Date().toISOString(), next_run_at: null,
+    });
+    return getMission(db, id)!;
+  });
+
+  fastify.get('/api/missions/:id/runs', async (request) => {
+    const { id } = request.params as { id: string };
+    return listMissionRuns(db, id);
   });
 }
