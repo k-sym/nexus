@@ -22,6 +22,7 @@ export interface MissionStatus {
     error?: string;
   };
   models: Array<{ provider: string; id: string; name: string; reasoning?: boolean; contextWindow?: number; maxTokens?: number; configured: boolean }>;
+  modelCounts?: { active: number; available: number };
   stats?: Record<'claude' | 'codex' | 'openrouter', {
     ok: boolean;
     value: string;

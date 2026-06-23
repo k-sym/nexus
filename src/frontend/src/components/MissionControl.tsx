@@ -139,8 +139,8 @@ function ModelCard({ m, onClick }: { m: ModelRow; onClick: () => void }) {
 }
 
 export default function MissionControl({ status, loading, onRefresh, onSelectAgent }: MissionControlProps) {
-  const configuredModels = (status?.models ?? []).filter((m) => m.configured).length;
-  const totalModels = (status?.models ?? []).length;
+  const activeModels = status?.modelCounts?.active ?? (status?.models ?? []).length;
+  const availableModels = status?.modelCounts?.available ?? (status?.models ?? []).length;
   const mem = status?.memory;
   const models = mem?.models;
   const stats = status?.stats;
@@ -188,10 +188,10 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
 
             <Card title="Models">
               <div className="text-2xl font-semibold text-primary">
-                {configuredModels}/{totalModels}
+                {activeModels}/{availableModels}
               </div>
               <div className="text-xs text-muted mt-1">
-                active models · available
+                active / available models
               </div>
             </Card>
           </div>

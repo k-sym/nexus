@@ -26,10 +26,15 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
     // same catalog + curation filter as /api/models so the dashboard
     // never shows models the user has explicitly disabled (and defaults
     // to auth-configured models when no curation has been saved yet).
-    const models = fastify.modelCuration.apply(buildModelCatalog(fastify)).models;
+    const appliedModels = fastify.modelCuration.apply(buildModelCatalog(fastify));
+    const models = appliedModels.models;
+    const modelCounts = {
+      active: appliedModels.models.length,
+      available: appliedModels.allModels.length,
+    };
 
     const stats = await getUsageStats();
 
-    return { memory, models, stats };
+    return { memory, models, modelCounts, stats };
   });
 }
