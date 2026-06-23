@@ -72,9 +72,13 @@ export default function MissionsView({ projects }: Props) {
   };
 
   const remove = async (m: Mission) => {
-    await api.missions.delete(m.id);
-    if (selected?.id === m.id) { setSelected(null); setRuns([]); }
-    await load();
+    try {
+      await api.missions.delete(m.id);
+      if (selected?.id === m.id) { setSelected(null); setRuns([]); }
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Delete failed');
+    }
   };
 
   return (
