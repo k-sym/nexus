@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -229,6 +229,19 @@ export const api = {
     update: (id: string, data: Partial<Pick<BraindumpIdea, 'title' | 'body' | 'status' | 'project_id' | 'task_id'>>) =>
       fetchJson<BraindumpIdea>(`/api/braindump/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
     delete: (id: string) => fetchJson<void>(`/api/braindump/${id}`, { method: 'DELETE' }),
+  },
+  missions: {
+    listForProject: (projectId: string) => fetchJson<Mission[]>(`/api/projects/${projectId}/missions`),
+    create: (projectId: string, input: CreateMissionInput) =>
+      fetchJson<Mission>(`/api/projects/${projectId}/missions`, { method: 'POST', body: JSON.stringify(input) }),
+    get: (id: string) => fetchJson<Mission>(`/api/missions/${id}`),
+    update: (id: string, input: UpdateMissionInput) =>
+      fetchJson<Mission>(`/api/missions/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
+    delete: (id: string) => fetchJson<void>(`/api/missions/${id}`, { method: 'DELETE' }),
+    resume: (id: string) => fetchJson<Mission>(`/api/missions/${id}/resume`, { method: 'POST' }),
+    pause: (id: string) => fetchJson<Mission>(`/api/missions/${id}/pause`, { method: 'POST' }),
+    stop: (id: string) => fetchJson<Mission>(`/api/missions/${id}/stop`, { method: 'POST' }),
+    runs: (id: string) => fetchJson<MissionRun[]>(`/api/missions/${id}/runs`),
   },
   assistant: {
     thread: () => fetchJson<{ id: 'global'; messages: any[] }>(`/api/assistant/thread`),

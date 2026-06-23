@@ -4,7 +4,8 @@ export type OperationKind =
   | 'jira_sync'
   | 'github_sync'
   | 'memory_archive'
-  | 'memory_index';
+  | 'memory_index'
+  | 'mission_tick';
 
 export type OperationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 

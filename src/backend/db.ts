@@ -314,4 +314,55 @@ function runMigrations(db: Database.Database) {
   if (!threadCols.some((c) => c.name === 'last_model_key')) {
     db.exec('ALTER TABLE chat_threads ADD COLUMN last_model_key TEXT');
   }
+
+  // Mission scheduler — bounded recurring missions and their run history.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS missions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      kind TEXT NOT NULL DEFAULT 'echo',
+      config_json TEXT NOT NULL DEFAULT '{}',
+      pacing TEXT NOT NULL DEFAULT 'fixed',
+      interval_seconds INTEGER NOT NULL DEFAULT 3600,
+      max_iterations INTEGER,
+      max_wall_clock_seconds INTEGER,
+      max_tokens INTEGER,
+      run_window_start TEXT,
+      run_window_end TEXT,
+      status TEXT NOT NULL DEFAULT 'paused',
+      iteration_count INTEGER NOT NULL DEFAULT 0,
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      next_run_at TEXT,
+      started_at TEXT,
+      last_run_at TEXT,
+      stopped_at TEXT,
+      stop_reason TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_missions_project ON missions(project_id)');
+  db.exec('CREATE INDEX IF NOT EXISTS idx_missions_status_due ON missions(status, next_run_at)');
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS mission_runs (
+      id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      run_number INTEGER NOT NULL,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      status TEXT NOT NULL,
+      intent TEXT NOT NULL DEFAULT '',
+      selected_work_json TEXT,
+      result_summary TEXT NOT NULL DEFAULT '',
+      tokens_used INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      next_run_at TEXT,
+      stop_reason TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+  db.exec('CREATE INDEX IF NOT EXISTS idx_mission_runs_mission ON mission_runs(mission_id, run_number)');
 }
