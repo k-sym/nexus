@@ -54,7 +54,15 @@ async function main() {
   const activityManager = new ActivityManager(db);
   const stopActivityListening = activityManager.startListening();
   startJiraSync(db, activityManager);
-  startMissionScheduler(db, { emit: activityManager.bus.emit.bind(activityManager.bus) });
+  // Shared between chat routes and the mission scheduler so an assistant_turn
+  // mission claims the per-project/model slot the same way a chat turn does.
+  // Created here (before the scheduler), then decorated onto the app below.
+  const chatConcurrency = new ConcurrencyTracker();
+  startMissionScheduler(db, {
+    emit: activityManager.bus.emit.bind(activityManager.bus),
+    pi,
+    concurrency: chatConcurrency,
+  });
 
   const app = Fastify({ logger: false });
 
@@ -67,7 +75,7 @@ async function main() {
   const modelCuration = new ModelCurationStore(join(getNexusDir(), 'model-curation.json'));
   backfillOAuthCuratedModels(pi, modelCuration);
 
-  app.decorate('chatConcurrency', new ConcurrencyTracker());
+  app.decorate('chatConcurrency', chatConcurrency);
   app.decorate('modelCuration', modelCuration);
   app.decorate('oauthFlows', new OAuthFlowManager(pi.auth));
   app.decorate('activity', activityManager);

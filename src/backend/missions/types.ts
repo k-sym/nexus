@@ -1,11 +1,13 @@
 import type Database from 'better-sqlite3';
 import type { Mission, MissionKind, MissionRunStatus } from '@nexus/shared';
 import type { ActivityEvent } from '../activity/events.js';
+import type { PiRuntime } from '../pi/runtime.js';
+import type { ConcurrencyTracker } from '../pi/concurrency.js';
 
 export interface MissionRunnerDeps {
   emit?: (event: ActivityEvent) => void;
-  // `pi` is the PiRuntime; only the assistant_turn handler (Task 14) uses it. Typed loosely on purpose.
-  pi?: unknown;
+  pi?: PiRuntime;
+  concurrency?: ConcurrencyTracker;
 }
 
 export interface MissionRunContext {
