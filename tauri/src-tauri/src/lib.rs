@@ -1,4 +1,5 @@
 pub mod node;
+pub mod health;
 
 pub fn run() {
     tauri::Builder::default()
