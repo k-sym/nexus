@@ -2,7 +2,6 @@
 // along with a grandchild it spawned — the property node-pty terminals rely on.
 use nexus_tauri_lib::supervisor::{spawn_node, Child};
 use std::io::Write;
-use std::path::Path;
 use std::time::Duration;
 
 #[test]
