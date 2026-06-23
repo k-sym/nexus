@@ -3,8 +3,8 @@
  *
  * Aggregates the project-less, cross-cutting signals for the Mission Control
  * landing view: memory-daemon health, the user's curated list of pi runtime
- * models (with per-provider auth health), and recent agent activity. The
- * legacy "persona roster" surface is gone — the model registry is the new
+ * models (with per-provider auth health), and usage stats. The
+ * legacy "persona roster" surface is gone - the model registry is the new
  * ground truth, filtered by the user's curation choices.
  */
 import { FastifyInstance } from 'fastify';
@@ -13,8 +13,6 @@ import { buildModelCatalog } from './pi.js';
 import { getUsageStats } from '../codexbar.js';
 
 export async function registerStatusRoutes(fastify: FastifyInstance) {
-  const db = fastify.db;
-
   fastify.get('/api/mission-control', async () => {
     // Memory daemon health (degrades gracefully if unreachable).
     let memory: Record<string, unknown>;
@@ -30,25 +28,8 @@ export async function registerStatusRoutes(fastify: FastifyInstance) {
     // to auth-configured models when no curation has been saved yet).
     const models = fastify.modelCuration.apply(buildModelCatalog(fastify)).models;
 
-    // Recent activity across all projects.
-    const running = db
-      .prepare(
-        `SELECT ar.id, ar.task_id, t.title as task_title, ar.provider, ar.model, ar.started_at
-         FROM agent_runs ar LEFT JOIN tasks t ON t.id = ar.task_id
-         WHERE ar.status = 'running' ORDER BY ar.started_at DESC LIMIT 10`,
-      )
-      .all();
-    const recent = db
-      .prepare(
-        `SELECT ar.id, ar.task_id, t.title as task_title, ar.status, ar.provider, ar.model,
-                ar.duration_ms, ar.started_at, ar.completed_at
-         FROM agent_runs ar LEFT JOIN tasks t ON t.id = ar.task_id
-         ORDER BY ar.started_at DESC LIMIT 10`,
-      )
-      .all();
-
     const stats = await getUsageStats();
 
-    return { memory, models, stats, activity: { running, recent } };
+    return { memory, models, stats };
   });
 }

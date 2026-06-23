@@ -4,7 +4,10 @@ import MissionControl from './MissionControl';
 
 const status = {
   memory: { ok: true, memories: 0, jobs: { pending: 0, dead: 0 }, models: { gen: true, embed: true, rerank: true } },
-  models: [],
+  models: [
+    { provider: 'anthropic', id: 'claude-sonnet-4', name: 'Claude Sonnet 4', configured: true },
+    { provider: 'openrouter', id: 'gpt-5', name: 'GPT-5', configured: false },
+  ],
   stats: {
     claude: {
       ok: true,
@@ -76,7 +79,7 @@ describe('MissionControl', () => {
     expect(stats.compareDocumentPosition(modelsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it('renders Recent activity above the Models section', () => {
+  it('labels the model count as active models against available models', () => {
     render(
       <MissionControl
         status={status as any}
@@ -85,12 +88,11 @@ describe('MissionControl', () => {
         onSelectAgent={() => {}}
       />,
     );
-    const activity = screen.getByText('Recent activity');
-    const modelsSection = screen.getAllByText('Models').pop()!;
-    expect(activity.compareDocumentPosition(modelsSection) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText('1/2')).toBeInTheDocument();
+    expect(screen.getByText('active models · available')).toBeInTheDocument();
   });
 
-  it('does not show token data in the recent activity rows', () => {
+  it('does not render the obsolete Recent activity panel', () => {
     render(
       <MissionControl
         status={{
@@ -107,28 +109,7 @@ describe('MissionControl', () => {
         onSelectAgent={() => {}}
       />,
     );
-    expect(screen.getByText('Sample task')).toBeInTheDocument();
-    expect(screen.queryByText(/tok/i)).not.toBeInTheDocument();
-  });
-
-  it('labels recent activity rows that are not linked to a task', () => {
-    render(
-      <MissionControl
-        status={{
-          ...status,
-          activity: {
-            running: [],
-            recent: [
-              { id: '1', task_id: null, task_title: null, provider: 'claude', model: 'sonnet', status: 'completed' },
-            ],
-          },
-        } as any}
-        loading={false}
-        onRefresh={() => {}}
-        onSelectAgent={() => {}}
-      />,
-    );
-    expect(screen.getByText('Chat activity')).toBeInTheDocument();
-    expect(screen.getByText('claude · completed')).toBeInTheDocument();
+    expect(screen.queryByText('Recent activity')).not.toBeInTheDocument();
+    expect(screen.queryByText('Sample task')).not.toBeInTheDocument();
   });
 });
