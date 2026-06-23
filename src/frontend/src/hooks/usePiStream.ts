@@ -357,7 +357,13 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
             },
           })
         : null;
-      const hasContent = current && (current.content || current.thinking || (current.toolCalls && current.toolCalls.length > 0));
+      const hasContent = current && (
+        current.content ||
+        current.thinking ||
+        (current.toolCalls && current.toolCalls.length > 0) ||
+        current.run ||
+        activeRun
+      );
       if (hasContent) {
         return {
           ...state,
@@ -394,6 +400,7 @@ export function usePiStream() {
   const [state, dispatch] = useReducer(streamReducer, INITIAL_STATE);
   const abortRef = useRef<AbortController | null>(null);
   const activeThreadRef = useRef<string | null>(null);
+  const streamingThreadRef = useRef<string | null>(null);
 
   const setActiveThread = useCallback((threadId: string | null) => {
     activeThreadRef.current = threadId;
@@ -505,10 +512,15 @@ export function usePiStream() {
       opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[]; onError?: (message: string) => void } = {},
     ): Promise<ContextUsage | null> => {
       activeThreadRef.current = threadId;
+      streamingThreadRef.current = threadId;
       const attachments = opts.attachments ?? opts.images ?? [];
       dispatch({ type: 'START_STREAM', prompt: text, attachments });
       const ctrl = new AbortController();
       abortRef.current = ctrl;
+      const clearRequestRefs = () => {
+        if (abortRef.current === ctrl) abortRef.current = null;
+        if (streamingThreadRef.current === threadId) streamingThreadRef.current = null;
+      };
       const images = attachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
       const files = attachments.filter((attachment) => attachment.type === 'file');
       const requestBody = {
@@ -528,8 +540,8 @@ export function usePiStream() {
           signal: ctrl.signal,
         });
       } catch (err) {
+        clearRequestRefs();
         if ((err as Error).name === 'AbortError') {
-          dispatch({ type: 'ABORT_STREAM' });
           return null;
         }
         dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
@@ -539,6 +551,7 @@ export function usePiStream() {
       if (res.status === 409) {
         const body = await res.json().catch(() => ({}));
         if (body.kind === 'model_busy') {
+          clearRequestRefs();
           throw new ChatBusyError(
             body.activeThreadId ?? '',
             body.activeTitle ?? 'busy thread',
@@ -548,6 +561,7 @@ export function usePiStream() {
         const error = body.error ?? body.message ?? `HTTP ${res.status}`;
         dispatch({ type: 'STREAM_ERROR', error });
         opts.onError?.(error);
+        clearRequestRefs();
         return null;
       }
       if (!res.ok || !res.body) {
@@ -555,6 +569,7 @@ export function usePiStream() {
         const error = body.error ?? body.message ?? `HTTP ${res.status}`;
         dispatch({ type: 'STREAM_ERROR', error });
         opts.onError?.(error);
+        clearRequestRefs();
         return null;
       }
       const reader = res.body.getReader();
@@ -606,13 +621,12 @@ export function usePiStream() {
         }
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
-          dispatch({ type: 'ABORT_STREAM' });
           return lastContextUsage;
         }
         dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
         opts.onError?.((err as Error).message);
       } finally {
-        abortRef.current = null;
+        clearRequestRefs();
       }
       return lastContextUsage;
     },
@@ -620,18 +634,20 @@ export function usePiStream() {
   );
 
   const abortStream = useCallback(async (source: 'user' | 'frontend' = 'frontend') => {
-    const threadId = activeThreadRef.current;
-    if (abortRef.current) {
-      if (threadId) {
-        await apiFetch(`/api/threads/${threadId}/abort`, {
+    const threadId = streamingThreadRef.current;
+    const controller = abortRef.current;
+    dispatch({ type: 'ABORT_STREAM', source });
+    if (controller) {
+      const abortRequest = threadId
+        ? apiFetch(`/api/threads/${threadId}/abort`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ source }),
-        }).catch(() => undefined);
-      }
-      abortRef.current.abort();
+        }).catch(() => undefined)
+        : Promise.resolve(undefined);
+      controller.abort();
+      await abortRequest;
     }
-    dispatch({ type: 'ABORT_STREAM', source });
   }, []);
 
   return { state, startStream, abortStream, dispatch, setActiveThread };

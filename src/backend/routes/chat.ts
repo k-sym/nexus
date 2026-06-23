@@ -36,7 +36,7 @@ interface ActiveStream {
 }
 
 type ChatSession = Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> & {
-  sessionManager?: Pick<AgentSession['sessionManager'], 'appendCustomEntry' | 'getLeafId' | 'getLeafEntry'>;
+  sessionManager?: Pick<AgentSession['sessionManager'], 'appendCustomEntry' | 'getLeafId' | 'getLeafEntry' | 'getEntries'>;
 };
 
 const CLIENT_ABORT_SOURCES = new Set<AgentRunAbortSource>(['user', 'frontend']);
@@ -44,6 +44,19 @@ const CLIENT_ABORT_SOURCES = new Set<AgentRunAbortSource>(['user', 'frontend']);
 function omitEvent<T extends { event: string }>(value: T): Omit<T, 'event'> {
   const { event: _event, ...rest } = value;
   return rest;
+}
+
+function latestAssistantEntryId(session: ChatSession | undefined): string | undefined {
+  const manager = session?.sessionManager;
+  if (!manager) return undefined;
+  const entries = manager.getEntries?.() ?? [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.type === 'message' && entry.message.role === 'assistant') return entry.id;
+  }
+  const leaf = manager.getLeafEntry();
+  if (leaf?.type === 'message' && leaf.message?.role !== 'toolResult') return manager.getLeafId() ?? undefined;
+  return undefined;
 }
 
 interface ThreadRunClaim {
@@ -496,12 +509,11 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       }
     } finally {
       responseCompleted = true;
-      const leaf = session?.sessionManager?.getLeafEntry();
       const endEvent: AgentRunEnd = {
         event: 'end',
         runId,
         threadId,
-        assistantEntryId: leaf?.type === 'message' ? session?.sessionManager?.getLeafId() ?? undefined : undefined,
+        assistantEntryId: latestAssistantEntryId(session),
         completedAt: new Date().toISOString(),
         status: terminalStatus,
         abortSource,

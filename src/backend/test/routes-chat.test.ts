@@ -1422,7 +1422,7 @@ test('POST /api/threads/:id/messages/stream emits context usage after prompting'
 
 test('POST /api/threads/:id/messages/stream emits and persists matching run boundaries', async () => {
   const customEntries: Array<{ customType: string; data: unknown }> = [];
-  let leafId = 'assistant-entry-1';
+  const leafId = 'tool-result-entry';
   const session = {
     sessionManager: {
       appendCustomEntry: (customType: string, data: unknown) => {
@@ -1430,7 +1430,11 @@ test('POST /api/threads/:id/messages/stream emits and persists matching run boun
         return `custom-${customEntries.length}`;
       },
       getLeafId: () => leafId,
-      getLeafEntry: () => ({ type: 'message' }),
+      getLeafEntry: () => ({ type: 'message', message: { role: 'toolResult' } }),
+      getEntries: () => [
+        { type: 'message', id: 'assistant-entry-1', message: { role: 'assistant' } },
+        { type: 'message', id: leafId, message: { role: 'toolResult' } },
+      ],
     },
     subscribe: () => () => {},
     setModel: async () => {},
@@ -1461,7 +1465,7 @@ test('POST /api/threads/:id/messages/stream emits and persists matching run boun
     assert.ok(end);
     assert.equal(end.run.runId, start.run.runId);
     assert.equal(end.run.status, 'completed');
-    assert.equal(end.run.assistantEntryId, leafId);
+    assert.equal(end.run.assistantEntryId, 'assistant-entry-1');
     assert.equal(customEntries.length, 2);
     assert.equal(customEntries[0].customType, 'nexus.agent_run');
     assert.equal(customEntries[1].customType, 'nexus.agent_run');

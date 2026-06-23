@@ -117,6 +117,30 @@ describe('streamReducer', () => {
     expect(abort.messages[1].content).toBe('partial');
   });
 
+  it('ABORT_STREAM preserves a started run before content arrives', () => {
+    const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
+    const withRun = streamReducer(start, {
+      type: 'RUN_ACTION',
+      action: {
+        type: 'RUN_STARTED',
+        run: {
+          runId: 'run-1',
+          threadId: 'thread-1',
+          startedAt: '2026-06-22T10:00:00.000Z',
+        },
+      },
+    });
+    const abort = streamReducer(withRun, { type: 'ABORT_STREAM', source: 'user' });
+
+    expect(abort.isRunning).toBe(false);
+    expect(abort.messages).toHaveLength(2);
+    expect(abort.messages[1].run).toMatchObject({
+      runId: 'run-1',
+      status: 'cancelled',
+      abortSource: 'user',
+    });
+  });
+
   it('RESET clears to initial', () => {
     const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
     const reset = streamReducer(start, { type: 'RESET' });
@@ -185,6 +209,41 @@ describe('usePiStream', () => {
 
     expect(result.current.state.messages[1].run?.status).toBe('interrupted');
     expect(result.current.state.messages[1].run?.tools[0].status).toBe('interrupted');
+  });
+
+  it('aborts the streaming thread after the visible thread changes', async () => {
+    const requestedUrls: string[] = [];
+    global.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.endsWith('/abort')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+      }
+      const signal = init?.signal;
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')));
+          },
+        }),
+      } as Response;
+    });
+    const { result } = renderHook(() => usePiStream());
+
+    let streamPromise!: Promise<unknown>;
+    act(() => {
+      streamPromise = result.current.startStream('thread-old', 'hello');
+    });
+    act(() => result.current.setActiveThread('thread-new'));
+    await act(async () => {
+      await result.current.abortStream('frontend');
+      await streamPromise;
+    });
+
+    expect(requestedUrls.some((url) => url.endsWith('/api/threads/thread-old/abort'))).toBe(true);
+    expect(requestedUrls.some((url) => url.endsWith('/api/threads/thread-new/abort'))).toBe(false);
   });
 
   it('surfaces same-thread busy responses as normal errors without throwing a conflict', async () => {
