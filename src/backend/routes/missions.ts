@@ -134,6 +134,7 @@ export async function registerMissionRoutes(fastify: FastifyInstance) {
     const { id } = request.params as { id: string };
     const mission = getMission(db, id);
     if (!mission) throw httpError('mission not found', 404);
+    if (mission.status === 'stopped') throw httpError('stopped mission cannot be paused', 409);
     updateMissionFields(db, id, { status: 'paused', next_run_at: null });
     return getMission(db, id)!;
   });

@@ -112,6 +112,19 @@ test('stop marks the mission stopped with reason manual', async () => {
   cleanup();
 });
 
+test('pause rejects a stopped mission with 409', async () => {
+  const { app, cleanup } = buildApp();
+  await app.ready();
+  const created = (await app.inject({ method: 'POST', url: '/api/projects/p1/missions',
+    payload: { title: 'm', kind: 'echo', pacing: 'fixed', interval_seconds: 600, max_iterations: 5 } })).json();
+  const stopped = (await app.inject({ method: 'POST', url: `/api/missions/${created.id}/stop` })).json();
+  assert.equal(stopped.status, 'stopped');
+  const res = await app.inject({ method: 'POST', url: `/api/missions/${created.id}/pause` });
+  assert.equal(res.statusCode, 409);
+  await app.close();
+  cleanup();
+});
+
 test('GET runs returns the ledger (empty initially)', async () => {
   const { app, cleanup } = buildApp();
   await app.ready();
