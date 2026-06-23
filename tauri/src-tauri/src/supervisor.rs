@@ -42,7 +42,10 @@ impl Child {
 }
 
 impl Drop for Child {
-    fn drop(&mut self) { self.kill_group(); } // kill_on_drop analog
+    fn drop(&mut self) {
+        self.kill_group();           // SIGTERM the whole group (grandchildren too)
+        let _ = self.inner.wait();   // reap the direct child so it doesn't zombie
+    }
 }
 
 fn configure(cmd: &mut Command, node: &str) {
@@ -50,7 +53,14 @@ fn configure(cmd: &mut Command, node: &str) {
     cmd.stdin(Stdio::null()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
     // New process group so we can group-kill (Unix).
     use std::os::unix::process::CommandExt;
-    unsafe { cmd.pre_exec(|| { libc::setsid(); Ok(()) }); }
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 }
 
 fn spawn(mut cmd: Command, node: &str) -> std::io::Result<Child> {
