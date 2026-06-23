@@ -8,6 +8,7 @@ const status = {
     { provider: 'anthropic', id: 'claude-sonnet-4', name: 'Claude Sonnet 4', configured: true },
     { provider: 'openrouter', id: 'gpt-5', name: 'GPT-5', configured: false },
   ],
+  modelCounts: { active: 1, available: 3 },
   stats: {
     claude: {
       ok: true,
@@ -88,8 +89,8 @@ describe('MissionControl', () => {
         onSelectAgent={() => {}}
       />,
     );
-    expect(screen.getByText('1/2')).toBeInTheDocument();
-    expect(screen.getByText('active models · available')).toBeInTheDocument();
+    expect(screen.getByText('1/3')).toBeInTheDocument();
+    expect(screen.getByText('active / available models')).toBeInTheDocument();
   });
 
   it('does not render the obsolete Recent activity panel', () => {

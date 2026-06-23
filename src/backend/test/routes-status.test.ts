@@ -14,12 +14,21 @@ function makeApp() {
   app.decorate('db', db);
   app.decorate('pi', {
     models: {
-      getAll: () => [],
-      getAvailable: () => [],
+      getAll: () => [
+        { provider: 'anthropic', id: 'claude-sonnet-4', name: 'Claude Sonnet 4' },
+        { provider: 'openrouter', id: 'gpt-5', name: 'GPT-5' },
+        { provider: 'openrouter', id: 'llama', name: 'Llama' },
+      ],
+      getAvailable: () => [
+        { provider: 'anthropic', id: 'claude-sonnet-4', name: 'Claude Sonnet 4' },
+      ],
     },
   });
   app.decorate('modelCuration', {
-    apply: (models: unknown[]) => ({ models }),
+    apply: (models: any[]) => ({
+      allModels: models,
+      models: models.filter((model) => model.provider === 'anthropic'),
+    }),
   });
   app.register(registerStatusRoutes);
   return {
@@ -54,7 +63,9 @@ test('GET /api/mission-control omits dashboard activity rows', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/mission-control' });
 
     assert.equal(res.statusCode, 200);
-    assert.equal(Object.hasOwn(res.json(), 'activity'), false);
+    const body = res.json();
+    assert.equal(Object.hasOwn(body, 'activity'), false);
+    assert.deepEqual(body.modelCounts, { active: 1, available: 3 });
   } finally {
     await app.close();
     cleanup();
