@@ -116,7 +116,7 @@ Shell processes selected by classification:
 
 | Metric               | Electron      | Tauri         | Delta (E−T)  |
 |----------------------|--------------|--------------|--------------|
-| Main process RSS     | 162 MB        | 109 MB        | −54 MB       |
+| Main process RSS     | 159 MB        | 109 MB        | −50 MB       |
 | GPU helper RSS       | 112 MB        | 69 MB         | −43 MB       |
 | Network helper RSS   | 46 MB         | 18 MB         | −28 MB       |
 | Renderer/WebContent  | 128 MB        | 72 MB         | −56 MB       |
@@ -185,7 +185,7 @@ The numbers support the thesis on size and RSS; they do not permit a cold-start 
 
 **Shell-only bundle size:** Tauri's shell footprint is ~17 MB vs Electron's ~261 MB — a 15× reduction. This is the clearest, most objective finding. The difference is structural: Electron bundles its own Chromium+Node runtime (260 MB), while Tauri uses the system-provided WebKit.framework (zero bytes counted in the bundle). For a distributed installer this is the dominant factor.
 
-**Idle RSS:** Tauri's shell processes consume ~267 MB vs Electron's ~444 MB — approximately 177 MB lower. The Tauri WebKit XPC processes do use significant RSS (162 MB combined), but the RSS figures for XPC processes may overcount shared physical pages (macOS uses copy-on-write for framework pages shared across processes and apps). The true private-memory advantage for Tauri may be larger than the RSS delta suggests. Electron's four-process model (main + GPU + network + renderer) has a similar architecture to Tauri + WebKit XPC, but Electron's Chromium is a heavier runtime than system WebKit, reflected in the per-process RSS.
+**Idle RSS:** Tauri's shell processes consume ~267 MB vs Electron's ~444 MB — approximately 177 MB lower. The Tauri WebKit XPC processes do use significant RSS (~158 MB combined), but the RSS figures for XPC processes may overcount shared physical pages (macOS uses copy-on-write for framework pages shared across processes and apps). The true private-memory advantage for Tauri may be larger than the RSS delta suggests. Electron's four-process model (main + GPU + network + renderer) has a similar architecture to Tauri + WebKit XPC, but Electron's Chromium is a heavier runtime than system WebKit, reflected in the per-process RSS.
 
 **Cold start:** The metric is dominated by Node service init time (~1.7s for both) and provides no evidence about shell initialization speed. A meaningful comparison would require an isolated splash-to-window measurement with services excluded, which was not done here.
 
