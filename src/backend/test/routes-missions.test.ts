@@ -67,3 +67,16 @@ test('PUT rejects editing a non-paused mission with 409', async () => {
   await app.close();
   cleanup();
 });
+
+test('PUT rejects stripping the last ceiling (max_iterations -> null) on a fixed mission', async () => {
+  const { app, cleanup } = buildApp();
+  await app.ready();
+  const created = (await app.inject({ method: 'POST', url: '/api/projects/p1/missions',
+    payload: { title: 'capped', kind: 'echo', pacing: 'fixed', interval_seconds: 600, max_iterations: 5 } })).json();
+  assert.equal(created.status, 'paused');
+  const res = await app.inject({ method: 'PUT', url: `/api/missions/${created.id}`,
+    payload: { max_iterations: null } });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+  cleanup();
+});
