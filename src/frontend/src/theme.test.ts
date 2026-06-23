@@ -32,6 +32,12 @@ describe('theme palette contract', () => {
     expect(app).toContain('ambient-shell surface-canvas');
   });
 
+  it('disables run-card status animations when reduced motion is requested', () => {
+    expect(css).toContain('.agent-run-card .animate-spin');
+    expect(css).toContain('.agent-run-card .animate-pulse');
+    expect(css).toContain('animation: none !important');
+  });
+
   it('keeps the starfield opt-in animated with gradient-based glow', () => {
     expect(css).toContain('@keyframes ambient-twinkle');
     expect(css).toContain('2.6px');

@@ -1,4 +1,4 @@
-import { WarningCircle, Check, Spinner } from '@phosphor-icons/react';
+import { WarningCircle, Check, Circle, Prohibit, Spinner } from '@phosphor-icons/react';
 import { useState } from 'react';
 import { QuestionCard } from './QuestionCard';
 import { normalizeQuestionRequest, parseQuestionResult, type QuestionAnswer, type QuestionToolResult } from '../lib/questions';
@@ -11,11 +11,16 @@ export interface ToolCallInfo {
   id: string;
   name: string;
   args: Record<string, unknown>;
-  status: 'running' | 'completed' | 'error' | 'interrupted';
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'interrupted' | 'completed' | 'error';
   result?: string;
   is_error?: boolean;
   details?: unknown;
   partial_output?: string;
+  partialOutput?: string;
+  queuedAt?: number;
+  startedAt?: number;
+  completedAt?: number;
+  payloadBytes?: number;
 }
 
 interface ToolCallTimelineProps {
@@ -39,7 +44,7 @@ export function ToolCallTimeline({ toolCalls, detailsExpanded, questionState, on
               key={tc.id}
               request={request}
               answeredResult={result ?? undefined}
-              unavailable={tc.status === 'interrupted' || tc.status === 'error' || (tc.status === 'completed' && !result)}
+              unavailable={tc.status === 'interrupted' || tc.status === 'cancelled' || tc.status === 'failed' || tc.status === 'error' || ((tc.status === 'completed' || tc.status === 'succeeded') && !result)}
               submitting={state?.submitting}
               error={state?.error}
               onSubmit={(answers) => onAnswerQuestion?.(tc.id, answers) ?? Promise.resolve()}
@@ -58,19 +63,25 @@ function ToolCallBlock({
 }: { toolCall: ToolCallInfo; detailsExpanded?: boolean }) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const isRunning = toolCall.status === 'running';
-  const isError = toolCall.status === 'error';
-  const showContent = detailsExpanded !== undefined ? detailsExpanded : localExpanded;
+  const isQueued = toolCall.status === 'queued';
+  const isError = toolCall.status === 'error' || toolCall.status === 'failed';
+  const isInterrupted = toolCall.status === 'interrupted' || toolCall.status === 'cancelled';
+  const showContent = !!detailsExpanded || localExpanded;
 
   const accentColor = isRunning
     ? 'text-indigo-400'
     : isError
       ? 'text-red-400'
+      : isInterrupted
+        ? 'text-amber-300'
       : 'text-emerald-400';
 
   const borderColor = isRunning
     ? 'border-indigo-500/30'
     : isError
       ? 'border-red-500/30'
+      : isInterrupted
+        ? 'border-amber-500/30'
       : 'border-zinc-700/50';
 
   const { header, statusLine } = buildHeader(toolCall);
@@ -81,15 +92,24 @@ function ToolCallBlock({
         type="button"
         className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5 w-full text-left cursor-pointer select-none"
         onClick={() => setLocalExpanded(!localExpanded)}
+        aria-expanded={showContent}
       >
-        {isRunning ? (
+        {isQueued ? (
+          <Circle className="w-3 h-3 flex-shrink-0 text-zinc-500" />
+        ) : isRunning ? (
           <Spinner className={`w-3 h-3 animate-spin flex-shrink-0 ${accentColor}`} />
         ) : isError ? (
           <WarningCircle className={`w-3 h-3 flex-shrink-0 ${accentColor}`} />
+        ) : isInterrupted ? (
+          <Prohibit className={`w-3 h-3 flex-shrink-0 ${accentColor}`} />
         ) : (
           <Check className={`w-3 h-3 flex-shrink-0 ${accentColor}`} />
         )}
-        <span className="text-zinc-300 flex-1 truncate">{header}</span>
+        <span className="text-zinc-300 flex-1 truncate" title={header}>{header}</span>
+        <span className={`text-[10px] ${accentColor}`}>{toolStatusLabel(toolCall.status)}</span>
+        {formatToolDuration(toolCall) && (
+          <span className="text-[10px] text-zinc-600">{formatToolDuration(toolCall)}</span>
+        )}
         {!showContent && !isRunning && (
           <span className="text-[10px] text-zinc-600 flex-shrink-0">Ctrl+O</span>
         )}
@@ -104,6 +124,18 @@ function ToolCallBlock({
       )}
     </div>
   );
+}
+
+function toolStatusLabel(status: ToolCallInfo['status']): string {
+  switch (status) {
+    case 'queued': return 'Queued';
+    case 'running': return 'Running';
+    case 'failed':
+    case 'error': return 'Failed';
+    case 'cancelled': return 'Cancelled';
+    case 'interrupted': return 'Interrupted';
+    default: return 'Succeeded';
+  }
 }
 
 function buildHeader(tc: ToolCallInfo): { header: string; statusLine?: string } {
@@ -121,7 +153,7 @@ function buildHeader(tc: ToolCallInfo): { header: string; statusLine?: string } 
       const action = isNewFile ? 'created' : 'overwritten';
       return {
         header: `write ${shortenPath(path)} (${lines} lines · ${size})`,
-        statusLine: tc.status === 'completed' ? `└ ${action}` : undefined,
+        statusLine: tc.status === 'completed' || tc.status === 'succeeded' ? `└ ${action}` : undefined,
       };
     }
 
@@ -138,7 +170,7 @@ function buildHeader(tc: ToolCallInfo): { header: string; statusLine?: string } 
       if (added > 0 || removed > 0) statParts.push(`+${added} -${removed}`);
       return {
         header: `editing ${shortenPath(path)}${statParts.length > 0 ? ` (${statParts.join(' · ')})` : ''}`,
-        statusLine: tc.status === 'completed'
+        statusLine: tc.status === 'completed' || tc.status === 'succeeded'
           ? `└ diff ${added > 0 || removed > 0 ? `+${added} -${removed}` : 'applied'}`
           : undefined,
       };
@@ -207,8 +239,9 @@ function ToolContent({ toolCall }: { toolCall: ToolCallInfo }) {
   const isRunning = toolCall.status === 'running';
 
   if (isRunning) {
-    if (toolCall.partial_output) {
-      return <TruncatedOutput text={toolCall.partial_output} limit={800} />;
+    const partialOutput = toolCall.partialOutput ?? toolCall.partial_output;
+    if (partialOutput) {
+      return <TruncatedOutput text={partialOutput} limit={800} />;
     }
     return (
       <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
@@ -233,7 +266,7 @@ function ToolContent({ toolCall }: { toolCall: ToolCallInfo }) {
 
   if (toolCall.name === 'Read') return null;
 
-  if (toolCall.name === 'Bash' && toolCall.status === 'error') {
+  if (toolCall.name === 'Bash' && (toolCall.status === 'error' || toolCall.status === 'failed')) {
     return (
       <pre className="text-[11px] whitespace-pre-wrap text-red-400">
         {truncate(toolCall.result, 3000)}
@@ -242,6 +275,13 @@ function ToolContent({ toolCall }: { toolCall: ToolCallInfo }) {
   }
 
   return <TruncatedOutput text={toolCall.result} limit={2000} />;
+}
+
+function formatToolDuration(toolCall: ToolCallInfo): string | null {
+  if (!toolCall.startedAt) return null;
+  const end = toolCall.completedAt ?? Date.now();
+  const seconds = Math.max(0, Math.floor((end - toolCall.startedAt) / 1000));
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function runningLabel(name?: string): string {

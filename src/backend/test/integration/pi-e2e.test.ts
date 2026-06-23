@@ -64,15 +64,12 @@ test('POST /api/threads/:id/messages/stream returns 200 NDJSON', async () => {
     assert.equal(res.statusCode, 200, `stream failed: ${res.status} ${res.body.slice(0, 200)}`);
     const lines = res.body.trim().split('\n').filter(Boolean);
     assert.ok(lines.length > 0, 'expected at least one NDJSON line');
-    // The route emits {kind: 'done'} on a successful prompt completion
-    // (which is what we get when no model is configured — pi returns
-    // immediately with no error). The important thing is the wire format
-    // is valid NDJSON, the route completes, and the stream ends cleanly.
+    // A run_end envelope is the durable terminal record. The important thing
+    // is the wire format is valid NDJSON, the route completes, and the stream
+    // ends cleanly.
     const last = JSON.parse(lines[lines.length - 1]);
-    assert.ok(
-      last.kind === 'done' || last.kind === 'error',
-      `expected terminal kind, got ${JSON.stringify(last)}`,
-    );
+    assert.equal(last.kind, 'run_end', `expected terminal kind, got ${JSON.stringify(last)}`);
+    assert.ok(['completed', 'failed', 'cancelled', 'interrupted'].includes(last.run.status));
   } finally {
     await app.close();
     db.close();

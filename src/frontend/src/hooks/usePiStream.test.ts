@@ -117,6 +117,30 @@ describe('streamReducer', () => {
     expect(abort.messages[1].content).toBe('partial');
   });
 
+  it('ABORT_STREAM preserves a started run before content arrives', () => {
+    const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
+    const withRun = streamReducer(start, {
+      type: 'RUN_ACTION',
+      action: {
+        type: 'RUN_STARTED',
+        run: {
+          runId: 'run-1',
+          threadId: 'thread-1',
+          startedAt: '2026-06-22T10:00:00.000Z',
+        },
+      },
+    });
+    const abort = streamReducer(withRun, { type: 'ABORT_STREAM', source: 'user' });
+
+    expect(abort.isRunning).toBe(false);
+    expect(abort.messages).toHaveLength(2);
+    expect(abort.messages[1].run).toMatchObject({
+      runId: 'run-1',
+      status: 'cancelled',
+      abortSource: 'user',
+    });
+  });
+
   it('RESET clears to initial', () => {
     const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
     const reset = streamReducer(start, { type: 'RESET' });
@@ -125,6 +149,103 @@ describe('streamReducer', () => {
 });
 
 describe('usePiStream', () => {
+  it('reduces run boundaries and tool events into a terminal run', async () => {
+    const encoder = new TextEncoder();
+    const events = [
+      { kind: 'run_start', run: { runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z', provider: 'test', model: 'model' } },
+      { type: 'message_update', assistantMessageEvent: { type: 'toolcall_end', toolCall: { id: 'call-1', name: 'Bash', arguments: { command: 'npm test' } } } },
+      { type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'Bash', args: { command: 'npm test' } },
+      { type: 'tool_execution_update', toolCallId: 'call-1', partialResult: { content: [{ type: 'text', text: 'running' }] } },
+      { type: 'tool_execution_end', toolCallId: 'call-1', isError: false, result: { content: [{ type: 'text', text: 'passed' }] } },
+      { kind: 'run_end', run: { runId: 'run-1', threadId: 'thread-1', completedAt: '2026-06-22T10:00:10.000Z', status: 'completed' } },
+    ];
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(controller) {
+          for (const event of events) controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
+          controller.close();
+        },
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'run tests');
+    });
+
+    expect(result.current.state.messages[1].run).toMatchObject({
+      runId: 'run-1',
+      status: 'completed',
+      provider: 'test',
+      model: 'model',
+    });
+    expect(result.current.state.messages[1].run?.tools[0]).toMatchObject({
+      id: 'call-1',
+      status: 'succeeded',
+      result: 'passed',
+    });
+  });
+
+  it('marks a started run interrupted when the stream closes without run_end', async () => {
+    const encoder = new TextEncoder();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_start', run: { runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' } })}\n`));
+          controller.enqueue(encoder.encode(`${JSON.stringify({ type: 'tool_execution_start', toolCallId: 'call-1', toolName: 'Write', args: {} })}\n`));
+          controller.close();
+        },
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.startStream('thread-1', 'write');
+    });
+
+    expect(result.current.state.messages[1].run?.status).toBe('interrupted');
+    expect(result.current.state.messages[1].run?.tools[0].status).toBe('interrupted');
+  });
+
+  it('aborts the streaming thread after the visible thread changes', async () => {
+    const requestedUrls: string[] = [];
+    global.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      requestedUrls.push(url);
+      if (url.endsWith('/abort')) {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+      }
+      const signal = init?.signal;
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream({
+          start(controller) {
+            signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')));
+          },
+        }),
+      } as Response;
+    });
+    const { result } = renderHook(() => usePiStream());
+
+    let streamPromise!: Promise<unknown>;
+    act(() => {
+      streamPromise = result.current.startStream('thread-old', 'hello');
+    });
+    act(() => result.current.setActiveThread('thread-new'));
+    await act(async () => {
+      await result.current.abortStream('frontend');
+      await streamPromise;
+    });
+
+    expect(requestedUrls.some((url) => url.endsWith('/api/threads/thread-old/abort'))).toBe(true);
+    expect(requestedUrls.some((url) => url.endsWith('/api/threads/thread-new/abort'))).toBe(false);
+  });
+
   it('surfaces same-thread busy responses as normal errors without throwing a conflict', async () => {
     const onError = vi.fn();
     global.fetch = vi.fn().mockResolvedValue({

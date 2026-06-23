@@ -10,6 +10,19 @@ import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import { ConcurrencyTracker } from '../pi/concurrency';
 import { QuestionBroker, type QuestionRequest } from '../pi/questions';
 import { flattenEntries, registerChatRoutes } from '../routes/chat';
+import type { AgentRunWireEvent } from '@nexus/shared';
+
+const runContractFixture: AgentRunWireEvent = {
+  kind: 'run_start',
+  run: {
+    runId: 'run-1',
+    threadId: 'thread-1',
+    startedAt: '2026-06-22T10:00:00.000Z',
+    provider: 'openrouter',
+    model: 'moonshotai/kimi-k2.7-code',
+  },
+};
+void runContractFixture;
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -19,6 +32,10 @@ function deferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function parseNdjson(body: string): any[] {
+  return body.trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
 }
 
 test('question history associates a matching result with its assistant tool call', () => {
@@ -59,7 +76,10 @@ test('question history associates a matching result with its assistant tool call
     id: 'call-1',
     name: 'question',
     args: { questions: [] },
-    status: 'completed',
+    status: 'succeeded',
+    queuedAt: undefined,
+    completedAt: undefined,
+    partialOutput: '',
     result: `Scope: Small\n\n${JSON.stringify(details)}`,
     details,
   });
@@ -77,6 +97,84 @@ test('question history marks a tool call without a result interrupted', () => {
 
   assert.equal(messages[0].tool_calls[0].status, 'interrupted');
   assert.equal(messages[0].tool_calls[0].result, undefined);
+});
+
+test('tool history derives success from matching results and interrupts missing results', () => {
+  const messages = flattenEntries([
+    {
+      type: 'custom',
+      id: 'run-start',
+      customType: 'nexus.agent_run',
+      data: { event: 'start', runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' },
+    },
+    {
+      type: 'message',
+      id: 'assistant-1',
+      message: {
+        role: 'assistant',
+        timestamp: 100,
+        content: [
+          { type: 'toolCall', id: 'call-1', name: 'Bash', arguments: { command: 'npm test' } },
+          { type: 'toolCall', id: 'call-2', name: 'Write', arguments: { path: '/tmp/a', content: 'done' } },
+          { type: 'text', text: 'Both operations succeeded.' },
+        ],
+      },
+    },
+    {
+      type: 'message',
+      id: 'result-1',
+      message: {
+        role: 'toolResult',
+        toolCallId: 'call-1',
+        toolName: 'Bash',
+        isError: false,
+        timestamp: 200,
+        content: [{ type: 'text', text: 'tests passed' }],
+      },
+    },
+    {
+      type: 'custom',
+      id: 'run-end',
+      customType: 'nexus.agent_run',
+      data: {
+        event: 'end',
+        runId: 'run-1',
+        threadId: 'thread-1',
+        assistantEntryId: 'assistant-1',
+        completedAt: '2026-06-22T10:00:10.000Z',
+        status: 'interrupted',
+        abortSource: 'frontend',
+      },
+    },
+  ]) as any[];
+
+  const assistant = messages.find((message) => message.role === 'assistant');
+  assert.equal(assistant.tool_calls[0].status, 'succeeded');
+  assert.equal(assistant.tool_calls[0].result, 'tests passed');
+  assert.equal(assistant.tool_calls[1].status, 'interrupted');
+  assert.equal(assistant.tool_calls[1].result, undefined);
+  assert.equal(assistant.run.runId, 'run-1');
+  assert.equal(assistant.run.status, 'interrupted');
+  assert.equal(assistant.run.abortSource, 'frontend');
+});
+
+test('run history reloads multiple assistant/tool messages as one logical run card', () => {
+  const messages = flattenEntries([
+    { type: 'custom', id: 'start', customType: 'nexus.agent_run', data: { event: 'start', runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' } },
+    { type: 'message', id: 'user-1', message: { role: 'user', content: 'work', timestamp: 1 } },
+    { type: 'message', id: 'assistant-1', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'Read', arguments: { path: '/a' } }], timestamp: 2 } },
+    { type: 'message', id: 'tool-1', message: { role: 'toolResult', toolCallId: 'call-1', toolName: 'Read', isError: false, content: [{ type: 'text', text: 'contents' }], timestamp: 3 } },
+    { type: 'message', id: 'assistant-2', message: { role: 'assistant', content: [{ type: 'text', text: 'Finished.' }], timestamp: 4 } },
+    { type: 'custom', id: 'end', customType: 'nexus.agent_run', data: { event: 'end', runId: 'run-1', threadId: 'thread-1', assistantEntryId: 'assistant-2', completedAt: '2026-06-22T10:00:10.000Z', status: 'completed' } },
+  ]) as any[];
+
+  assert.equal(messages.filter((message) => message.role === 'assistant').length, 1);
+  assert.equal(messages.filter((message) => message.role === 'toolResult').length, 0);
+  const assistant = messages.find((message) => message.role === 'assistant');
+  assert.equal(assistant.content, 'Finished.');
+  assert.equal(assistant.tool_calls[0].id, 'call-1');
+  assert.equal(assistant.tool_calls[0].status, 'succeeded');
+  assert.equal(assistant.run.runId, 'run-1');
 });
 
 function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean } = {}) {
@@ -1322,6 +1420,62 @@ test('POST /api/threads/:id/messages/stream emits context usage after prompting'
   }
 });
 
+test('POST /api/threads/:id/messages/stream emits and persists matching run boundaries', async () => {
+  const customEntries: Array<{ customType: string; data: unknown }> = [];
+  const leafId = 'tool-result-entry';
+  const session = {
+    sessionManager: {
+      appendCustomEntry: (customType: string, data: unknown) => {
+        customEntries.push({ customType, data });
+        return `custom-${customEntries.length}`;
+      },
+      getLeafId: () => leafId,
+      getLeafEntry: () => ({ type: 'message', message: { role: 'toolResult' } }),
+      getEntries: () => [
+        { type: 'message', id: 'assistant-entry-1', message: { role: 'assistant' } },
+        { type: 'message', id: leafId, message: { role: 'toolResult' } },
+      ],
+    },
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'test-provider', id: 'test-model' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'plain text', modelKey: 'test-provider/test-model' },
+    });
+
+    assert.equal(res.statusCode, 200);
+    const events = parseNdjson(res.body);
+    const start = events.find((event) => event.kind === 'run_start');
+    const end = events.find((event) => event.kind === 'run_end');
+    assert.ok(start);
+    assert.ok(end);
+    assert.equal(end.run.runId, start.run.runId);
+    assert.equal(end.run.status, 'completed');
+    assert.equal(end.run.assistantEntryId, 'assistant-entry-1');
+    assert.equal(customEntries.length, 2);
+    assert.equal(customEntries[0].customType, 'nexus.agent_run');
+    assert.equal(customEntries[1].customType, 'nexus.agent_run');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream keeps Anthropic OAuth on the Pi session path', async () => {
   let sessionForCalled = false;
   let promptCalled = false;
@@ -1727,6 +1881,100 @@ test('POST /api/threads/:id/abort returns no_run when nothing is in flight', asy
     const res = await app.inject({ method: 'POST', url: '/api/threads/thread-1/abort' });
     assert.equal(res.json().ok, false);
     assert.equal(res.json().reason, 'no_run');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/abort records a user-cancelled terminal run', async () => {
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const session = {
+    sessionManager: {
+      appendCustomEntry: () => 'custom-entry',
+      getLeafId: () => 'assistant-entry',
+      getLeafEntry: () => ({ type: 'message' }),
+    },
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => promptStopped.resolve(),
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const stream = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'cancel me' },
+    });
+    await promptStarted.promise;
+
+    const abort = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/abort',
+      payload: { source: 'user' },
+    });
+    assert.equal(abort.statusCode, 200);
+
+    const terminal = parseNdjson((await stream).body).find((event) => event.kind === 'run_end');
+    assert.equal(terminal.run.status, 'cancelled');
+    assert.equal(terminal.run.abortSource, 'user');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/abort rejects an untrusted abort source', async () => {
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => promptStopped.resolve(),
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => undefined },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  try {
+    const stream = app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'keep running' },
+    });
+    await promptStarted.promise;
+    const invalid = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/abort',
+      payload: { source: 'database' },
+    });
+    assert.equal(invalid.statusCode, 400);
+    await app.inject({ method: 'POST', url: '/api/threads/thread-1/abort', payload: { source: 'user' } });
+    await stream;
   } finally {
     await app.close();
     db.close();

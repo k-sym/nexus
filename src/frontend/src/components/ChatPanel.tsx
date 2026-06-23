@@ -14,7 +14,6 @@
  *   - Session resume: pi owns sessions natively; no terminal hand-off
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Stop } from '@phosphor-icons/react';
 import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
@@ -24,6 +23,8 @@ import { ModelSelector } from './ModelSelector';
 import { ToolCallTimeline } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
+import { AgentRunCard } from './AgentRunCard';
+import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 
 interface ChatPanelProps {
   projectId: string;
@@ -147,7 +148,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [draggingAttachments, setDraggingAttachments] = useState(false);
   const [questionSubmissions, setQuestionSubmissions] = useState<QuestionSubmissionState>({});
   const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const streamContentVersion = [
+    loadedMessages.length,
+    state.messages.length,
+    state.streamingMessage?.content.length ?? 0,
+    state.streamingMessage?.run?.lastEventAt ?? 0,
+    state.streamingMessage?.run?.tools.reduce((total, tool) => total + tool.partialOutput.length, 0) ?? 0,
+  ].join(':');
+  const { containerRef: messagesRef, isFollowing, onScroll, jumpToLatest } = useFollowAtBottom(streamContentVersion);
 
   const activeModel = models.find((model) => `${model.provider}/${model.id}` === activeModelId);
   const pendingImages = pendingAttachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
@@ -310,15 +318,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
-  // Auto-scroll on any visible-message change. (jsdom doesn't implement
-  // scrollIntoView; the optional-chained guard keeps tests green.)
-  useEffect(() => {
-    const el = messagesEndRef.current;
-    if (el && typeof el.scrollIntoView === 'function') {
-      el.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [loadedMessages, state.messages, state.streamingMessage]);
-
   const submit = useCallback(
     async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; onError?: (message: string) => void } = {}) => {
       if (!threadId) return;
@@ -441,16 +440,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       handleSend();
     }
   };
-
-  const handleAbort = useCallback(async () => {
-    if (!threadId) return;
-    try {
-      await apiFetch(`/api/threads/${threadId}/abort`, { method: 'POST' });
-    } catch {
-      /* ignore */
-    }
-    await abortStream();
-  }, [threadId, abortStream]);
 
   const confirmCancelOther = useCallback(async () => {
     if (!pendingConfirm) return;
@@ -596,7 +585,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3" data-testid="chat-messages">
+      <div
+        ref={messagesRef}
+        onScroll={onScroll}
+        className="flex-1 overflow-y-auto p-4 space-y-3"
+        data-testid="chat-messages"
+      >
         {isEmpty ? (
           <p className="text-faint text-sm">Send a message to start.</p>
         ) : (
@@ -609,6 +603,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               fallbackState={fallbackSubmissions[m.id]}
               onAnswerQuestion={answerNativeQuestion}
               onAnswerFallback={answerFallbackQuestion}
+              onStop={() => void abortStream('user')}
             />
           ))
         )}
@@ -619,10 +614,20 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             questionState={questionSubmissions}
             onAnswerQuestion={answerNativeQuestion}
             onAnswerFallback={answerFallbackQuestion}
+            onStop={() => void abortStream('user')}
           />
         )}
-        <div ref={messagesEndRef} />
       </div>
+
+      {!isFollowing && (
+        <button
+          type="button"
+          onClick={jumpToLatest}
+          className="absolute bottom-28 right-6 z-10 rounded-full border border-subtle surface-elevated px-3 py-1.5 text-xs text-primary shadow-lg"
+        >
+          Jump to latest
+        </button>
+      )}
 
       {error && (
         <div className="px-4 py-2 border-t border-subtle text-xs text-red-300" role="alert">
@@ -693,17 +698,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           />
           <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
             <ContextUsageLabel usage={state.contextUsage} />
-            {isRunning ? (
-              <button
-                type="button"
-                onClick={handleAbort}
-                data-testid="abort-button"
-                className="px-3 py-2 surface-elevated text-muted rounded-lg hover:text-[var(--text-primary)] transition-colors"
-                title="Stop the current generation"
-              >
-                <Stop className="w-5 h-5 mx-auto" weight="fill" />
-              </button>
-            ) : (
+            {!isRunning && (
               <button
                 type="button"
                 onClick={handleSend}
@@ -728,6 +723,7 @@ function MessageBubble({
   fallbackState,
   onAnswerQuestion,
   onAnswerFallback,
+  onStop,
 }: {
   msg: StreamMessage;
   detailsExpanded: boolean;
@@ -735,6 +731,7 @@ function MessageBubble({
   fallbackState?: QuestionSubmissionState[string];
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onAnswerFallback: (messageId: string, request: QuestionRequest, answers: QuestionAnswer[]) => Promise<void>;
+  onStop: () => void;
 }) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'toolResult';
@@ -742,6 +739,21 @@ function MessageBubble({
   const fallback = !isUser && !isTool && msg.isStreaming !== true
     ? parseTerminalAskBlock(msg.content)
     : null;
+  if (!isUser && !isTool && msg.run) {
+    return (
+      <div className="flex justify-start">
+        <AgentRunCard
+          run={msg.run}
+          content={msg.content}
+          thinking={msg.thinking}
+          detailsExpanded={detailsExpanded}
+          onStop={onStop}
+          questionState={questionState}
+          onAnswerQuestion={onAnswerQuestion}
+        />
+      </div>
+    );
+  }
   return (
     <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
       <div

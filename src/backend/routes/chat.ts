@@ -13,7 +13,14 @@ import { FastifyInstance } from 'fastify';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { v4 as uuid } from 'uuid';
-import { ChatThread } from '@nexus/shared';
+import {
+  AGENT_RUN_CUSTOM_TYPE,
+  type AgentRunAbortSource,
+  type AgentRunEnd,
+  type AgentRunStart,
+  type AgentRunTerminalStatus,
+  type ChatThread,
+} from '@nexus/shared';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
 import { loadConfig } from '../config.js';
@@ -24,6 +31,32 @@ const ABORT_GRACE_MS = 200;
 
 interface ActiveStream {
   session: Pick<AgentSession, 'abort'>;
+  runId: string;
+  abortSource?: AgentRunAbortSource;
+}
+
+type ChatSession = Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> & {
+  sessionManager?: Pick<AgentSession['sessionManager'], 'appendCustomEntry' | 'getLeafId' | 'getLeafEntry' | 'getEntries'>;
+};
+
+const CLIENT_ABORT_SOURCES = new Set<AgentRunAbortSource>(['user', 'frontend']);
+
+function omitEvent<T extends { event: string }>(value: T): Omit<T, 'event'> {
+  const { event: _event, ...rest } = value;
+  return rest;
+}
+
+function latestAssistantEntryId(session: ChatSession | undefined): string | undefined {
+  const manager = session?.sessionManager;
+  if (!manager) return undefined;
+  const entries = manager.getEntries?.() ?? [];
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry.type === 'message' && entry.message.role === 'assistant') return entry.id;
+  }
+  const leaf = manager.getLeafEntry();
+  if (leaf?.type === 'message' && leaf.message?.role !== 'toolResult') return manager.getLeafId() ?? undefined;
+  return undefined;
 }
 
 interface ThreadRunClaim {
@@ -295,7 +328,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
             modelKey: active?.modelKey ?? modelKey,
           };
     }
-    let session: Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> | undefined;
+    let session: ChatSession | undefined;
     let responseCompleted = false;
     let clientDisconnected = false;
     let disconnectAbort: Promise<void> | undefined;
@@ -363,7 +396,20 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     };
 
     const operationId = uuid();
+    const runId = operationId;
+    const startEvent: AgentRunStart = {
+      event: 'start',
+      runId,
+      threadId,
+      startedAt: new Date().toISOString(),
+      provider: selectedModel?.provider ?? 'default',
+      model: selectedModel?.id ?? body.modelKey ?? 'default',
+    };
+    session.sessionManager?.appendCustomEntry(AGENT_RUN_CUSTOM_TYPE, startEvent);
+    write({ kind: 'run_start', run: omitEvent(startEvent) });
     let streamError: string | undefined;
+    let terminalStatus: AgentRunTerminalStatus = 'completed';
+    let abortSource: AgentRunAbortSource | undefined;
     fastify.activity?.bus.emit({
       type: 'start',
       operationId,
@@ -399,8 +445,17 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         console.error('[chat] persistUserTurn failed:', err?.message);
       }
       if (session) {
-        activeStreams.set(threadId, { session });
-        const subscription = session.subscribe((ev) => write(ev));
+        activeStreams.set(threadId, { session, runId });
+        const subscription = session.subscribe((ev) => {
+          write(ev);
+          fastify.activity?.bus.emit({
+            type: 'update',
+            operationId,
+            kind: 'chat_turn',
+            title: `${project?.name ?? 'unknown'} / ${thread.title}`,
+            lastEvent: ev.type,
+          });
+        });
         try {
           if (images.length > 0) {
             await session.prompt(promptContent, { images });
@@ -415,6 +470,12 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           error.name = 'AbortError';
           throw error;
         }
+        const completedAbortSource = activeStreams.get(threadId)?.abortSource;
+        if (completedAbortSource) {
+          terminalStatus = 'cancelled';
+          abortSource = completedAbortSource;
+          streamError = 'aborted';
+        }
         const contextUsage = safeContextUsage(session);
         if (contextUsage) {
           write({ type: 'context_usage', usage: contextUsage });
@@ -428,14 +489,38 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           });
         }
       }
-      write({ kind: 'done' });
     } catch (err: any) {
       const isAbort = err?.name === 'AbortError';
       if (isAbort) pi.questions?.cancelThread(threadId, 'Stream aborted');
       streamError = isAbort ? 'aborted' : (err?.message || 'prompt failed');
-      write({ kind: 'error', error: streamError });
+      const explicitSource = activeStreams.get(threadId)?.abortSource;
+      if (isAbort && explicitSource) {
+        terminalStatus = 'cancelled';
+        abortSource = explicitSource;
+      } else if (isAbort && clientDisconnected) {
+        terminalStatus = 'interrupted';
+        abortSource = 'frontend';
+      } else if (err?.name === 'TimeoutError' || err?.code === 'UND_ERR_HEADERS_TIMEOUT') {
+        terminalStatus = 'failed';
+        abortSource = 'timeout';
+      } else {
+        terminalStatus = 'failed';
+        abortSource = 'runtime';
+      }
     } finally {
       responseCompleted = true;
+      const endEvent: AgentRunEnd = {
+        event: 'end',
+        runId,
+        threadId,
+        assistantEntryId: latestAssistantEntryId(session),
+        completedAt: new Date().toISOString(),
+        status: terminalStatus,
+        abortSource,
+        error: streamError,
+      };
+      session?.sessionManager?.appendCustomEntry(AGENT_RUN_CUSTOM_TYPE, endEvent);
+      write({ kind: 'run_end', run: omitEvent(endEvent) });
       activeStreams.delete(threadId);
       fastify.activity?.bus.emit({
         type: 'stop',
@@ -457,10 +542,16 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.post('/api/threads/:threadId/abort', async (request) => {
+  fastify.post('/api/threads/:threadId/abort', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
     const existing = activeStreams.get(threadId);
     if (!existing) return { ok: false, reason: 'no_run' };
+    const source = ((request.body ?? {}) as { source?: AgentRunAbortSource }).source ?? 'user';
+    if (!CLIENT_ABORT_SOURCES.has(source)) {
+      reply.code(400);
+      return { ok: false, error: 'source must be user or frontend' };
+    }
+    existing.abortSource = source;
     try {
       await existing.session.abort();
     } catch (err: any) {
@@ -607,14 +698,59 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
     // Telemetry is best-effort; history always returns raw output.
   }
   const toolResults = new Map<string, any>();
-  for (const entry of entries as any[]) {
+  const runStarts = new Map<string, AgentRunStart>();
+  const runEndsByAssistant = new Map<string, AgentRunEnd>();
+  const runEndIndexes = new Map<string, { index: number; event: AgentRunEnd }>();
+  const sourceEntries = entries as any[];
+  for (const [index, entry] of sourceEntries.entries()) {
     const message = entry?.type === 'message' ? entry.message : undefined;
     if (message?.role === 'toolResult' && message.toolCallId) {
       toolResults.set(String(message.toolCallId), message);
     }
+    if (entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE) {
+      const data = entry.data as AgentRunStart | AgentRunEnd | undefined;
+      if (data?.event === 'start') runStarts.set(data.runId, data);
+      if (data?.event === 'end') {
+        runEndIndexes.set(data.runId, { index, event: data });
+        if (data.assistantEntryId) runEndsByAssistant.set(data.assistantEntryId, data);
+      }
+    }
+  }
+  const runStartsByAssistant = new Map<string, AgentRunStart>();
+  const normalizedEntries: any[] = [];
+  for (let index = 0; index < sourceEntries.length; index += 1) {
+    const entry = sourceEntries[index];
+    const data = entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE
+      ? entry.data as AgentRunStart | AgentRunEnd | undefined
+      : undefined;
+    if (data?.event === 'start') {
+      const end = runEndIndexes.get(data.runId);
+      const endIndex = end?.index ?? sourceEntries.length;
+      const segment = sourceEntries.slice(index + 1, endIndex);
+      normalizedEntries.push(...segment.filter((candidate) => candidate?.type === 'message' && candidate.message?.role === 'user'));
+      const assistants = segment.filter((candidate) => candidate?.type === 'message' && candidate.message?.role === 'assistant');
+      const lastAssistant = assistants.at(-1);
+      if (lastAssistant) {
+        const synthetic = {
+          ...lastAssistant,
+          message: {
+            ...lastAssistant.message,
+            content: assistants.flatMap((candidate) => candidate.message?.content ?? []),
+            timestamp: assistants[0].message?.timestamp ?? lastAssistant.message?.timestamp,
+          },
+        };
+        runStartsByAssistant.set(String(synthetic.id), data);
+        if (end && !end.event.assistantEntryId) runEndsByAssistant.set(String(synthetic.id), end.event);
+        normalizedEntries.push(synthetic);
+      }
+      index = endIndex;
+      continue;
+    }
+    if (data?.event === 'end') continue;
+    normalizedEntries.push(entry);
   }
   const out: unknown[] = [];
-  for (const e of entries as any[]) {
+  for (const e of normalizedEntries) {
     if (e.type !== 'message') continue;
     const m = e.message;
     if (!m) continue;
@@ -635,23 +771,21 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
         if (block.type === 'text') text += block.text;
         else if (block.type === 'thinking') thinking += block.thinking;
         else if (block.type === 'toolCall') {
+          const result = toolResults.get(String(block.id));
+          const resultText = result ? extractText(result.content) : undefined;
           const call: Record<string, unknown> = {
             id: block.id,
             name: block.name,
             args: block.arguments,
-            status: 'completed',
+            status: result ? (result.isError ? 'failed' : 'succeeded') : 'interrupted',
+            queuedAt: m.timestamp ?? e.timestamp,
+            partialOutput: '',
           };
-          if (block.name === 'question') {
-            const result = toolResults.get(String(block.id));
-            if (!result) {
-              call.status = 'interrupted';
-            } else {
-              const resultText = extractText(result.content);
-              call.status = result.isError ? 'error' : 'completed';
-              call.result = resultText;
-              const details = result.details ?? parseTrailingJson(resultText);
-              if (details !== undefined) call.details = details;
-            }
+          if (result) {
+            call.result = resultText;
+            call.completedAt = result.timestamp;
+            const details = result.details ?? (block.name === 'question' ? parseTrailingJson(resultText ?? '') : undefined);
+            if (details !== undefined) call.details = details;
           }
           toolCalls.push(call);
         }
@@ -660,6 +794,22 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
       if (isError && !text) {
         text = formatProviderError(m.errorMessage) || 'Provider returned an error with no message.';
       }
+      const runEnd = runEndsByAssistant.get(String(e.id));
+      const runStart = runStartsByAssistant.get(String(e.id)) ?? (runEnd ? runStarts.get(runEnd.runId) : undefined);
+      const run = runStart ? {
+        runId: runStart.runId,
+        threadId: runStart.threadId,
+        status: runEnd?.status ?? 'interrupted',
+        phase: 'finalizing',
+        startedAt: Date.parse(runStart.startedAt),
+        lastEventAt: runEnd ? Date.parse(runEnd.completedAt) : (m.timestamp ?? e.timestamp),
+        completedAt: runEnd ? Date.parse(runEnd.completedAt) : undefined,
+        provider: runStart.provider ?? m.provider,
+        model: runStart.model ?? m.model,
+        abortSource: runEnd?.abortSource,
+        error: runEnd?.error,
+        tools: toolCalls,
+      } : undefined;
       out.push({
         id: e.id,
         role: 'assistant',
@@ -672,6 +822,7 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
         stopReason: m.stopReason,
         errorMessage: m.errorMessage,
         timestamp: m.timestamp ?? e.timestamp,
+        ...(run ? { run } : {}),
       });
     } else if (m.role === 'toolResult') {
       const projection = projections.get(String(m.toolCallId));
