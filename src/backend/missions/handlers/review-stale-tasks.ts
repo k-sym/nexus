@@ -4,9 +4,12 @@ interface TaskRow { id: string; title: string; updated_at: string; }
 
 export const reviewStaleTasksHandler: MissionHandler = async (ctx) => {
   const { db, mission } = ctx;
-  const config = JSON.parse(mission.config_json || '{}') as { stale_days?: number; statuses?: string[] };
+  let config: { stale_days?: number; statuses?: string[] } = {};
+  try { config = JSON.parse(mission.config_json || '{}'); } catch { /* fall back to defaults */ }
   const staleDays = config.stale_days ?? 3;
-  const statuses = config.statuses ?? ['in_progress', 'review'];
+  const statuses = (Array.isArray(config.statuses) && config.statuses.length > 0)
+    ? config.statuses
+    : ['in_progress', 'review'];
   const cutoff = new Date(Date.now() - staleDays * 86400_000).toISOString();
 
   const placeholders = statuses.map(() => '?').join(', ');

@@ -12,7 +12,8 @@ interface TicketRow { key: string; summary: string; priority: string | null; }
  */
 export const triageTicketsHandler: MissionHandler = async (ctx) => {
   const { db, mission } = ctx;
-  const config = JSON.parse(mission.config_json || '{}') as { assignee?: string; max_per_run?: number };
+  let config: { assignee?: string; max_per_run?: number } = {};
+  try { config = JSON.parse(mission.config_json || '{}'); } catch { /* fall back to defaults */ }
   const limit = config.max_per_run ?? 20;
 
   const params: unknown[] = [mission.project_id];
