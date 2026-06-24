@@ -100,6 +100,51 @@ test('PiRuntime.createSession configures a session file path under the per-cwd d
   }
 });
 
+test('PiRuntime.sessionFor resumes the on-disk session after the in-memory cache is cleared (restart)', async () => {
+  // Regression test for issue #107: after a backend restart (or any in-memory
+  // eviction), sessionFor() must reopen the thread's existing on-disk session
+  // file instead of creating a blank one — otherwise the model loses all
+  // prior conversation context.
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = {
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  };
+  try {
+    const rt = new PiRuntime(paths);
+    const cwd = '/tmp/proj';
+
+    // First "turn": create the session and persist a user + assistant pair.
+    const session = await rt.sessionFor('thread-restart', cwd);
+    const sm = (session as any).sessionManager;
+    assert.ok(sm, 'AgentSession exposes its sessionManager');
+    sm.appendMessage({ role: 'user', content: [{ type: 'text', text: 'hello from before restart' }] });
+    sm.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'hi there' }] });
+
+    // Simulate a backend restart: drop the in-memory caches WITHOUT deleting
+    // the on-disk file (dropSession would delete the file, which is not what
+    // a restart does).
+    (rt as any).sessions.clear();
+    (rt as any).sessionPromises.clear();
+    (rt as any).sessionModels.clear();
+
+    // Reopen: with the fix, this resumes the existing file.
+    const resumed = await rt.sessionFor('thread-restart', cwd);
+    const resumedSm = (resumed as any).sessionManager;
+    const entries = resumedSm.getEntries() as Array<{ type: string; message?: { role: string } }>;
+    assert.ok(
+      entries.some((e) => e.type === 'message' && e.message?.role === 'user'),
+      'resumed session contains the prior user message',
+    );
+    assert.ok(
+      entries.some((e) => e.type === 'message' && e.message?.role === 'assistant'),
+      'resumed session contains the prior assistant message',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('PiRuntime.dropSession removes the on-disk session file matching _${threadId}.jsonl', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = {
