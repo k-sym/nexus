@@ -20,7 +20,7 @@ import { apiFetch } from '../api-base';
 import { api } from '../api';
 import { buildQuestionAnswerSummary, parseTerminalAskBlock, type QuestionAnswer, type QuestionRequest, type QuestionToolResult } from '../lib/questions';
 import { ModelSelector } from './ModelSelector';
-import { ToolCallTimeline } from './ToolCallTimeline';
+import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { AgentRunCard } from './AgentRunCard';
@@ -526,6 +526,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const streaming = state.streamingMessage;
   const isRunning = state.isRunning;
   const isEmpty = visible.length === 0 && !streaming;
+  // The latest assistant response stays expanded so the user can see what
+  // they're replying to (issue #108). While a new run is streaming, none of
+  // the existing assistant messages is "latest" — the new one is in flight —
+  // so they collapse and the streaming response takes focus.
+  const latestAssistantId = isRunning ? null : findLatestAssistantId(visible);
 
   return (
     <div
@@ -599,6 +604,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               key={m.id}
               msg={m}
               detailsExpanded={detailsExpanded}
+              isLatest={m.id === latestAssistantId}
               questionState={questionSubmissions}
               fallbackState={fallbackSubmissions[m.id]}
               onAnswerQuestion={answerNativeQuestion}
@@ -719,6 +725,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 function MessageBubble({
   msg,
   detailsExpanded,
+  isLatest,
   questionState,
   fallbackState,
   onAnswerQuestion,
@@ -727,6 +734,7 @@ function MessageBubble({
 }: {
   msg: StreamMessage;
   detailsExpanded: boolean;
+  isLatest?: boolean;
   questionState: QuestionSubmissionState;
   fallbackState?: QuestionSubmissionState[string];
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
@@ -747,6 +755,7 @@ function MessageBubble({
           content={msg.content}
           thinking={msg.thinking}
           detailsExpanded={detailsExpanded}
+          isLatest={isLatest}
           onStop={onStop}
           questionState={questionState}
           onAnswerQuestion={onAnswerQuestion}
@@ -778,8 +787,6 @@ function MessageBubble({
             <ToolCallTimeline
               toolCalls={msg.toolCalls as any}
               detailsExpanded={detailsExpanded}
-              questionState={questionState}
-              onAnswerQuestion={onAnswerQuestion}
             />
           </div>
         )}
@@ -839,7 +846,18 @@ function MessageBubble({
             />
           </div>
         ) : (
-          <p className="whitespace-pre-wrap">{msg.content}</p>
+          <>
+            <p className="whitespace-pre-wrap">{msg.content}</p>
+            {/* Native question tools render after the prelude text, at the
+                bottom of the bubble (issue #109). */}
+            {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
+              <QuestionCards
+                toolCalls={msg.toolCalls as any}
+                questionState={questionState}
+                onAnswerQuestion={onAnswerQuestion}
+              />
+            )}
+          </>
         )}
       </div>
     </div>
@@ -850,4 +868,15 @@ function fileExtensionLabel(name: string): string {
   const dot = name.lastIndexOf('.');
   if (dot < 0 || dot === name.length - 1) return 'file';
   return name.slice(dot + 1, dot + 5);
+}
+
+/** Id of the last assistant (non-user, non-toolResult) message in the list,
+ *  or null if there is none. Used to mark the latest response so it stays
+ *  expanded until the user replies (issue #108). */
+function findLatestAssistantId(messages: StreamMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const m = messages[i];
+    if (m.role !== 'user' && m.role !== 'toolResult') return m.id;
+  }
+  return null;
 }

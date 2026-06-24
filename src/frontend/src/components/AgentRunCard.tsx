@@ -1,15 +1,20 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { AgentRunView } from '../chat/agent-run-state';
 import type { QuestionAnswer, QuestionToolResult } from '../lib/questions';
 import { AgentRunHeader } from './AgentRunHeader';
 import { ThinkingBlock } from './ThinkingBlock';
-import { ToolCallTimeline } from './ToolCallTimeline';
+import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 
 interface AgentRunCardProps {
   run: AgentRunView;
   content: string;
   thinking?: string | null;
   detailsExpanded: boolean;
+  /** When true, this is the latest assistant response in the thread. A
+   *  completed latest run stays expanded so the user can see what they're
+   *  replying to; it collapses once the user sends a reply (isLatest becomes
+   *  false). The user's manual toggle is always respected. (issue #108) */
+  isLatest?: boolean;
   onStop: () => void;
   questionState?: Record<string, { submitting?: boolean; error?: string; result?: QuestionToolResult }>;
   onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
@@ -30,24 +35,31 @@ export function AgentRunCard({
   content,
   thinking,
   detailsExpanded,
+  isLatest = false,
   onStop,
   questionState,
   onAnswerQuestion,
 }: AgentRunCardProps) {
-  const [locallyExpanded, setLocallyExpanded] = useState(run.status !== 'completed');
-  useEffect(() => {
-    if (run.status === 'failed' || run.status === 'cancelled' || run.status === 'interrupted') {
-      setLocallyExpanded(true);
-    }
-  }, [run.status]);
-  const expanded = run.status === 'running' || detailsExpanded || locallyExpanded;
+  // Expansion model (issue #108): a run auto-expands while running, when it
+  // ended badly (failed/cancelled/interrupted), or when it's the latest
+  // assistant response the user is replying to. The user's manual toggle is
+  // captured as an override that always wins over the auto state, so once
+  // they explicitly open/close a card it stays that way.
+  const [userOverride, setUserOverride] = useState<boolean | null>(null);
+  const autoExpanded =
+    run.status === 'running' ||
+    run.status === 'failed' ||
+    run.status === 'cancelled' ||
+    run.status === 'interrupted' ||
+    isLatest;
+  const expanded = userOverride ?? (autoExpanded || detailsExpanded);
 
   return (
     <section className="agent-run-card w-full max-w-[88%] overflow-hidden rounded-xl border border-subtle surface-glass text-primary">
       <AgentRunHeader
         run={run}
         expanded={expanded}
-        onToggle={() => setLocallyExpanded((value) => !value)}
+        onToggle={() => setUserOverride(!expanded)}
         onStop={onStop}
         summary={runSummary(run)}
       />
@@ -56,8 +68,6 @@ export function AgentRunCard({
           <ToolCallTimeline
             toolCalls={run.tools}
             detailsExpanded={detailsExpanded}
-            questionState={questionState}
-            onAnswerQuestion={onAnswerQuestion}
           />
           {thinking && (
             <ThinkingBlock
@@ -70,6 +80,14 @@ export function AgentRunCard({
           {run.error && run.status !== 'completed' && (
             <p className="text-xs text-red-300" role="alert">{run.error}</p>
           )}
+          {/* Question cards render last, after the prelude text, so the ask
+              sits at the bottom of the bubble next to where the user replies
+              (issue #109). */}
+          <QuestionCards
+            toolCalls={run.tools}
+            questionState={questionState}
+            onAnswerQuestion={onAnswerQuestion}
+          />
         </div>
       )}
     </section>
