@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Nexus Tauri shell capabilities. The 'remote' block is dev-only: the dev webview loads the Vite server (a remote URL) so permissions must be granted to it; a packaged build uses the local asset protocol and ignores 'remote'.",
+  "windows": ["*"],
+  "remote": {
+    "urls": ["http://localhost:5173/*"]
+  },
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "dialog:default",
+    "shell:allow-open"
+  ]
+}

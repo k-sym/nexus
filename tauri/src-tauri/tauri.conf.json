@@ -1,0 +1,25 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Nexus (Tauri)",
+  "version": "0.1.0",
+  "identifier": "it.resolve.nexus.tauri",
+  "build": { "beforeDevCommand": "", "beforeBuildCommand": "", "frontendDist": "../../src/frontend/dist" },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [],
+    "security": { "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; script-src 'self' 'unsafe-inline'" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "icon": ["icons/icon.icns", "icons/icon.png"],
+    "resources": {
+      "../../.stage/services": "services",
+      "../../.stage/node": "node"
+    },
+    "macOS": {
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "13.3"
+    }
+  }
+}

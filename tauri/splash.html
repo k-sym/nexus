@@ -143,24 +143,37 @@
         return '';
       }
 
-      function render(payload) {
-        const services = payload.services || {};
-        for (const svc of ORDER) {
-          const s = services[svc.key];
-          if (!s) continue;
-          const el = els[svc.key];
-          const state = s.state || 'pending';
-          el.dot.className = 'dot ' + dotClass(state);
-          el.state.className = 'state ' + (['up', 'reused', 'warn', 'failed'].includes(state) ? state : '');
-          el.state.textContent = s.detail || STATE_TEXT[state] || state;
-          el.row.classList.toggle('active', state !== 'pending');
+      function renderStatus(payload) {
+        // Single-service update: { key, state, detail }
+        if (payload.key) {
+          const el = els[payload.key];
+          if (el) {
+            const state = payload.state || 'pending';
+            el.dot.className = 'dot ' + dotClass(state);
+            el.state.className = 'state ' + (['up', 'reused', 'warn', 'failed'].includes(state) ? state : '');
+            el.state.textContent = payload.detail || STATE_TEXT[state] || state;
+            el.row.classList.toggle('active', state !== 'pending');
+          }
         }
-        if (payload.message) footEl.textContent = payload.message;
+        if (payload.message) {
+          footEl.textContent = payload.message;
+        }
       }
 
-      if (window.nexusBoot && window.nexusBoot.onStatus) {
-        window.nexusBoot.onStatus(render);
+      // Subscribe to boot status events emitted by the Rust supervisor.
+      // window.__TAURI__ is injected by Tauri when app.withGlobalTauri = true
+      // in tauri.conf.json — no CDN or bundler needed.
+      function subscribe() {
+        if (window.__TAURI__ && window.__TAURI__.event) {
+          window.__TAURI__.event.listen('boot://status', function(event) {
+            renderStatus(event.payload);
+          });
+        } else {
+          // Retry briefly in case the Tauri IPC is not yet initialised.
+          setTimeout(subscribe, 50);
+        }
       }
+      subscribe();
     </script>
   </body>
 </html>
