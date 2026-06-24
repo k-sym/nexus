@@ -13,7 +13,7 @@ test("splitIntoChunks defaults stay below the local embedder token limit with ma
 
   assert.ok(chunks.length > 1);
   for (const chunk of chunks) {
-    assert.ok(wordCount(chunk) <= 220, `expected <= 220 words, got ${wordCount(chunk)}`);
+    assert.ok(wordCount(chunk) <= 180, `expected <= 180 words, got ${wordCount(chunk)}`);
   }
 });
 
