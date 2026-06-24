@@ -161,7 +161,28 @@ export class PiRuntime {
     // (avoids top-level CJS resolution failures in tsx when the workspace
     // doesn't set type:module).
     const { SessionManager, SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
-    const sessionManager = SessionManager.create(cwd, this.sessionDirFor(cwd), { id: threadId });
+    const sessionDir = this.sessionDirFor(cwd);
+    // Resume an existing on-disk session for this thread if one exists.
+    // SessionManager.create(cwd, dir, { id }) always starts a BLANK session —
+    // the { id } option only names a brand-new file; it never reopens an
+    // existing one. So after a backend restart (or any in-memory cache
+    // eviction), naively calling create() here would spawn a second, empty
+    // `<timestamp>_<threadId>.jsonl` and the model would lose all prior
+    // conversation context. We look up the thread's existing file (the same
+    // lookup readMessages() uses) and open() it to continue the conversation.
+    // Only when no prior session exists do we create a new one.
+    let sessionManager;
+    try {
+      const infos = await SessionManager.list(cwd, sessionDir);
+      const existing = infos.find((info) => info.id === threadId);
+      sessionManager = existing
+        ? SessionManager.open(existing.path, sessionDir, cwd)
+        : SessionManager.create(cwd, sessionDir, { id: threadId });
+    } catch {
+      // Listing failed (e.g. corrupt/locked session dir) — fall back to a
+      // fresh session rather than blocking the turn entirely.
+      sessionManager = SessionManager.create(cwd, sessionDir, { id: threadId });
+    }
     const settingsManager = SettingsManager.inMemory();
     const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
