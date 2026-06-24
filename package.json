@@ -18,7 +18,7 @@
     "typecheck": "npm run --workspace=src/shared build && npm run --workspace=src/backend typecheck && npm run --workspace=src/frontend typecheck",
     "stage:services": "node scripts/stage-services.cjs",
     "stage:node": "node scripts/fetch-node-runtime.cjs",
-    "prepackage": "npm run build && npm run stage:services && npm run stage:node",
+    "prepackage": "npm run build && npm run stage:services && node scripts/prune-foreign-natives.cjs && npm run stage:node",
     "pack": "npm run prepackage && electron-builder --dir",
     "dist": "npm run prepackage && electron-builder",
     "tauri:dev": "npm run --workspace=tauri dev",
