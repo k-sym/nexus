@@ -30,28 +30,55 @@ interface ToolCallTimelineProps {
   onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
 }
 
+/** Whether a tool call is a structured question (rendered as a QuestionCard). */
+export function isQuestionTool(tc: ToolCallInfo): boolean {
+  return tc.name === 'question' && !!normalizeQuestionRequest(tc.args);
+}
+
 export function ToolCallTimeline({ toolCalls, detailsExpanded, questionState, onAnswerQuestion }: ToolCallTimelineProps) {
-  if (toolCalls.length === 0) return null;
+  // Question tools are rendered separately (via <QuestionCards />) so they can
+  // be placed at the bottom of the bubble — after the assistant's prelude text
+  // — rather than above it (issue #109).
+  const nonQuestionTools = toolCalls.filter((tc) => !isQuestionTool(tc));
+  if (nonQuestionTools.length === 0) return null;
   return (
     <div className="flex flex-col gap-1 my-1.5">
-      {toolCalls.map((tc) => {
-        const request = tc.name === 'question' ? normalizeQuestionRequest(tc.args) : null;
-        if (request) {
-          const state = questionState?.[tc.id];
-          const result = state?.result ?? parseQuestionResult(tc.details) ?? parseQuestionResult(tc.result);
-          return (
-            <QuestionCard
-              key={tc.id}
-              request={request}
-              answeredResult={result ?? undefined}
-              unavailable={tc.status === 'interrupted' || tc.status === 'cancelled' || tc.status === 'failed' || tc.status === 'error' || ((tc.status === 'completed' || tc.status === 'succeeded') && !result)}
-              submitting={state?.submitting}
-              error={state?.error}
-              onSubmit={(answers) => onAnswerQuestion?.(tc.id, answers) ?? Promise.resolve()}
-            />
-          );
-        }
-        return <ToolCallBlock key={tc.id} toolCall={tc} detailsExpanded={detailsExpanded} />;
+      {nonQuestionTools.map((tc) => (
+        <ToolCallBlock key={tc.id} toolCall={tc} detailsExpanded={detailsExpanded} />
+      ))}
+    </div>
+  );
+}
+
+interface QuestionCardsProps {
+  toolCalls: ToolCallInfo[];
+  questionState?: Record<string, { submitting?: boolean; error?: string; result?: QuestionToolResult }>;
+  onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
+}
+
+/** Render only the question tool calls as QuestionCards. Intended to be placed
+ *  at the bottom of a chat bubble, after the assistant's prelude text. */
+export function QuestionCards({ toolCalls, questionState, onAnswerQuestion }: QuestionCardsProps) {
+  const questionTools = toolCalls.filter(isQuestionTool);
+  if (questionTools.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-2 mt-2">
+      {questionTools.map((tc) => {
+        const request = normalizeQuestionRequest(tc.args);
+        if (!request) return null;
+        const state = questionState?.[tc.id];
+        const result = state?.result ?? parseQuestionResult(tc.details) ?? parseQuestionResult(tc.result);
+        return (
+          <QuestionCard
+            key={tc.id}
+            request={request}
+            answeredResult={result ?? undefined}
+            unavailable={tc.status === 'interrupted' || tc.status === 'cancelled' || tc.status === 'failed' || tc.status === 'error' || ((tc.status === 'completed' || tc.status === 'succeeded') && !result)}
+            submitting={state?.submitting}
+            error={state?.error}
+            onSubmit={(answers) => onAnswerQuestion?.(tc.id, answers) ?? Promise.resolve()}
+          />
+        );
       })}
     </div>
   );
