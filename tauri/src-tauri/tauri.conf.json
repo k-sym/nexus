@@ -18,7 +18,8 @@
       "../../.stage/node": "node"
     },
     "macOS": {
-      "entitlements": "entitlements.plist"
+      "entitlements": "entitlements.plist",
+      "minimumSystemVersion": "13.3"
     }
   }
 }

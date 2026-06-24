@@ -2,7 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <!-- Electron / V8 -->
+  <!-- JIT: required by WebKit's JavaScriptCore (the webview JS engine) AND by the
+       bundled Node's V8. Both JIT-compile, so the hardened runtime needs these. -->
   <key>com.apple.security.cs.allow-jit</key>
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
