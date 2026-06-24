@@ -66,10 +66,11 @@ pub fn run() {
             // - dev:  repo root (CARGO_MANIFEST_DIR/../..)
             // - prod: Tauri resource dir (contains services/ and node/)
             let root: std::path::PathBuf = if is_dev {
-                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../..")
-                    .canonicalize()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                // CARGO_MANIFEST_DIR is tauri/src-tauri; ../.. is the repo root.
+                // Prefer the canonical path, but fall back to the lexical one (still
+                // correct) rather than "." — "." would silently break service resolution.
+                let lexical = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+                lexical.canonicalize().unwrap_or(lexical)
             } else {
                 app.path().resource_dir().expect("Tauri resource_dir unavailable")
             };
@@ -176,12 +177,17 @@ pub fn run() {
                         true
                     });
 
-                    if let Err(e) = builder.build() {
-                        eprintln!("[boot] main window build failed: {e}");
-                    } else {
-                        // Close the splash now that the main window is up.
-                        if let Some(s) = handle.get_webview_window("splash") {
-                            let _ = s.close();
+                    match builder.build() {
+                        Err(e) => eprintln!("[boot] main window build failed: {e}"),
+                        Ok(main_window) => {
+                            // Dev convenience: pop the webview devtools (debug builds
+                            // include them; release does not).
+                            #[cfg(debug_assertions)]
+                            main_window.open_devtools();
+                            // Close the splash now that the main window is up.
+                            if let Some(s) = handle.get_webview_window("splash") {
+                                let _ = s.close();
+                            }
                         }
                     }
                 } else {

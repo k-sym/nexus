@@ -79,7 +79,10 @@ pub fn spawn_node(node: &str, entry: &Path, cwd: &Path) -> std::io::Result<Child
     spawn(cmd, node)
 }
 
-/// Spawn an npm script in a workspace (dev).
+/// Spawn an npm script in a workspace. DEV ONLY — `boot()` calls this exclusively
+/// behind `is_dev`. It deliberately uses `resolve_node()` (the developer's system
+/// Node) because the bundled Node ships only in packaged builds; in prod, `boot()`
+/// uses `spawn_node` with the bundled Node instead. Do not call this on a prod path.
 pub fn spawn_npm(cwd: &Path, args: &[&str]) -> std::io::Result<Child> {
     let node = resolve_node().unwrap_or_else(|| "node".into());
     let mut cmd = Command::new("npm");
