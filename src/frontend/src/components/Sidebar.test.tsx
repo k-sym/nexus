@@ -38,6 +38,7 @@ const noop = vi.fn();
 function renderSidebar({
   threads = [{ thread }],
   activeSessionIds = new Set<string>(),
+  archivingThreadIds = new Set<string>(),
   onEditProject = noop,
   onDeleteProject = noop,
   onReorderProjects = noop,
@@ -47,6 +48,7 @@ function renderSidebar({
 }: {
   threads?: ThreadMeta[];
   activeSessionIds?: Set<string>;
+  archivingThreadIds?: Set<string>;
   onEditProject?: (project: Project) => void;
   onDeleteProject?: (projectId: string) => void;
   onReorderProjects?: (projectIds: string[]) => void;
@@ -62,6 +64,7 @@ function renderSidebar({
       activeThreadId={thread.id}
       threads={threads}
       activeSessionIds={activeSessionIds}
+      archivingThreadIds={archivingThreadIds}
       projectCounts={{
         [project.id]: { tasks: 3, sessions: threads.length },
         [secondProject.id]: { tasks: 10, sessions: 2 },
@@ -193,6 +196,22 @@ describe('Sidebar', () => {
 
     expect(window.confirm).toHaveBeenCalledWith('Archive this session to memory and delete it?');
     expect(onArchiveThread).toHaveBeenCalledWith(thread.id);
+  });
+
+  it('shows archive progress and prevents duplicate archive actions', async () => {
+    const user = userEvent.setup();
+    const onArchiveThread = vi.fn();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    renderSidebar({ archivingThreadIds: new Set([thread.id]), onArchiveThread });
+
+    expect(screen.getByTitle('Archiving to memory')).toBeInTheDocument();
+    expect(screen.getByText('Archiving...')).toBeInTheDocument();
+    expect(screen.queryByTitle('Archive to memory')).not.toBeInTheDocument();
+
+    await user.click(screen.getByText(thread.title));
+
+    expect(onArchiveThread).not.toHaveBeenCalled();
+    expect(window.confirm).not.toHaveBeenCalled();
   });
 
   it('keeps delete separate from archive', async () => {

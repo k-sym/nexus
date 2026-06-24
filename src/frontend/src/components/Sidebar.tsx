@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
-import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon } from '@phosphor-icons/react';
+import { CaretRight, CaretDown, Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch } from '@phosphor-icons/react';
 
 export type SubView = 'kanban' | 'memory' | 'chat';
 
@@ -20,6 +20,7 @@ interface SidebarProps {
   activeThreadId: string | null;
   threads: ThreadMeta[];
   activeSessionIds: Set<string>;
+  archivingThreadIds: Set<string>;
   projectCounts: Record<string, SidebarProjectCounts>;
   onSelectProject: (id: string) => void;
   onSelectSubView: (projectId: string, sub: SubView) => void;
@@ -89,6 +90,7 @@ function CountBadge({ children, className = '' }: { children: React.ReactNode; c
 
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
+  archivingThreadIds,
   projectCounts,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onArchiveThread, onDeleteThread, onNewChat, onNewProject,
   onEditProject, onDeleteProject, onReorderProjects,
@@ -287,22 +289,32 @@ export default function Sidebar({
                       threads.map(({ thread }) => {
                         const isRenaming = renamingId === thread.id;
                         const isActiveSession = activeSessionIds.has(thread.id);
+                        const isArchiving = archivingThreadIds.has(thread.id);
                         return (
                           <Row
                             key={thread.id}
                             active={activeThreadId === thread.id}
                             depth={2}
                             onClick={() => {
-                              if (!isRenaming) onSelectThread(project.id, thread.id);
+                              if (!isRenaming && !isArchiving) onSelectThread(project.id, thread.id);
                             }}
                             trailing={
                               <span className="flex items-center gap-1 shrink-0">
-                                {isActiveSession && (
+                                {isArchiving ? (
+                                  <span
+                                    title="Archiving to memory"
+                                    className="inline-flex items-center gap-1 text-[10px] text-emerald-300"
+                                  >
+                                    <CircleNotch size={13} className="animate-spin" />
+                                    <span>Archiving...</span>
+                                  </span>
+                                ) : isActiveSession && (
                                   <span
                                     title="Session active"
                                     className="inline-block h-3.5 w-3.5 rounded-full border-2 border-[var(--text-faint)] border-t-[var(--accent-strong)] animate-spin"
                                   />
                                 )}
+                                {!isArchiving && (
                                 <span className="hidden group-hover:flex items-center gap-1">
                                   <span
                                     role="button"
@@ -338,6 +350,7 @@ export default function Sidebar({
                                     <Trash size={13} />
                                   </span>
                                 </span>
+                                )}
                               </span>
                             }
                           >
