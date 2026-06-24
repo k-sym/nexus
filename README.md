@@ -58,7 +58,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                       Electron                           │
+│                    Tauri (Rust core)                    │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │               React Dashboard (Vite)                │ │
 │  │  Mission Control | Kanban | Sessions | Tickets |    │ │
@@ -86,7 +86,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 └─────────────────────────────────────────────────────────┘
 ```
 
-The backend runs the Fastify HTTP API, the orchestrator polling loop, the Jira polling loop, and the mission scheduler loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/providers/tickets; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Electron app for production.
+The backend runs the Fastify HTTP API, the orchestrator polling loop, the Jira polling loop, and the mission scheduler loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/providers/tickets; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Tauri app for production. The desktop shell is **Tauri v2** (a small Rust core using the OS WebView) — it supervises the daemon/backend services and hosts the UI; it replaced the previous Electron shell (~15× smaller, ~177 MB less idle RAM).
 
 ### Packages
 
@@ -96,7 +96,7 @@ The backend runs the Fastify HTTP API, the orchestrator polling loop, the Jira p
 | `src/backend` | `@nexus/backend` | Fastify API, orchestrator, Jira polling |
 | `src/memory-daemon` | `@nexus/memory-daemon` | Standalone memory daemon (vault + index + retrieval), HTTP :4100 + MCP |
 | `src/frontend` | `@nexus/frontend` | React dashboard |
-| `electron` | `nexus-electron` | Electron shell that boots the services + loads the UI |
+| `tauri` | `nexus-tauri` | Tauri v2 (Rust) desktop shell — supervises the services + loads the UI |
 
 ---
 
@@ -110,7 +110,7 @@ Nexus has no application analytics or telemetry integration. Its backend and mem
 |---|---|---|
 | Backend API | `127.0.0.1:4173` | Local Fastify service; owns application workflows and `nexus.db` |
 | Memory daemon | `127.0.0.1:4100` | Local vault/index owner; backend and MCP clients call it over HTTP |
-| Frontend dev server | `127.0.0.1:5173` | Development only; production assets are bundled into Electron |
+| Frontend dev server | `127.0.0.1:5173` | Development only; production assets are bundled into the Tauri app |
 | Local generation / embedding / reranking | `127.0.0.1:4001` / `:4002` / `:4003` | Optional local model services used by memory retrieval/indexing |
 | Projects, tasks, hot sessions, mirrored tickets | `~/.nexus/nexus.db` | Local application state |
 | Memories and archived-session summaries | configured Obsidian vault (default `~/Obsidian/Nexus/`) | Canonical Markdown |
@@ -156,6 +156,7 @@ Settings provides two maintenance controls:
 ### Prerequisites
 
 - **Node.js** ≥ 20
+- **Rust** (stable) + **Xcode Command Line Tools** — to build the Tauri desktop shell on macOS. The WebView is the OS-provided WebKit (nothing extra to install). `xcode-select --install`; install Rust via [rustup](https://rustup.rs) or `brew install rust`.
 - **Claude Code CLI** (`claude`) — for the Developer persona ([install](https://docs.claude.com/claude-code))
 - **Codex CLI** (`codex`) — for the Reviewer persona (optional)
 - **OpenCode CLI** (`opencode`) — for the OpenCode provider (optional)
@@ -171,7 +172,6 @@ npm install
 (cd src/backend && npm install)
 (cd src/frontend && npm install)
 (cd src/memory-daemon && npm install --no-workspaces)
-(cd electron && npm install)
 ```
 
 ### Set your API keys
@@ -204,7 +204,7 @@ then opens your browser to http://localhost:5173.
 
 - **Stop:** `Ctrl-C` in the terminal stops all three cleanly (ports freed, no orphaned processes).
 - **Closing the browser does _not_ stop the services** — the script isn't tied to the browser tab,
-  so the servers keep running until you `Ctrl-C`. (This differs from the Electron app, where closing
+  so the servers keep running until you `Ctrl-C`. (This differs from the desktop app, where closing
   the window tears the services down.)
 - The local llama stack (4001/4002/4003) is **not** managed by this script — start it separately (see below).
 
@@ -224,62 +224,63 @@ npm run dev:frontend        # or: cd src/frontend && npm run dev
 
 Open http://localhost:5173
 
-### Run as Electron app
+### Run the desktop app (Tauri)
 
-The Electron app is **self-contained**: it brings up the required services itself behind a startup
-splash that shows each service's status, then opens the main UI. It probes each port first and
-**reuses** anything already running (e.g. a daemon under LaunchD), so it won't double-spawn. If the
-local model stack (`4001/4002/4003`) isn't reachable, it shows a non-blocking warning and continues
-in degraded (FTS-only) mode. Closing the window stops the services it started.
-
-The Electron main process is TypeScript — it's compiled to `electron/dist/main.js` with `tsc`
-(`electron/package.json` → `build`) before Electron can load it. The two run modes differ in what
-they compile and where they load the UI from.
-
-**1. Compile everything (required for production mode):**
+The desktop app is **self-contained**: a Rust supervisor brings up the required services itself
+behind a startup splash that shows each service's status, then opens the main UI. It probes each
+port first and **reuses** anything already running (e.g. a daemon under LaunchD), so it won't
+double-spawn. If the local model stack (`4001/4002/4003`) isn't reachable, it shows a non-blocking
+warning and continues in degraded (FTS-only) mode. Closing the window stops the services it started.
 
 ```bash
-# Builds, in order: shared → backend → frontend → electron (tsc) → memory daemon.
-# Production mode loads the frontend from src/frontend/dist and runs the compiled
-# backend/daemon, so a full build must run first.
-npm run build
+npm run dev    # = tauri:dev — launches the Tauri shell with Vite HMR; the supervisor
+               # spawns the daemon, backend, and Vite dev server (or reuses any already up)
 ```
 
-**2. Run as a production Electron app:**
+The first `tauri:dev` compiles the Rust core (a few minutes); later runs are fast. For a compiled
+production build of just the services + frontend (without the shell), `npm run build`.
+
+> **Native ABI note.** The backend/daemon run as standalone Node processes — under the developer's
+> **system Node** in dev and a **bundled Node** in the packaged app — spawned via
+> `std::process::Command`, never a `fork()`. `better-sqlite3` must match the ABI of whichever Node
+> runs it. In dev, `scripts/ensure-sqlite-abi.cjs` runs as a `predev`/`prestart` hook for the backend
+> and the daemon (two separate installs): it verifies the native module loads under the current Node
+> and, if not, rebuilds the owning install before the process starts. In the packaged app, the staged
+> services' native modules are built against the bundled Node by `scripts/stage-services.cjs`, so the
+> ABI matches. Ensure a system `node` (≥ 20) is on your `PATH` for dev.
+
+### Build a distributable (signed + notarized `.dmg`, macOS)
+
+`npm run dist` runs the whole pipeline (`scripts/dist-macos.sh`): build → sign → sign the bundled
+Node + native modules → notarize + staple the app → build the DMG → notarize + staple it → verify
+Gatekeeper. Output: `tauri/src-tauri/target/release/bundle/dmg/Nexus.dmg`.
+
+**One-time setup, per machine** (nothing sensitive is stored in the repo):
 
 ```bash
-# Recompiles the Electron main (tsc) and launches `electron .`. With the PROD flag it
-# spawns the compiled backend + daemon (under system Node — see note) and loads the
-# built frontend from disk. No Vite/dev servers involved.
-NEXUS_ELECTRON_PROD=1 npm run --workspace=electron dev
+# 1. A "Developer ID Application" certificate in your login keychain
+#    (Xcode → Settings → Accounts → Manage Certificates → + → Developer ID Application).
+security find-identity -v -p codesigning | grep "Developer ID Application"
+
+# 2. A notarytool credential profile named "nexus-notary" (App Store Connect API key shown;
+#    or use --apple-id / --team-id / --password with an app-specific password):
+xcrun notarytool store-credentials "nexus-notary" \
+  --key /path/AuthKey_XXXX.p8 --key-id <KEY_ID> --issuer <ISSUER_UUID>
 ```
 
-**Run in dev mode instead** (hot reload) — drop the flag:
+**Set the signing identity in your environment** (e.g. add to `~/.zshrc`), then build:
 
 ```bash
-# Spawns the Vite dev server, backend, and daemon as dev processes (or reuses any
-# already up) and loads localhost:5173 in the Electron window.
-npm run --workspace=electron dev
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID)"
+# NEXUS_NOTARY_PROFILE defaults to "nexus-notary" — only set it if you named the profile differently.
+npm run dist
 ```
 
-> The compiled backend/daemon are launched with `spawn('node', …)` (system Node), **not** Electron's
-> `fork()` — Electron's bundled Node has a different ABI and would break the `better-sqlite3` native
-> module. Ensure a system `node` (≥ 20) is on your `PATH`.
->
-> **Native ABI guard.** Because the backend and daemon always run under system Node, `better-sqlite3`
-> must be compiled for system Node's ABI — never Electron's. If something rebuilds it for Electron
-> (a stray `electron-rebuild`, an Electron packaging step), the service dies at boot with
-> `ERR_DLOPEN_FAILED` / `NODE_MODULE_VERSION mismatch`. To self-heal, `scripts/ensure-sqlite-abi.cjs`
-> runs as a `predev`/`prestart` hook for both the backend and the daemon: it verifies the module loads
-> under the current Node and, if not, rebuilds the owning install before the process starts. The
-> backend (root `node_modules`) and the daemon (its own `node_modules`, outside the workspaces) are
-> two separate installs, so both are guarded independently. Note: the hooks fire for `npm run …` start
-> paths (dev/web); a future *packaged* Electron build that spawns `node dist/…` directly would need the
-> guard wired into `electron/main.ts` as well.
+For a quick **unsigned local** app bundle (no signing/notarization), run `npm run tauri:build`
+instead — it produces `Nexus (Tauri).app` under `tauri/src-tauri/target/release/bundle/macos/`.
 
-> **Packaging:** there's no `.app`/`.dmg`/installer build wired up yet (no electron-builder/forge) —
-> the app launches **unpackaged** via the `electron` binary as above. Packaging into a distributable
-> is a future step.
+> Scope: macOS arm64 only, Developer ID distribution, no auto-update — see
+> `docs/superpowers/specs/2026-06-23-tauri-full-conversion-design.md`.
 
 On first run, NEXUS creates `~/.nexus/` with default config, starter personas, a set of default
 providers, an Obsidian vault, and the SQLite database.
@@ -744,10 +745,9 @@ Base URL: `http://127.0.0.1:4173`
 ```
 nexus/
 ├── package.json                 # Root workspace (dev / web / build / typecheck scripts)
-├── electron/
-│   ├── main.ts                  # Electron entry: boots services + window
-│   ├── splash.html              # Startup splash (per-service status)
-│   └── preload.js
+├── tauri/                       # Tauri v2 desktop shell (Rust core)
+│   ├── splash.html              # Startup splash (per-service status), embedded in the binary
+│   └── src-tauri/src/           # supervisor (Rust port of the old electron/main.ts) + window lifecycle
 ├── src/
 │   ├── shared/
 │   │   └── index.ts             # All shared types & constants
@@ -805,7 +805,7 @@ nexus/
 
 ```bash
 # from nexus/
-npm run build      # shared → backend → frontend → electron + memory daemon
+npm run build      # shared → backend → frontend → memory daemon  (the Tauri shell builds separately via tauri:build / dist)
 ```
 
 ### Type-check
@@ -838,7 +838,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 |---|---|
 | Session replies "Config needed" | Set `OPENROUTER_API_KEY` in your environment and restart the backend. |
 | `no such column` SQLite error | An old DB predates a schema change. Migrations handle most cases; if needed, delete `~/.nexus/nexus.db*` and restart. |
-| `ERR_DLOPEN_FAILED` / `better_sqlite3.node was compiled against a different Node.js version (NODE_MODULE_VERSION)` at backend/daemon boot | `better-sqlite3` was rebuilt for the wrong ABI (usually Electron's instead of system Node's). The `predev`/`prestart` guard (`scripts/ensure-sqlite-abi.cjs`) auto-rebuilds it on the next `npm run web`/`dev`. To fix by hand: `npm rebuild better-sqlite3` (backend) and `npm rebuild better-sqlite3 --prefix src/memory-daemon` (daemon). |
+| `ERR_DLOPEN_FAILED` / `better_sqlite3.node was compiled against a different Node.js version (NODE_MODULE_VERSION)` at backend/daemon boot | `better-sqlite3` was rebuilt against a different Node.js version than the one running the services. The `predev`/`prestart` guard (`scripts/ensure-sqlite-abi.cjs`) auto-rebuilds it on the next `npm run web`/`dev`. To fix by hand: `npm rebuild better-sqlite3` (backend) and `npm rebuild better-sqlite3 --prefix src/memory-daemon` (daemon). |
 | Claude Code task fails instantly | Ensure the `claude` CLI is installed and on your `PATH`. Check `~/.nexus/workspaces/<slug>/outputs/<task-id>.log`. |
 | `N memory job(s) failed (dead-lettered)` / `embedder unreachable` | Almost always the local model stack is misconfigured, **not** down. A `llama-server` can be listening but return `501` for `/v1/embeddings` or `/v1/rerank` if it wasn't started with the right flags. Launch embeddings with `--embedding --pooling mean` (:4002) and rerank with `--reranking` (:4003). Confirm with `curl -s -X POST http://127.0.0.1:4002/v1/embeddings -d '{"input":"hi","model":"..."}'` returns 200. Dead jobs do **not** auto-retry — requeue them once the stack is fixed. |
 | KG extraction dead-letters / gen returns empty content | Your generation model (:4001) is a reasoning/"thinking" model burning its whole token budget on hidden reasoning. Relaunch it with `--reasoning off`, or use a non-reasoning model. |
