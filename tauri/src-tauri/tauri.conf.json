@@ -3,7 +3,7 @@
   "productName": "Nexus (Tauri)",
   "version": "0.1.0",
   "identifier": "it.resolve.nexus.tauri",
-  "build": { "beforeDevCommand": "cp splash.html ../src/frontend/dist/splash.html", "beforeBuildCommand": "cp splash.html ../src/frontend/dist/splash.html", "frontendDist": "../../src/frontend/dist" },
+  "build": { "beforeDevCommand": "", "beforeBuildCommand": "", "frontendDist": "../../src/frontend/dist" },
   "app": {
     "withGlobalTauri": true,
     "windows": [],

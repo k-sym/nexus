@@ -23,6 +23,17 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        // Serve the splash page from the binary itself (include_bytes! at compile
+        // time) via a custom scheme. This keeps splash.html shell-owned in tauri/,
+        // with no coupling to the frontend's dist output and no build-time copy —
+        // and it's available the instant the splash window is created, before Vite
+        // or the services exist.
+        .register_uri_scheme_protocol("nexus-splash", |_ctx, _req| {
+            tauri::http::Response::builder()
+                .header("Content-Type", "text/html")
+                .body(include_bytes!("../../splash.html").to_vec())
+                .expect("build splash response")
+        })
         .manage(Spawned(Mutex::new(Vec::new())))
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -46,14 +57,15 @@ pub fn run() {
             }
 
             // ── 1) Splash window ──────────────────────────────────────────
-            // splash.html lives in tauri/splash.html (source of truth) and is
-            // copied to src/frontend/dist/splash.html so it is served by
-            // Tauri's secure asset protocol at App("splash.html").
-            // This keeps the CSP origin consistent with the main window.
+            // Served from the binary-embedded `nexus-splash` custom scheme (see the
+            // protocol registration above) — no dependency on the frontend dist or
+            // a running Vite, so it can appear immediately while services boot.
             let _splash = WebviewWindowBuilder::new(
                 &handle,
                 "splash",
-                WebviewUrl::App("splash.html".into()),
+                WebviewUrl::CustomProtocol(
+                    "nexus-splash://localhost/".parse().expect("splash url"),
+                ),
             )
             .title("Nexus — starting")
             .inner_size(480.0, 380.0)
