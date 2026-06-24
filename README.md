@@ -297,7 +297,7 @@ server is up — see Troubleshooting.)
 
 | Port | Role | Recommended model | Required mode flags |
 |---|---|---|---|
-| 4001 | generation (HyDE + KG extraction) | a small instruct model, e.g. `Qwen3-*-Instruct` (Q4_K_M) | `--reasoning off` **if the model is a reasoning/"thinking" model** — otherwise it spends its whole token budget thinking and returns empty content |
+| 4001 | generation (HyDE + KG extraction + session archive summaries) | a small instruct model, e.g. `Qwen3-*-Instruct` (Q4_K_M) | `--ctx-size 32768`; `--reasoning off` **if the model is a reasoning/"thinking" model** — otherwise it spends its whole token budget thinking and returns empty content |
 | 4002 | embeddings | `nomic-embed-text-v1.5` (f16, 768-dim) | `--embedding --pooling mean` |
 | 4003 | reranking | `qwen3-reranker-0.6b` (q8_0) | `--reranking` |
 
@@ -310,7 +310,7 @@ Full launch commands (shared flags: `--host 127.0.0.1 --n-gpu-layers 99 --flash-
 ```bash
 # 4001 — generation (HyDE + knowledge-graph extraction)
 llama-server --model ~/Models/Qwen3-Instruct-Q4_K_M.gguf \
-  --port 4001 --host 127.0.0.1 --n-gpu-layers 99 --ctx-size 8192 --flash-attn on \
+  --port 4001 --host 127.0.0.1 --n-gpu-layers 99 --ctx-size 32768 --flash-attn on \
   --reasoning off
 
 # 4002 — embeddings (768-dim vectors for vector recall)
@@ -324,9 +324,9 @@ llama-server --model ~/Models/qwen3-reranker-0.6b-q8_0.gguf \
   --reranking
 ```
 
-The gen model's context window only needs to cover one memory + a short prompt, so `8192` is ample —
-no need for 32k (a larger KV cache just competes for VRAM with the other two servers). Sanity-check
-each server after launch:
+The gen model also summarizes archived sessions, so use a `32768` context window where VRAM allows it.
+Smaller contexts can work for memory retrieval but may reject longer archive prompts. Sanity-check each
+server after launch:
 
 ```bash
 curl -s -X POST http://127.0.0.1:4002/v1/embeddings \

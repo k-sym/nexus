@@ -71,6 +71,8 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(() => new Set());
+  const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -423,9 +425,26 @@ export default function App() {
   };
 
   const handleArchiveThread = async (threadId: string) => {
-    await api.chat.archiveThread(threadId);
-    if (threadId === activeThreadId) setActiveThreadId(null);
-    if (activeProjectId) await loadThreads(activeProjectId);
+    if (archivingThreadIds.has(threadId)) return;
+    setArchiveError(null);
+    setArchivingThreadIds((current) => new Set(current).add(threadId));
+    try {
+      await api.chat.archiveThread(threadId);
+      if (threadId === activeThreadId) setActiveThreadId(null);
+      if (activeProjectId) await loadThreads(activeProjectId);
+      await loadActivity();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to archive session.';
+      setArchiveError(message);
+      console.error('Failed to archive session:', err);
+      await loadActivity();
+    } finally {
+      setArchivingThreadIds((current) => {
+        const next = new Set(current);
+        next.delete(threadId);
+        return next;
+      });
+    }
   };
 
   const handleDeleteThread = async (threadId: string) => {
@@ -622,6 +641,7 @@ export default function App() {
           activeThreadId={activeThreadId}
           threads={activeProjectId ? threadMetas : []}
           activeSessionIds={activeSessionIds}
+          archivingThreadIds={archivingThreadIds}
           projectCounts={sidebarProjectCounts}
           onSelectProject={focusProject}
           onSelectSubView={selectSubView}
@@ -638,6 +658,15 @@ export default function App() {
 
         <main className="flex-1 flex flex-col min-w-0">{renderMain()}</main>
       </div>
+      {archiveError && (
+        <div
+          role="alert"
+          className="fixed bottom-4 right-4 z-50 max-w-md rounded-md border border-red-400/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 shadow-lg backdrop-blur"
+        >
+          <div className="font-medium">Archive failed</div>
+          <div className="mt-1 text-red-100/80">{archiveError}</div>
+        </div>
+      )}
 
       <CommandPalette open={paletteOpen} commands={commands} onClose={() => setPaletteOpen(false)} />
 
