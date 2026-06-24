@@ -277,7 +277,7 @@ npm run dist
 ```
 
 For a quick **unsigned local** app bundle (no signing/notarization), run `npm run tauri:build`
-instead — it produces `Nexus (Tauri).app` under `tauri/src-tauri/target/release/bundle/macos/`.
+instead — it produces `Nexus.app` under `tauri/src-tauri/target/release/bundle/macos/`.
 
 > Scope: macOS arm64 only, Developer ID distribution, no auto-update — see
 > `docs/superpowers/specs/2026-06-23-tauri-full-conversion-design.md`.
