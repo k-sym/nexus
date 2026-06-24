@@ -22,7 +22,8 @@
     "pack": "npm run prepackage && electron-builder --dir",
     "dist": "npm run prepackage && electron-builder",
     "tauri:dev": "npm run --workspace=tauri dev",
-    "tauri:build": "npm run prepackage && npm run --workspace=tauri build"
+    "tauri:build": "npm run prepackage && npm run --workspace=tauri build",
+    "dist:mac": "bash scripts/dist-macos.sh"
   },
   "workspaces": [
     "src/shared",
