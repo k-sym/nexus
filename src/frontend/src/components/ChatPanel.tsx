@@ -138,7 +138,7 @@ function fileToAttachment(file: File): Promise<ChatAttachment> {
 
 export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, seed, onSeedConsumed }: ChatPanelProps) {
   const { models, activeModelId, setModel, setThread } = useModels();
-  const { state, startStream, abortStream, dispatch, setActiveThread } = usePiStream();
+  const { state, startStream, abortStream, detachStream, dispatch, setActiveThread } = usePiStream();
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
@@ -180,12 +180,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   useEffect(() => {
     if (!threadId || !onSessionActivityChange) return;
     onSessionActivityChange(threadId, state.isRunning);
-    return () => onSessionActivityChange(threadId, false);
   }, [threadId, state.isRunning, onSessionActivityChange]);
 
-  // Reset stream state, abort any active stream, and clear input when switching threads.
+  // Reset local stream state and clear input when switching threads. The
+  // backend run continues unless the user explicitly presses Stop.
   useEffect(() => {
-    abortStream();
+    detachStream();
     dispatch({ type: 'RESET' });
     setError(null);
     setPendingConfirm(null);
@@ -195,7 +195,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setArtifactPath(null);
     setArtifactRailOpen(false);
     setDraggingAttachments(false);
-  }, [threadId, dispatch, abortStream]);
+  }, [threadId, dispatch, detachStream]);
 
   // Check if the selected model is busy in another thread (poll every 2 seconds)
   useEffect(() => {

@@ -650,5 +650,12 @@ export function usePiStream() {
     }
   }, []);
 
-  return { state, startStream, abortStream, dispatch, setActiveThread };
+  const detachStream = useCallback(() => {
+    const controller = abortRef.current;
+    if (controller) controller.abort();
+    abortRef.current = null;
+    streamingThreadRef.current = null;
+  }, []);
+
+  return { state, startStream, abortStream, detachStream, dispatch, setActiveThread };
 }

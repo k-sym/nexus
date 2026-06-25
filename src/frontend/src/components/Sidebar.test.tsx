@@ -38,6 +38,7 @@ const noop = vi.fn();
 function renderSidebar({
   threads = [{ thread }],
   activeSessionIds = new Set<string>(),
+  waitingSessionIds = new Set<string>(),
   archivingThreadIds = new Set<string>(),
   onEditProject = noop,
   onDeleteProject = noop,
@@ -48,6 +49,7 @@ function renderSidebar({
 }: {
   threads?: ThreadMeta[];
   activeSessionIds?: Set<string>;
+  waitingSessionIds?: Set<string>;
   archivingThreadIds?: Set<string>;
   onEditProject?: (project: Project) => void;
   onDeleteProject?: (projectId: string) => void;
@@ -64,6 +66,7 @@ function renderSidebar({
       activeThreadId={thread.id}
       threads={threads}
       activeSessionIds={activeSessionIds}
+      waitingSessionIds={waitingSessionIds}
       archivingThreadIds={archivingThreadIds}
       projectCounts={{
         [project.id]: { tasks: 3, sessions: threads.length },
@@ -95,6 +98,17 @@ describe('Sidebar', () => {
     expect(screen.getByText('Sessions')).toBeInTheDocument();
     expect(screen.queryByText('Chat')).not.toBeInTheDocument();
     expect(screen.getByTitle('Session active')).toBeInTheDocument();
+  });
+
+  it('shows a waiting-for-response marker instead of the active spinner', () => {
+    renderSidebar({
+      threads: [{ thread }],
+      activeSessionIds: new Set([thread.id]),
+      waitingSessionIds: new Set([thread.id]),
+    });
+
+    expect(screen.getByTitle('Waiting for response')).toBeInTheDocument();
+    expect(screen.queryByTitle('Session active')).not.toBeInTheDocument();
   });
 
   it('shows an empty sessions state', () => {

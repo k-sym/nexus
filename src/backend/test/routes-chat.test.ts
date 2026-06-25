@@ -894,10 +894,9 @@ test('POST /api/threads/:id/messages/stream claims the thread before awaiting se
   }
 });
 
-test('POST /api/threads/:id/messages/stream stops after session setup when the client disconnects during setup', async () => {
+test('POST /api/threads/:id/messages/stream keeps a setup-completed prompt running after client disconnect', async () => {
   const sessionForStarted = deferred<void>();
   const duplicateSessionForStarted = deferred<void>();
-  const disconnectObserved = deferred<void>();
   const clientClosed = deferred<void>();
   const releaseSessionFor = deferred<void>();
   let sessionForCalls = 0;
@@ -915,7 +914,7 @@ test('POST /api/threads/:id/messages/stream stops after session setup when the c
     },
   };
   const runtime = {
-    questions: { cancelThread: () => disconnectObserved.resolve() },
+    questions: { cancelThread: () => {} },
     readMessages: async () => [],
     sessionFor: async () => {
       sessionForCalls += 1;
@@ -949,7 +948,6 @@ test('POST /api/threads/:id/messages/stream stops after session setup when the c
 
     clientRequest.destroy();
     await clientClosed.promise;
-    await disconnectObserved.promise;
     const whileSetupPending = app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
@@ -965,8 +963,8 @@ test('POST /api/threads/:id/messages/stream stops after session setup when the c
     releaseSessionFor.resolve();
     await Promise.allSettled([whileSetupPending]);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(promptCalls, 0);
-    assert.equal(abortCalls, 1);
+    assert.equal(promptCalls, 1);
+    assert.equal(abortCalls, 0);
   } finally {
     releaseSessionFor.resolve();
     clientRequest?.destroy();
@@ -976,12 +974,11 @@ test('POST /api/threads/:id/messages/stream stops after session setup when the c
   }
 });
 
-test('POST /api/threads/:id/messages/stream retains its claim while a disconnected prompt terminates', async () => {
+test('POST /api/threads/:id/messages/stream keeps a disconnected prompt running until it terminates', async () => {
   const promptStarted = deferred<void>();
   const promptStopped = deferred<void>();
-  const abortStarted = deferred<void>();
-  const releaseAbort = deferred<void>();
   let promptCalls = 0;
+  let abortCalls = 0;
 
   const session = {
     subscribe: () => () => {},
@@ -994,9 +991,7 @@ test('POST /api/threads/:id/messages/stream retains its claim while a disconnect
       }
     },
     abort: async () => {
-      abortStarted.resolve();
-      await releaseAbort.promise;
-      promptStopped.resolve();
+      abortCalls += 1;
     },
   };
   const runtime = {
@@ -1017,7 +1012,7 @@ test('POST /api/threads/:id/messages/stream retains its claim while a disconnect
     });
     await promptStarted.promise;
     first.raw.res.destroy();
-    await abortStarted.promise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const second = await app.inject({
       method: 'POST',
@@ -1027,8 +1022,23 @@ test('POST /api/threads/:id/messages/stream retains its claim while a disconnect
     assert.equal(second.statusCode, 409);
     assert.equal(second.json().kind, 'thread_busy');
     assert.equal(promptCalls, 1);
+    assert.equal(abortCalls, 0);
 
-    releaseAbort.resolve();
+    const active = await app.inject({ method: 'GET', url: '/api/chat/active-runs' });
+    assert.equal(active.statusCode, 200);
+    assert.deepEqual(active.json(), {
+      activeThreadIds: ['thread-1'],
+      runs: [{
+        threadId: 'thread-1',
+        title: 'T1',
+        modelKey: 'anthropic/sonnet',
+        projectId: 'proj-1',
+        waitingForResponse: false,
+        questionCount: 0,
+      }],
+    });
+
+    promptStopped.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
     const third = await app.inject({
       method: 'POST',
@@ -1038,8 +1048,64 @@ test('POST /api/threads/:id/messages/stream retains its claim while a disconnect
     assert.equal(third.statusCode, 200);
     assert.equal(promptCalls, 2);
   } finally {
-    releaseAbort.resolve();
     promptStopped.resolve();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/chat/active-runs marks runs waiting on pending questions', async () => {
+  const questions = new QuestionBroker();
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    questions,
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  const stream = app.inject({
+    method: 'POST',
+    url: '/api/threads/thread-1/messages/stream',
+    payload: { content: 'first', modelKey: 'anthropic/sonnet' },
+  });
+  const pendingQuestion = questions.register('thread-1', 'call-1', questionRequest);
+
+  try {
+    await promptStarted.promise;
+    const active = await app.inject({ method: 'GET', url: '/api/chat/active-runs' });
+
+    assert.equal(active.statusCode, 200);
+    assert.deepEqual(active.json(), {
+      activeThreadIds: ['thread-1'],
+      runs: [{
+        threadId: 'thread-1',
+        title: 'T1',
+        modelKey: 'anthropic/sonnet',
+        projectId: 'proj-1',
+        waitingForResponse: true,
+        questionCount: 1,
+      }],
+    });
+  } finally {
+    questions.cancelThread('thread-1', 'cleanup');
+    promptStopped.resolve();
+    await pendingQuestion;
+    await stream;
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
@@ -2028,11 +2094,10 @@ test('question cleanup cancels a pending question when its active stream is abor
   }
 });
 
-test('question cleanup aborts the active session when the response closes during prompt', async () => {
+test('question cleanup leaves the active session running when the response closes during prompt', async () => {
   const questions = new QuestionBroker();
   const promptStarted = deferred<void>();
   const promptStopped = deferred<void>();
-  const sessionAborted = deferred<void>();
   let abortCalls = 0;
   const session = {
     subscribe: () => () => {},
@@ -2043,8 +2108,6 @@ test('question cleanup aborts the active session when the response closes during
     },
     abort: async () => {
       abortCalls += 1;
-      promptStopped.resolve();
-      sessionAborted.resolve();
     },
   };
   const runtime = {
@@ -2068,14 +2131,15 @@ test('question cleanup aborts the active session when the response closes during
     await promptStarted.promise;
 
     response.raw.res.destroy();
-    await Promise.race([
-      sessionAborted.promise,
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('session was not aborted after response close')), 100)),
-    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    assert.equal(abortCalls, 1);
-    assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).status, 404);
-    assert.equal((await pending).status, 'cancelled');
+    assert.equal(abortCalls, 0);
+    assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).ok, true);
+    assert.equal((await pending).status, 'answered');
+    assert.deepEqual(concurrency.get('proj-1', 'default'), { threadId: 'thread-1', title: 'T1', modelKey: 'default' });
+
+    promptStopped.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(concurrency.get('proj-1', 'default'), undefined);
   } finally {
     promptStopped.resolve();

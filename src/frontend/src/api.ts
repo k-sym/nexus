@@ -77,6 +77,18 @@ export interface ActivityResponse {
   counts: Record<string, number>;
 }
 
+export interface ActiveChatRunsResponse {
+  activeThreadIds: string[];
+  runs: Array<{
+    threadId: string;
+    title: string;
+    modelKey: string;
+    projectId: string | null;
+    waitingForResponse: boolean;
+    questionCount: number;
+  }>;
+}
+
 export type SecretSource = 'environment' | 'config-env-reference' | 'config-literal' | 'pi-auth-file' | 'gh-cli' | 'absent' | 'unknown';
 
 export interface TrustSecret {
@@ -180,6 +192,7 @@ export const api = {
   },
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`/api/projects/${projectId}/threads`),
+    activeRuns: () => fetchJson<ActiveChatRunsResponse>(`/api/chat/active-runs`),
     // Creates a thread. Threads don't bind to a persona any more.
     // The optional `title` sets the initial title (defaults to "New Session").
     createThread: (projectId: string, title?: string) =>

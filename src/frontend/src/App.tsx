@@ -71,6 +71,7 @@ export default function App() {
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(() => new Set());
+  const [waitingSessionIds, setWaitingSessionIds] = useState<Set<string>>(() => new Set());
   const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
   const [archiveError, setArchiveError] = useState<string | null>(null);
 
@@ -181,6 +182,22 @@ export default function App() {
     if (activeProjectId) loadThreads(activeProjectId);
     else setThreads([]);
   }, [activeProjectId, loadThreads]);
+
+  const refreshActiveChatRuns = useCallback(async () => {
+    try {
+      const data = await api.chat.activeRuns();
+      setActiveSessionIds(new Set(data.activeThreadIds));
+      setWaitingSessionIds(new Set(data.runs.filter((run) => run.waitingForResponse).map((run) => run.threadId)));
+    } catch (err) {
+      console.error('Failed to load active chat runs:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshActiveChatRuns();
+    const interval = setInterval(refreshActiveChatRuns, 2000);
+    return () => clearInterval(interval);
+  }, [refreshActiveChatRuns]);
 
   useEffect(() => {
     if (!activeProjectId) return;
@@ -641,6 +658,7 @@ export default function App() {
           activeThreadId={activeThreadId}
           threads={activeProjectId ? threadMetas : []}
           activeSessionIds={activeSessionIds}
+          waitingSessionIds={waitingSessionIds}
           archivingThreadIds={archivingThreadIds}
           projectCounts={sidebarProjectCounts}
           onSelectProject={focusProject}
