@@ -144,7 +144,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ activeThreadId: string; activeTitle: string; pendingText: string; pendingAttachments: ChatAttachment[] } | null>(null);
-  const [modelBusy, setModelBusy] = useState<{ threadId: string; title: string } | null>(null);
+  const [modelBusy, setModelBusy] = useState<{ threadId: string; title: string; projectBusy?: boolean } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
   const [draggingAttachments, setDraggingAttachments] = useState(false);
@@ -212,7 +212,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         const data = await res.json();
         if (!cancelled) {
           if (data.busy && data.activeThreadId !== threadId) {
-            setModelBusy({ threadId: data.activeThreadId, title: data.activeTitle });
+            setModelBusy({ threadId: data.activeThreadId, title: data.activeTitle, projectBusy: data.projectBusy === true });
           } else {
             setModelBusy(null);
           }
@@ -576,7 +576,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           <span className="flex items-center gap-2">
             <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
             <span>
-              This model is currently streaming in "{modelBusy.title}". Wait for it to finish or choose a different model.
+              {modelBusy.projectBusy
+                ? `An autonomous mission is running in "${modelBusy.title}". Chat is paused on this project until it finishes.`
+                : `This model is currently streaming in "${modelBusy.title}". Wait for it to finish or choose a different model.`}
             </span>
           </span>
         </div>

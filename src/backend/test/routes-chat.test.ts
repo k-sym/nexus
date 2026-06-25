@@ -424,6 +424,133 @@ test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy t
   }
 });
 
+// ── Project-wide concurrency (issue #95) ─────────────────────────────────────
+//
+// An assistant_turn mission holds the project-wide slot. A chat turn on the
+// SAME project but a DIFFERENT model must be blocked (the original bug: the
+// mission claimed 'default', so a chat turn on an explicit model slipped
+// past and the two could race on the same working tree).
+
+test('POST /api/threads/:id/messages/stream returns 409 project_busy when a mission holds the project-wide slot, even on a different model', async () => {
+  const { app, db, dir, concurrency } = makeApp();
+  try {
+    // Simulate an assistant_turn mission claiming the project-wide slot.
+    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Overnight mission');
+    assert.ok(missionOwner);
+
+    // Chat on a different, explicit model — must NOT slip past the project guard.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
+    });
+    assert.equal(res.statusCode, 409);
+    const body = res.json();
+    assert.equal(body.kind, 'project_busy');
+    assert.equal(body.activeThreadId, 'mission-thread');
+    assert.equal(body.activeTitle, 'Overnight mission');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/model-status reports busy=true (projectBusy) when a mission holds the project-wide slot', async () => {
+  const { app, db, dir, concurrency } = makeApp();
+  try {
+    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission');
+    assert.ok(missionOwner);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/projects/proj-1/model-status?modelKey=anthropic/sonnet',
+    });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.equal(body.busy, true);
+    assert.equal(body.projectBusy, true);
+    assert.equal(body.activeThreadId, 'mission-thread');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream proceeds once the mission releases the project-wide slot', async () => {
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir, concurrency } = makeApp(runtime);
+  try {
+    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission');
+    assert.ok(missionOwner);
+
+    // With confirm-cancel, the route waits up to ABORT_GRACE_MS (200ms) for
+    // the project slot to free. Release it well inside the window.
+    setTimeout(() => concurrency.releaseProject('proj-1', missionOwner!), 5);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      headers: { 'X-Confirm-Cancel': 'true' },
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
+    });
+    // The stream completes (fake session resolves immediately); we assert
+    // the route did NOT return the 409 project_busy and actually streamed.
+    assert.equal(res.statusCode, 200, `expected 200 after mission release, got ${res.statusCode}: ${res.body}`);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream releases the project-wide slot on completion (no leak to the next chat turn)', async () => {
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {},
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
+  };
+  const { app, db, dir, concurrency } = makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
+    });
+    assert.equal(res.statusCode, 200);
+    // After the stream completes, both the per-model and project-wide slots
+    // must be released so a subsequent chat turn (or a mission) can claim.
+    assert.equal(concurrency.get('proj-1', 'anthropic/sonnet'), undefined);
+    assert.equal(concurrency.getProject('proj-1'), undefined);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream aborts the active session when confirm-cancel is set', async () => {
   const firstPromptStarted = deferred<void>();
   const firstAbortSeen = deferred<void>();

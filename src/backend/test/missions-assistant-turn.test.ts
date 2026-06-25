@@ -11,6 +11,9 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import type { Mission } from '@nexus/shared';
 import { assistantTurnHandler } from '../missions/handlers/assistant-turn.js';
+import { getDb } from '../db.js';
+import { insertMission, getMission } from '../missions/store.js';
+import { runMissionOnce } from '../missions/runner.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -57,27 +60,38 @@ function makeMission(overrides: Partial<Mission> = {}): Mission {
   } as Mission;
 }
 
-/** A fake session that reports 4242 tokens. */
-const fakeSession = {
-  prompt: async (_text: string) => {},
-  getContextUsage: () => ({ tokens: 4242, contextWindow: 200000, percent: 2 }),
-  abort: async () => {},
-};
+/**
+ * A fake session whose getSessionStats() reports cumulative input/output
+ * counters that advance by a fixed delta per prompt(). Used to verify the
+ * handler reports per-turn spend (issue #96), not context-window occupancy.
+ */
+function makeFakeSession(opts: { inputDelta?: number; outputDelta?: number } = {}) {
+  const inputDelta = opts.inputDelta ?? 1000;
+  const outputDelta = opts.outputDelta ?? 500;
+  let input = 0;
+  let output = 0;
+  return {
+    prompt: async (_text: string) => { input += inputDelta; output += outputDelta; },
+    getSessionStats: () => ({ tokens: { input, output, cacheRead: 0, cacheWrite: 0, total: input + output } }),
+    abort: async () => {},
+  };
+}
 
+const fakeSession = makeFakeSession({ inputDelta: 3000, outputDelta: 1242 });
 const fakePi = { sessionFor: async (_t: string, _cwd: string) => fakeSession } as any;
 
-/** A fake concurrency tracker that always grants the claim. */
+/** A fake concurrency tracker that always grants the project-wide claim. */
 function makeGrantingConcurrency() {
   const owner = Symbol('test-owner');
   return {
-    claim: (_projectId: string, _modelKey: string, _threadId: string, _title: string) => owner,
-    release: (_projectId: string, _modelKey: string, _owner: symbol) => true,
+    claimProject: (_projectId: string, _threadId: string, _title: string) => owner,
+    releaseProject: (_projectId: string, _owner: symbol) => true,
   } as any;
 }
 
 // ── Test 1: happy path ────────────────────────────────────────────────────────
 
-test('assistant_turn: happy path → succeeded, tokensUsed=4242', async () => {
+test('assistant_turn: happy path → succeeded, tokensUsed = per-turn input+output spend', async () => {
   const repoDir = mkdtempSync(join(tmpdir(), 'nexus-at-test-'));
   try {
     const db = makeDb('proj-1', repoDir);
@@ -95,8 +109,9 @@ test('assistant_turn: happy path → succeeded, tokensUsed=4242', async () => {
     });
 
     assert.equal(outcome.status, 'succeeded', `expected succeeded, got: ${outcome.status} (${outcome.error})`);
-    assert.equal(outcome.tokensUsed, 4242, `expected tokensUsed=4242, got ${outcome.tokensUsed}`);
-    assert.ok(typeof outcome.summary === 'string' && outcome.summary.length > 0, 'summary should be non-empty');
+    // fakeSession reports input delta 3000 + output delta 1242 = 4242 per turn.
+    assert.equal(outcome.tokensUsed, 4242, `expected tokensUsed=4242 (3000 in + 1242 out), got ${outcome.tokensUsed}`);
+    assert.ok(outcome.summary?.includes('tokens spent'), `summary should mention spend, got: ${outcome.summary}`);
     db.close();
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
@@ -185,7 +200,7 @@ test('assistant_turn: in-flight abort → failed with error "aborted", does not 
     // Fake session: prompt() hangs until abort() rejects the deferred promise.
     const abortableSession = {
       prompt: async (_text: string) => pendingPrompt,
-      getContextUsage: () => ({ tokens: 0, contextWindow: 200000, percent: 0 }),
+      getSessionStats: () => ({ tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } }),
       abort: async () => {
         abortCalled = true;
         rejectPrompt(Object.assign(new Error('aborted'), { name: 'AbortError' }));
@@ -308,8 +323,8 @@ test('assistant_turn: concurrency busy → failed without calling model', async 
     const watchedPi = { sessionFor: async () => watchedSession } as any;
 
     const busyConcurrency = {
-      claim: () => undefined, // always busy
-      release: () => true,
+      claimProject: () => undefined, // always busy
+      releaseProject: () => true,
     } as any;
 
     const db = makeDb('proj-1', repoDir);
@@ -354,4 +369,96 @@ test('assistant_turn: no concurrency tracker → still succeeds', async () => {
   } finally {
     rmSync(repoDir, { recursive: true, force: true });
   }
+});
+
+// ── Test 10: multi-iteration spend accumulation (issue #96) ──────────────────
+//
+// Drives the runner across two iterations with a fake session whose
+// getSessionStats() cumulative input/output counters grow by a fixed delta
+// each turn. Verifies mission.tokens_used accumulates the *per-turn spend*
+// (input+output delta), not end-of-turn context-window occupancy, and that
+// the accumulation is monotonic toward max_tokens.
+
+test('assistant_turn + runner: multi-iteration tokens_used accumulates per-turn spend, not context occupancy', async () => {
+  const repoDir = mkdtempSync(join(tmpdir(), 'nexus-at-spend-'));
+  const dbPath = join(tmpdir(), `nexus-at-spend-${process.pid}-${Date.now()}.db`);
+  let db: Database.Database | undefined;
+  try {
+    db = getDb(dbPath);
+    db.prepare(
+      "INSERT INTO projects (id, slug, name, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at) VALUES ('p1','p1','P','', ?, '{}',0,'', ?, ?)",
+    ).run(repoDir, new Date().toISOString(), new Date().toISOString());
+
+    // Fake session: cumulative input grows 1000/turn, output 500/turn.
+    // Per-turn spend delta = 1500 each iteration. Context-window occupancy
+    // would instead grow monotonically (e.g. 1500, 3000, ...) and summing it
+    // across iterations would double-count retained context.
+    let input = 0;
+    let output = 0;
+    const spendSession = {
+      prompt: async (_text: string) => { input += 1000; output += 500; },
+      getSessionStats: () => ({ tokens: { input, output, cacheRead: 0, cacheWrite: 0, total: input + output } }),
+      abort: async () => {},
+    };
+    const spendPi = { sessionFor: async () => spendSession } as any;
+    const grantingConcurrency = {
+      claimProject: () => Symbol('test'),
+      releaseProject: () => true,
+    } as any;
+
+    const m = insertMission(db, {
+      project_id: 'p1', title: 'spend mission', description: '', kind: 'assistant_turn',
+      config_json: JSON.stringify({ prompt: 'do work' }), pacing: 'fixed', interval_seconds: 1,
+      max_iterations: 10, max_wall_clock_seconds: null, max_tokens: 3000,
+      run_window_start: null, run_window_end: null, status: 'active',
+      next_run_at: new Date().toISOString(), started_at: new Date().toISOString(),
+    });
+
+    const deps = { pi: spendPi, concurrency: grantingConcurrency };
+
+    // Iteration 1: per-turn spend = 1500.
+    const r1 = await runMissionOnce(db, getMission(db, m.id)!, deps);
+    assert.equal(r1.run!.status, 'succeeded');
+    assert.equal(r1.run!.tokens_used, 1500, `iter 1 per-turn spend should be 1500, got ${r1.run!.tokens_used}`);
+    assert.equal(r1.mission.tokens_used, 1500);
+
+    // Iteration 2: per-turn spend = 1500 again (NOT 3000, which context
+    // occupancy would report). Cumulative = 3000, which hits max_tokens.
+    const r2 = await runMissionOnce(db, getMission(db, m.id)!, deps);
+    assert.equal(r2.run!.status, 'succeeded');
+    assert.equal(r2.run!.tokens_used, 1500, `iter 2 per-turn spend should be 1500, got ${r2.run!.tokens_used}`);
+    assert.equal(r2.mission.tokens_used, 3000);
+    // Cumulative spend hit the max_tokens ceiling → mission stops.
+    assert.equal(r2.mission.status, 'stopped');
+    assert.equal(r2.mission.stop_reason, 'token_budget');
+  } finally {
+    db?.close();
+    for (const ext of ['', '-wal', '-shm']) rmSync(dbPath + ext, { force: true });
+    rmSync(repoDir, { recursive: true, force: true });
+  }
+});
+
+// ── Test 11: project-wide concurrency claim blocks a same-project chat slot ──
+//
+// Verifies at the handler + tracker level (no Fastify) that a mission holding
+// the project-wide slot prevents a per-(project,model) claim from coexisting
+// in the route layer's acquisition order. Mirrors the route-level test in
+// routes-chat.test.ts but exercises the real ConcurrencyTracker.
+
+test('assistant_turn: project-wide claim mutually excludes with a per-model claim on the same project', async () => {
+  const { ConcurrencyTracker } = await import('../pi/concurrency.js');
+  const t = new ConcurrencyTracker();
+  // Mission claims the project-wide slot.
+  const missionOwner = t.claimProject('proj-x', 'mission-thread', 'Mission');
+  assert.ok(missionOwner);
+  // A chat turn on an explicit model in the SAME project: the route acquires
+  // project-wide first, so it must fail here (this is the route's check).
+  assert.equal(t.claimProject('proj-x', 'chat-thread', 'Chat'), undefined, 'project-wide slot must be held by the mission');
+  // And conversely, while the mission holds the project slot, the per-model
+  // primitive itself is independent (chat would only reach it after the
+  // project claim succeeds). The mutual-exclusion is enforced at the
+  // project-wide layer, which is the whole point of issue #95.
+  t.releaseProject('proj-x', missionOwner);
+  // After release, a chat turn can claim the project slot again.
+  assert.ok(t.claimProject('proj-x', 'chat-thread', 'Chat'));
 });

@@ -71,3 +71,81 @@ test('ConcurrencyTracker stale owner cannot release a replacement claim', () => 
   });
   assert.equal(t.claim('project-a', 'anthropic/sonnet', 'thread-3', 'C'), undefined);
 });
+
+// ── Project-wide claims (issue #95) ─────────────────────────────────────────
+
+test('ConcurrencyTracker.claimProject + getProject round-trip', () => {
+  const t = new ConcurrencyTracker();
+  assert.ok(t.claimProject('project-a', 'thread-1', 'Mission A'));
+  const got = t.getProject('project-a');
+  assert.deepEqual(got, { threadId: 'thread-1', title: 'Mission A', scope: 'project' });
+});
+
+test('ConcurrencyTracker.getProject returns undefined for unknown project', () => {
+  const t = new ConcurrencyTracker();
+  assert.equal(t.getProject('nope'), undefined);
+});
+
+test('ConcurrencyTracker.releaseProject removes the project slot', () => {
+  const t = new ConcurrencyTracker();
+  const owner = t.claimProject('project-a', 'thread-1', 'Mission');
+  assert.ok(owner);
+  t.releaseProject('project-a', owner);
+  assert.equal(t.getProject('project-a'), undefined);
+});
+
+test('ConcurrencyTracker rejects a second project-wide claim on the same project', () => {
+  const t = new ConcurrencyTracker();
+  assert.ok(t.claimProject('project-a', 'thread-1', 'Mission'));
+  assert.equal(t.claimProject('project-a', 'thread-2', 'Other'), undefined);
+  assert.equal(t.getProject('project-a')?.threadId, 'thread-1');
+});
+
+test('ConcurrencyTracker project-wide claim is independent of per-(project,model) slots', () => {
+  const t = new ConcurrencyTracker();
+  // A mission holds the project-wide slot...
+  assert.ok(t.claimProject('project-a', 'mission-thread', 'Mission'));
+  // ...and a per-model claim for the SAME project but a DIFFERENT thread still
+  // succeeds at the tracker level (chat enforces mutual exclusion at the
+  // route layer, not the primitive). This proves the maps are independent.
+  assert.ok(t.claim('project-a', 'anthropic/sonnet', 'chat-thread', 'Chat'));
+  assert.equal(t.getProject('project-a')?.threadId, 'mission-thread');
+  assert.equal(t.get('project-a', 'anthropic/sonnet')?.threadId, 'chat-thread');
+});
+
+test('ConcurrencyTracker project-wide claim is isolated per project', () => {
+  const t = new ConcurrencyTracker();
+  assert.ok(t.claimProject('project-a', 'thread-1', 'A'));
+  assert.ok(t.claimProject('project-b', 'thread-2', 'B'));
+  assert.equal(t.getProject('project-a')?.threadId, 'thread-1');
+  assert.equal(t.getProject('project-b')?.threadId, 'thread-2');
+});
+
+test('ConcurrencyTracker stale owner cannot releaseProject a replacement', () => {
+  const t = new ConcurrencyTracker();
+  const first = t.claimProject('project-a', 'thread-1', 'A');
+  assert.ok(first);
+  t.releaseProject('project-a', first);
+  const second = t.claimProject('project-a', 'thread-2', 'B');
+  assert.ok(second);
+  assert.equal(t.releaseProject('project-a', first), false);
+  assert.equal(t.getProject('project-a')?.threadId, 'thread-2');
+});
+
+test('ConcurrencyTracker.releaseProject wakes waitForProjectRelease waiters', async () => {
+  const t = new ConcurrencyTracker();
+  const owner = t.claimProject('project-a', 'thread-1', 'Mission');
+  assert.ok(owner);
+  const observed = t.getProject('project-a')!;
+  const released = t.waitForProjectRelease('project-a', observed, 1000);
+  // Release shortly; the waiter should resolve to true before the timeout.
+  setTimeout(() => t.releaseProject('project-a', owner), 5);
+  assert.equal(await released, true);
+  assert.equal(t.getProject('project-a'), undefined);
+});
+
+test('ConcurrencyTracker.waitForProjectRelease resolves immediately when not held', async () => {
+  const t = new ConcurrencyTracker();
+  const observed = { threadId: 'gone', title: 'gone', scope: 'project' as const };
+  assert.equal(await t.waitForProjectRelease('project-a', observed, 100), true);
+});
