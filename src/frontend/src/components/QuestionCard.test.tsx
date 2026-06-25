@@ -93,7 +93,7 @@ describe('QuestionCard', () => {
     ]);
   });
 
-  it('renders answered results as read-only chosen labels', () => {
+  it('renders answered results as a compact transcript summary', () => {
     const answeredResult: QuestionToolResult = {
       status: 'answered',
       toolCallId: 'call-1',
@@ -104,8 +104,11 @@ describe('QuestionCard', () => {
     };
     render(<QuestionCard request={request} answeredResult={answeredResult} onSubmit={vi.fn()} />);
 
-    expect(screen.getByText('Full')).toBeInTheDocument();
-    expect(screen.getByText('Tomorrow')).toBeInTheDocument();
+    expect(screen.getByText('Answered')).toBeInTheDocument();
+    expect(screen.getByText('Scope: Full')).toBeInTheDocument();
+    expect(screen.getByText('Delivery: Tomorrow')).toBeInTheDocument();
+    expect(screen.queryByText('Which scope?')).not.toBeInTheDocument();
+    expect(screen.queryByText('How should it ship?')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Submit answers' })).not.toBeInTheDocument();
     expect(screen.queryByRole('radio')).not.toBeInTheDocument();
   });

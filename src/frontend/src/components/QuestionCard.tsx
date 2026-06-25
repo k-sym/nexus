@@ -37,21 +37,28 @@ export function QuestionCard({
   }
 
   if (answeredResult?.status === 'answered') {
+    const summaries = request.questions.map((question) => {
+      const answer = answeredResult.answers.find((candidate) => candidate.questionId === question.id);
+      const values = (answer?.selected ?? []).map((value) =>
+        question.options.find((option) => option.value === value)?.label ?? value);
+      if (answer?.custom) values.push(answer.custom);
+      return { id: question.id, label: `${question.header}: ${values.join(', ')}` };
+    });
+
     return (
-      <section className="space-y-3 rounded-lg border border-slate-700 bg-slate-900/60 p-4">
-        {request.questions.map((question) => {
-          const answer = answeredResult.answers.find((candidate) => candidate.questionId === question.id);
-          const values = (answer?.selected ?? []).map((value) =>
-            question.options.find((option) => option.value === value)?.label ?? value);
-          if (answer?.custom) values.push(answer.custom);
-          return (
-            <div key={question.id}>
-              <h3 className="text-sm font-medium text-slate-200">{question.header}</h3>
-              <p className="text-sm text-slate-400">{question.question}</p>
-              <p className="mt-1 text-sm text-slate-200">{values.join(', ')}</p>
-            </div>
-          );
-        })}
+      <section
+        aria-label="Answered questions"
+        className="rounded-md border border-slate-700/70 bg-slate-950/40 px-3 py-2 text-xs text-slate-300"
+      >
+        <div className="mb-1 flex items-center gap-2">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden="true" />
+          <span className="font-medium text-slate-300">Answered</span>
+        </div>
+        <ul className="space-y-1">
+          {summaries.map((summary) => (
+            <li key={summary.id} className="text-slate-300">{summary.label}</li>
+          ))}
+        </ul>
       </section>
     );
   }

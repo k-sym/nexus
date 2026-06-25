@@ -108,6 +108,9 @@ describe('ChatPanel', () => {
       expect.objectContaining({ method: 'POST' }),
     ));
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Submit answers' })).not.toBeInTheDocument());
+    expect(screen.getByText('Answered')).toBeInTheDocument();
+    expect(screen.getByText('Scope: Full')).toBeInTheDocument();
+    expect(screen.queryByText('Which scope?')).not.toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/messages/stream'))).toHaveLength(0);
   });
 
@@ -164,6 +167,9 @@ describe('ChatPanel', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Submit answers' }));
 
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/messages/stream'))).toHaveLength(1));
+    await waitFor(() => expect(screen.getByText('Scope: Full')).toBeInTheDocument());
+    expect(screen.getByText('Answered')).toBeInTheDocument();
+    expect(screen.queryByText('Which scope?')).not.toBeInTheDocument();
     const streamCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/messages/stream'))!;
     expect(JSON.parse(String((streamCall[1] as RequestInit).body))).toMatchObject({ content: 'Scope: Full' });
   });
