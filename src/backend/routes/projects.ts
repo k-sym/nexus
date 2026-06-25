@@ -3,6 +3,7 @@ import { v4 as uuid } from 'uuid';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { Project, Task, TaskStatus, type ReviewActionRequest, type ReviewActionResult } from '@nexus/shared';
 import { buildReviewActionPrompt, buildReviewActionTitle, getProjectGitDiff, reviewActionPlan } from '../git/diff.js';
 import { summarizeTaskThread } from '../memory/summarize.js';
@@ -18,6 +19,68 @@ function expandHome(p: string): string {
   if (p === '~') return os.homedir();
   if (p.startsWith('~/')) return path.join(os.homedir(), p.slice(2));
   return p;
+}
+
+const TEXT_PREVIEW_BYTES = 512 * 1024;
+const BINARY_PREVIEW_BYTES = 8 * 1024 * 1024;
+
+type FilePreviewKind = 'text' | 'image' | 'pdf' | 'unsupported';
+
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.csv': 'text/csv',
+  '.gif': 'image/gif',
+  '.jpeg': 'image/jpeg',
+  '.jpg': 'image/jpeg',
+  '.json': 'application/json',
+  '.md': 'text/markdown',
+  '.pdf': 'application/pdf',
+  '.png': 'image/png',
+  '.tsv': 'text/tab-separated-values',
+  '.txt': 'text/plain',
+  '.webp': 'image/webp',
+  '.yaml': 'application/yaml',
+  '.yml': 'application/yaml',
+};
+
+function mimeTypeFor(filePath: string): string {
+  return MIME_BY_EXTENSION[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream';
+}
+
+function previewKindFor(mimeType: string): FilePreviewKind {
+  if (mimeType.startsWith('text/') || ['application/json', 'application/yaml'].includes(mimeType)) return 'text';
+  if (mimeType.startsWith('image/')) return 'image';
+  if (mimeType === 'application/pdf') return 'pdf';
+  return 'unsupported';
+}
+
+function requestedFilePath(rawPath: string): string {
+  if (rawPath.startsWith('file://')) return fileURLToPath(rawPath);
+  return rawPath;
+}
+
+function resolveProjectFile(project: Project, rawPath: string): { filePath: string; stat: fs.Stats } {
+  const projectRoot = fs.realpathSync(path.resolve(expandHome(project.repo_path)));
+  const requestPath = requestedFilePath(rawPath);
+  const requested = path.resolve(path.isAbsolute(requestPath) ? requestPath : path.join(projectRoot, requestPath));
+  if (!fs.existsSync(requested)) {
+    const err = new Error('File not found') as any;
+    err.statusCode = 404;
+    throw err;
+  }
+  const filePath = fs.realpathSync(requested);
+  const insideProject = filePath === projectRoot || filePath.startsWith(`${projectRoot}${path.sep}`);
+  if (!insideProject) {
+    const err = new Error('File must be inside the project directory') as any;
+    err.statusCode = 403;
+    throw err;
+  }
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) {
+    const err = new Error('Path is not a file') as any;
+    err.statusCode = 400;
+    throw err;
+  }
+  return { filePath, stat };
 }
 
 export async function registerProjectRoutes(fastify: FastifyInstance) {
@@ -95,6 +158,68 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
     return row as Project;
+  });
+
+  fastify.get('/api/projects/:id/files/preview', async (request) => {
+    const { id } = request.params as { id: string };
+    const { path: rawPath } = request.query as { path?: string };
+    if (!rawPath) {
+      const err = new Error('path is required') as any;
+      err.statusCode = 400;
+      throw err;
+    }
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
+    if (!project) {
+      const err = new Error('Project not found') as any;
+      err.statusCode = 404;
+      throw err;
+    }
+
+    const { filePath, stat } = resolveProjectFile(project, rawPath);
+    const mimeType = mimeTypeFor(filePath);
+    const kind = previewKindFor(mimeType);
+    const base = {
+      path: filePath,
+      name: path.basename(filePath),
+      mimeType,
+      kind,
+      size: stat.size,
+    };
+
+    if (kind === 'text') {
+      if (stat.size > TEXT_PREVIEW_BYTES) return { ...base, kind: 'unsupported', reason: 'File is too large to preview inline' };
+      return { ...base, content: fs.readFileSync(filePath, 'utf8') };
+    }
+    if (kind === 'image') {
+      if (stat.size > BINARY_PREVIEW_BYTES) return { ...base, kind: 'unsupported', reason: 'Image is too large to preview inline' };
+      return { ...base, data: fs.readFileSync(filePath).toString('base64') };
+    }
+    if (kind === 'pdf') {
+      return {
+        ...base,
+        url: `/api/projects/${encodeURIComponent(id)}/files/raw?path=${encodeURIComponent(filePath)}`,
+      };
+    }
+    return base;
+  });
+
+  fastify.get('/api/projects/:id/files/raw', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const { path: rawPath } = request.query as { path?: string };
+    if (!rawPath) {
+      const err = new Error('path is required') as any;
+      err.statusCode = 400;
+      throw err;
+    }
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
+    if (!project) {
+      const err = new Error('Project not found') as any;
+      err.statusCode = 404;
+      throw err;
+    }
+    const { filePath } = resolveProjectFile(project, rawPath);
+    reply.type(mimeTypeFor(filePath));
+    return fs.readFileSync(filePath);
   });
 
   fastify.get('/api/projects/:id/git/diff', async (request) => {

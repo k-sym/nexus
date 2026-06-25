@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -104,6 +104,110 @@ test('GET /api/projects includes task and active chat session counts', async () 
         { id: 'project-c', task_count: 0, chat_session_count: 0 },
       ],
     );
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/files/preview returns project-local markdown text', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    const filePath = join(dir, 'project_docs', 'design', 'preview.md');
+    mkdirSync(join(dir, 'project_docs', 'design'), { recursive: true });
+    writeFileSync(filePath, '# Preview\n\nGenerated plan.');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/project-a/files/preview?path=${encodeURIComponent(filePath)}`,
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), {
+      path: realpathSync(filePath),
+      name: 'preview.md',
+      mimeType: 'text/markdown',
+      kind: 'text',
+      size: 26,
+      content: '# Preview\n\nGenerated plan.',
+    });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/files/preview resolves relative paths from the project root', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    const relativePath = join('output', 'stick-man-640x480.png');
+    const filePath = join(dir, relativePath);
+    mkdirSync(join(dir, 'output'), { recursive: true });
+    writeFileSync(filePath, Buffer.from('89504e470d0a1a0a', 'hex'));
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/project-a/files/preview?path=${encodeURIComponent(relativePath)}`,
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), {
+      path: realpathSync(filePath),
+      name: 'stick-man-640x480.png',
+      mimeType: 'image/png',
+      kind: 'image',
+      size: 8,
+      data: 'iVBORw0KGgo=',
+    });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/files/preview resolves bare filenames from the project root', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    const filePath = join(dir, 'test.md');
+    writeFileSync(filePath, '# Test\n\nGenerated.');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/project-a/files/preview?path=${encodeURIComponent('test.md')}`,
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), {
+      path: realpathSync(filePath),
+      name: 'test.md',
+      mimeType: 'text/markdown',
+      kind: 'text',
+      size: 18,
+      content: '# Test\n\nGenerated.',
+    });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/files/preview rejects paths outside the project', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    const outsidePath = join(tmpdir(), 'nexus-outside-preview.md');
+    writeFileSync(outsidePath, 'outside');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/project-a/files/preview?path=${encodeURIComponent(outsidePath)}`,
+    });
+
+    assert.equal(res.statusCode, 403);
+    assert.match(res.json().error, /Forbidden/i);
   } finally {
     await app.close();
     db.close();

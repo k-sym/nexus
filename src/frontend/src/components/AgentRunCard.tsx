@@ -4,6 +4,7 @@ import type { QuestionAnswer, QuestionToolResult } from '../lib/questions';
 import { AgentRunHeader } from './AgentRunHeader';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
+import ChatArtifactLinks from './ChatArtifactLinks';
 
 interface AgentRunCardProps {
   run: AgentRunView;
@@ -18,6 +19,7 @@ interface AgentRunCardProps {
   onStop: () => void;
   questionState?: Record<string, { submitting?: boolean; error?: string; result?: QuestionToolResult }>;
   onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
+  onOpenArtifact?: (path: string) => void;
 }
 
 function runSummary(run: AgentRunView): string {
@@ -39,6 +41,7 @@ export function AgentRunCard({
   onStop,
   questionState,
   onAnswerQuestion,
+  onOpenArtifact,
 }: AgentRunCardProps) {
   // Expansion model (issue #108): a run auto-expands while running, when it
   // ended badly (failed/cancelled/interrupted), or when it's the latest
@@ -76,7 +79,11 @@ export function AgentRunCard({
               expanded={detailsExpanded}
             />
           )}
-          {content && <p className="whitespace-pre-wrap text-sm">{content}</p>}
+          {content && (
+            <p className="whitespace-pre-wrap text-sm">
+              {onOpenArtifact ? <ChatArtifactLinks text={content} onOpenPath={onOpenArtifact} /> : content}
+            </p>
+          )}
           {run.error && run.status !== 'completed' && (
             <p className="text-xs text-red-300" role="alert">{run.error}</p>
           )}
