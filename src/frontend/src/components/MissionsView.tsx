@@ -97,7 +97,7 @@ export default function MissionsView({ projects }: Props) {
             </select>
             <button
               onClick={() => setShowCreate((v) => !v)}
-              className="flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500"
+              className="flex items-center gap-1 rounded-lg accent-button px-3 py-1.5 text-sm transition-colors"
             >
               <Plus size={16} /> New
             </button>
@@ -117,7 +117,7 @@ export default function MissionsView({ projects }: Props) {
               placeholder="Mission title…"
               value={draft.title}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-              className="w-full rounded-lg border border-zinc-800 bg-transparent px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/60"
+              className="w-full rounded-lg border border-zinc-800 bg-transparent px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-strong"
             />
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-zinc-500">Kind
@@ -164,7 +164,7 @@ export default function MissionsView({ projects }: Props) {
               </button>
               <button
                 onClick={handleCreate}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500"
+                className="rounded-lg accent-button px-3 py-1.5 text-sm transition-colors"
               >
                 Create (paused)
               </button>
@@ -181,7 +181,7 @@ export default function MissionsView({ projects }: Props) {
               key={m.id}
               onClick={() => void selectMission(m)}
               className={`group block w-full rounded-xl border px-4 py-3 text-left transition-colors ${
-                selected?.id === m.id ? 'border-indigo-500/60' : 'border-zinc-800 hover:border-zinc-700'
+                selected?.id === m.id ? 'border-strong' : 'border-zinc-800 hover:border-zinc-700'
               } bg-zinc-900`}
             >
               <div className="flex items-center justify-between">

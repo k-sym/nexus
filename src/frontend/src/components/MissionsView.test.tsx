@@ -29,4 +29,15 @@ describe('MissionsView', () => {
     render(<MissionsView projects={projects as never} />);
     await waitFor(() => expect(screen.getByText('Triage tickets')).toBeInTheDocument());
   });
+
+  it('uses current accent styling instead of legacy purple mission controls', async () => {
+    render(<MissionsView projects={projects as never} />);
+
+    const newButton = screen.getByRole('button', { name: /New/ });
+    expect(newButton).toHaveClass('accent-button');
+    expect(newButton).not.toHaveClass('bg-indigo-600');
+
+    const mission = await screen.findByRole('button', { name: /Triage tickets/ });
+    expect(mission).not.toHaveClass('border-indigo-500/60');
+  });
 });
