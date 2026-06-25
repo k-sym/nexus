@@ -39,6 +39,35 @@ test('GET /api/assistant/thread returns the global assistant thread with message
   }
 });
 
+test('DELETE /api/assistant/thread clears all stored assistant messages', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    db.prepare('INSERT INTO assistant_messages (id, role, content, created_at) VALUES (?, ?, ?, ?)').run(
+      'm1',
+      'user',
+      'hello',
+      new Date().toISOString(),
+    );
+    db.prepare('INSERT INTO assistant_messages (id, role, content, created_at) VALUES (?, ?, ?, ?)').run(
+      'm2',
+      'assistant',
+      'hi there',
+      new Date().toISOString(),
+    );
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/assistant/thread' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json().ok, true);
+
+    const remaining = db.prepare('SELECT COUNT(*) as n FROM assistant_messages').get() as { n: number };
+    assert.equal(remaining.n, 0);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/assistant/messages/stream returns a clear error when assistant config is missing', async () => {
   const { app, db, dir } = makeApp({ ...loadConfig(), assistant: { url: '', api_key: '${ASSISTANT_API_KEY}' } });
   const originalKey = process.env.ASSISTANT_API_KEY;

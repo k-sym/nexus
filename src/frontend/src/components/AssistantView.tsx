@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Stop } from '@phosphor-icons/react';
+import { Stop, ArrowsClockwise } from '@phosphor-icons/react';
 import { AssistantMessage, useAssistantStream } from '../hooks/useAssistantStream';
 
 export default function AssistantView() {
-  const { messages, isRunning, error, loadThread, send, abort } = useAssistantStream();
+  const { messages, isRunning, error, loadThread, send, abort, clear } = useAssistantStream();
   const [input, setInput] = useState('');
 
   useEffect(() => {
@@ -13,9 +13,14 @@ export default function AssistantView() {
   const handleSend = useCallback(async () => {
     const text = input.trim();
     if (!text || isRunning) return;
+    if (text === '/new' || text === '/clear') {
+      const cleared = await clear();
+      if (cleared) setInput('');
+      return;
+    }
     const sent = await send(text);
     if (sent) setInput('');
-  }, [input, isRunning, send]);
+  }, [input, isRunning, send, clear]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -24,6 +29,12 @@ export default function AssistantView() {
     }
   };
 
+  const handleNewSession = useCallback(() => {
+    if (isRunning || messages.length === 0) return;
+    if (!window.confirm('Clear the Assistant conversation? This cannot be undone.')) return;
+    void clear();
+  }, [isRunning, messages.length, clear]);
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <header className="surface-glass flex items-center justify-between px-6 py-3 border-b border-subtle shrink-0">
@@ -31,12 +42,24 @@ export default function AssistantView() {
           <h1 className="text-lg font-semibold">Assistant</h1>
           <p className="text-xs text-faint">Global remote assistant</p>
         </div>
-        <span className="text-xs text-faint uppercase tracking-wider">Project independent</span>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={handleNewSession}
+            disabled={isRunning || messages.length === 0}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted rounded-lg border border-subtle hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            title="Clear the conversation and start fresh (or type /new)"
+          >
+            <ArrowsClockwise size={14} />
+            New Session
+          </button>
+          <span className="text-xs text-faint uppercase tracking-wider">Project independent</span>
+        </div>
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {messages.length === 0 ? (
-          <p className="text-faint text-sm">Send a message to start.</p>
+          <p className="text-faint text-sm">Send a message to start. Type <code className="text-muted">/new</code> to clear anytime.</p>
         ) : (
           messages.map((message) => <AssistantBubble key={message.id} message={message} />)
         )}

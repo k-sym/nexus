@@ -104,5 +104,16 @@ export function useAssistantStream() {
     setIsRunning(false);
   }, []);
 
-  return { messages, isRunning, error, loadThread, send, abort };
+  const clear = useCallback(async (): Promise<boolean> => {
+    setError(null);
+    const res = await apiFetch('/api/assistant/thread', { method: 'DELETE' });
+    if (!res.ok) {
+      setError(await responseError(res));
+      return false;
+    }
+    setMessages([]);
+    return true;
+  }, []);
+
+  return { messages, isRunning, error, loadThread, send, abort, clear };
 }
