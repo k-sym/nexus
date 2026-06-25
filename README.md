@@ -1,6 +1,6 @@
 # NEXUS
 
-A personal agent orchestration platform. NEXUS lets you define projects, break them into tasks on a Kanban board, and assign specialized AI agents to work those tasks — including spawning Claude Code, Codex, and OpenCode as sub-agents. Memory persists across sessions via a local memory daemon synced to an Obsidian vault.
+A personal agent orchestration platform. NEXUS lets you define projects, break them into tasks on a Kanban board, and work those tasks interactively in chat threads powered by any model you can reach — Claude Code, Codex, OpenCode, OpenRouter, local servers, or any OpenAI-compatible endpoint. Memory persists across sessions via a local memory daemon synced to an Obsidian vault.
 
 > NEXUS is not another bloated Agent OS. It's the control layer that makes your existing tools (Claude Code, Codex, OpenCode, OpenRouter, local models) work together the way you want.
 
@@ -17,11 +17,13 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 - [Concepts](#concepts)
   - [Projects](#projects)
   - [Tasks & Kanban](#tasks--kanban)
-  - [Providers](#providers)
-  - [Personas](#personas)
+  - [Models & Curation](#models--curation)
   - [Orchestrator](#orchestrator)
   - [Memory](#memory)
   - [Sessions](#sessions)
+  - [Assistant](#assistant)
+  - [Braindump](#braindump)
+  - [Activity Console](#activity-console)
   - [Tickets (Jira mirror)](#tickets-jira-mirror)
   - [Mission Control](#mission-control)
   - [Missions](#missions)
@@ -39,18 +41,21 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 |---|---|
 | **Projects** | Link existing local git repos. NEXUS adds a `project_docs/` structure for specs, plans, and uploads. |
 | **Kanban** | 5-column board (Triage → To Do → In Progress → Review → Deploy) with drag-and-drop. |
-| **Orchestrator** | Watches for tasks entering "In Progress" and dispatches them to the right agent automatically. |
+| **Interactive task chat** | Moving a task into **In Progress** opens an interactive chat thread bound to a model you pick — the old headless dispatch loop is gone. The agent works the task in the conversation while you steer it. |
 | **Missions** | Bounded, recurring or self-paced autonomous jobs against a project's tasks/tickets. Hard ceilings (iterations / wall-clock / token budget / run window), a per-iteration audit ledger, and pause/resume/stop controls. Off by default; can never run unbounded. |
-| **Providers** | First-class registry of agent backends: Claude Code / Codex / OpenCode (CLI), any OpenAI-compatible HTTP endpoint (OpenRouter, local servers), and remote Hermes agents. CRUD + connectivity test in the UI. |
-| **Personas** | YAML-defined agent personalities that bind a provider + model + system prompt + tools. Assign different ones to coding, review, deploy, etc. |
-| **Multi-provider agents** | Spawns Claude Code / Codex / OpenCode as CLI subprocesses; calls OpenRouter and any local OpenAI-compatible server (omlx, LM Studio, llama.cpp, …) over HTTP. |
+| **Models & curation** | A model registry (the Pi runtime) knows every model reachable from your configured auth — API keys (OpenRouter, local servers) and OAuth (Anthropic, OpenAI/Codex, GitHub Copilot). You curate which models show up in the picker; per-thread model selection with image/document attachments. No more YAML "personas". |
+| **Multi-provider chat** | One runtime drives Claude Code, Codex, OpenCode, OpenRouter, local OpenAI-compatible servers (omlx, LM Studio, llama.cpp), and remote Hermes-style endpoints — each reached through the Pi SDK's provider bridges. |
+| **Assistant** | A separate, project-less streaming chat against a single configured assistant endpoint (any OpenAI-compatible URL + bearer key). Its own message log, independent of project sessions. |
+| **Braindump** | Capture free-form ideas before they become tasks; triage them into a project's Kanban from the Braindump view. |
+| **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
-| **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, Claude session capture (resume in-app or in a terminal), and manual archival into memory. |
+| **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, image + PDF/document attachments, and manual archival into memory. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
-| **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira sync that changed tickets, or a sync failure. Backed by a `notifications` table the frontend polls. |
-| **Mission Control** | A single dashboard aggregating daemon health, the agent roster with per-provider health, and an activity feed. |
-| **Token usage** | Per-run token tracking (exact for API providers, estimated for CLI) with a project-scoped Usage view. |
-| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, and Jira sync. |
+| **GitHub triage** | Open issues on a project's GitHub remote are mirrored into the Triage column on Kanban open (token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. |
+| **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira/GitHub sync that changed tickets, a sync failure, or a task summary being written. Backed by a `notifications` table the frontend polls. |
+| **Mission Control** | The landing dashboard: memory-daemon health, your curated model list with per-provider auth health, and usage stats (Claude/Codex/OpenRouter session windows). |
+| **Trust & Privacy** | A read-only trust snapshot surfaced in Settings — services, storage, secret sources, outbound destinations, and maintenance controls (rebuild index, clear Nexus memory). |
+| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, Jira + GitHub sync, signal filters. |
 
 ---
 
@@ -62,20 +67,21 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 │  ┌────────────────────────────────────────────────────┐ │
 │  │               React Dashboard (Vite)                │ │
 │  │  Mission Control | Kanban | Sessions | Tickets |    │ │
-│  │  Personas | Providers | Memory | Tickets | Usage    │ │
-│  └─────────────────────┬──────────────────────────────┘ │
+│  │  Braindump | Assistant | Activity | Memory |Usage   │ │
+│  └─────────────────────────────┬──────────────────────┘ │
 │                        │ HTTP (localhost:4173)           │
 │  ┌─────────────────────▼──────────────────────────────┐ │
 │  │               Node.js Backend (Fastify)             │ │
 │  │                                                      │ │
-│  │   Routes ── Orchestrator ── Jira Poll ── MemClient  │ │
+│  │   Routes ── Pi Runtime ── Jira Poll ── MemClient    │ │
+│  │              (ModelRegistry + AuthStorage)          │ │
 │  └──┬───────────┬──────────────┬──────────────┬───────┘ │
 │     │           │              │              │          │
-│  SQLite      Sub-agent     Memory client   HTTP models   │
-│ (nexus.db)   spawner       → daemon        (OpenAI-compat)│
-│              ├ claude (CLI)   (HTTP :4100)                │
-│              ├ codex  (CLI)        │                      │
-│              └ opencode (CLI)      ▼                      │
+│  SQLite      Pi sessions    Memory client   HTTP models   │
+│ (nexus.db)  (per-thread,    → daemon        (OpenAI-compat)│
+│              SDK-driven)      (HTTP :4100)                │
+│                              │                            │
+│                              ▼                            │
 │                          ┌──────────────────────────┐    │
 │                          │  @nexus/memory-daemon     │    │
 │                          │  Obsidian vault + index   │    │
@@ -86,7 +92,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 └─────────────────────────────────────────────────────────┘
 ```
 
-The backend runs the Fastify HTTP API, the orchestrator polling loop, the Jira polling loop, and the mission scheduler loop in a single Node process. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/providers/tickets; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Tauri app for production. The desktop shell is **Tauri v2** (a small Rust core using the OS WebView) — it supervises the daemon/backend services and hosts the UI; it replaced the previous Electron shell (~15× smaller, ~177 MB less idle RAM).
+The backend runs the Fastify HTTP API, the Jira polling loop, and the mission scheduler loop in a single Node process. **Model execution is driven by the [Pi runtime](https://github.com/earendil-works/pi-coding-agent)** (`@earendil-works/pi-coding-agent`): one `PiRuntime` per backend owns an `AuthStorage` (credentials in `~/.nexus/auth.json`) and a `ModelRegistry` (every model reachable from that auth), and creates one `AgentSession` per chat thread. The old headless orchestrator dispatch loop has been removed — task work now happens interactively in chat threads. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/tickets/missions; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Tauri app for production. The desktop shell is **Tauri v2** (a small Rust core using the OS WebView) — it supervises the daemon/backend services and hosts the UI; it replaced the previous Electron shell (~15× smaller, ~177 MB less idle RAM).
 
 ### Packages
 
@@ -122,8 +128,8 @@ Ports and paths can be changed in configuration. **Settings → Trust & Privacy*
 
 ### Secrets
 
-- Pi provider API keys and OAuth credentials are stored in `~/.nexus/auth.json`.
-- OpenRouter, local-model, and assistant keys support `${ENV_VAR}` interpolation in `config.yaml`. If a literal key is entered in Settings, it is stored in `config.yaml` and masked when Settings reads it back.
+- Provider API keys (OpenRouter, local-model, assistant) and OAuth credentials (Anthropic, OpenAI/Codex, GitHub Copilot) are stored in `~/.nexus/auth.json`, managed by the Pi runtime's `AuthStorage`.
+- OpenRouter, local-model, and assistant keys also support `${ENV_VAR}` interpolation in `config.yaml`. If a literal key is entered in Settings, it is stored in `config.yaml` and masked when Settings reads it back.
 - `JIRA_TOKEN` is read from the process environment. Nexus also loads the nearest local `.env` file at startup without overwriting variables already exported by the shell.
 - GitHub issue sync prefers `GITHUB_TOKEN`, then falls back to `gh auth token`; the GitHub CLI owns the fallback credential storage.
 
@@ -131,7 +137,7 @@ Ports and paths can be changed in configuration. **Settings → Trust & Privacy*
 
 | Destination | Data sent when enabled or used |
 |---|---|
-| Configured model providers | Prompts, conversation context, selected attachments/images, tool results, and any recalled memory injected into the prompt |
+| Configured model providers (via Pi runtime) | Prompts, conversation context, selected attachments/images, tool results, and any recalled memory injected into the prompt |
 | Configured assistant endpoint | Assistant conversation messages and the configured bearer credential |
 | Jira Cloud | The configured account email, API token, project/search query, and issue requests |
 | GitHub | Repository owner/name, issue API requests, and a token when one is available |
@@ -157,11 +163,12 @@ Settings provides two maintenance controls:
 
 - **Node.js** ≥ 20
 - **Rust** (stable) + **Xcode Command Line Tools** — to build the Tauri desktop shell on macOS. The WebView is the OS-provided WebKit (nothing extra to install). `xcode-select --install`; install Rust via [rustup](https://rustup.rs) or `brew install rust`.
-- **Claude Code CLI** (`claude`) — for the Developer persona ([install](https://docs.claude.com/claude-code))
-- **Codex CLI** (`codex`) — for the Reviewer persona (optional)
-- **OpenCode CLI** (`opencode`) — for the OpenCode provider (optional)
-- **OpenRouter API key** — for the Generalist persona and chat ([get one](https://openrouter.ai/keys))
-- **A local model stack** (optional, for memory + local/cron personas) — three OpenAI-compatible endpoints for generation, embeddings, and reranking. See [The Local Model Stack](#the-local-model-stack) — the launch flags matter.
+- **At least one model provider credential** — pick whichever you want to use:
+  - **OpenRouter API key** — the easiest way to reach hundreds of models from one key ([get one](https://openrouter.ai/keys)).
+  - **Anthropic / OpenAI / GitHub Copilot OAuth** — sign in via Settings → Auth; the Pi runtime stores the token in `~/.nexus/auth.json`.
+  - **Claude Code CLI** (`claude`), **Codex CLI** (`codex`), or **OpenCode CLI** (`opencode`) — installed and on your `PATH` if you want to use their provider bridges ([Claude Code install](https://docs.claude.com/claude-code)).
+  - **A local OpenAI-compatible server** (omlx, LM Studio, llama.cpp, …) — point `models.local.base_url` at it.
+- **A local model stack** (optional, for memory + local chat) — three OpenAI-compatible endpoints for generation, embeddings, and reranking. See [The Local Model Stack](#the-local-model-stack) — the launch flags matter.
 
 ### Install
 
@@ -185,9 +192,10 @@ cp .env.example .env
 The backend loads `.env` on startup. Already-exported shell variables take precedence.
 
 ```bash
-export OPENROUTER_API_KEY="sk-or-..."   # OpenRouter agents + chat
+export OPENROUTER_API_KEY="sk-or-..."   # OpenRouter models + chat
 export OMLX_API_KEY="..."               # local model server, if it requires auth
-export HERMES_API_KEY="..."             # remote Hermes agent (if used)
+export ASSISTANT_API_KEY="..."          # the standalone Assistant view endpoint
+export HERMES_API_KEY="..."             # remote Hermes-style endpoint (if used)
 ```
 
 GitHub issue sync: run `gh auth login` before starting, or set `GITHUB_TOKEN`.
@@ -280,16 +288,18 @@ For a quick **unsigned local** app bundle (no signing/notarization), run `npm ru
 instead — it produces `Nexus.app` under `tauri/src-tauri/target/release/bundle/macos/`.
 
 > Scope: macOS arm64 only, Developer ID distribution, no auto-update — see
-> `docs/superpowers/specs/2026-06-23-tauri-full-conversion-design.md`.
+> `project_docs/specs/2026-06-09-pure-pi-architecture-design.md`.
 
-On first run, NEXUS creates `~/.nexus/` with default config, starter personas, a set of default
-providers, an Obsidian vault, and the SQLite database.
+On first run, NEXUS creates `~/.nexus/` with default config, an Obsidian vault,
+the SQLite database, and the directory for Pi session logs. (There are no longer
+any "starter personas" or a seeded `providers` table — model reachability is
+discovered at runtime from your auth; see [Models & Curation](#models--curation).)
 
 ---
 
 ## The Local Model Stack
 
-Memory retrieval (and local/cron personas) rely on **three independent OpenAI-compatible servers** on
+Memory retrieval (and local chat) rely on **three independent OpenAI-compatible servers** on
 loopback. The reference setup runs three `llama-server` (llama.cpp) processes — **and the launch flags
 are not optional**. A server can be listening on its port but still reject every request if it wasn't
 started in the right mode. (Nexus currently reports such failures as "unreachable" even when the
@@ -348,17 +358,15 @@ All config lives under `~/.nexus/`:
 
 ```
 ~/.nexus/
-├── config.yaml          # Global settings
-├── auth.json            # Pi provider API keys and OAuth credentials
-├── personas/            # Agent YAML configs (one file per persona)
-│   ├── developer.yaml
-│   ├── reviewer.yaml
-│   ├── generalist.yaml
-│   └── cron-runner.yaml
-├── workspaces/          # Per-project agent output logs
+├── config.yaml            # Global settings (non-secret)
+├── auth.json              # Pi runtime credentials: API keys + OAuth tokens (mode 0600)
+├── model-curation.json    # Which models you've enabled in the picker (mode 0600)
+├── sessions/              # Pi session JSONL logs, per-repo subdirs
+│   └── <repo-slug>/<threadId>.jsonl
+├── workspaces/            # Per-project agent output logs (legacy)
 │   └── <project-slug>/outputs/<task-id>.log
-├── nexus.db             # SQLite database (projects/tasks/chats/providers/tickets)
-└── logs/                # Application logs
+├── nexus.db               # SQLite database (projects/tasks/threads/tickets/missions)
+└── logs/                  # Application logs
 ```
 
 The Obsidian vault (canonical memory + chat archives) defaults to `~/Obsidian/Nexus/` so it's visible
@@ -374,9 +382,32 @@ server:
 models:
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"   # env var interpolation
-  local:                               # OpenAI-compatible server for chat / cron personas
+  local:                               # OpenAI-compatible server for chat
     base_url: "http://127.0.0.1:4001/v1"
     api_key: "${OMLX_API_KEY}"         # if your server requires auth; env interpolation supported
+    embedding_model: ""                # optional overrides for the memory stack
+    rerank_model: ""
+
+assistant:                             # the standalone Assistant view (project-less chat)
+  url: ""                              # any OpenAI-compatible chat completions URL
+  api_key: "${ASSISTANT_API_KEY}"
+
+# Signal filters trim noisy tool output before it lands in chat history
+# (ANSI, progress bars, repeated lines, package-manager spam, test output,
+# stack traces, diff context). See src/backend/signal-filters/.
+signal_filters:
+  enabled: true
+  min_input_bytes: 4096
+  max_output_bytes: 12000
+  filters:
+    ansi: true
+    progress: true
+    repeated_lines: true
+    package_manager: true
+    test_output: true
+    stack_trace: true
+    diff_context: true
+  projects: {}                         # per-project overrides keyed by slug
 
 # Memory is served by the standalone @nexus/memory-daemon (separate process, see
 # src/memory-daemon/). The Obsidian vault is canonical; the SQLite index is rebuildable.
@@ -407,19 +438,17 @@ jira:                            # native Jira ticket poll (Settings -> Jira). T
   instance: ""                   # e.g. your-company.atlassian.net (https:// optional)
   project: "SUP"                 # project key to sync
   poll_minutes: 15               # cadence while Nexus is running
+  content_rules: []              # optional content rules
 
-claude_code:
-  command: "claude"
-  args: []                       # extra CLI flags; the prompt is passed via -p
-  idle_timeout_seconds: 600      # kill a turn only after this long with NO streamed activity
+github:                          # GitHub issue triage (Settings -> GitHub). Token via GITHUB_TOKEN or `gh auth token`.
+  enabled: true                  # mirrors open issues into Triage on Kanban open
 
-codex:
-  command: "codex"
-  args: []
-
+obsidian:                        # where the canonical vault lives
+  vault_path: "~/Obsidian/Nexus"
+  sync_interval_seconds: 30
 ```
 
-Environment variables are interpolated with `${VAR}` syntax, and Nexus loads the nearest local `.env` file without replacing already-exported values. Environment references are preferred for OpenRouter, local-model, and assistant keys; literal values entered in Settings are stored in `config.yaml` and masked on read. Pi provider API keys and OAuth credentials live in `~/.nexus/auth.json`. Jira uses `JIRA_TOKEN`; GitHub uses `GITHUB_TOKEN` or `gh auth token`.
+Environment variables are interpolated with `${VAR}` syntax, and Nexus loads the nearest local `.env` file without replacing already-exported values. Environment references are preferred for OpenRouter, local-model, and assistant keys; literal values entered in Settings are stored in `config.yaml` and masked on read. Provider API keys and OAuth tokens live in `~/.nexus/auth.json` (managed by the Pi runtime, never in `config.yaml`). Jira uses `JIRA_TOKEN`; GitHub uses `GITHUB_TOKEN` or `gh auth token`.
 
 ---
 
@@ -448,67 +477,31 @@ There is no "Done" column — once a task reaches **Deploy** it's considered com
 
 Moving a task into **In Progress** triggers the orchestrator.
 
-### Providers
+### Models & Curation
 
-A **Provider** is a reusable agent backend, stored in the `providers` table and managed from the
-Providers settings page (CRUD + a connectivity **Test** button). Each provider has a `kind`:
+NEXUS no longer ships a "personas" abstraction. Instead, the **Pi runtime** (`@earendil-works/pi-coding-agent`) is the single source of truth for what models are available and how to reach them.
 
-| Kind | Transport | Examples |
-|---|---|---|
-| `claude_code` | CLI subprocess | the `claude` binary |
-| `codex` | CLI subprocess | the `codex` binary |
-| `opencode` | CLI subprocess | the `opencode` binary |
-| `openai_compat` | HTTP (OpenAI-compatible) | OpenRouter, omlx, LM Studio, llama.cpp |
-| `hermes` | HTTP (remote OpenAI-compatible) | a remote Hermes agent over Tailscale |
+- **`AuthStorage`** (`~/.nexus/auth.json`) holds credentials: API keys (OpenRouter, local servers, the Assistant endpoint) and OAuth tokens (Anthropic, OpenAI/Codex, GitHub Copilot). Add them in **Settings → Auth** — either paste an API key or kick off an OAuth flow (the UI polls the flow and accepts a manual callback when a provider requires it).
+- **`ModelRegistry`** enumerates every model reachable from your configured auth, per provider. Each model carries its `provider`, `id`, display `name`, whether it reasons, its context window, max output tokens, and input modalities (`text`/`image`).
+- **Curation** (`~/.nexus/model-curation.json`) is the user's filter over the registry. Out of the box every auth-configured model is shown; once you enable/disable models in **Settings → Models**, only your curated set appears in the chat model picker, the task model picker, and Mission Control. Curation is keyed by `provider/id` and degrades gracefully — if a model disappears from the registry (e.g. an OAuth token is revoked), it silently drops out of the curated list.
+- **Per-thread model selection**: each chat turn picks a `modelKey` (`provider/id`). The chosen model is persisted on the thread (`last_model_key`) and on a task (`model_key`) so reopening either restores it. Switch models mid-conversation at any time.
 
-A fresh database seeds a default set of providers (OpenRouter, a local server, Claude Code, Codex,
-OpenCode, and Hermes). Personas bind to a provider via `provider_id`; a legacy `provider:` enum
-(`claude_code | codex | openrouter | local | ollama`) is still honored as a fallback.
-
-### Personas
-
-Personas are agent personalities defined as YAML files in `~/.nexus/personas/`. Each binds a
-provider + model, a system prompt, allowed tools, a workspace path, and a token budget.
-
-> **In the UI these are labelled "Agents"** (the persona is what an agent *is* once created). The
-> underlying type, table, and `/api/personas` routes keep the `persona` name.
-
-```yaml
-name: Code Reviewer
-slug: reviewer
-provider_id: <provider-uuid>   # preferred: references a Provider record
-provider: codex                # legacy fallback: claude_code | codex | openrouter | local
-model: codex-default
-system_prompt: |
-  You are a senior code reviewer. Focus on correctness,
-  security, and maintainability.
-tools: [read_file, list_files, run_command]
-workspace: "~/Projects/{project}"
-startup_scripts:
-  - git fetch origin
-token_budget: 3000
-```
-
-Four starter personas ship by default: **Developer** (Claude Code), **Reviewer** (Codex),
-**Generalist** (OpenRouter), **Cron Runner** (local model). A **Hermes** persona/provider is also
-seeded for remote agents. Edit them via the Personas page or directly as YAML.
-
-**Column-Agent Mapping**: Each project can map a default persona to each Kanban column (e.g. the Review column defaults to "Reviewer"). Configure this from the panel below the Kanban board.
+> The legacy `personas` and `providers` SQLite tables are retained in `db.ts` for one more release as back-compat shims and are not surfaced in the UI or API. There is no `/api/personas` or `/api/providers` route.
 
 ### Orchestrator
 
-The orchestrator is a background loop (polls every 5s) that:
+There is no longer a headless dispatch loop. The orchestrator module was removed when task work moved into interactive chat threads (the backend's `index.ts` notes: *"the old headless orchestrator dispatch loop has been removed"*).
 
-1. Finds tasks in **In Progress** that don't already have a running agent.
-2. Resolves the persona (explicit `assigned_agent` → column default → `generalist`).
-3. Builds a prompt containing: persona system prompt, project name/description, task details, the `project_docs/` file index, other tasks in the project, and relevant memories.
-4. Dispatches to the persona's provider:
-   - **claude_code** / **codex** / **opencode** → spawned as CLI subprocesses (5-minute timeout).
-   - **openai_compat** / **hermes** (and legacy **openrouter** / **local**) → called over HTTP (OpenAI-compatible chat completions).
-5. Streams output to `~/.nexus/workspaces/<slug>/outputs/<task-id>.log`.
-6. On success → advances the task to the next column and extracts key insights into memory. On failure → moves the task back to Triage.
+What remains is the **task → chat** flow:
 
-Every run is recorded in the `agent_runs` table. See live status at `GET /api/agents/status`.
+1. A task sits in **Triage** or **To Do** with no thread attached.
+2. You drag it into **In Progress**. If it has no chat thread yet, the **model picker** opens (`TaskModelPicker`) — pick any model from your curated set.
+3. NEXUS creates a chat thread titled after the task, links it (`tasks.thread_id` + `tasks.model_key`), flips the card to **In Progress**, and seeds the first turn with a task prompt so the agent starts working immediately.
+4. You steer the agent in the conversation. When the work is done, advance the card to **Review** or **Deploy** — on that transition the thread is summarized into project memory (best-effort, fire-and-forget) and a notification is raised.
+
+Reopening a linked card reopens its chat. Dragging a card back to **Triage**/**To Do** clears the thread link (the Pi session is already closed) so the bubble doesn't dangle.
+
+The `agent_runs` table still records task-scoped runs surfaced by `GET /api/agents/status` and `/api/agents/runs/:taskId`.
 
 ### Memory
 
@@ -526,13 +519,26 @@ Namespaces: `nexus` (per project), `global`, plus external agent namespaces. See
 
 Each project has a sessions interface:
 
-- Pick which persona/provider powers the conversation.
-- Drag-and-drop files onto the composer — they land in `project_docs/uploads/` and are referenced in context.
+- Pick which curated model powers the conversation (per-thread; remembered on the thread).
+- Drag-and-drop files onto the composer — they land in `project_docs/uploads/` and are referenced in context. Image and document (PDF/Word/Excel/CSV/markdown/plain-text) attachments are supported, gated by the selected model's input modalities.
 - Relevant memories are recalled and injected into the prompt; each Q&A is archived to memory (best-effort).
-- **Question cards**: when an agent emits an ` ```ask ``` ` block, it renders as a structured question card (single/multi/custom answers); your reply is fed back as the next turn (`POST /api/threads/:threadId/answer`).
-- **Live streaming**: replies stream in token-by-token (`POST /api/threads/:threadId/messages/stream`, NDJSON). This is provider-agnostic — Claude (`stream-json`), Codex (`--json`), OpenCode (`--format json`), and HTTP providers (OpenAI SSE) each go through a normalizing adapter, so you see the agent working rather than a blank wait. The non-streaming `POST .../messages` remains for non-UI callers. Claude Code turns are bounded by an **idle** timeout (no streamed activity), not a wall-clock cap — see `claude_code.idle_timeout_seconds`.
-- **Claude session capture & resume**: Claude Code turns run with `--output-format stream-json` under a self-assigned `--session-id`, so Nexus captures the resumable session id per thread (surfaced live the moment a turn starts). A chip under the chat header lets you **copy** `claude --resume <id>` or **open a macOS Terminal** already resumed into that session — useful if a turn stalls. In-app turns also continue the same session (`--resume`), so the thread is one continuous conversation shared with the terminal. (One writer at a time — hand off, don't drive both at once.)
+- **Question cards**: when an agent emits a `question` tool call, it renders as a structured question card (single/multi/custom answers); your reply is fed back as the next turn (`POST /api/threads/:threadId/questions/:toolCallId/answer`).
+- **Live streaming**: replies stream token-by-token over NDJSON (`POST /api/threads/:threadId/messages/stream`). The Pi runtime normalizes events across providers (text deltas, tool calls, thinking blocks, run boundaries, context-usage), so you see the agent working regardless of which provider backs the model. The full entry history is also persisted as session JSONL under `~/.nexus/sessions/<repo-slug>/`.
+- **Concurrency**: a per-`(project, model)` slot and a project-wide slot prevent two repo-mutating runs from racing on the same working tree (issue #95). A conflicting request gets a `409` with `kind: thread_busy` / `model_busy` / `project_busy`; the frontend can retry with `X-Confirm-Cancel: true` to abort the holder first. Live runs are listed at `GET /api/chat/active-runs` and abortable via `POST /api/threads/:threadId/abort`.
+- **Signal filters** trim noisy tool output (ANSI, progress bars, package-manager spam, test output, stack traces, diff context) before it lands in chat history — configurable globally and per-project under `signal_filters` in `config.yaml`.
 - Archival is user-triggered. Nexus summarizes the conversation into canonical `nexus` memory, then removes the hot SQLite thread only after memory storage succeeds.
+
+### Assistant
+
+A project-less streaming chat against a single configured OpenAI-compatible endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It has its own message log (the `assistant_messages` table), its own view in the top bar, and is independent of project sessions — handy for "ask the herd" style quick questions that don't belong to a repo. Streams over NDJSON; supports abort and clear.
+
+### Braindump
+
+Free-form idea capture *before* something is a task. The **Braindump** view lists active ideas; each idea can be triaged into a project (which creates a Triage Kanban task) and is then marked `triaged` and drops out of the active list. Triaged rows are retained for future history. Backed by the `braindump_ideas` table.
+
+### Activity Console
+
+A unified operations console replacing the old "agent roster" feed. The `operations` table records every long-running operation — `chat_turn`, `assistant_stream`, `jira_sync`, `github_sync`, `memory_archive`, `memory_index` — with start/stop, status, provider/model, usage, last event, and diagnostics. The **Activity** view shows running + recent operations with counts by status, and per-operation **abort** (for chat/assistant), **retry** (for memory archive, Jira sync, GitHub sync), and **copy diagnostics**. Backed by `GET /api/activity` and friends; an `ActivityManager` subscribes to an in-process event bus so the console updates in near-real-time.
 
 ### Tickets (Jira mirror)
 
@@ -561,8 +567,8 @@ it gets populated:
 The landing dashboard. A single `GET /api/mission-control` call aggregates:
 
 - **Memory daemon health** (reachability + the local model stack's status),
-- **Agent roster** — every persona with a per-provider health probe,
-- **Activity feed** — running and recent agent runs.
+- **Curated models** — your enabled models with per-provider auth health (the legacy "persona roster" surface is gone; the model registry is the new ground truth, filtered by your curation choices), plus `active`/`available` counts,
+- **Usage stats** — Claude / Codex / OpenRouter session and weekly usage windows (sampled from the OS, the CodexBar history, and the OpenRouter credit balance).
 
 ### Missions
 
@@ -605,7 +611,7 @@ window opens.
 | `echo` | deterministic built-in (testing / demo); no side effects |
 | `triage_tickets` | mirrors un-triaged Jira/GitHub tickets into `triage` tasks for the project; backlog-drains |
 | `review_stale_tasks` | reports tasks idle past a threshold (pure read — it *proposes*, never mutates tasks) |
-| `assistant_turn` | *(planned, separate gate)* drives an LLM session in the project repo — the only model-calling kind, with mandatory guardrails |
+| `assistant_turn` | drives an LLM session in the project repo — the only model-calling kind. Claims the project-wide concurrency slot the same way a chat turn does, so it never races an interactive run on the same working tree (issue #95). Guardrails: bounded iterations/wall-clock/tokens, run window, full audit ledger. |
 
 **Audit ledger.** Every executed iteration writes a `mission_runs` row — intent, selected work, result
 summary, tokens used, errors, the next scheduled run, and the stop reason — and emits a `mission_tick`
@@ -617,16 +623,18 @@ create form, and the per-mission run ledger with controls. Drive it from there o
 
 ## Model Routing
 
-| Task Type | Provider kind | Method | Default Persona |
-|---|---|---|---|
-| Coding | Claude Code | CLI subprocess | Developer |
-| Code Review | Codex | CLI subprocess | Reviewer |
-| Coding (alt) | OpenCode | CLI subprocess | — |
-| General / Marketing / Media | OpenRouter (`openai_compat`) | HTTP API | Generalist |
-| Cron / Menial | Local server (`openai_compat`) | HTTP API | Cron Runner |
-| Remote automation | Hermes | HTTP API | Hermes |
+There is no fixed persona → provider mapping anymore. Any curated model can drive any task; you pick per-thread (chat) or per-task (the In Progress model picker). The Pi runtime resolves the provider bridge from the model's `provider`:
 
-Spawning Claude Code, Codex, and OpenCode as **CLI subprocesses** (rather than calling their APIs) is deliberate — it lets you use them as standalone tools and sidesteps subscription-in-harness restrictions.
+| Provider (in model key) | Reachable via | Examples |
+|---|---|---|
+| `openrouter` | HTTP (OpenAI-compatible) | any OpenRouter model |
+| `anthropic` | OAuth (Pi `anthropic-messages` bridge) | Claude models via your Anthropic account |
+| `openai-codex` | OAuth | OpenAI Codex models |
+| `github-copilot` | OAuth | Copilot-backed models |
+| `local` / custom | HTTP (OpenAI-compatible) | omlx, LM Studio, llama.cpp, a remote Hermes-style endpoint |
+| `claude-code` / `codex` / `opencode` | CLI-backed Pi provider bridges | the `claude`, `codex`, `opencode` binaries on your `PATH` |
+
+Spawning the CLI agent tools through the Pi SDK (rather than calling their HTTP APIs directly) is deliberate — it lets you use them as standalone tools and sidesteps subscription-in-harness restrictions.
 
 ---
 
@@ -637,50 +645,85 @@ Base URL: `http://127.0.0.1:4173`
 ### Projects
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/projects` | List projects |
+| GET | `/api/projects` | List projects (with `task_count` + `chat_session_count`) |
 | GET | `/api/projects/:id` | Get a project |
 | POST | `/api/projects` | Create (body: `name`, `description`, `repo_path`) |
-| PUT | `/api/projects/:id` | Update (incl. `config_json` for column mapping) |
+| PUT | `/api/projects/:id` | Update (incl. `config_json`, `repo_path`) |
 | DELETE | `/api/projects/:id` | Delete |
+| PUT | `/api/projects/order` | Reorder projects (`{ project_ids }`) |
+| GET | `/api/projects/:id/files/preview` | Inline preview of a project file (`?path=`) — text/image/PDF |
+| GET | `/api/projects/:id/files/raw` | Raw file bytes (`?path=`) |
+| GET | `/api/projects/:id/git/diff` | Current working-tree diff (hunks for the Diff Review panel) |
+| POST | `/api/projects/:id/review-actions` | Spawn a task / assign a reviewer / attach a hunk to chat from a diff hunk |
+| POST | `/api/projects/:id/github/sync` | Mirror open GitHub issues into Triage (no-op when GitHub is disabled) |
 
 ### Tasks
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/projects/:id/tasks` | List tasks in a project |
 | POST | `/api/projects/:id/tasks` | Create a task |
-| PUT | `/api/tasks/:id` | Update (status change triggers orchestrator) |
+| PUT | `/api/tasks/:id` | Update (status, priority, `assigned_agent`, `model_key`, `thread_id`). Moving to **In Progress** is now handled client-side by creating a thread + seeding chat; the `review`/`deploy` transition summarizes the linked thread into memory. |
 | DELETE | `/api/tasks/:id` | Delete |
 
-### Providers
+### Models & Curation
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/providers` | List providers |
-| POST | `/api/providers` | Create a provider |
-| PUT | `/api/providers/:id` | Update |
-| DELETE | `/api/providers/:id` | Delete |
-| POST | `/api/providers/:id/test` | Connectivity / health check |
+| GET | `/api/models` | Curated model catalog (`{ allModels, models, enabledModelKeys, customized }`) |
+| PUT | `/api/models/curation` | Save your enabled model keys (`{ enabledModelKeys }`) |
+| POST | `/api/models/active` | Validate a `provider`/`model` pair exists in the registry |
 
-### Personas
+### Auth
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/personas` | List personas |
-| GET | `/api/personas/:slug` | Get full persona config |
-| POST | `/api/personas` | Create/update (writes YAML) |
-| DELETE | `/api/personas/:slug` | Delete |
+| GET | `/api/auth/has-credentials` | `{ ok, providers }` — any credentials configured? |
+| GET | `/api/auth/status` | Per-provider credential type (`api_key` / `oauth`) |
+| POST | `/api/auth/save-key` | Save an API key for a provider |
+| POST | `/api/auth/logout` | Remove a provider's credentials |
+| POST | `/api/auth/start-oauth` | Start an OAuth flow for `anthropic` / `openai-codex` / `github-copilot` |
+| GET | `/api/auth/oauth/:flowId` | Poll an OAuth flow's status (reloads models on completion) |
+| POST | `/api/auth/oauth/:flowId/respond` | Submit a manual callback value |
+| POST | `/api/auth/cancel-oauth` | Cancel a flow |
 
-### Sessions
+### Sessions (chat)
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/projects/:projectId/threads` | List active threads |
+| GET | `/api/projects/:projectId/threads` | List active (non-archived) threads |
 | POST | `/api/projects/:projectId/threads` | Create a thread |
-| GET | `/api/threads/:threadId/messages` | List messages |
-| POST | `/api/threads/:threadId/messages` | Send a message (gets AI reply with memory context) |
-| POST | `/api/threads/:threadId/messages/stream` | Send a message; streams the turn as NDJSON (`delta`/`session`/`done`/`error`) |
-| POST | `/api/threads/:threadId/answer` | Submit a reply to a question card |
+| GET | `/api/threads/:threadId` | Thread + message history (Pi session entries, falling back to DB rows) |
+| GET | `/api/threads/:threadId/messages` | Message history (backwards-compat alias) |
+| POST | `/api/threads/:threadId/messages/stream` | Send a turn; streams NDJSON (`run_start`, `text_delta`, tool calls, `context_usage`, `run_end`, …). Body includes `modelKey`, `images`, `attachments`. Concurrency `409`s with `kind: thread_busy` / `model_busy` / `project_busy`. |
+| POST | `/api/threads/:threadId/abort` | Abort the thread's active run (`{ source: 'user' \| 'frontend' }`) |
+| POST | `/api/threads/:threadId/questions/:toolCallId/answer` | Answer a structured question card |
 | PATCH | `/api/threads/:threadId` | Rename a thread |
-| POST | `/api/threads/:threadId/archive` | Archive a thread |
+| POST | `/api/threads/:threadId/archive` | Archive a thread to memory |
 | DELETE | `/api/threads/:threadId` | Delete a thread |
-| POST | `/api/threads/:threadId/open-terminal` | Open a macOS Terminal resuming the thread's Claude session |
+| GET | `/api/chat/active-runs` | Live chat runs across all threads (with `waitingForResponse`, `questionCount`) |
+| GET | `/api/projects/:projectId/model-status` | Is a `(project, modelKey)` busy? (`?modelKey=`) |
+
+### Assistant
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/assistant/thread` | The single assistant message log (`{ id: 'global', messages }`) |
+| DELETE | `/api/assistant/thread` | Clear the assistant conversation |
+| POST | `/api/assistant/messages/stream` | Send a message; streams NDJSON (`text_delta` / `complete` / `error`) |
+| POST | `/api/assistant/abort` | Abort the active assistant stream |
+
+### Braindump
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/braindump` | List active ideas |
+| POST | `/api/braindump` | Create an idea (`{ title, body }`) |
+| PATCH | `/api/braindump/:id` | Update / triage (`{ status, project_id, task_id }`) |
+| DELETE | `/api/braindump/:id` | Delete an idea |
+
+### Activity
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/activity` | Running + recent operations (`?status=`, `?kind=`, `?limit=`) + counts |
+| GET | `/api/activity/:id` | One operation row |
+| GET | `/api/activity/:id/diagnostics` | Diagnostics / last event / error for an operation |
+| POST | `/api/activity/:id/abort` | Abort a running `chat_turn` / `assistant_stream` |
+| POST | `/api/activity/:id/retry` | Retry a `memory_archive` / `jira_sync` / `github_sync` |
 
 ### Memory
 | Method | Path | Description |
@@ -689,6 +732,13 @@ Base URL: `http://127.0.0.1:4173`
 | POST | `/api/projects/:projectId/memories` | Add a memory |
 | PUT | `/api/memories/:id` | Update content |
 | DELETE | `/api/memories/:id` | Delete |
+
+### Trust & Privacy
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/trust` | Trust snapshot: services, storage, secret sources, outbound destinations, memory controls |
+| POST | `/api/trust/memory/rebuild` | Rebuild the daemon's disposable retrieval index |
+| POST | `/api/trust/memory/clear-nexus` | Permanently delete canonical `nexus`-namespace memory (requires `{ confirmation: 'CLEAR NEXUS MEMORY' }`) |
 
 ### Tickets (Jira mirror)
 | Method | Path | Description |
@@ -705,14 +755,13 @@ Base URL: `http://127.0.0.1:4173`
 ### Agents
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/agents/status` | Running + recent agent runs (with provider, model, tokens, duration) |
+| GET | `/api/agents/status` | Running + recent `agent_runs` (with provider, model, duration) |
 | GET | `/api/agents/runs/:taskId` | Run history for a task |
-| GET | `/api/agents/usage` | Aggregate token usage (`?projectId=` to scope); totals + breakdown by provider |
 
 ### Mission Control
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/mission-control` | Aggregated dashboard: daemon health, agent roster + provider health, activity |
+| GET | `/api/mission-control` | Aggregated dashboard: daemon health, curated models + auth health + counts, usage stats |
 
 ### Missions
 | Method | Path | Description |
@@ -730,8 +779,8 @@ Base URL: `http://127.0.0.1:4173`
 ### Settings
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/settings` | Current config (API key masked) |
-| PUT | `/api/settings` | Update config; writes `~/.nexus/config.yaml`. Omit/mask the API key to keep it unchanged |
+| GET | `/api/settings` | Current config (API keys masked; `github_token_detected` flag derived) |
+| PUT | `/api/settings` | Update config; writes `~/.nexus/config.yaml`. Omit/mask API keys to keep them unchanged |
 
 ### Health
 | Method | Path | Description |
@@ -752,49 +801,82 @@ nexus/
 │   ├── shared/
 │   │   └── index.ts             # All shared types & constants
 │   ├── backend/
-│   │   ├── index.ts             # Fastify server bootstrap
-│   │   ├── config.ts            # ~/.nexus config + default personas/providers
-│   │   ├── db.ts                # SQLite schema + migrations
-│   │   ├── routes/              # HTTP route handlers
-│   │   │   ├── projects.ts
-│   │   │   ├── chat.ts
-│   │   │   ├── personas.ts
-│   │   │   ├── providers.ts
+│   │   ├── index.ts             # Fastify server bootstrap (no orchestrator loop)
+│   │   ├── config.ts            # ~/.nexus config + ${ENV_VAR} interpolation + vault bootstrap
+│   │   ├── env.ts               # nearest .env loader (no-clobber)
+│   │   ├── db.ts                # SQLite schema + guarded migrations
+│   │   ├── codexbar.ts          # Claude/Codex/OpenRouter usage-window sampler (Mission Control stats)
+│   │   ├── routes/
+│   │   │   ├── projects.ts      # projects + tasks + files/preview + git/diff + review-actions + github/sync + order
+│   │   │   ├── chat.ts          # threads + NDJSON streaming + concurrency claims + archive
+│   │   │   ├── assistant.ts     # project-less Assistant view (streaming)
+│   │   │   ├── orchestrator.ts  # /agents/status + /agents/runs (read-only)
 │   │   │   ├── memory.ts
+│   │   │   ├── settings.ts      # ~/.nexus/config.yaml read/write (masked)
+│   │   │   ├── status.ts        # /mission-control (daemon health + curated models + usage)
 │   │   │   ├── tickets.ts       # Jira mirror + /jira/sync
-│   │   │   ├── notifications.ts # in-app notifications API
-│   │   │   ├── missions.ts      # bounded recurring missions (CRUD + controls + runs)
-│   │   │   ├── status.ts        # /mission-control
-│   │   │   └── orchestrator.ts  # /agents/*
-│   │   ├── orchestrator/
-│   │   │   ├── index.ts         # Polling loop + dispatch
-│   │   │   ├── providers.ts     # Claude Code / Codex / OpenCode / OpenAI-compatible
-│   │   │   └── context.ts       # Prompt builder + memory injection
+│   │   │   ├── braindump.ts     # ideas capture + triage
+│   │   │   ├── notifications.ts
+│   │   │   ├── auth.ts          # Pi AuthStorage transport (keys + OAuth flows)
+│   │   │   ├── pi.ts            # /api/models + curation + active
+│   │   │   ├── activity.ts      # /api/activity operations console
+│   │   │   ├── trust.ts         # trust snapshot + memory maintenance controls
+│   │   │   └── missions.ts      # bounded recurring missions (CRUD + controls + runs)
+│   │   ├── pi/                  # Pi runtime bridge (@earendil-works/pi-coding-agent)
+│   │   │   ├── runtime.ts       # one PiRuntime per process: AuthStorage + ModelRegistry + per-thread sessions
+│   │   │   ├── index.ts
+│   │   │   ├── model-curation.ts# ~/.nexus/model-curation.json store + apply()
+│   │   │   ├── oauth-flows.ts   # in-memory OAuth flow manager (poll + manual callback)
+│   │   │   ├── oauth-curation-backfill.ts
+│   │   │   ├── concurrency.ts   # per-(project,model) + project-wide slot tracker (issue #95)
+│   │   │   └── questions.ts     # QuestionBroker for structured question cards
+│   │   ├── sessions/
+│   │   │   ├── archive.ts       # thread → memory summarization
+│   │   │   └── export.ts
+│   │   ├── activity/            # operations event bus + DB persistence (ActivityManager)
 │   │   ├── missions/
 │   │   │   ├── runner.ts        # scheduler loop + single-iteration runner
 │   │   │   ├── bounds.ts        # ceilings, run-window, next-run scheduling (pure)
 │   │   │   ├── store.ts         # missions / mission_runs DB access
-│   │   │   └── handlers/        # echo, triage_tickets, review_stale_tasks (+ registry)
+│   │   │   ├── types.ts
+│   │   │   └── handlers/        # echo, triage_tickets, review_stale_tasks, assistant_turn (+ registry)
+│   │   ├── signal-filters/      # trims noisy tool output before chat history (config + pipeline + extension)
+│   │   ├── trust/
+│   │   │   └── snapshot.ts      # builds the read-only trust snapshot for Settings + /api/trust
 │   │   ├── memory/
-│   │   │   └── client.ts        # thin HTTP client to @nexus/memory-daemon (:4100)
+│   │   │   ├── client.ts        # thin HTTP client to @nexus/memory-daemon (:4100)
+│   │   │   ├── index.ts         # initMemorySystem
+│   │   │   └── summarize.ts     # task-thread → memory summarization
 │   │   ├── jira/
 │   │   │   ├── client.ts        # Jira REST client (fetch + map)
 │   │   │   └── poll.ts          # native ticket poll (runs while the app is up)
+│   │   ├── github/              # GitHub issue triage (client, repo, sync, token)
+│   │   ├── git/
+│   │   │   └── diff.ts          # working-tree diff + review-action prompts
 │   │   ├── notifications/
 │   │   │   └── index.ts         # notifications insert / list-unseen / mark-seen
 │   │   └── tickets/
 │   │       └── sync.ts          # shared ticket upsert (poll + push endpoint)
-│   ├── memory-daemon/           # Standalone memory daemon (own README)
+│   ├── memory-daemon/           # Standalone memory daemon (own README) — vault + index + retrieval, HTTP :4100 + MCP
 │   └── frontend/
 │       ├── index.html
 │       ├── vite.config.ts
 │       └── src/
 │           ├── main.tsx
-│           ├── App.tsx
+│           ├── App.tsx          # GlobalView: dashboard / activity / missions / tickets / braindump / assistant / settings
 │           ├── api.ts           # Typed API client
-│           └── components/      # MissionControl, KanbanBoard, ChatPanel,
-│                                # ProvidersSettings, PersonasPage,
-│                                # MemoryView, TicketsView, UsagePage, QuestionCard, …
+│           ├── api-base.ts
+│           ├── appearance.ts
+│           ├── chat/            # chat-stream hooks + helpers
+│           ├── hooks/           # usePiStream, useAssistantStream, useModels, useFollowAtBottom
+│           ├── lib/
+│           └── components/      # MissionControl, KanbanBoard, ChatPanel, AssistantView, BraindumpView,
+│                                # ActivityConsole, MissionsView, MemoryView, MemoryRail, TicketsView,
+│                                # TaskModelPicker, ModelSelector, ModelCurationSection, PiAuthSection,
+│                                # TrustPrivacySection, SettingsPage, DiffReviewPanel, ArtifactPreviewRail,
+│                                # ChatArtifactLinks, RightRail, QuestionCard, ThinkingBlock,
+│                                # ToolCallTimeline, CommandPalette, Sidebar, TopBar, DaemonToasts,
+│                                # NotificationToasts, ProjectModal, TaskModal, AgentRunCard, …
 ```
 
 ---
@@ -826,9 +908,9 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 
 ### Tables
 
-`projects`, `tasks`, `personas`, `providers`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`, `missions`, `mission_runs`.
+`projects`, `tasks`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`, `braindump_ideas`, `notifications`, `assistant_messages`, `operations`, `missions`, `mission_runs`.
 
-(There is no `memories` table — memory lives in the daemon's own index, not `nexus.db`.)
+(The legacy `personas` and `providers` tables are still created by `db.ts` for one more release as back-compat shims and are not surfaced in the UI or API. There is no `memories` table — memory lives in the daemon's own index, not `nexus.db`.)
 
 ---
 
@@ -836,17 +918,19 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 
 | Symptom | Fix |
 |---|---|
-| Session replies "Config needed" | Set `OPENROUTER_API_KEY` in your environment and restart the backend. |
+| Chat replies "Config needed" / no models in the picker | Add at least one provider credential in **Settings → Auth** (an OpenRouter API key, or sign in via OAuth for Anthropic/OpenAI/Copilot), or set `OPENROUTER_API_KEY` in your environment and restart the backend. Then curate models in **Settings → Models**. |
 | `no such column` SQLite error | An old DB predates a schema change. Migrations handle most cases; if needed, delete `~/.nexus/nexus.db*` and restart. |
 | `ERR_DLOPEN_FAILED` / `better_sqlite3.node was compiled against a different Node.js version (NODE_MODULE_VERSION)` at backend/daemon boot | `better-sqlite3` was rebuilt against a different Node.js version than the one running the services. The `predev`/`prestart` guard (`scripts/ensure-sqlite-abi.cjs`) auto-rebuilds it on the next `npm run web`/`dev`. To fix by hand: `npm rebuild better-sqlite3` (backend) and `npm rebuild better-sqlite3 --prefix src/memory-daemon` (daemon). |
-| Claude Code task fails instantly | Ensure the `claude` CLI is installed and on your `PATH`. Check `~/.nexus/workspaces/<slug>/outputs/<task-id>.log`. |
+| A CLI-backed model (claude-code / codex / opencode) fails instantly | Ensure the relevant CLI (`claude`, `codex`, or `opencode`) is installed and on your `PATH`. Check the run's diagnostics via **Activity → copy diagnostics** or `GET /api/activity/:id/diagnostics`. |
 | `N memory job(s) failed (dead-lettered)` / `embedder unreachable` | Almost always the local model stack is misconfigured, **not** down. A `llama-server` can be listening but return `501` for `/v1/embeddings` or `/v1/rerank` if it wasn't started with the right flags. Launch embeddings with `--embedding --pooling mean --ubatch-size 1024` (:4002; the default `--ubatch-size` 512 rejects chunks that tokenize above 512 tokens) and rerank with `--reranking` (:4003). Confirm with `curl -s -X POST http://127.0.0.1:4002/v1/embeddings -d '{"input":"hi","model":"..."}'` returns 200. Dead jobs do **not** auto-retry — requeue them once the stack is fixed. |
 | KG extraction dead-letters / gen returns empty content | Your generation model (:4001) is a reasoning/"thinking" model burning its whole token budget on hidden reasoning. Relaunch it with `--reasoning off`, or use a non-reasoning model. |
 | A model server shows green but recall is empty | A port ping isn't a capability check — verify `/v1/embeddings` and `/v1/rerank` actually return 200 (see above). |
-| Local model tasks fail | Confirm your local server is running and reachable at `models.local.base_url`, and that the persona's `model` matches a loaded model name (check `GET {base_url}/models`). |
-| Agent never picks up a task | The task must be in **In Progress**. Check `GET /api/agents/status` and the backend console logs. |
-| Hermes agent offline | Export `HERMES_API_KEY` in the backend's environment before launching; the key is never stored in git. |
+| Local-server model not in the picker | Confirm your local server is running and reachable at `models.local.base_url`, then **Settings → Auth → save-key** for the `local` provider and **Settings → Models** to enable it. The model `id` must match a loaded model name (check `GET {base_url}/models`). |
+| `409 model_busy` / `project_busy` on a chat turn | Another run holds the per-`(project, model)` or project-wide slot. Retry with `X-Confirm-Cancel: true` to abort the holder first, or pick a different model. See issue #95. |
+| OAuth flow stuck | **Settings → Auth** polls the flow; if a provider needs a manual callback, the flow UI accepts the value via `/api/auth/oauth/:flowId/respond`. Cancel with `/api/auth/cancel-oauth` and retry. |
+| Hermes-style remote endpoint fails | Ensure `HERMES_API_KEY` is exported in the backend's environment before launching (or the endpoint's auth is otherwise configured); the key is never stored in git. |
 | Jira tickets don't appear | Check, in order: (1) **Settings → Jira** is *Enabled* and you **restarted the backend** afterwards (config is read once at startup); (2) `JIRA_TOKEN` is exported in the shell that launched the backend; (3) the **account email** is the one that owns the token — a wrong email returns an empty result, not an error, so it looks like "no tickets". The instance host accepts a bare host or a full `https://…` URL. |
+| GitHub issues don't mirror into Triage | Run `gh auth login` or set `GITHUB_TOKEN`; confirm **Settings → GitHub** is enabled; ensure the project's repo has a detected remote (`git_remote` on the project). Sync runs on Kanban open. |
 
 ---
 
