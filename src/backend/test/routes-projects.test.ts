@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -136,6 +136,38 @@ test('GET /api/projects/:id/files/preview returns project-local markdown text', 
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/files/preview allows files through project-local symlinked directories', async () => {
+  const { app, db, dir } = makeApp();
+  const externalDocs = mkdtempSync(join(tmpdir(), 'nexus-project-docs-target-'));
+  try {
+    const symlinkPath = join(dir, 'project_docs');
+    const filePath = join(symlinkPath, 'design', 'preview.md');
+    mkdirSync(join(externalDocs, 'design'), { recursive: true });
+    writeFileSync(join(externalDocs, 'design', 'preview.md'), '# Symlinked\n\nGenerated plan.');
+    symlinkSync(externalDocs, symlinkPath, 'dir');
+
+    const res = await app.inject({
+      method: 'GET',
+      url: `/api/projects/project-a/files/preview?path=${encodeURIComponent(filePath)}`,
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), {
+      path: filePath,
+      name: 'preview.md',
+      mimeType: 'text/markdown',
+      kind: 'text',
+      size: 28,
+      content: '# Symlinked\n\nGenerated plan.',
+    });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(externalDocs, { recursive: true, force: true });
   }
 });
 
