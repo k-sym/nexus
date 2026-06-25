@@ -74,6 +74,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig) {
     return { id: 'global', messages: readMessages(db) };
   });
 
+  fastify.delete('/api/assistant/thread', async () => {
+    if (activeAssistantAbort) {
+      activeAssistantAbort.abort();
+      activeAssistantAbort = null;
+    }
+    db.prepare('DELETE FROM assistant_messages').run();
+    return { ok: true, id: 'global' };
+  });
+
   fastify.post('/api/assistant/messages/stream', async (request, reply) => {
     const body = (request.body ?? {}) as { content?: string };
     const content = body.content?.trim() ?? '';

@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { apiFetch } from '../api-base';
 
 export interface AssistantMessage {
@@ -28,6 +28,18 @@ export function useAssistantStream() {
   const [isRunning, setIsRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Synchronous guard so concurrent callers can't both read `false` while
+  // the React state update is still in flight.
+  const sendingRef = useRef(false);
+  const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
+
+  const cancelActiveReader = useCallback(() => {
+    const reader = readerRef.current;
+    if (!reader) return;
+    readerRef.current = null;
+    reader.cancel().catch(() => undefined);
+  }, []);
+
   const loadThread = useCallback(async () => {
     setError(null);
     const res = await apiFetch('/api/assistant/thread');
@@ -41,7 +53,9 @@ export function useAssistantStream() {
 
   const send = useCallback(async (content: string): Promise<boolean> => {
     const trimmed = content.trim();
-    if (!trimmed || isRunning) return false;
+    if (!trimmed) return false;
+    if (sendingRef.current) return false;
+    sendingRef.current = true;
     setError(null);
 
     const res = await apiFetch('/api/assistant/messages/stream', {
@@ -51,10 +65,12 @@ export function useAssistantStream() {
     });
     if (!res.ok) {
       setError(await responseError(res));
+      sendingRef.current = false;
       return false;
     }
     if (!res.body) {
       setError('Assistant response did not include a stream.');
+      sendingRef.current = false;
       return false;
     }
 
@@ -64,6 +80,7 @@ export function useAssistantStream() {
     setMessages((current) => [...current, localMessage('user', trimmed), assistantDraft]);
 
     const reader = res.body.getReader();
+    readerRef.current = reader;
     const decoder = new TextDecoder();
     let pending = '';
     try {
@@ -92,17 +109,38 @@ export function useAssistantStream() {
       ));
       return true;
     } catch (err) {
+      // Reader cancelled by clear/abort — leave messages as-is, no error toast.
+      if (readerRef.current !== reader) return false;
       setError(err instanceof Error ? err.message : String(err));
       return false;
     } finally {
+      if (readerRef.current === reader) readerRef.current = null;
+      sendingRef.current = false;
       setIsRunning(false);
     }
-  }, [isRunning]);
-
-  const abort = useCallback(async () => {
-    await apiFetch('/api/assistant/abort', { method: 'POST' }).catch(() => undefined);
-    setIsRunning(false);
   }, []);
 
-  return { messages, isRunning, error, loadThread, send, abort };
+  const abort = useCallback(async () => {
+    cancelActiveReader();
+    await apiFetch('/api/assistant/abort', { method: 'POST' }).catch(() => undefined);
+    sendingRef.current = false;
+    setIsRunning(false);
+  }, [cancelActiveReader]);
+
+  const clear = useCallback(async (): Promise<boolean> => {
+    setError(null);
+    cancelActiveReader();
+    await apiFetch('/api/assistant/abort', { method: 'POST' }).catch(() => undefined);
+    const res = await apiFetch('/api/assistant/thread', { method: 'DELETE' });
+    if (!res.ok) {
+      setError(await responseError(res));
+      return false;
+    }
+    sendingRef.current = false;
+    setIsRunning(false);
+    setMessages([]);
+    return true;
+  }, [cancelActiveReader]);
+
+  return { messages, isRunning, error, loadThread, send, abort, clear };
 }
