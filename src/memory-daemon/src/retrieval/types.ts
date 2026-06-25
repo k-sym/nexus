@@ -26,10 +26,14 @@ export interface RecallItem {
   title: string | null;
   namespace: string;
   project: string | null;
+  category: string | null;
   source: string;
   score: number; // best matched-sentence score for the memory
   sentences: MatchedSentence[];
   parentChunks: string[];
+  body: string;
+  created_at: string;
+  updated_at: string;
   filePath: string;
   facts?: Triple[];
 }

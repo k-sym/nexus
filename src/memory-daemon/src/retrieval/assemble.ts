@@ -19,8 +19,12 @@ interface MemoryRow {
   title: string | null;
   namespace: string;
   project: string | null;
+  category: string | null;
   source: string;
+  body: string;
   file_path: string;
+  created_at: string;
+  updated_at: string;
 }
 interface SentenceRow {
   id: number;
@@ -44,7 +48,7 @@ export function assemble(ctx: AppContext, input: AssembleInput): RecallItem[] {
   const maxRrf = Math.max(...input.rrf.values(), 1e-9);
 
   const getMem = ctx.db.prepare(
-    "SELECT id, title, namespace, project, source, file_path FROM memories WHERE id = ? AND deleted_at IS NULL",
+    "SELECT id, title, namespace, project, category, source, body, file_path, created_at, updated_at FROM memories WHERE id = ? AND deleted_at IS NULL",
   );
   const getSentences = ctx.db.prepare("SELECT id, text, chunk_id FROM sentences WHERE id IN (SELECT value FROM json_each(?))");
   const firstSentences = ctx.db.prepare("SELECT id, text, chunk_id FROM sentences WHERE memory_id = ? ORDER BY ord LIMIT 3");
@@ -96,10 +100,14 @@ export function assemble(ctx: AppContext, input: AssembleInput): RecallItem[] {
       title: mem.title,
       namespace: mem.namespace,
       project: mem.project,
+      category: mem.category,
       source: mem.source,
       score: bestRerank,
       sentences,
       parentChunks,
+      body: mem.body,
+      created_at: mem.created_at,
+      updated_at: mem.updated_at,
       filePath: mem.file_path,
       ...(facts && facts.length > 0 ? { facts } : {}),
     };

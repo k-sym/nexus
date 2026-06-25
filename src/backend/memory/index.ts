@@ -21,8 +21,11 @@ export interface Memory {
   id: string;
   project_id: string;
   category: string;
+  title: string;
   content: string;
+  source: string;
   created_at: string;
+  updated_at: string;
 }
 
 export interface MemoryInput {
@@ -74,6 +77,24 @@ function formatItem(item: DaemonRecallItem): string {
   return `${item.title}: ${text}`;
 }
 
+function contentFromRecallItem(item: DaemonRecallItem): string {
+  return (item.body ?? item.parentChunks?.[0] ?? item.sentences.map(s => s.text).join(' ') ?? item.title ?? '').trim();
+}
+
+function mapRecallItem(projectId: string, item: DaemonRecallItem): Memory {
+  const timestamp = item.updated_at ?? item.created_at ?? new Date(0).toISOString();
+  return {
+    id: item.id,
+    project_id: projectId,
+    category: item.category || 'general',
+    title: item.title || '',
+    content: contentFromRecallItem(item),
+    source: item.source,
+    created_at: item.created_at ?? timestamp,
+    updated_at: timestamp,
+  };
+}
+
 /**
  * Token-budgeted recall for auto-injection. Returns formatted strings (the shape the
  * orchestrator/chat injectors and the frontend Memory panel already expect).
@@ -114,6 +135,20 @@ export async function getRelevantMemories(
   return results;
 }
 
+/** Search memories for the management UI. Unlike recall injection, this preserves IDs. */
+export async function searchMemoryRecords(db: Database.Database, projectId: string, query: string): Promise<Memory[]> {
+  if (!query || query.trim().length === 0) return [];
+  const slug = projectSlug(db, projectId);
+
+  try {
+    const res = await daemon.search(query, { namespace: 'nexus', project: slug, scope: 'isolated' }, 50);
+    return res.items.map(item => mapRecallItem(projectId, item)).filter(item => item.content || item.title);
+  } catch (err: any) {
+    console.error('[memory] UI search failed:', err.message);
+    return [];
+  }
+}
+
 /** List recent memories for a project (frontend list view). */
 export async function getAllMemories(db: Database.Database, projectId: string): Promise<Memory[]> {
   const slug = projectSlug(db, projectId);
@@ -123,8 +158,11 @@ export async function getAllMemories(db: Database.Database, projectId: string): 
       id: m.id,
       project_id: projectId,
       category: m.category || 'general',
-      content: m.title || '',
-      created_at: m.updated_at,
+      title: m.title || '',
+      content: (m.body || m.title || '').trim(),
+      source: m.source,
+      created_at: m.created_at ?? m.updated_at,
+      updated_at: m.updated_at,
     }));
   } catch (err: any) {
     console.error('[memory] list failed:', err.message);

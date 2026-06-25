@@ -138,6 +138,17 @@ export interface ClearNexusResult {
   reconciliationError?: string;
 }
 
+export interface MemoryRecord {
+  id: string;
+  project_id: string;
+  category: string;
+  title: string;
+  content: string;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 function qs(params: Record<string, string | number | undefined>): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) if (v !== undefined) sp.set(k, String(v));
@@ -273,10 +284,12 @@ export const api = {
       fetchJson<{ ok: boolean }>(`/api/notifications/seen`, { method: 'POST', body: JSON.stringify({ ids }) }),
   },
   memory: {
-    search: (projectId: string, query: string) => fetchJson<string[]>(`/api/projects/${projectId}/memories?q=${encodeURIComponent(query)}`),
-    list: (projectId: string) => fetchJson<any[]>(`/api/projects/${projectId}/memories`),
+    search: (projectId: string, query: string) => fetchJson<MemoryRecord[]>(`/api/projects/${projectId}/memories?q=${encodeURIComponent(query)}`),
+    list: (projectId: string) => fetchJson<MemoryRecord[]>(`/api/projects/${projectId}/memories`),
     create: (projectId: string, data: { content: string; category?: string; agent_id?: string }) =>
       fetchJson<any>(`/api/projects/${projectId}/memories`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: { content: string }) =>
+      fetchJson<void>(`/api/memories/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     delete: (id: string) => fetchJson<void>(`/api/memories/${id}`, { method: 'DELETE' }),
   },
   activity: {

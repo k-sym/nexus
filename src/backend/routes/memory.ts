@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { MemoryInput, addMemory, getRelevantMemories, getAllMemories, deleteMemory, updateMemory } from '../memory/index.js';
+import { MemoryInput, addMemory, searchMemoryRecords, getAllMemories, deleteMemory, updateMemory } from '../memory/index.js';
 
 export async function registerMemoryRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
@@ -9,7 +9,7 @@ export async function registerMemoryRoutes(fastify: FastifyInstance) {
     const { q } = request.query as { q?: string };
 
     if (q) {
-      return getRelevantMemories(db, projectId, q);
+      return searchMemoryRecords(db, projectId, q);
     }
     return getAllMemories(db, projectId);
   });
