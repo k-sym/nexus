@@ -177,6 +177,25 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     if (threadRunClaims.get(threadId)?.owner === owner) threadRunClaims.delete(threadId);
   };
 
+  fastify.get('/api/chat/active-runs', async () => {
+    const runs = Array.from(threadRunClaims.entries()).map(([threadId, claim]) => {
+      const row = db.prepare('SELECT project_id FROM chat_threads WHERE id = ?').get(threadId) as { project_id: string } | undefined;
+      const questionCount = pi.questions?.pendingCount(threadId) ?? 0;
+      return {
+        threadId,
+        title: claim.title,
+        modelKey: claim.modelKey,
+        projectId: row?.project_id ?? null,
+        waitingForResponse: questionCount > 0,
+        questionCount,
+      };
+    });
+    return {
+      activeThreadIds: runs.map((run) => run.threadId),
+      runs,
+    };
+  });
+
   fastify.get('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
     const rows = db
@@ -331,18 +350,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     let session: ChatSession | undefined;
     let responseCompleted = false;
     let clientDisconnected = false;
-    let disconnectAbort: Promise<void> | undefined;
-    const abortDisconnectedSession = () => {
-      if (!clientDisconnected || !session || disconnectAbort) return;
-      disconnectAbort = session.abort().catch((err: any) => {
-        console.error(`[chat] failed to abort disconnected thread ${threadId}:`, err?.message);
-      });
-    };
     const abortOnResponseClose = () => {
       if (responseCompleted || clientDisconnected) return;
       clientDisconnected = true;
-      pi.questions?.cancelThread(threadId, 'Client disconnected');
-      abortDisconnectedSession();
     };
     reply.raw.once('close', abortOnResponseClose);
     request.raw.once('aborted', abortOnResponseClose);
@@ -354,7 +364,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         reply.code(500);
         return { error: err?.message || 'failed to create session' };
       }
-      abortDisconnectedSession();
       if (clientDisconnected) return;
 
       if (body.modelKey && selectedModel) {
@@ -369,7 +378,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
             reply.code(400);
             return { error: message };
           }
-          abortDisconnectedSession();
           if (clientDisconnected) return;
         }
       }
@@ -465,11 +473,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         } finally {
           subscription();
         }
-        if (clientDisconnected) {
-          const error = new Error('Client disconnected');
-          error.name = 'AbortError';
-          throw error;
-        }
         const completedAbortSource = activeStreams.get(threadId)?.abortSource;
         if (completedAbortSource) {
           terminalStatus = 'cancelled';
@@ -536,7 +539,6 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       responseCompleted = true;
       reply.raw.removeListener('close', abortOnResponseClose);
       request.raw.removeListener('aborted', abortOnResponseClose);
-      if (disconnectAbort) await disconnectAbort;
       concurrency.release(thread.project_id, modelKey, modelClaimOwner);
       releaseThreadClaim();
     }

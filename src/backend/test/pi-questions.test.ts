@@ -172,6 +172,26 @@ test('question broker cancelThread resolves and removes all thread entries', asy
   await other;
 });
 
+test('question broker reports pending question counts by thread', async () => {
+  const broker = new QuestionBroker();
+  const request = validRequest();
+  const one = broker.register('thread-1', 'call-1', request);
+  const two = broker.register('thread-1', 'call-2', request);
+  const other = broker.register('thread-2', 'call-3', request);
+
+  assert.equal(broker.pendingCount('thread-1'), 2);
+  assert.equal(broker.hasPending('thread-1'), true);
+  assert.equal(broker.pendingCount('missing'), 0);
+  assert.equal(broker.hasPending('missing'), false);
+
+  broker.cancelThread('thread-1', 'done');
+  assert.equal((await one).status, 'cancelled');
+  assert.equal((await two).status, 'cancelled');
+  assert.equal(broker.pendingCount('thread-1'), 0);
+  broker.cancelThread('thread-2', 'cleanup');
+  await other;
+});
+
 test('question broker abort signals cancel registration and format results deterministically', async () => {
   const broker = new QuestionBroker();
   const controller = new AbortController();

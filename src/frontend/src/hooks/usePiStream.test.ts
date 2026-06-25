@@ -211,7 +211,7 @@ describe('usePiStream', () => {
     expect(result.current.state.messages[1].run?.tools[0].status).toBe('interrupted');
   });
 
-  it('aborts the streaming thread after the visible thread changes', async () => {
+  it('detaches the visible stream without aborting the backend run after the visible thread changes', async () => {
     const requestedUrls: string[] = [];
     global.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -238,12 +238,11 @@ describe('usePiStream', () => {
     });
     act(() => result.current.setActiveThread('thread-new'));
     await act(async () => {
-      await result.current.abortStream('frontend');
+      result.current.detachStream();
       await streamPromise;
     });
 
-    expect(requestedUrls.some((url) => url.endsWith('/api/threads/thread-old/abort'))).toBe(true);
-    expect(requestedUrls.some((url) => url.endsWith('/api/threads/thread-new/abort'))).toBe(false);
+    expect(requestedUrls.some((url) => url.endsWith('/abort'))).toBe(false);
   });
 
   it('surfaces same-thread busy responses as normal errors without throwing a conflict', async () => {

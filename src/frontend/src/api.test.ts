@@ -28,6 +28,28 @@ describe('chat question API', () => {
       }),
     );
   });
+
+  it('fetches active chat run thread IDs', async () => {
+    const response = {
+      activeThreadIds: ['thread-1'],
+      runs: [{
+        threadId: 'thread-1',
+        title: 'Needs scope',
+        modelKey: 'openrouter/model',
+        projectId: 'project-1',
+        waitingForResponse: true,
+        questionCount: 1,
+      }],
+    };
+    apiFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => response,
+    });
+
+    await expect(api.chat.activeRuns()).resolves.toEqual(response);
+
+    expect(apiFetch).toHaveBeenCalledWith('/api/chat/active-runs', expect.any(Object));
+  });
 });
 
 describe('api.projects diff review', () => {

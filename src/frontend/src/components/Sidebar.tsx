@@ -20,6 +20,7 @@ interface SidebarProps {
   activeThreadId: string | null;
   threads: ThreadMeta[];
   activeSessionIds: Set<string>;
+  waitingSessionIds: Set<string>;
   archivingThreadIds: Set<string>;
   projectCounts: Record<string, SidebarProjectCounts>;
   onSelectProject: (id: string) => void;
@@ -90,6 +91,7 @@ function CountBadge({ children, className = '' }: { children: React.ReactNode; c
 
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
+  waitingSessionIds,
   archivingThreadIds,
   projectCounts,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onArchiveThread, onDeleteThread, onNewChat, onNewProject,
@@ -289,6 +291,7 @@ export default function Sidebar({
                       threads.map(({ thread }) => {
                         const isRenaming = renamingId === thread.id;
                         const isActiveSession = activeSessionIds.has(thread.id);
+                        const isWaitingForResponse = waitingSessionIds.has(thread.id);
                         const isArchiving = archivingThreadIds.has(thread.id);
                         return (
                           <Row
@@ -308,6 +311,11 @@ export default function Sidebar({
                                     <CircleNotch size={13} className="animate-spin" />
                                     <span>Archiving...</span>
                                   </span>
+                                ) : isWaitingForResponse ? (
+                                  <span
+                                    title="Waiting for response"
+                                    className="inline-block h-3.5 w-3.5 rounded-full border border-amber-200/80 bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.45)] animate-pulse"
+                                  />
                                 ) : isActiveSession && (
                                   <span
                                     title="Session active"

@@ -256,6 +256,18 @@ export class QuestionBroker {
     }
   }
 
+  pendingCount(threadId: string): number {
+    let count = 0;
+    for (const entry of this.pending.values()) {
+      if (entry.threadId === threadId) count += 1;
+    }
+    return count;
+  }
+
+  hasPending(threadId: string): boolean {
+    return this.pendingCount(threadId) > 0;
+  }
+
   private cancelEntry(key: string, reason: string): void {
     const entry = this.pending.get(key);
     if (!entry) return;
