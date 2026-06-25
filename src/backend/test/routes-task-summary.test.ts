@@ -98,6 +98,77 @@ test('PUT /api/tasks/:id persists thread_id, model_key and status on the in_prog
   }
 });
 
+test('moving a thread-linked task back to triage/todo clears thread_id and model_key (issue #97)', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    insertTask(db, { status: 'in_progress', thread_id: 'thread-9', model_key: 'anthropic/sonnet-4-5' });
+
+    // Back to todo — link should be wiped so the Kanban chat bubble disappears.
+    const resTodo = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/task-1',
+      payload: { status: 'todo' },
+    });
+    assert.equal(resTodo.statusCode, 200);
+    const todoRow = resTodo.json();
+    assert.equal(todoRow.status, 'todo');
+    assert.equal(todoRow.thread_id, null, 'thread_id cleared on move to todo');
+    assert.equal(todoRow.model_key, null, 'model_key cleared on move to todo');
+
+    // Relink so we can verify triage behaves the same.
+    await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/task-1',
+      payload: { status: 'in_progress', thread_id: 'thread-9', model_key: 'anthropic/sonnet-4-5' },
+    });
+
+    const resTriage = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/task-1',
+      payload: { status: 'triage' },
+    });
+    assert.equal(resTriage.statusCode, 200);
+    const triageRow = resTriage.json();
+    assert.equal(triageRow.status, 'triage');
+    assert.equal(triageRow.thread_id, null, 'thread_id cleared on move to triage');
+    assert.equal(triageRow.model_key, null, 'model_key cleared on move to triage');
+
+    // Editing a triage task without changing status must also keep the link clear.
+    const resEdit = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/task-1',
+      payload: { title: 'Renamed while in triage' },
+    });
+    assert.equal(resEdit.statusCode, 200);
+    assert.equal(resEdit.json().thread_id, null, 'triage edit does not resurrect the link');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('moving a thread-linked task into review preserves thread_id for summarization', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    insertTask(db, { status: 'in_progress', thread_id: 'thread-9', model_key: 'anthropic/sonnet-4-5' });
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/tasks/task-1',
+      payload: { status: 'review' },
+    });
+    assert.equal(res.statusCode, 200);
+    const row = res.json();
+    assert.equal(row.status, 'review');
+    assert.equal(row.thread_id, 'thread-9', 'thread_id preserved on move to review');
+    assert.equal(row.model_key, 'anthropic/sonnet-4-5', 'model_key preserved on move to review');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('moving a thread-linked task into review with an empty thread is a graceful no-op (no notification)', async () => {
   const { app, db, dir } = makeApp();
   try {

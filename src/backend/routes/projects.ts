@@ -516,8 +516,31 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     }
 
     const now = new Date().toISOString();
-    db.prepare('UPDATE tasks SET title = COALESCE(?, title), description = COALESCE(?, description), status = COALESCE(?, status), priority = COALESCE(?, priority), assigned_agent = COALESCE(?, assigned_agent), due_date = COALESCE(?, due_date), model_key = COALESCE(?, model_key), thread_id = COALESCE(?, thread_id), updated_at = ? WHERE id = ?')
-      .run(body.title, body.description, body.status, body.priority, body.assigned_agent, body.due_date, body.model_key, body.thread_id, now, id);
+
+    // Tasks in the pre-work columns (triage/todo) must never carry a live
+    // chat-thread link — that link is what renders the chat bubble on the
+    // Kanban card. When a card is dragged out of "In Progress" back to one
+    // of these columns the underlying Pi session is already closed, so
+    // keeping thread_id here leaves a dangling bubble that 404s on click
+    // (issue #97). Reset the link whenever the *resulting* status is a
+    // pre-work state, regardless of whether status was in the payload.
+    const resultingStatus: TaskStatus = body.status ?? existing.status;
+    const resetThreadLink = (['triage', 'todo'] as TaskStatus[]).includes(resultingStatus);
+
+    db.prepare(
+      'UPDATE tasks SET title = COALESCE(?, title), description = COALESCE(?, description), status = COALESCE(?, status), priority = COALESCE(?, priority), assigned_agent = COALESCE(?, assigned_agent), due_date = COALESCE(?, due_date), model_key = ?, thread_id = ?, updated_at = ? WHERE id = ?',
+    ).run(
+      body.title,
+      body.description,
+      body.status,
+      body.priority,
+      body.assigned_agent,
+      body.due_date,
+      resetThreadLink ? null : (body.model_key ?? existing.model_key ?? null),
+      resetThreadLink ? null : (body.thread_id ?? existing.thread_id ?? null),
+      now,
+      id,
+    );
 
     db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, existing.project_id);
 
