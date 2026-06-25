@@ -58,18 +58,24 @@ function requestedFilePath(rawPath: string): string {
   return rawPath;
 }
 
-function resolveProjectFile(project: Project, rawPath: string): { filePath: string; stat: fs.Stats } {
-  const projectRoot = fs.realpathSync(path.resolve(expandHome(project.repo_path)));
+function isPathInside(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
+}
+
+function resolveProjectFile(project: Project, rawPath: string): { filePath: string; displayPath: string; stat: fs.Stats } {
+  const projectRoot = path.resolve(expandHome(project.repo_path));
+  const realProjectRoot = fs.realpathSync(projectRoot);
   const requestPath = requestedFilePath(rawPath);
   const requested = path.resolve(path.isAbsolute(requestPath) ? requestPath : path.join(projectRoot, requestPath));
+  const visibleInsideProject = isPathInside(requested, projectRoot);
   if (!fs.existsSync(requested)) {
     const err = new Error('File not found') as any;
     err.statusCode = 404;
     throw err;
   }
   const filePath = fs.realpathSync(requested);
-  const insideProject = filePath === projectRoot || filePath.startsWith(`${projectRoot}${path.sep}`);
-  if (!insideProject) {
+  const realInsideProject = isPathInside(filePath, realProjectRoot);
+  if (!visibleInsideProject && !realInsideProject) {
     const err = new Error('File must be inside the project directory') as any;
     err.statusCode = 403;
     throw err;
@@ -80,7 +86,7 @@ function resolveProjectFile(project: Project, rawPath: string): { filePath: stri
     err.statusCode = 400;
     throw err;
   }
-  return { filePath, stat };
+  return { filePath, displayPath: realInsideProject ? filePath : requested, stat };
 }
 
 export async function registerProjectRoutes(fastify: FastifyInstance) {
@@ -175,12 +181,12 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       throw err;
     }
 
-    const { filePath, stat } = resolveProjectFile(project, rawPath);
+    const { filePath, displayPath, stat } = resolveProjectFile(project, rawPath);
     const mimeType = mimeTypeFor(filePath);
     const kind = previewKindFor(mimeType);
     const base = {
-      path: filePath,
-      name: path.basename(filePath),
+      path: displayPath,
+      name: path.basename(displayPath),
       mimeType,
       kind,
       size: stat.size,
@@ -197,7 +203,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     if (kind === 'pdf') {
       return {
         ...base,
-        url: `/api/projects/${encodeURIComponent(id)}/files/raw?path=${encodeURIComponent(filePath)}`,
+        url: `/api/projects/${encodeURIComponent(id)}/files/raw?path=${encodeURIComponent(displayPath)}`,
       };
     }
     return base;
