@@ -293,6 +293,18 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         }
         pi.questions?.cancelThread(busy.threadId, 'Cancelled by another thread');
         await concurrency.waitForRelease(thread.project_id, modelKey, busy, ABORT_GRACE_MS);
+        // If the grace window expired without release, surface the per-model
+        // conflict here rather than falling through to the project-wide check
+        // (a still-busy per-model slot is the more specific diagnostic).
+        if (concurrency.get(thread.project_id, modelKey)?.threadId === busy.threadId) {
+          reply.code(409);
+          return {
+            kind: 'model_busy',
+            activeThreadId: busy.threadId,
+            activeTitle: busy.title,
+            modelKey: busy.modelKey,
+          };
+        }
       } else {
         reply.code(409);
         return {
@@ -300,6 +312,35 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
           activeThreadId: busy.threadId,
           activeTitle: busy.title,
           modelKey: busy.modelKey,
+        };
+      }
+    }
+
+    // Project-wide check: an assistant_turn mission (or any repo-mutating
+    // agent) may hold the project-wide slot. If so, treat it like a model_busy
+    // conflict so an autonomous agent and a chat turn never race on the same
+    // working tree regardless of which model each uses (issue #95).
+    const projectBusy = concurrency.getProject(thread.project_id);
+    if (projectBusy && projectBusy.threadId !== threadId) {
+      if (confirmCancel) {
+        // The project-wide holder is a mission — there's no active chat
+        // stream to abort here, and the mission runs to completion on its
+        // own schedule. Wait for it to release within the grace window.
+        await concurrency.waitForProjectRelease(thread.project_id, projectBusy, ABORT_GRACE_MS);
+        if (concurrency.getProject(thread.project_id)?.threadId === projectBusy.threadId) {
+          reply.code(409);
+          return {
+            kind: 'project_busy',
+            activeThreadId: projectBusy.threadId,
+            activeTitle: projectBusy.title,
+          };
+        }
+      } else {
+        reply.code(409);
+        return {
+          kind: 'project_busy',
+          activeThreadId: projectBusy.threadId,
+          activeTitle: projectBusy.title,
         };
       }
     }
@@ -333,8 +374,25 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       return threadBusyResponse(threadId, threadRunClaims.get(threadId)!);
     }
     const releaseThreadClaim = () => releaseThreadRun(threadId, threadClaimOwner);
+    // Acquire the project-wide slot FIRST (deadlock-safe ordering: any caller
+    // that holds both always acquires project-wide before per-model). A
+    // mission that already holds the project slot will cause this claim to
+    // fail and we surface project_busy. Issue #95.
+    const projectClaimOwner = concurrency.claimProject(thread.project_id, threadId, thread.title);
+    if (!projectClaimOwner) {
+      releaseThreadClaim();
+      const active = concurrency.getProject(thread.project_id);
+      reply.code(409);
+      return {
+        kind: 'project_busy',
+        activeThreadId: active?.threadId,
+        activeTitle: active?.title,
+      };
+    }
+    const releaseProjectClaim = () => concurrency.releaseProject(thread.project_id, projectClaimOwner);
     const modelClaimOwner = concurrency.claim(thread.project_id, modelKey, threadId, thread.title);
     if (!modelClaimOwner) {
+      releaseProjectClaim();
       releaseThreadClaim();
       const active = concurrency.get(thread.project_id, modelKey);
       reply.code(409);
@@ -539,7 +597,10 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       responseCompleted = true;
       reply.raw.removeListener('close', abortOnResponseClose);
       request.raw.removeListener('aborted', abortOnResponseClose);
+      // Release in reverse acquisition order: per-model, then project-wide,
+      // then the in-process thread claim. See issue #95.
       concurrency.release(thread.project_id, modelKey, modelClaimOwner);
+      releaseProjectClaim();
       releaseThreadClaim();
     }
   });
@@ -668,6 +729,17 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         busy: true,
         activeThreadId: busy.threadId,
         activeTitle: busy.title,
+      };
+    }
+    // A mission (or any repo-mutating agent) may hold the project-wide slot
+    // without a per-(project,model) entry. Surface that too (issue #95).
+    const projectBusy = concurrency.getProject(projectId);
+    if (projectBusy) {
+      return {
+        busy: true,
+        activeThreadId: projectBusy.threadId,
+        activeTitle: projectBusy.title,
+        projectBusy: true,
       };
     }
     return { busy: false };
