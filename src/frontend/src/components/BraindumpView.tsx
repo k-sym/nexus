@@ -75,7 +75,7 @@ export default function BraindumpView({ projects, onTriage }: BraindumpViewProps
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
               placeholder="Capture an idea and press Enter…"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/60"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-strong"
             />
           </div>
 
@@ -88,7 +88,7 @@ export default function BraindumpView({ projects, onTriage }: BraindumpViewProps
                 key={idea.id}
                 onClick={() => setSelected(idea)}
                 className={`group w-full text-left bg-zinc-900 border rounded-md px-4 py-2.5 transition-colors ${
-                  selected?.id === idea.id ? 'border-indigo-500/60' : 'border-zinc-800 hover:border-zinc-700'
+                  selected?.id === idea.id ? 'border-strong' : 'border-zinc-800 hover:border-zinc-700'
                 }`}
               >
                 <div className="flex items-center gap-2">
@@ -117,7 +117,7 @@ export default function BraindumpView({ projects, onTriage }: BraindumpViewProps
                   onBlur={handleSaveBody}
                   rows={6}
                   placeholder="Flesh out the idea…"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/60 resize-none"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-strong resize-none"
                 />
               </div>
               <TriageToProject projects={projects} resetKey={selected.id} onCreate={handleTriage} />

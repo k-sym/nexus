@@ -17,8 +17,16 @@ describe('theme palette contract', () => {
     expect(css).toContain('--surface-glass:');
     expect(css).toContain('--border-subtle:');
     expect(css).toContain('--accent:');
+    expect(css).toContain('--accent-foreground: #071014');
     expect(css).toContain('.surface-glass');
     expect(css).toContain('.accent-button');
+  });
+
+  it('uses current accent colors for scrollbar styling', () => {
+    expect(css).toContain('::-webkit-scrollbar-thumb');
+    expect(css).toContain('background: rgba(137, 232, 203, 0.26)');
+    expect(css).toContain('background: rgba(137, 232, 203, 0.46)');
+    expect(css).not.toContain('rgba(167, 139, 250');
   });
 
   it('defines the ambient shell and open kanban lane contract', () => {
@@ -38,10 +46,16 @@ describe('theme palette contract', () => {
     expect(css).toContain('animation: none !important');
   });
 
-  it('keeps the starfield opt-in animated with gradient-based glow', () => {
+  it('uses the selected light content islands palette while neutralizing the starfield glow', () => {
     expect(css).toContain('@keyframes ambient-twinkle');
-    expect(css).toContain('2.6px');
-    expect(css).toContain('rgba(190, 242, 255, 0.07) 7px');
+    expect(css).toContain('--surface-canvas: #101417');
+    expect(css).toContain('--surface-panel: rgba(21, 29, 33, 0.94)');
+    expect(css).toContain('--surface-elevated: rgba(39, 52, 58, 0.90)');
+    expect(css).toContain('--accent: #89e8cb');
+    expect(css).toContain('background: rgba(8, 13, 16, 0.96)');
+    expect(css).toContain('background: rgba(39, 52, 58, 0.82)');
+    expect(css).toContain('background-image: none');
+    expect(css).toContain('opacity: 0');
     expect(css).toContain('.ambient-animate .ambient-shell::after');
     expect(css).toContain('ambient-drift 22s');
   });

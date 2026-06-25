@@ -37,6 +37,8 @@ const noop = vi.fn();
 
 function renderSidebar({
   threads = [{ thread }],
+  subView = 'chat',
+  activeThreadId = thread.id,
   activeSessionIds = new Set<string>(),
   waitingSessionIds = new Set<string>(),
   archivingThreadIds = new Set<string>(),
@@ -48,6 +50,8 @@ function renderSidebar({
   onNewChat = noop,
 }: {
   threads?: ThreadMeta[];
+  subView?: 'kanban' | 'memory' | 'chat';
+  activeThreadId?: string | null;
   activeSessionIds?: Set<string>;
   waitingSessionIds?: Set<string>;
   archivingThreadIds?: Set<string>;
@@ -62,8 +66,8 @@ function renderSidebar({
     <Sidebar
       projects={[project, secondProject]}
       activeProjectId={project.id}
-      subView="chat"
-      activeThreadId={thread.id}
+      subView={subView}
+      activeThreadId={activeThreadId}
       threads={threads}
       activeSessionIds={activeSessionIds}
       waitingSessionIds={waitingSessionIds}
@@ -95,7 +99,7 @@ describe('Sidebar', () => {
   it('labels chat threads as sessions and shows active session activity', () => {
     renderSidebar({ threads: [{ thread }], activeSessionIds: new Set([thread.id]) });
 
-    expect(screen.getByText('Sessions')).toBeInTheDocument();
+    expect(screen.getByLabelText('Project sessions')).toHaveTextContent('Inspect progress docs first');
     expect(screen.queryByText('Chat')).not.toBeInTheDocument();
     expect(screen.getByTitle('Session active')).toBeInTheDocument();
   });
@@ -118,33 +122,108 @@ describe('Sidebar', () => {
     expect(screen.queryByText('No conversations')).not.toBeInTheDocument();
   });
 
-  it('shows project and kanban counts with a sessions create button in the drawer', () => {
+  it('shows active project counts with a new session action in the workspace', () => {
     renderSidebar({ threads: [{ thread }, { thread: { ...thread, id: 'thread-2', title: 'Second session' } }] });
 
-    expect(screen.getByText('3/2')).toBeInTheDocument();
-    expect(screen.getByText('10/2')).toBeInTheDocument();
+    expect(screen.getByText('3 tasks')).toBeInTheDocument();
+    expect(screen.getByText('2 sessions')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
-    expect(screen.getByTitle('New session')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'New Session' })).toBeInTheDocument();
   });
 
-  it('separates each project group with a top divider', () => {
+  it('renders a compact project rail beside the project details panel', () => {
     renderSidebar();
 
-    expect(screen.getByLabelText('Project group: nexus')).toHaveClass('border-t');
-    expect(screen.getByLabelText('Project group: mywise')).toHaveClass('border-t');
+    expect(screen.getByLabelText('Project rail')).toBeInTheDocument();
+    expect(screen.getByLabelText('Project details')).toBeInTheDocument();
+    expect(screen.getByTitle('nexus')).toHaveTextContent('N');
+    expect(screen.getByTitle('mywise')).toHaveTextContent('M');
   });
 
-  it('uses the sessions plus button to start a new session', async () => {
+  it('shows the active project as a summary card in the details panel', () => {
+    renderSidebar();
+
+    const summary = screen.getByLabelText('Active project: nexus');
+    expect(summary).toHaveTextContent('nexus');
+    expect(summary).toHaveTextContent('/repo/nexus');
+    expect(summary).toHaveTextContent('3 tasks');
+    expect(summary).toHaveTextContent('1 session');
+  });
+
+  it('promotes running and waiting sessions into an active sessions section', () => {
+    const waitingThread: ChatThread = {
+      ...thread,
+      id: 'thread-2',
+      title: 'Waiting on approval',
+    };
+
+    renderSidebar({
+      threads: [{ thread }, { thread: waitingThread }],
+      activeSessionIds: new Set([thread.id, waitingThread.id]),
+      waitingSessionIds: new Set([waitingThread.id]),
+    });
+
+    const activeSection = screen.getByLabelText('Active sessions');
+    expect(activeSection).toHaveTextContent('Inspect progress docs first');
+    expect(activeSection).toHaveTextContent('RUN');
+    expect(activeSection).toHaveTextContent('Waiting on approval');
+    expect(activeSection).toHaveTextContent('WAIT');
+  });
+
+  it('uses compact dark rail styling hooks and removes the repeated project list', () => {
+    renderSidebar();
+
+    expect(screen.getByLabelText('Project rail')).toHaveClass('compact-project-rail');
+    expect(screen.getByLabelText('Project details')).toHaveClass('compact-project-panel');
+    expect(screen.getByLabelText('Active project: nexus')).toHaveClass('compact-project-card');
+    expect(screen.queryByLabelText('Project group: nexus')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Project group: mywise')).not.toBeInTheDocument();
+  });
+
+  it('places active project destinations directly under the active project card', () => {
+    renderSidebar();
+
+    const workspace = screen.getByLabelText('Active project workspace');
+    expect(workspace.querySelector('.compact-project-workspace')).toBeInTheDocument();
+    expect(workspace).toHaveTextContent('Kanban');
+    expect(workspace).toHaveTextContent('Memory');
+    expect(workspace).toHaveTextContent('New Session');
+    expect(workspace).not.toHaveTextContent('Sessions');
+    expect(workspace).toHaveTextContent('Project intelligence');
+  });
+
+  it('uses the new session action row to start a new session', async () => {
     const user = userEvent.setup();
     const onNewChat = vi.fn();
     renderSidebar({ onNewChat });
 
-    expect(screen.queryByText('New Session')).not.toBeInTheDocument();
+    const workspaceCard = screen.getByLabelText('Active project navigation');
+    expect(workspaceCard).toHaveTextContent('New Session');
+    expect(workspaceCard).not.toHaveTextContent(thread.title);
+    expect(screen.getByLabelText('Project sessions')).toHaveTextContent(thread.title);
 
-    await user.click(screen.getByTitle('New session'));
+    await user.click(screen.getByRole('button', { name: 'New Session' }));
 
     expect(onNewChat).toHaveBeenCalledWith(project.id);
-    expect(screen.getByText(thread.title)).toBeInTheDocument();
+  });
+
+  it('shows non-archived sessions even when the current subview is not chat', () => {
+    renderSidebar({ subView: 'kanban', activeThreadId: null, threads: [{ thread }] });
+
+    expect(screen.getByLabelText('Project sessions')).toHaveTextContent(thread.title);
+  });
+
+  it('renders each session as its own row rather than one grouped list card', () => {
+    renderSidebar({
+      threads: [
+        { thread },
+        { thread: { ...thread, id: 'thread-2', title: 'Second session' } },
+      ],
+    });
+
+    const sessions = screen.getByLabelText('Project sessions');
+    expect(sessions).not.toHaveClass('compact-project-session-list');
+    expect(sessions.querySelectorAll('.compact-project-session-row')).toHaveLength(2);
   });
 
   it('uses the default sidebar width when no preference is saved', () => {
@@ -183,7 +262,7 @@ describe('Sidebar', () => {
     const onEditProject = vi.fn();
     renderSidebar({ onEditProject });
 
-    await user.click(screen.getAllByTitle('Edit project')[0]);
+    await user.click(screen.getByTitle('Edit active project'));
 
     expect(onEditProject).toHaveBeenCalledWith(project);
   });
@@ -194,7 +273,7 @@ describe('Sidebar', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSidebar({ onDeleteProject });
 
-    await user.click(screen.getAllByTitle('Delete project')[0]);
+    await user.click(screen.getByTitle('Delete active project'));
 
     expect(window.confirm).toHaveBeenCalledWith('Delete this project? This cannot be undone.');
     expect(onDeleteProject).toHaveBeenCalledWith(project.id);
@@ -241,7 +320,7 @@ describe('Sidebar', () => {
     expect(onArchiveThread).not.toHaveBeenCalled();
   });
 
-  it('reorders projects by dragging one project onto another', () => {
+  it('reorders projects by dragging one project rail avatar onto another', () => {
     const onReorderProjects = vi.fn();
     renderSidebar({ onReorderProjects });
     const dataTransfer = {
@@ -252,8 +331,8 @@ describe('Sidebar', () => {
       getData(format: string) { return this.data.get(format) ?? ''; },
     };
 
-    fireEvent.dragStart(screen.getByText('mywise').closest('button')!, { dataTransfer });
-    fireEvent.drop(screen.getByText('nexus').closest('button')!, { dataTransfer });
+    fireEvent.dragStart(screen.getByLabelText('Switch to mywise'), { dataTransfer });
+    fireEvent.drop(screen.getByLabelText('Switch to nexus'), { dataTransfer });
 
     expect(onReorderProjects).toHaveBeenCalledWith(['project-2', 'project-1']);
   });

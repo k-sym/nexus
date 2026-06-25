@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import MissionsView from './MissionsView';
 
 vi.mock('../api', () => ({
@@ -19,8 +19,12 @@ vi.mock('../api', () => ({
   },
 }));
 
-const projects = [{ id: 'p1', slug: 'p1', name: 'Project One', description: '', repo_path: '/tmp/p1',
-  config_json: '{}', git_remote: '', created_at: '', updated_at: '' }];
+const projects = [
+  { id: 'p1', slug: 'p1', name: 'Project One', description: '', repo_path: '/tmp/p1',
+    config_json: '{}', git_remote: '', created_at: '', updated_at: '' },
+  { id: 'p2', slug: 'p2', name: 'Baker', description: '', repo_path: '/tmp/p2',
+    config_json: '{}', git_remote: '', created_at: '', updated_at: '' },
+];
 
 describe('MissionsView', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -28,5 +32,33 @@ describe('MissionsView', () => {
   it('lists missions for the selected project', async () => {
     render(<MissionsView projects={projects as never} />);
     await waitFor(() => expect(screen.getByText('Triage tickets')).toBeInTheDocument());
+  });
+
+  it('uses current accent styling instead of legacy purple mission controls', async () => {
+    render(<MissionsView projects={projects as never} />);
+
+    const newButton = screen.getByRole('button', { name: /New/ });
+    expect(newButton).toHaveClass('accent-button');
+    expect(newButton).not.toHaveClass('bg-indigo-600');
+
+    const mission = await screen.findByRole('button', { name: /Triage tickets/ });
+    expect(mission).not.toHaveClass('border-indigo-500/60');
+  });
+
+  it('uses a themed project picker instead of the browser select in the header', async () => {
+    render(<MissionsView projects={projects as never} />);
+
+    expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
+
+    const trigger = screen.getByRole('button', { name: /Mission project Project One/i });
+    expect(trigger).toHaveClass('triage-project-trigger');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'listbox');
+
+    fireEvent.click(trigger);
+    const listbox = screen.getByRole('listbox', { name: /Mission project/i });
+    expect(listbox).toHaveClass('triage-project-listbox');
+
+    fireEvent.click(screen.getByRole('option', { name: 'Baker' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: /Mission project Baker/i })).toBeInTheDocument());
   });
 });

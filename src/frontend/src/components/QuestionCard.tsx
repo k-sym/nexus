@@ -140,7 +140,7 @@ export function QuestionCard({
       <button
         type="submit"
         disabled={!complete || submitting}
-        className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+        className="accent-button rounded-lg px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
       >
         {submitting ? 'Submitting…' : 'Submit answers'}
       </button>

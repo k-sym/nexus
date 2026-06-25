@@ -6,12 +6,16 @@ import TriageToProject from './TriageToProject';
 
 const STATUS_ORDER = ['Waiting for support', 'In Progress', 'Waiting for customer'];
 
-const PRIORITY_COLOR: Record<string, string> = {
-  Urgent: 'text-red-400',
-  High: 'text-orange-400',
-  Medium: 'text-amber-400',
-  Low: 'text-zinc-400',
+const PRIORITY_CLASS: Record<string, string> = {
+  Urgent: 'ticket-priority-urgent',
+  High: 'ticket-priority-high',
+  Medium: 'ticket-priority-medium',
+  Low: 'ticket-priority-low',
 };
+
+function priorityClass(priority: string): string {
+  return `ticket-priority-pill ${PRIORITY_CLASS[priority] ?? 'ticket-priority-low'}`;
+}
 
 function groupByStatus(tickets: Ticket[]): [string, Ticket[]][] {
   const groups = new Map<string, Ticket[]>();
@@ -115,13 +119,13 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
                       key={t.key}
                       onClick={() => setSelected(t)}
                       className={`w-full text-left bg-zinc-900 border rounded-md px-4 py-2.5 transition-colors ${
-                        selected?.key === t.key ? 'border-indigo-500/60' : 'border-zinc-800 hover:border-zinc-700'
+                        selected?.key === t.key ? 'border-strong' : 'border-zinc-800 hover:border-zinc-700'
                       }`}
                     >
                       <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono text-indigo-400/80 shrink-0">{t.key}</span>
+                        <span className="text-xs font-mono accent-text shrink-0">{t.key}</span>
                         <span className="text-sm text-zinc-200 truncate flex-1">{t.summary}</span>
-                        <span className={`text-[11px] shrink-0 ${PRIORITY_COLOR[t.priority] ?? 'text-zinc-400'}`}>{t.priority}</span>
+                        <span className={`shrink-0 ${priorityClass(t.priority)}`}>{t.priority}</span>
                       </div>
                     </button>
                   ))}
@@ -137,14 +141,14 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
             <div className="p-5 space-y-4">
               <div>
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-mono text-indigo-400/80">{selected.key}</span>
+                  <span className="text-xs font-mono accent-text">{selected.key}</span>
                   <span className="text-[11px] text-zinc-500">{selected.status}</span>
                 </div>
                 <h2 className="text-base font-semibold text-zinc-100 leading-snug">{selected.summary}</h2>
               </div>
 
               <dl className="text-xs text-zinc-400 space-y-1.5">
-                <div className="flex justify-between"><dt className="text-zinc-500">Priority</dt><dd className={PRIORITY_COLOR[selected.priority] ?? ''}>{selected.priority}</dd></div>
+                <div className="flex justify-between items-center"><dt className="text-zinc-500">Priority</dt><dd className={priorityClass(selected.priority)}>{selected.priority}</dd></div>
                 <div className="flex justify-between"><dt className="text-zinc-500">Assignee</dt><dd>{selected.assignee ?? '—'}</dd></div>
                 <div className="flex justify-between"><dt className="text-zinc-500">Created</dt><dd>{selected.created ?? '—'}</dd></div>
                 <div className="flex justify-between"><dt className="text-zinc-500">Updated</dt><dd>{selected.updated ?? '—'}</dd></div>
@@ -155,7 +159,7 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
                   href={selected.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="block text-center text-sm text-indigo-400 hover:text-indigo-300 border border-zinc-800 rounded-md py-2 transition-colors"
+                  className="block text-center text-sm accent-text hover:text-[var(--accent)] border border-zinc-800 hover:border-strong rounded-md py-2 transition-colors"
                 >
                   Open in Jira ↗
                 </a>

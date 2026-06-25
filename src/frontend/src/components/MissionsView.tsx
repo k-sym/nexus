@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Play, Pause, Stop, Trash, Plus } from '@phosphor-icons/react';
+import { Play, Pause, Stop, Trash, Plus, CaretDown } from '@phosphor-icons/react';
 import type { Project, Mission, MissionRun, CreateMissionInput, MissionKind, MissionPacing } from '@nexus/shared';
 import { api } from '../api';
 
@@ -21,7 +21,12 @@ export default function MissionsView({ projects }: Props) {
   const [runs, setRuns] = useState<MissionRun[]>([]);
   const [draft, setDraft] = useState<CreateMissionInput>(emptyDraft());
   const [showCreate, setShowCreate] = useState(false);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!projectId && projects.length > 0) setProjectId(projects[0].id);
+  }, [projectId, projects]);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -61,6 +66,13 @@ export default function MissionsView({ projects }: Props) {
     }
   };
 
+  const selectedProject = projects.find((project) => project.id === projectId) ?? projects[0];
+
+  const selectProject = (nextProjectId: string) => {
+    setProjectId(nextProjectId);
+    setProjectPickerOpen(false);
+  };
+
   const control = async (m: Mission, action: 'resume' | 'pause' | 'stop') => {
     try {
       await api.missions[action](m.id);
@@ -88,16 +100,46 @@ export default function MissionsView({ projects }: Props) {
         <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
           <h1 className="text-xl font-semibold text-zinc-100">Missions</h1>
           <div className="flex items-center gap-2">
-            <select
-              value={projectId}
-              onChange={(e) => setProjectId(e.target.value)}
-              className="bg-zinc-900 rounded-lg border border-zinc-800 px-2 py-1 text-sm text-zinc-200"
-            >
-              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <div className="relative">
+              <button
+                type="button"
+                aria-haspopup="listbox"
+                aria-expanded={projectPickerOpen}
+                aria-label={`Mission project ${selectedProject?.name ?? 'none'}`}
+                onClick={() => setProjectPickerOpen((open) => !open)}
+                className="triage-project-trigger min-w-44"
+              >
+                <span className="min-w-0 truncate">{selectedProject?.name ?? 'Choose project'}</span>
+                <CaretDown
+                  size={16}
+                  className={`shrink-0 text-muted transition-transform ${projectPickerOpen ? 'rotate-180' : ''}`}
+                  aria-hidden="true"
+                />
+              </button>
+              {projectPickerOpen && (
+                <div
+                  role="listbox"
+                  aria-label="Mission project"
+                  className="triage-project-listbox"
+                >
+                  {projects.map((project) => (
+                    <button
+                      key={project.id}
+                      type="button"
+                      role="option"
+                      aria-selected={project.id === projectId}
+                      onClick={() => selectProject(project.id)}
+                      className={`triage-project-option ${project.id === projectId ? 'triage-project-option-selected' : ''}`}
+                    >
+                      {project.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             <button
               onClick={() => setShowCreate((v) => !v)}
-              className="flex items-center gap-1 rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500"
+              className="flex items-center gap-1 rounded-lg accent-button px-3 py-1.5 text-sm transition-colors"
             >
               <Plus size={16} /> New
             </button>
@@ -117,7 +159,7 @@ export default function MissionsView({ projects }: Props) {
               placeholder="Mission title…"
               value={draft.title}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-              className="w-full rounded-lg border border-zinc-800 bg-transparent px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500/60"
+              className="w-full rounded-lg border border-zinc-800 bg-transparent px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-strong"
             />
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-zinc-500">Kind
@@ -164,7 +206,7 @@ export default function MissionsView({ projects }: Props) {
               </button>
               <button
                 onClick={handleCreate}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-500"
+                className="rounded-lg accent-button px-3 py-1.5 text-sm transition-colors"
               >
                 Create (paused)
               </button>
@@ -181,7 +223,7 @@ export default function MissionsView({ projects }: Props) {
               key={m.id}
               onClick={() => void selectMission(m)}
               className={`group block w-full rounded-xl border px-4 py-3 text-left transition-colors ${
-                selected?.id === m.id ? 'border-indigo-500/60' : 'border-zinc-800 hover:border-zinc-700'
+                selected?.id === m.id ? 'border-strong' : 'border-zinc-800 hover:border-zinc-700'
               } bg-zinc-900`}
             >
               <div className="flex items-center justify-between">

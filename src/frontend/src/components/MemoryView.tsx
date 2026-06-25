@@ -29,7 +29,7 @@ function MemoryArticle({ memory, selected, onView, onCopy, onEdit, onDelete }: M
   return (
     <article
       className={`bg-zinc-900 border rounded-md px-4 py-3 transition-colors ${
-        selected ? 'border-indigo-500/60' : 'border-zinc-800 hover:border-zinc-700'
+        selected ? 'border-strong' : 'border-zinc-800 hover:border-zinc-700'
       }`}
     >
       <div className="flex items-start gap-3">
@@ -39,7 +39,7 @@ function MemoryArticle({ memory, selected, onView, onCopy, onEdit, onDelete }: M
           className="flex-1 min-w-0 text-left cursor-pointer"
         >
           <div className="flex flex-wrap items-center gap-2 mb-1">
-            <span className="text-[10px] uppercase tracking-wider text-indigo-400/80">{memory.category}</span>
+            <span className="text-[10px] uppercase tracking-wider accent-text">{memory.category}</span>
             {memory.updated_at && <span className="text-[10px] text-zinc-600">{shortDate(memory.updated_at)}</span>}
             {memory.source && <span className="text-[10px] text-zinc-600">{memory.source}</span>}
           </div>
@@ -225,13 +225,13 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
             onChange={e => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search memories..."
-            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-strong"
           />
           <button
             type="button"
             onClick={handleSearch}
             disabled={searching}
-            className="px-4 py-2 text-sm bg-indigo-500 text-ink rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors cursor-pointer"
+            className="px-4 py-2 text-sm accent-button rounded-md disabled:opacity-40 transition-colors cursor-pointer"
           >
             {searching ? 'Searching...' : 'Search'}
           </button>
@@ -276,7 +276,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
               <div className="p-4 space-y-4">
                 <div className="flex items-start gap-3">
                   <div className="min-w-0 flex-1">
-                    <div className="text-[10px] uppercase tracking-wider text-indigo-400/80">{selected.category}</div>
+                    <div className="text-[10px] uppercase tracking-wider accent-text">{selected.category}</div>
                     <h2 className="text-base font-semibold text-zinc-100 break-words">{displayTitle(selected)}</h2>
                   </div>
                   <button
@@ -303,14 +303,14 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
                       value={editContent}
                       onChange={e => setEditContent(e.target.value)}
                       rows={8}
-                      className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 resize-y focus:outline-none focus:border-indigo-500/50"
+                      className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 resize-y focus:outline-none focus:border-strong"
                     />
                     <div className="flex gap-2">
                       <button
                         type="button"
                         onClick={handleSave}
                         disabled={saving || !editContent.trim()}
-                        className="px-3 py-1.5 text-xs bg-indigo-500 text-ink rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors cursor-pointer"
+                        className="px-3 py-1.5 text-xs accent-button rounded-md disabled:opacity-40 transition-colors cursor-pointer"
                       >
                         {saving ? 'Saving...' : 'Save memory'}
                       </button>
@@ -379,13 +379,13 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
             onChange={e => setNewMemory(e.target.value)}
             placeholder="Add a memory..."
             rows={1}
-            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 resize-none focus:outline-none focus:border-indigo-500/50"
+            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 resize-none focus:outline-none focus:border-strong"
           />
           <button
             type="button"
             onClick={handleAdd}
             disabled={adding || !newMemory.trim()}
-            className="px-4 py-2 text-sm bg-indigo-500 text-ink rounded-md hover:bg-indigo-600 disabled:opacity-40 transition-colors cursor-pointer"
+            className="px-4 py-2 text-sm accent-button rounded-md disabled:opacity-40 transition-colors cursor-pointer"
           >
             {adding ? 'Adding...' : 'Add Memory'}
           </button>
