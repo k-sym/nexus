@@ -55,6 +55,12 @@ describe('QuestionCard', () => {
     ]);
   });
 
+  it('uses the shared accent button styling for submitting answers', () => {
+    render(<QuestionCard request={request} onSubmit={vi.fn()} />);
+
+    expect(screen.getByRole('button', { name: 'Submit answers' })).toHaveClass('accent-button');
+  });
+
   it('supports multiple selections and a custom response', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);

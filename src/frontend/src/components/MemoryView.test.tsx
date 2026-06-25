@@ -119,4 +119,25 @@ describe('MemoryView', () => {
     expect(window.confirm).toHaveBeenCalledWith('Delete this memory permanently?');
     expect(memoryApi.delete).toHaveBeenCalledWith('mem-1');
   });
+
+  it('uses current shell accent styling instead of legacy purple memory controls', async () => {
+    const user = userEvent.setup();
+    render(<MemoryView projectId="project-1" />);
+
+    await user.click(await screen.findByRole('button', { name: /Keep archive body/ }));
+
+    const selectedArticle = screen.getAllByText('Full memory body with the useful decision.')[0].closest('article')!;
+    expect(selectedArticle).toHaveClass('border-strong');
+    expect(selectedArticle).not.toHaveClass('border-indigo-500/60');
+
+    const categoryLabels = screen.getAllByText('decision');
+    expect(categoryLabels[0]).toHaveClass('accent-text');
+    expect(categoryLabels[0]).not.toHaveClass('text-indigo-400/80');
+
+    expect(screen.getByRole('button', { name: 'Search' })).toHaveClass('accent-button');
+    expect(screen.getByRole('button', { name: 'Add Memory' })).toHaveClass('accent-button');
+
+    await user.click(screen.getByRole('button', { name: 'Edit memory' }));
+    expect(screen.getByRole('button', { name: 'Save memory' })).toHaveClass('accent-button');
+  });
 });
