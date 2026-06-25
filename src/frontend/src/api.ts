@@ -109,6 +109,12 @@ export interface ReindexResult {
   queued: number;
 }
 
+export type FilePreview =
+  | { path: string; name: string; mimeType: string; kind: 'text'; size: number; content: string }
+  | { path: string; name: string; mimeType: string; kind: 'image'; size: number; data: string }
+  | { path: string; name: string; mimeType: string; kind: 'pdf'; size: number; url: string }
+  | { path: string; name: string; mimeType: string; kind: 'unsupported'; size: number; reason?: string };
+
 export interface ClearNexusResult {
   namespace: 'nexus';
   deleted: number;
@@ -159,6 +165,8 @@ export const api = {
     githubSync: (id: string) =>
       fetchJson<{ created: number; total: number }>(`/api/projects/${id}/github/sync`, { method: 'POST' }),
     gitDiff: (id: string) => fetchJson<GitDiffState>(`/api/projects/${id}/git/diff`),
+    previewFile: (id: string, path: string) =>
+      fetchJson<FilePreview>(`/api/projects/${id}/files/preview?path=${encodeURIComponent(path)}`),
     reviewAction: (id: string, data: ReviewActionRequest) =>
       fetchJson<ReviewActionResult>(`/api/projects/${id}/review-actions`, {
         method: 'POST',

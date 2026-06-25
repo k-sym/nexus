@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
-import { CaretRight, CaretLeft, ArrowSquareOut } from '@phosphor-icons/react';
+import { ArrowSquareOut } from '@phosphor-icons/react';
 import { api } from '../api';
+import RightRail from './RightRail';
 
 interface MemoryRailProps {
   projectId: string;
@@ -67,34 +68,38 @@ export default function MemoryRail({ projectId, onOpenFull }: MemoryRailProps) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAdd(); }
   };
 
-  if (!open) {
-    return (
-      <button
-        onClick={() => setOpen(true)}
-        title="Show memory"
-        className="shrink-0 w-8 border-l border-subtle surface-glass flex flex-col items-center justify-center gap-2 text-faint hover:text-[var(--text-primary)] transition-colors"
-      >
-        <CaretLeft size={16} />
-        <span className="text-[10px] uppercase tracking-wider [writing-mode:vertical-rl]">Memory</span>
-      </button>
-    );
-  }
-
   return (
-    <aside className="shrink-0 w-72 border-l border-subtle surface-glass flex flex-col min-h-0">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-subtle">
-        <span className="text-[10px] uppercase tracking-wider text-faint font-medium">Memory</span>
-        <div className="flex items-center gap-2">
-          <button onClick={onOpenFull} title="Open full Memory page" className="flex items-center gap-1 text-xs text-faint hover:text-[var(--text-primary)] transition-colors">
-            <ArrowSquareOut size={14} /> Open
+    <RightRail
+      label="Memory"
+      title="Memory"
+      open={open}
+      onOpenChange={setOpen}
+      actions={(
+        <button onClick={onOpenFull} title="Open full Memory page" className="flex items-center gap-1 text-xs text-faint hover:text-[var(--text-primary)] transition-colors">
+          <ArrowSquareOut size={14} /> Open
+        </button>
+      )}
+      footer={(
+        <>
+          <textarea
+            value={draft}
+            onChange={e => setDraft(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Add a memory… (Enter to save)"
+            rows={2}
+            className="w-full surface-panel border border-subtle rounded-md px-2 py-1.5 text-xs text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
+          />
+          <button
+            onClick={handleAdd}
+            disabled={adding || !draft.trim()}
+            className="mt-1 w-full px-2 py-1 text-xs accent-button rounded-md disabled:opacity-40 transition-colors"
+          >
+            {adding ? 'Adding…' : 'Add'}
           </button>
-          <button onClick={() => setOpen(false)} title="Collapse" className="text-faint hover:text-[var(--text-primary)] transition-colors">
-            <CaretRight size={14} />
-          </button>
-        </div>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-2 space-y-1.5">
+        </>
+      )}
+    >
+      <div className="space-y-1.5">
         {recent.length === 0 && (
           <div className="text-xs text-faint text-center py-6">No memories yet.</div>
         )}
@@ -108,24 +113,6 @@ export default function MemoryRail({ projectId, onOpenFull }: MemoryRailProps) {
           </div>
         ))}
       </div>
-
-      <div className="border-t border-subtle p-2">
-        <textarea
-          value={draft}
-          onChange={e => setDraft(e.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder="Add a memory… (Enter to save)"
-          rows={2}
-          className="w-full surface-panel border border-subtle rounded-md px-2 py-1.5 text-xs text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
-        />
-        <button
-          onClick={handleAdd}
-          disabled={adding || !draft.trim()}
-          className="mt-1 w-full px-2 py-1 text-xs accent-button rounded-md disabled:opacity-40 transition-colors"
-        >
-          {adding ? 'Adding…' : 'Add'}
-        </button>
-      </div>
-    </aside>
+    </RightRail>
   );
 }

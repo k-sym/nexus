@@ -155,4 +155,35 @@ describe('AgentRunCard', () => {
     // The prelude must come before the question card in DOM order.
     expect(prelude.compareDocumentPosition(questionPrompt)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
+
+  it('renders generated file paths in run content as preview controls', () => {
+    const onOpenArtifact = vi.fn();
+    const filePath = '/Users/k-sym/Projects/baker-internal/chat-preview-test.md';
+    render(<AgentRunCard
+      run={run({ status: 'completed', phase: 'finalizing', completedAt: Date.now() })}
+      content={`Created it here:\n\n\`${filePath}\``}
+      thinking=""
+      detailsExpanded
+      onStop={() => {}}
+      onOpenArtifact={onOpenArtifact}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview chat-preview-test.md' }));
+    expect(onOpenArtifact).toHaveBeenCalledWith(filePath);
+  });
+
+  it('renders generated bare filenames in run content as preview controls', () => {
+    const onOpenArtifact = vi.fn();
+    render(<AgentRunCard
+      run={run({ status: 'completed', phase: 'finalizing', completedAt: Date.now() })}
+      content="Created `test.md` with 10 lines."
+      thinking=""
+      detailsExpanded
+      onStop={() => {}}
+      onOpenArtifact={onOpenArtifact}
+    />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Preview test.md' }));
+    expect(onOpenArtifact).toHaveBeenCalledWith('test.md');
+  });
 });

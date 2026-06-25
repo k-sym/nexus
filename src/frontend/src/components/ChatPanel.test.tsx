@@ -251,6 +251,76 @@ describe('ChatPanel', () => {
     expect(screen.queryByRole('button', { name: 'Submit answers' })).not.toBeInTheDocument();
   });
 
+  it('opens an artifact preview rail from an assistant-generated file path', async () => {
+    const filePath = '/Users/k-sym/Projects/nexus/project_docs/design/preview.md';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [
+          { id: 'assistant-1', role: 'assistant', content: `Spec written to ${filePath}`, timestamp: 1 },
+        ] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/files/preview')) {
+        return { ok: true, json: async () => ({
+          path: filePath,
+          name: 'preview.md',
+          mimeType: 'text/markdown',
+          kind: 'text',
+          size: 24,
+          content: '# Preview\n\nBuilt notes.',
+        }) } as Response;
+      }
+      return { ok: true, json: async () => ({ busy: false }) } as Response;
+    });
+    global.fetch = fetchMock;
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await userEvent.click(await screen.findByRole('button', { name: `Preview preview.md` }));
+
+    expect(await screen.findByRole('complementary', { name: 'File preview' })).toBeInTheDocument();
+    expect(await screen.findByText(/Built notes\./)).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/projects/p1/files/preview?path=${encodeURIComponent(filePath)}`,
+      expect.anything(),
+    );
+  });
+
+  it('opens an artifact preview rail from an assistant-generated relative image path', async () => {
+    const filePath = 'output/stick-man-640x480.png';
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [
+          { id: 'assistant-1', role: 'assistant', content: `Created: \`${filePath}\``, timestamp: 1 },
+        ] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/files/preview')) {
+        return { ok: true, json: async () => ({
+          path: filePath,
+          name: 'stick-man-640x480.png',
+          mimeType: 'image/png',
+          kind: 'image',
+          size: 128,
+          data: 'iVBORw0KGgo=',
+        }) } as Response;
+      }
+      return { ok: true, json: async () => ({ busy: false }) } as Response;
+    });
+    global.fetch = fetchMock;
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Preview stick-man-640x480.png' }));
+
+    expect(await screen.findByRole('complementary', { name: 'File preview' })).toBeInTheDocument();
+    expect(await screen.findByAltText('stick-man-640x480.png')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/projects/p1/files/preview?path=${encodeURIComponent(filePath)}`,
+      expect.anything(),
+    );
+  });
+
   it('shows the empty state when no thread is selected', () => {
     render(
       <ChatPanel

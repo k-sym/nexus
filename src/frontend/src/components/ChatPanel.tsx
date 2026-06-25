@@ -25,6 +25,8 @@ import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { AgentRunCard } from './AgentRunCard';
 import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
+import ArtifactPreviewRail from './ArtifactPreviewRail';
+import ChatArtifactLinks from './ChatArtifactLinks';
 
 interface ChatPanelProps {
   projectId: string;
@@ -148,6 +150,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [draggingAttachments, setDraggingAttachments] = useState(false);
   const [questionSubmissions, setQuestionSubmissions] = useState<QuestionSubmissionState>({});
   const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
+  const [artifactPath, setArtifactPath] = useState<string | null>(null);
+  const [artifactRailOpen, setArtifactRailOpen] = useState(false);
   const streamContentVersion = [
     loadedMessages.length,
     state.messages.length,
@@ -188,6 +192,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
+    setArtifactPath(null);
+    setArtifactRailOpen(false);
     setDraggingAttachments(false);
   }, [threadId, dispatch, abortStream]);
 
@@ -224,6 +230,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       clearInterval(interval);
     };
   }, [projectId, activeModelId, threadId]);
+
+  const openArtifactPreview = useCallback((path: string) => {
+    setArtifactPath(path);
+    setArtifactRailOpen(true);
+  }, []);
 
   // Helper to fetch thread messages (without setting model)
   const fetchThreadMessages = useCallback(async (id: string) => {
@@ -533,14 +544,15 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const latestAssistantId = isRunning ? null : findLatestAssistantId(visible);
 
   return (
-    <div
-      className="flex-1 flex flex-col min-w-0 h-full relative"
-      data-testid="chat-drop-target"
-      onDragEnter={handleDragEnter}
-      onDragOver={handleDragOver}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
-    >
+    <div className="flex-1 flex min-w-0 h-full">
+      <div
+        className="flex-1 flex flex-col min-w-0 h-full relative"
+        data-testid="chat-drop-target"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
       {draggingAttachments && (
         <div className="absolute inset-3 z-20 rounded-lg border border-dashed border-cyan-300/50 bg-slate-950/70 flex items-center justify-center text-sm text-primary pointer-events-none">
           Release to attach files
@@ -609,6 +621,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               fallbackState={fallbackSubmissions[m.id]}
               onAnswerQuestion={answerNativeQuestion}
               onAnswerFallback={answerFallbackQuestion}
+              onOpenArtifact={openArtifactPreview}
               onStop={() => void abortStream('user')}
             />
           ))
@@ -620,6 +633,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             questionState={questionSubmissions}
             onAnswerQuestion={answerNativeQuestion}
             onAnswerFallback={answerFallbackQuestion}
+            onOpenArtifact={openArtifactPreview}
             onStop={() => void abortStream('user')}
           />
         )}
@@ -718,6 +732,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           </div>
         </div>
       </div>
+      </div>
+      <ArtifactPreviewRail
+        projectId={projectId}
+        selectedPath={artifactPath}
+        open={artifactRailOpen}
+        onOpenChange={setArtifactRailOpen}
+      />
     </div>
   );
 }
@@ -730,6 +751,7 @@ function MessageBubble({
   fallbackState,
   onAnswerQuestion,
   onAnswerFallback,
+  onOpenArtifact,
   onStop,
 }: {
   msg: StreamMessage;
@@ -739,6 +761,7 @@ function MessageBubble({
   fallbackState?: QuestionSubmissionState[string];
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onAnswerFallback: (messageId: string, request: QuestionRequest, answers: QuestionAnswer[]) => Promise<void>;
+  onOpenArtifact: (path: string) => void;
   onStop: () => void;
 }) {
   const isUser = msg.role === 'user';
@@ -759,6 +782,7 @@ function MessageBubble({
           onStop={onStop}
           questionState={questionState}
           onAnswerQuestion={onAnswerQuestion}
+          onOpenArtifact={onOpenArtifact}
         />
       </div>
     );
@@ -847,7 +871,9 @@ function MessageBubble({
           </div>
         ) : (
           <>
-            <p className="whitespace-pre-wrap">{msg.content}</p>
+            <p className="whitespace-pre-wrap">
+              {isUser ? msg.content : <ChatArtifactLinks text={msg.content} onOpenPath={onOpenArtifact} />}
+            </p>
             {/* Native question tools render after the prelude text, at the
                 bottom of the bubble (issue #109). */}
             {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
