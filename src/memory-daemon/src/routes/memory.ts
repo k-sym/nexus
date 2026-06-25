@@ -58,7 +58,7 @@ export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): voi
     const scope = (filter.namespace ? " AND namespace = @namespace" : "") + (filter.project ? " AND project = @project" : "");
     const rows = ctx.db
       .prepare(
-        `SELECT id, title, namespace, project, category, source, updated_at
+        `SELECT id, title, namespace, project, category, source, body, created_at, updated_at
          FROM memories WHERE deleted_at IS NULL${scope} ORDER BY updated_at DESC LIMIT @limit`,
       )
       .all({ namespace: filter.namespace ?? null, project: filter.project ?? null, limit: limit ?? 50 });

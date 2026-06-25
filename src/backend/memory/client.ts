@@ -12,10 +12,14 @@ export interface DaemonRecallItem {
   title: string | null;
   namespace: string;
   project: string | null;
+  category?: string | null;
   source: string;
   score: number;
   sentences: { id: number; text: string; score: number }[];
   parentChunks: string[];
+  body?: string;
+  created_at?: string;
+  updated_at?: string;
   facts?: { subject: string; relation: string; object: string }[];
 }
 
@@ -33,6 +37,8 @@ export interface DaemonListItem {
   project: string | null;
   category: string | null;
   source: string;
+  body?: string;
+  created_at?: string;
   updated_at: string;
 }
 
@@ -120,6 +126,9 @@ export const daemon = {
   },
   list(scope: DaemonScope = {}, limit?: number) {
     return req<{ items: DaemonListItem[] }>('GET', `/memories${qs({ ...scope, limit })}`);
+  },
+  search(query: string, scope: DaemonScope = {}, limit?: number) {
+    return req<DaemonRecallResponse>('GET', `/memories${qs({ q: query, ...scope, limit })}`);
   },
   update(id: string, patch: { title?: string; body?: string }) {
     return req<unknown>('PUT', `/memories/${encodeURIComponent(id)}`, patch);
