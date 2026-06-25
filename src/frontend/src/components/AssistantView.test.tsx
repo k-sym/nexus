@@ -104,4 +104,38 @@ describe('AssistantView', () => {
     });
     expect(confirmSpy).toHaveBeenCalled();
   });
+
+  it('does not fire a second stream request while one is already in flight', async () => {
+    let resolveStream: (res: Response) => void;
+    const streamPromise = new Promise<Response>((resolve) => { resolveStream = resolve; });
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/thread' && init?.method === 'DELETE') {
+        return { ok: true, json: async () => ({ ok: true, id: 'global' }) } as Response;
+      }
+      if (url === '/api/assistant/thread') {
+        return { ok: true, json: async () => ({ id: 'global', messages: [] }) } as Response;
+      }
+      if (url === '/api/assistant/messages/stream') {
+        return streamPromise;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    fireEvent.change(input, { target: { value: 'Hi' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    // Fire a second send immediately while the first is still pending.
+    fireEvent.change(input, { target: { value: 'Hi again' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      const streamCalls = apiFetchMock.mock.calls.filter(([url]) => url === '/api/assistant/messages/stream');
+      expect(streamCalls.length).toBe(1);
+    });
+
+    // Release the hanging stream so the component unmounts cleanly.
+    resolveStream!(new Response('{}'));
+  });
 });
