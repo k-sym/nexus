@@ -1239,6 +1239,58 @@ test('GET /api/chat/active-runs marks runs waiting on pending questions', async 
   }
 });
 
+test('GET /api/threads/:threadId keeps unfinished active run history running', async () => {
+  const promptStarted = deferred<void>();
+  const promptStopped = deferred<void>();
+  const persistedRunId = 'pending-run-id';
+  const entries = () => [
+    { type: 'custom', id: 'start', customType: 'nexus.agent_run', data: { event: 'start', runId: persistedRunId, threadId: 'thread-1', startedAt: '2026-06-26T05:00:00.000Z', provider: 'openrouter', model: 'glm-5.2' } },
+    { type: 'message', id: 'user-1', message: { role: 'user', content: 'continue', timestamp: 1 } },
+    { type: 'message', id: 'assistant-1', message: { role: 'assistant', timestamp: 2, content: [{ type: 'toolCall', id: 'call-1', name: 'Bash', arguments: { command: 'npm test' } }] } },
+  ];
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      promptStarted.resolve();
+      await promptStopped.promise;
+    },
+    abort: async () => {},
+  };
+  const runtime = {
+    questions: new QuestionBroker(),
+    readMessages: async () => entries(),
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openrouter', id: 'glm-5.2' }) },
+  };
+  const { app, db, dir } = makeApp(runtime);
+  const stream = app.inject({
+    method: 'POST',
+    url: '/api/threads/thread-1/messages/stream',
+    payload: { content: 'continue', modelKey: 'openrouter/glm-5.2' },
+  });
+
+  try {
+    await promptStarted.promise;
+    const response = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+
+    assert.equal(response.statusCode, 200);
+    const assistant = response.json().messages.find((message: any) => message.role === 'assistant');
+    assert.equal(assistant.run.status, 'running');
+    assert.equal(assistant.run.completedAt, undefined);
+    assert.equal(assistant.run.tools[0].status, 'running');
+  } finally {
+    promptStopped.resolve();
+    await stream;
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream returns model selection errors before prompting', async () => {
   let promptCalled = false;
   const session = {

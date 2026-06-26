@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime, buildResourceLoaderOptions, buildSessionExtensionFactories, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
@@ -145,6 +145,36 @@ test('PiRuntime.sessionFor resumes the on-disk session after the in-memory cache
   }
 });
 
+test('PiRuntime uses the most recently modified duplicate session file for a thread', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = {
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  };
+  try {
+    const rt = new PiRuntime(paths);
+    const cwd = '/tmp/proj';
+    const threadId = 'thread-duplicate';
+    const cwdDir = join(paths.sessionsDir, cwdSlug(cwd));
+    mkdirSync(cwdDir, { recursive: true });
+
+    const oldFile = join(cwdDir, `2026-06-24T09-00-00-000Z_${threadId}.jsonl`);
+    const newFile = join(cwdDir, `2026-06-24T10-00-00-000Z_${threadId}.jsonl`);
+    writeSessionFile(oldFile, threadId, cwd, '2026-06-24T09:00:00.000Z', 'old duplicate message');
+    writeSessionFile(newFile, threadId, cwd, '2026-06-24T10:00:00.000Z', 'new duplicate message');
+
+    const messages = await rt.readMessages(threadId, cwd) as Array<{ message?: { content?: Array<{ text?: string }> } }>;
+    assert.equal(messages[0]?.message?.content?.[0]?.text, 'new duplicate message');
+
+    const session = await rt.sessionFor(threadId, cwd);
+    const entries = (session as any).sessionManager.getEntries() as Array<{ type: string; message?: { content?: Array<{ text?: string }> } }>;
+    const messageEntry = entries.find((entry) => entry.type === 'message');
+    assert.equal(messageEntry?.message?.content?.[0]?.text, 'new duplicate message');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('PiRuntime.dropSession removes the on-disk session file matching _${threadId}.jsonl', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = {
@@ -166,6 +196,21 @@ test('PiRuntime.dropSession removes the on-disk session file matching _${threadI
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function writeSessionFile(file: string, threadId: string, cwd: string, timestamp: string, text: string): void {
+  const header = { type: 'session', version: 3, id: threadId, timestamp, cwd };
+  const message = {
+    type: 'message',
+    id: `${timestamp}-message`,
+    parentId: null,
+    timestamp,
+    message: {
+      role: 'user',
+      content: [{ type: 'text', text }],
+    },
+  };
+  writeFileSync(file, `${JSON.stringify(header)}\n${JSON.stringify(message)}\n`);
+}
 
 test('PiRuntime.dropSession is a no-op for a thread that has no file on disk', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));

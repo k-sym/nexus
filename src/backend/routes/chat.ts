@@ -95,6 +95,28 @@ type ChatAttachment = ChatImageAttachment | ChatFileAttachment;
 
 const activeStreams = new Map<string, ActiveStream>();
 const CHAT_STREAM_BODY_LIMIT_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Chat-run lifecycle instrumentation. On by default; disable with
+ * NEXUS_DEBUG_CHAT_RUN=0. Surfaces (via stdout, visible in `npm run dev`):
+ *   - run start / end (terminal status, elapsed, who released the claim)
+ *   - client-disconnect-during-run (the key navigation event — run should
+ *     keep going; this logs that the session was NOT aborted)
+ *   - a ~3s heartbeat while a run is in flight: elapsed, lastEventType, whether
+ *     the original stream socket is still open, whether the claim is still held
+ *   - what GET /api/threads/:id and /api/chat/active-runs report for the thread
+ *
+ * This separates three failure modes that all look like "frozen, no progress":
+ *   H1 run died on navigation  (claim released → card would show interrupted)
+ *   H2 run alive & progressing but not flushed to session JSONL (heartbeat advances)
+ *   H3 run alive but hung        (heartbeat frozen, claim still held)
+ */
+const CHAT_RUN_DEBUG = process.env.NEXUS_DEBUG_CHAT_RUN !== '0';
+function logRun(threadId: string, runId: string, event: string, extra: Record<string, unknown> = {}): void {
+  if (!CHAT_RUN_DEBUG) return;
+  console.log(`[chat-run] ${event} thread=${threadId} run=${runId}${Object.keys(extra).length ? ' ' + JSON.stringify(extra) : ''}`);
+}
+
 const allowedImageMimeTypes = new Set<ChatImageAttachment['mimeType']>([
   'image/png',
   'image/jpeg',
@@ -190,6 +212,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
         questionCount,
       };
     });
+    if (CHAT_RUN_DEBUG && runs.length) {
+      console.log(`[chat-run] active_runs_query activeThreads=${JSON.stringify(runs.map((r) => r.threadId))} streamEntries=${JSON.stringify([...activeStreams.keys()])}`);
+    }
     return {
       activeThreadIds: runs.map((run) => run.threadId),
       runs,
@@ -231,7 +256,22 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | undefined;
     const cwd = project?.repo_path || process.cwd();
     const entries = await pi.readMessages(threadId, cwd);
-    return { thread, cwd, messages: entries.length > 0 ? flattenEntries(entries, cwd) : dbMessages(db, threadId) };
+    const activeRunId = activeStreams.get(threadId)?.runId;
+    const activeThreadIds = threadRunClaims.has(threadId) ? new Set([threadId]) : undefined;
+    const claimHeld = threadRunClaims.has(threadId);
+    if (CHAT_RUN_DEBUG) {
+      const flattened = entries.length > 0 ? flattenEntries(entries, cwd, { activeRunIds: activeRunId ? new Set([activeRunId]) : undefined, activeThreadIds }) : dbMessages(db, threadId);
+      const lastRun = (flattened as any[]).slice().reverse().find((m) => m?.run)?.run;
+      console.log(`[chat-run] history_query thread=${threadId} entriesOnDisk=${entries.length} claimHeld=${claimHeld} activeRunId=${activeRunId ?? 'none'} lastRunStatus=${lastRun?.status ?? 'none'} lastRunPhase=${lastRun?.phase ?? 'none'}`);
+      return { thread, cwd, messages: flattened };
+    }
+    return {
+      thread,
+      cwd,
+      messages: entries.length > 0
+        ? flattenEntries(entries, cwd, { activeRunIds: activeRunId ? new Set([activeRunId]) : undefined, activeThreadIds })
+        : dbMessages(db, threadId),
+    };
   });
 
   // Backwards-compat alias — the old route returned just the messages.
@@ -244,7 +284,11 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       | undefined;
     const cwd = project?.repo_path || process.cwd();
     const entries = await pi.readMessages(threadId, cwd);
-    return entries.length > 0 ? flattenEntries(entries, cwd) : dbMessages(db, threadId);
+    const activeRunId = activeStreams.get(threadId)?.runId;
+    const activeThreadIds = threadRunClaims.has(threadId) ? new Set([threadId]) : undefined;
+    return entries.length > 0
+      ? flattenEntries(entries, cwd, { activeRunIds: activeRunId ? new Set([activeRunId]) : undefined, activeThreadIds })
+      : dbMessages(db, threadId);
   });
 
   fastify.post('/api/threads/:threadId/messages/stream', { bodyLimit: CHAT_STREAM_BODY_LIMIT_BYTES }, async (request, reply) => {
@@ -408,9 +452,18 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     let session: ChatSession | undefined;
     let responseCompleted = false;
     let clientDisconnected = false;
+    let lastEventType = '(none)';
+    let promptInFlight = false;
     const abortOnResponseClose = () => {
       if (responseCompleted || clientDisconnected) return;
       clientDisconnected = true;
+      // The critical navigation event: the viewer left but the backend run
+      // must keep going. We deliberately do NOT abort the session here.
+      logRun(threadId, '(pending)', 'client_disconnect_during_run', {
+        promptInFlight,
+        aborted: false,
+        note: 'backend run should continue; claim retained',
+      });
     };
     reply.raw.once('close', abortOnResponseClose);
     request.raw.once('aborted', abortOnResponseClose);
@@ -473,6 +526,11 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     };
     session.sessionManager?.appendCustomEntry(AGENT_RUN_CUSTOM_TYPE, startEvent);
     write({ kind: 'run_start', run: omitEvent(startEvent) });
+    logRun(threadId, runId, 'run_start', {
+      provider: startEvent.provider,
+      model: startEvent.model,
+      projectId: thread.project_id,
+    });
     let streamError: string | undefined;
     let terminalStatus: AgentRunTerminalStatus = 'completed';
     let abortSource: AgentRunAbortSource | undefined;
@@ -512,7 +570,9 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       }
       if (session) {
         activeStreams.set(threadId, { session, runId });
+        const runStartMs = Date.parse(startEvent.startedAt);
         const subscription = session.subscribe((ev) => {
+          lastEventType = String((ev as any)?.type ?? (ev as any)?.kind ?? '(unknown)');
           write(ev);
           fastify.activity?.bus.emit({
             type: 'update',
@@ -522,13 +582,31 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
             lastEvent: ev.type,
           });
         });
+        // Heartbeat: prove the run is alive (or hung) independently of the
+        // viewer. 'clientConnected' = the original stream socket is still
+        // open; if it's false but the run keeps advancing, navigation did NOT
+        // kill the backend run (H2). If lastEventType stops advancing while
+        // the claim stays held, the run is hung (H3).
+        const heartbeat = setInterval(() => {
+          logRun(threadId, runId, 'heartbeat', {
+            elapsedMs: Date.now() - runStartMs,
+            lastEventType,
+            clientConnected: !clientDisconnected && !reply.raw.destroyed,
+            claimHeld: threadRunClaims.has(threadId),
+            promptInFlight,
+          });
+        }, 3000);
         try {
+          promptInFlight = true;
+          logRun(threadId, runId, 'prompt_start', { clientConnected: !clientDisconnected });
           if (images.length > 0) {
             await session.prompt(promptContent, { images });
           } else {
             await session.prompt(promptContent);
           }
         } finally {
+          promptInFlight = false;
+          clearInterval(heartbeat);
           subscription();
         }
         const completedAbortSource = activeStreams.get(threadId)?.abortSource;
@@ -583,6 +661,14 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
       session?.sessionManager?.appendCustomEntry(AGENT_RUN_CUSTOM_TYPE, endEvent);
       write({ kind: 'run_end', run: omitEvent(endEvent) });
       activeStreams.delete(threadId);
+      logRun(threadId, runId, 'run_end', {
+        status: terminalStatus,
+        abortSource,
+        error: streamError,
+        elapsedMs: Date.now() - Date.parse(startEvent.startedAt),
+        clientDisconnected,
+        lastEventType,
+      });
       fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
@@ -608,6 +694,7 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
   fastify.post('/api/threads/:threadId/abort', async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
     const existing = activeStreams.get(threadId);
+    logRun(threadId, existing?.runId ?? '(none)', 'abort_requested', { hadStream: !!existing });
     if (!existing) return { ok: false, reason: 'no_run' };
     const source = ((request.body ?? {}) as { source?: AgentRunAbortSource }).source ?? 'user';
     if (!CLIENT_ABORT_SOURCES.has(source)) {
@@ -622,6 +709,24 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
     }
     pi.questions?.cancelThread(threadId, 'Stream aborted');
     return { ok: true };
+  });
+
+  // Diagnostic snapshot of the live chat-run registry. Queryable any time
+  // (e.g. `curl localhost:PORT/api/chat/debug/runs`) to see what the backend
+  // believes is in flight — independent of any viewer.
+  fastify.get('/api/chat/debug/runs', async () => {
+    return {
+      streams: Array.from(activeStreams.entries()).map(([threadId, s]) => ({
+        threadId,
+        runId: s.runId,
+        abortSource: s.abortSource,
+      })),
+      claims: Array.from(threadRunClaims.entries()).map(([threadId, c]) => ({
+        threadId,
+        title: c.title,
+        modelKey: c.modelKey,
+      })),
+    };
   });
 
   fastify.post('/api/threads/:threadId/questions/:toolCallId/answer', async (request, reply) => {
@@ -762,7 +867,12 @@ function safeContextUsage(session: Partial<Pick<AgentSession, 'getContextUsage'>
  * toolResult message. Tool calls and thinking blocks are extracted from
  * the assistant message's `content` array.
  */
-export function flattenEntries(entries: unknown[], repoPath = process.cwd()): unknown[] {
+interface FlattenEntriesOptions {
+  activeRunIds?: Set<string>;
+  activeThreadIds?: Set<string>;
+}
+
+export function flattenEntries(entries: unknown[], repoPath = process.cwd(), options: FlattenEntriesOptions = {}): unknown[] {
   let projections = new Map<string, SignalProjection>();
   try {
     const messages = (entries as Array<{ message?: unknown }>).map((entry) => entry.message).filter(Boolean);
@@ -870,11 +980,19 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
       }
       const runEnd = runEndsByAssistant.get(String(e.id));
       const runStart = runStartsByAssistant.get(String(e.id)) ?? (runEnd ? runStarts.get(runEnd.runId) : undefined);
+      const runIsActive = !!runStart && !runEnd && (
+        options.activeRunIds?.has(runStart.runId) === true ||
+        options.activeThreadIds?.has(runStart.threadId) === true
+      );
+      const projectedTools = runIsActive
+        ? toolCalls.map((toolCall: any) => toolCall.status === 'interrupted' ? { ...toolCall, status: 'running' } : toolCall)
+        : toolCalls;
+      const hasRunningTool = runIsActive && projectedTools.some((toolCall: any) => toolCall.status === 'running');
       const run = runStart ? {
         runId: runStart.runId,
         threadId: runStart.threadId,
-        status: runEnd?.status ?? 'interrupted',
-        phase: 'finalizing',
+        status: runEnd?.status ?? (runIsActive ? 'running' : 'interrupted'),
+        phase: runEnd ? 'finalizing' : (hasRunningTool ? 'tool_running' : 'model_responding'),
         startedAt: Date.parse(runStart.startedAt),
         lastEventAt: runEnd ? Date.parse(runEnd.completedAt) : (m.timestamp ?? e.timestamp),
         completedAt: runEnd ? Date.parse(runEnd.completedAt) : undefined,
@@ -882,7 +1000,7 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd()): un
         model: runStart.model ?? m.model,
         abortSource: runEnd?.abortSource,
         error: runEnd?.error,
-        tools: toolCalls,
+        tools: projectedTools,
       } : undefined;
       out.push({
         id: e.id,
