@@ -13,6 +13,32 @@ interface Alert {
   msg: string;
 }
 
+const DISMISSED_STORAGE_KEY = 'nexus.daemonToasts.dismissed';
+
+function alertKey(alert: Alert): string {
+  return `${alert.id}:${alert.msg}`;
+}
+
+function readDismissed(): Set<string> {
+  if (typeof window === 'undefined') return new Set();
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeDismissed(dismissed: Set<string>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify([...dismissed]));
+  } catch {
+    /* localStorage may be unavailable; in-memory dismissal still works. */
+  }
+}
+
 /** Derive health alerts from the daemon status that App already polls. */
 function deriveAlerts(status: MissionStatus | null): Alert[] {
   if (!status) return [];
@@ -39,24 +65,34 @@ const STYLE: Record<Level, string> = {
 };
 
 export default function DaemonToasts({ status }: DaemonToastsProps) {
-  const [dismissed, setDismissed] = useState<Set<string>>(new Set());
+  const [dismissed, setDismissed] = useState<Set<string>>(() => readDismissed());
 
   const active = deriveAlerts(status);
-  const activeKey = active.map(a => a.id).sort().join('|');
+  const activeSetKey = active.map(alertKey).sort().join('|');
 
   // When the set of active alerts changes, drop dismissals for conditions that
   // have cleared — so a recurring issue can toast again after it's fixed.
   useEffect(() => {
     setDismissed(prev => {
-      const ids = new Set(active.map(a => a.id));
-      const next = new Set([...prev].filter(id => ids.has(id)));
-      return next.size === prev.size ? prev : next;
+      const activeKeys = new Set(active.map(alertKey));
+      const next = new Set([...prev].filter(id => activeKeys.has(id)));
+      if (next.size === prev.size) return prev;
+      writeDismissed(next);
+      return next;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeKey]);
+  }, [activeSetKey]);
 
-  const visible = active.filter(a => !dismissed.has(a.id));
+  const visible = active.filter(a => !dismissed.has(alertKey(a)));
   if (visible.length === 0) return null;
+
+  const dismiss = (alert: Alert) => {
+    setDismissed(prev => {
+      const next = new Set(prev).add(alertKey(alert));
+      writeDismissed(next);
+      return next;
+    });
+  };
 
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
@@ -73,7 +109,7 @@ export default function DaemonToasts({ status }: DaemonToastsProps) {
             <div className="text-sm text-zinc-200 leading-snug">{a.msg}</div>
           </div>
           <button
-            onClick={() => setDismissed(prev => new Set(prev).add(a.id))}
+            onClick={() => dismiss(a)}
             title="Dismiss"
             className="shrink-0 text-zinc-600 hover:text-zinc-200 transition-colors"
           >
