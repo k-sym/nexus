@@ -101,6 +101,7 @@ describe('ActivityConsole', () => {
   });
 
   it('filters by status', () => {
+    const onFiltersChange = vi.fn();
     render(
       <ActivityConsole
         operations={operations}
@@ -114,9 +115,11 @@ describe('ActivityConsole', () => {
         onAbort={() => {}}
         onRetry={() => {}}
         onCopyDiagnostics={() => {}}
+        onFiltersChange={onFiltersChange}
       />,
     );
     fireEvent.change(screen.getByDisplayValue('All statuses'), { target: { value: 'failed' } });
+    expect(onFiltersChange).toHaveBeenCalledWith({ kind: '', status: 'failed' });
     expect(screen.queryByText('Demo / Test')).not.toBeInTheDocument();
     expect(screen.queryByText('Demo / Done')).not.toBeInTheDocument();
     expect(screen.getByText('No operations match the current filters.')).toBeInTheDocument();

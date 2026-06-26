@@ -29,9 +29,12 @@ export async function registerActivityRoutes(fastify: FastifyInstance) {
       runningWhere += ' AND kind = ?';
       runningParams.push(kindFilter);
     }
-    const runningRows = db
-      .prepare(`SELECT * FROM operations WHERE status = 'running'${runningWhere} ORDER BY started_at DESC LIMIT ?`)
-      .all(...runningParams, limit) as any[];
+    const runningRows =
+      !statusFilter || statusFilter === 'running'
+        ? (db
+            .prepare(`SELECT * FROM operations WHERE status = 'running'${runningWhere} ORDER BY started_at DESC LIMIT ?`)
+            .all(...runningParams, limit) as any[])
+        : [];
 
     const running = runningRows.map((row) => enrichRunning(row, activity));
 
@@ -41,7 +44,9 @@ export async function registerActivityRoutes(fastify: FastifyInstance) {
       recentWhere += ' AND kind = ?';
       recentParams.push(kindFilter);
     }
-    if (statusFilter) {
+    if (statusFilter === 'running') {
+      recentWhere += ' AND 0';
+    } else if (statusFilter) {
       recentWhere += ' AND status = ?';
       recentParams.push(statusFilter);
     } else {
@@ -51,9 +56,19 @@ export async function registerActivityRoutes(fastify: FastifyInstance) {
       .prepare(`SELECT * FROM operations WHERE 1=1${recentWhere} ORDER BY started_at DESC LIMIT ?`)
       .all(...recentParams, limit) as any[];
 
+    const countParams: string[] = [];
+    let countWhere = 'WHERE 1=1';
+    if (kindFilter) {
+      countWhere += ' AND kind = ?';
+      countParams.push(kindFilter);
+    }
+    if (statusFilter) {
+      countWhere += ' AND status = ?';
+      countParams.push(statusFilter);
+    }
     const counts = db
-      .prepare("SELECT status, COUNT(*) AS count FROM operations GROUP BY status")
-      .all() as { status: string; count: number }[];
+      .prepare(`SELECT status, COUNT(*) AS count FROM operations ${countWhere} GROUP BY status`)
+      .all(...countParams) as { status: string; count: number }[];
 
     return {
       running,
