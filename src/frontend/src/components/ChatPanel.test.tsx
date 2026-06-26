@@ -138,6 +138,59 @@ describe('ChatPanel', () => {
     expect(screen.queryByRole('button', { name: 'Submit answers' })).not.toBeInTheDocument();
   });
 
+  it('re-attaches to a still-running backend run: gates the composer, polls for progress, and cancels via /abort', async () => {
+    const runningMessages = {
+      thread: { id: 't1' },
+      messages: [{
+        id: 'assistant-1', role: 'assistant', content: '', timestamp: 1,
+        run: {
+          runId: 'run-1', threadId: 't1', status: 'running', phase: 'tool_running',
+          startedAt: 1, lastEventAt: 1, provider: 'anthropic', model: 'sonnet',
+          tools: [{ id: 'call-1', name: 'Bash', args: { command: 'npm test' }, status: 'running' }],
+        },
+      }],
+    };
+    const completedMessages = {
+      thread: { id: 't1' },
+      messages: [{
+        id: 'assistant-1', role: 'assistant', content: 'done', timestamp: 1,
+        run: { runId: 'run-1', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [{ id: 'call-1', name: 'Bash', args: { command: 'npm test' }, status: 'succeeded', result: 'ok' }] },
+      }],
+    };
+    let aborted = false;
+    const abortCalls: string[] = [];
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => (aborted ? completedMessages : runningMessages) } as Response;
+      }
+      if (url === '/api/threads/t1/abort') {
+        abortCalls.push(init?.body ? JSON.parse(String(init.body)).source : 'unknown');
+        aborted = true;
+        return { ok: true, json: async () => ({ ok: true }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const input = screen.getByTestId('chat-input');
+
+    // The running run re-attaches: its Stop control renders, and the composer is gated
+    // even though this instance isn't streaming the run itself.
+    await screen.findByRole('button', { name: 'Stop current run' });
+    await waitFor(() => expect(input).toBeDisabled());
+    expect(screen.queryByTestId('send-button')).not.toBeInTheDocument();
+
+    // Stop cancels the backend run via the explicit /abort endpoint.
+    screen.getByRole('button', { name: 'Stop current run' }).click();
+    await waitFor(() => expect(abortCalls).toEqual(['user']));
+
+    // Polling reconciles progress: once the run is no longer running, the composer re-enables.
+    await waitFor(() => expect(input).not.toBeDisabled(), { timeout: 4000 });
+  }, 15000);
+
   it('renders a terminal fallback question and submits one readable continuation turn', async () => {
     const encoder = new TextEncoder();
     const ask = JSON.stringify({ questions: [{

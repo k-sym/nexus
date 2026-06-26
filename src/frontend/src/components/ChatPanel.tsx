@@ -13,7 +13,7 @@
  *     the user can read them from ~/.nexus/sessions/{cwd-slug}/*.jsonl
  *   - Session resume: pi owns sessions natively; no terminal hand-off
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
@@ -37,6 +37,10 @@ interface ChatPanelProps {
   onThreadsChanged?: () => void;
   /** Reports whether this session is actively streaming/thinking/tooling. */
   onSessionActivityChange?: (threadId: string, active: boolean) => void;
+  /** Set of threadIds that the backend reports as having an active run.
+   *  Cross-checked with the loaded history because a run still in-flight may
+   *  not yet have a persisted assistant message with a `run` field. */
+  backendActiveThreadIds?: Set<string>;
   /** A task-seeded first turn. When `seed.threadId` matches the active thread,
    *  ChatPanel auto-submits `seed.prompt` once (with `seed.modelKey`) and calls
    *  `onSeedConsumed`. Used by the "Run task" flow to start the agent on open. */
@@ -136,9 +140,9 @@ function fileToAttachment(file: File): Promise<ChatAttachment> {
   });
 }
 
-export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, seed, onSeedConsumed }: ChatPanelProps) {
+export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, backendActiveThreadIds, seed, onSeedConsumed }: ChatPanelProps) {
   const { models, activeModelId, setModel, setThread } = useModels();
-  const { state, startStream, abortStream, detachStream, dispatch, setActiveThread } = usePiStream();
+  const { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread } = usePiStream();
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
@@ -177,10 +181,21 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setThread(threadId);
   }, [threadId, setThread]);
 
+  // Whether the loaded history shows a backend-owned run that is still active
+  // and not being driven by this instance's own stream. Declared early because
+  // several effects/handlers below depend on it.
+  const attachedRunActive = useMemo(
+    () => !state.isRunning && !!threadId
+      && (loadedMessages.some((m) => m.run?.status === 'running')
+        || backendActiveThreadIds?.has(threadId) === true),
+    [state.isRunning, threadId, loadedMessages, backendActiveThreadIds],
+  );
+  const isRunning = state.isRunning || attachedRunActive;
+
   useEffect(() => {
     if (!threadId || !onSessionActivityChange) return;
-    onSessionActivityChange(threadId, state.isRunning);
-  }, [threadId, state.isRunning, onSessionActivityChange]);
+    onSessionActivityChange(threadId, isRunning);
+  }, [threadId, isRunning, onSessionActivityChange]);
 
   // Reset local stream state and clear input when switching threads. The
   // backend run continues unless the user explicitly presses Stop.
@@ -291,7 +306,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           setLoadedMessages(msgs);
         }
       } catch (err) {
-        console.error('Failed to load thread messages', err);
+        console.error('[chat-panel] Failed to load thread messages', threadId, err);
         if (!cancelled) setLoadedMessages([]);
       }
     })();
@@ -299,6 +314,27 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       cancelled = true;
     };
   }, [threadId, setModel]);
+
+  // --- re-attach to a backend-owned run after navigation ---------------------
+  // ChatPanel is remounted on project switch (key={activeProject.id}), so a run
+  // started in a previous mount has no live event feed here — the original
+  // stream transport belongs to the unmounted instance even though the backend
+  // run keeps going. When the loaded history shows a still-running run and this
+  // instance is not itself streaming, poll the history endpoint so progress
+  // (tool calls completing, assistant turns finishing) is reflected live. The
+  // run card already renders a Stop control for a running run; `stopRun` cancels
+  // the backend run via the explicit /abort endpoint (no local controller here).
+  useEffect(() => {
+    if (!attachedRunActive || !threadId) return;
+    let cancelled = false;
+    const poll = async () => {
+      const msgs = await fetchThreadMessages(threadId);
+      if (cancelled) return;
+      setLoadedMessages(msgs);
+    };
+    const interval = setInterval(poll, 1500);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [attachedRunActive, threadId, fetchThreadMessages]);
 
   // A task-seeded first turn fires exactly once per thread. The ref guard
   // keeps it from re-firing on remount, thread-switch, or the re-render that
@@ -437,13 +473,24 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (state.isRunning || (!text && pendingAttachments.length === 0) || !threadId || imageModelBlocked) return;
+    if (isRunning || (!text && pendingAttachments.length === 0) || !threadId || imageModelBlocked) return;
     const attachments = pendingAttachments;
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, imageModelBlocked, pendingAttachments, state.isRunning, submit]);
+  }, [input, threadId, imageModelBlocked, pendingAttachments, isRunning, submit]);
+
+  // Cancel whichever run is active: a locally-streamed run (this instance
+  // started it) goes through abortStream; a backend-owned run re-attached
+  // after navigation has no local transport and is cancelled via /abort.
+  const handleStop = useCallback(() => {
+    if (state.isRunning) {
+      void abortStream('user');
+    } else if (threadId) {
+      void stopRun(threadId, 'user');
+    }
+  }, [state.isRunning, threadId, abortStream, stopRun]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -535,7 +582,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
   const visible = loadedMessages.concat(state.messages);
   const streaming = state.streamingMessage;
-  const isRunning = state.isRunning;
   const isEmpty = visible.length === 0 && !streaming;
   // The latest assistant response stays expanded so the user can see what
   // they're replying to (issue #108). While a new run is streaming, none of
@@ -624,7 +670,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               onAnswerQuestion={answerNativeQuestion}
               onAnswerFallback={answerFallbackQuestion}
               onOpenArtifact={openArtifactPreview}
-              onStop={() => void abortStream('user')}
+              onStop={handleStop}
             />
           ))
         )}
@@ -636,7 +682,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             onAnswerQuestion={answerNativeQuestion}
             onAnswerFallback={answerFallbackQuestion}
             onOpenArtifact={openArtifactPreview}
-            onStop={() => void abortStream('user')}
+            onStop={handleStop}
           />
         )}
       </div>

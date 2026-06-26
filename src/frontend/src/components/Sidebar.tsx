@@ -21,6 +21,8 @@ interface SidebarProps {
   threads: ThreadMeta[];
   activeSessionIds: Set<string>;
   waitingSessionIds: Set<string>;
+  activeProjectIds: Set<string>;
+  waitingProjectIds: Set<string>;
   archivingThreadIds: Set<string>;
   projectCounts: Record<string, SidebarProjectCounts>;
   onSelectProject: (id: string) => void;
@@ -100,7 +102,7 @@ function pluralize(count: number, singular: string): string {
 
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
-  waitingSessionIds,
+  waitingSessionIds, activeProjectIds, waitingProjectIds,
   archivingThreadIds,
   projectCounts,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onArchiveThread, onDeleteThread, onNewChat, onNewProject,
@@ -188,6 +190,8 @@ export default function Sidebar({
       <nav aria-label="Project rail" className="compact-project-rail w-14 shrink-0 px-2 py-3 flex flex-col items-center gap-2">
         {projects.map((project) => {
           const isActiveProject = project.id === activeProjectId;
+          const isWaiting = waitingProjectIds.has(project.id);
+          const isActive = !isWaiting && activeProjectIds.has(project.id);
           return (
             <button
               key={project.id}
@@ -199,13 +203,23 @@ export default function Sidebar({
               onDragStart={(ev) => handleProjectDragStart(ev, project.id)}
               onDragOver={handleProjectDragOver}
               onDrop={(ev) => handleProjectDrop(ev, project.id)}
-              className={`compact-project-avatar h-10 w-10 text-sm ${
+              className={`compact-project-avatar relative h-10 w-10 text-sm ${
                 isActiveProject
                   ? 'compact-project-avatar-active'
                   : 'text-muted hover:text-[var(--text-primary)]'
               }`}
             >
               {projectInitial(project.name)}
+              {(isActive || isWaiting) && (
+                <span
+                  className={`absolute bottom-0.5 right-0.5 h-2.5 w-2.5 rounded-full border border-[var(--bg-canvas)] ${
+                    isWaiting
+                      ? 'bg-amber-400 animate-pulse'
+                      : 'bg-emerald-400 animate-pulse'
+                  }`}
+                  aria-hidden="true"
+                />
+              )}
             </button>
           );
         })}

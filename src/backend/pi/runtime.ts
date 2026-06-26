@@ -29,6 +29,12 @@ type ResourceLoaderOptions = {
   extensionFactories?: ExtensionFactory[];
 };
 
+type SessionInfoLike = {
+  id: string;
+  path: string;
+  modified: Date;
+};
+
 /**
  * A minimal model shape we expose from the runtime. Matches the fields we
  * forward to the frontend. The full `Model<Api>` from `@earendil-works/pi-ai`
@@ -83,6 +89,15 @@ export function buildSessionExtensionFactories(
   signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
 ): ExtensionFactory[] {
   return [createQuestionExtension(threadId, questions), signalFactoryBuilder(cwd)];
+}
+
+function mostRecentlyModifiedSessionForThread<T extends SessionInfoLike>(
+  infos: T[],
+  threadId: string,
+): T | undefined {
+  return infos
+    .filter((info) => info.id === threadId)
+    .sort((a, b) => b.modified.getTime() - a.modified.getTime())[0];
 }
 
 export class PiRuntime {
@@ -169,12 +184,13 @@ export class PiRuntime {
     // eviction), naively calling create() here would spawn a second, empty
     // `<timestamp>_<threadId>.jsonl` and the model would lose all prior
     // conversation context. We look up the thread's existing file (the same
-    // lookup readMessages() uses) and open() it to continue the conversation.
-    // Only when no prior session exists do we create a new one.
+    // lookup readMessages() uses) and open() the most recently modified match
+    // to continue the conversation. Only when no prior session exists do we
+    // create a new one.
     let sessionManager;
     try {
       const infos = await SessionManager.list(cwd, sessionDir);
-      const existing = infos.find((info) => info.id === threadId);
+      const existing = mostRecentlyModifiedSessionForThread(infos, threadId);
       sessionManager = existing
         ? SessionManager.open(existing.path, sessionDir, cwd)
         : SessionManager.create(cwd, sessionDir, { id: threadId });
@@ -260,7 +276,7 @@ export class PiRuntime {
     const { SessionManager } = await import('@earendil-works/pi-coding-agent');
     const sessionDir = this.sessionDirFor(cwd);
     const infos = await SessionManager.list(cwd, sessionDir);
-    const match = infos.find((s) => s.id === threadId);
+    const match = mostRecentlyModifiedSessionForThread(infos, threadId);
     if (!match) return [];
     const sm = SessionManager.open(match.path, sessionDir, cwd);
     return sm.getEntries().filter((entry) =>

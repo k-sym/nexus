@@ -211,22 +211,21 @@ describe('usePiStream', () => {
     expect(result.current.state.messages[1].run?.tools[0].status).toBe('interrupted');
   });
 
-  it('detaches the visible stream without aborting the backend run after the visible thread changes', async () => {
+  it('detaches the visible stream without aborting the transport or backend run after the visible thread changes', async () => {
     const requestedUrls: string[] = [];
+    let requestSignal: AbortSignal | undefined;
     global.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       requestedUrls.push(url);
       if (url.endsWith('/abort')) {
         return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
       }
-      const signal = init?.signal;
+      requestSignal = init?.signal ?? undefined;
       return {
         ok: true,
         status: 200,
         body: new ReadableStream({
-          start(controller) {
-            signal?.addEventListener('abort', () => controller.error(new DOMException('Aborted', 'AbortError')));
-          },
+          start() {},
         }),
       } as Response;
     });
@@ -237,12 +236,36 @@ describe('usePiStream', () => {
       streamPromise = result.current.startStream('thread-old', 'hello');
     });
     act(() => result.current.setActiveThread('thread-new'));
-    await act(async () => {
-      result.current.detachStream();
-      await streamPromise;
-    });
+    act(() => result.current.detachStream());
+    await Promise.race([
+      streamPromise.then(() => {
+        throw new Error('detached stream should keep the transport open');
+      }),
+      new Promise((resolve) => setTimeout(resolve, 10)),
+    ]);
 
     expect(requestedUrls.some((url) => url.endsWith('/abort'))).toBe(false);
+    expect(requestSignal?.aborted).toBe(false);
+  });
+
+  it('stopRun cancels a backend-owned run via the /abort endpoint without a local stream', async () => {
+    const calls: Array<{ url: string; method: string; body: any }> = [];
+    global.fetch = vi.fn().mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      calls.push({ url: String(input), method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : null });
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+    const { result } = renderHook(() => usePiStream());
+
+    await act(async () => {
+      await result.current.stopRun('thread-resumed', 'user');
+    });
+
+    const abortCall = calls.find((c) => c.url.endsWith('/api/threads/thread-resumed/abort'));
+    expect(abortCall).toBeDefined();
+    expect(abortCall!.method).toBe('POST');
+    expect(abortCall!.body).toEqual({ source: 'user' });
+    // No local stream state was touched — the reducer stays idle for re-attached runs.
+    expect(result.current.state.isRunning).toBe(false);
   });
 
   it('surfaces same-thread busy responses as normal errors without throwing a conflict', async () => {

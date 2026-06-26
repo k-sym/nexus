@@ -41,6 +41,8 @@ function renderSidebar({
   activeThreadId = thread.id,
   activeSessionIds = new Set<string>(),
   waitingSessionIds = new Set<string>(),
+  activeProjectIds = new Set<string>(),
+  waitingProjectIds = new Set<string>(),
   archivingThreadIds = new Set<string>(),
   onEditProject = noop,
   onDeleteProject = noop,
@@ -54,6 +56,8 @@ function renderSidebar({
   activeThreadId?: string | null;
   activeSessionIds?: Set<string>;
   waitingSessionIds?: Set<string>;
+  activeProjectIds?: Set<string>;
+  waitingProjectIds?: Set<string>;
   archivingThreadIds?: Set<string>;
   onEditProject?: (project: Project) => void;
   onDeleteProject?: (projectId: string) => void;
@@ -71,6 +75,8 @@ function renderSidebar({
       threads={threads}
       activeSessionIds={activeSessionIds}
       waitingSessionIds={waitingSessionIds}
+      activeProjectIds={activeProjectIds}
+      waitingProjectIds={waitingProjectIds}
       archivingThreadIds={archivingThreadIds}
       projectCounts={{
         [project.id]: { tasks: 3, sessions: threads.length },

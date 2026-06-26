@@ -651,11 +651,29 @@ export function usePiStream() {
   }, []);
 
   const detachStream = useCallback(() => {
-    const controller = abortRef.current;
-    if (controller) controller.abort();
     abortRef.current = null;
     streamingThreadRef.current = null;
   }, []);
 
-  return { state, startStream, abortStream, detachStream, dispatch, setActiveThread };
+  /**
+   * Cancel an active backend run by threadId, without depending on a local
+   * fetch controller. Used when re-attaching to a run that was started in a
+   * since-unmounted ChatPanel (e.g. after switching projects and back): the
+   * original stream transport is gone, but the backend run is still alive and
+   * must be aborted via the explicit /abort endpoint. The local reducer is
+   * not touched — the next history poll reconciles state.
+   */
+  const stopRun = useCallback(async (threadId: string, source: 'user' | 'frontend' = 'user') => {
+    try {
+      await apiFetch(`/api/threads/${threadId}/abort`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source }),
+      });
+    } catch {
+      /* polling reconciles state regardless */
+    }
+  }, []);
+
+  return { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread };
 }

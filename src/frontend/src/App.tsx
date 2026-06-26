@@ -76,6 +76,8 @@ export default function App() {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(() => new Set());
   const [waitingSessionIds, setWaitingSessionIds] = useState<Set<string>>(() => new Set());
+  const [activeProjectIds, setActiveProjectIds] = useState<Set<string>>(() => new Set());
+  const [waitingProjectIds, setWaitingProjectIds] = useState<Set<string>>(() => new Set());
   const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
   const [archiveError, setArchiveError] = useState<string | null>(null);
 
@@ -166,6 +168,7 @@ export default function App() {
     if (activeProjectId) {
       const proj = projects.find((p) => p.id === activeProjectId);
       setActiveProject(proj || null);
+      setTasks([]);
       loadTasks(activeProjectId);
     } else {
       setActiveProject(null);
@@ -188,8 +191,8 @@ export default function App() {
   }, [activeProjectId, subView, loadTasks]);
 
   useEffect(() => {
+    setThreads([]);
     if (activeProjectId) loadThreads(activeProjectId);
-    else setThreads([]);
   }, [activeProjectId, loadThreads]);
 
   const refreshActiveChatRuns = useCallback(async () => {
@@ -197,6 +200,8 @@ export default function App() {
       const data = await api.chat.activeRuns();
       setActiveSessionIds(new Set(data.activeThreadIds));
       setWaitingSessionIds(new Set(data.runs.filter((run) => run.waitingForResponse).map((run) => run.threadId)));
+      setActiveProjectIds(new Set(data.runs.filter((run) => run.projectId).map((run) => run.projectId!)));
+      setWaitingProjectIds(new Set(data.runs.filter((run) => run.projectId && run.waitingForResponse).map((run) => run.projectId!)));
     } catch (err) {
       console.error('Failed to load active chat runs:', err);
     }
@@ -430,13 +435,14 @@ export default function App() {
   };
   const focusProject = (id: string) => {
     setGlobalView(null);
+    if (id !== activeProjectId) setActiveThreadId(null);
     setActiveProjectId(id);
   };
   const selectSubView = (projectId: string, sub: SubView) => {
     setGlobalView(null);
+    if (projectId !== activeProjectId || sub !== 'chat') setActiveThreadId(null);
     setActiveProjectId(projectId);
     setSubView(sub);
-    if (sub !== 'chat') setActiveThreadId(null);
   };
   const selectThread = (projectId: string, threadId: string) => {
     setGlobalView(null);
@@ -631,6 +637,7 @@ export default function App() {
                   onBusyConflict={() => {}}
                   onThreadsChanged={() => loadThreads(activeProject.id)}
                   onSessionActivityChange={handleSessionActivityChange}
+                  backendActiveThreadIds={activeSessionIds}
                   seed={taskSeed}
                   onSeedConsumed={() => setTaskSeed(null)}
                 />
@@ -670,6 +677,8 @@ export default function App() {
           threads={activeProjectId ? threadMetas : []}
           activeSessionIds={activeSessionIds}
           waitingSessionIds={waitingSessionIds}
+          activeProjectIds={activeProjectIds}
+          waitingProjectIds={waitingProjectIds}
           archivingThreadIds={archivingThreadIds}
           projectCounts={sidebarProjectCounts}
           onSelectProject={focusProject}
