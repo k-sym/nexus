@@ -42,6 +42,31 @@ test('GET /api/activity returns running and recent operations', async () => {
   }
 });
 
+test('GET /api/activity applies status filter before limiting recent operations', async () => {
+  const { app, dir, activity, db } = makeApp();
+  try {
+    activity.bus.emit({ type: 'start', operationId: 'op-run', kind: 'jira_sync', title: 'Jira sync' });
+    activity.bus.emit({ type: 'start', operationId: 'op-success', kind: 'github_sync', title: 'GitHub sync' });
+    activity.bus.emit({ type: 'stop', operationId: 'op-success', kind: 'github_sync', title: 'GitHub sync', status: 'succeeded' });
+    activity.bus.emit({ type: 'start', operationId: 'op-failed', kind: 'memory_archive', title: 'Archive' });
+    activity.bus.emit({ type: 'stop', operationId: 'op-failed', kind: 'memory_archive', title: 'Archive', status: 'failed', error: 'embedder unreachable' });
+
+    db.prepare("UPDATE operations SET started_at = '2026-01-01T00:00:00.000Z' WHERE id = 'op-failed'").run();
+    db.prepare("UPDATE operations SET started_at = '2026-01-02T00:00:00.000Z' WHERE id = 'op-success'").run();
+
+    const res = await app.inject({ method: 'GET', url: '/api/activity?status=failed&limit=1' });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.deepEqual(body.running, []);
+    assert.equal(body.recent.length, 1);
+    assert.equal(body.recent[0].id, 'op-failed');
+    assert.deepEqual(body.counts, { failed: 1 });
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/activity/:id/diagnostics returns parsed diagnostics', async () => {
   const { app, dir, activity } = makeApp();
   try {

@@ -21,7 +21,7 @@ import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
 import ActivityConsole from './components/ActivityConsole';
 import DiffReviewPanel from './components/DiffReviewPanel';
-import type { ActivityResponse, ReviewActionResult } from './api';
+import type { ActivityResponse, OperationKind, OperationStatus, ReviewActionResult } from './api';
 
 type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'settings';
 
@@ -60,6 +60,10 @@ export default function App() {
   const [statusLoading, setStatusLoading] = useState(false);
   const [activity, setActivity] = useState<ActivityResponse | null>(null);
   const [activityLoading, setActivityLoading] = useState(false);
+  const [activityFilters, setActivityFilters] = useState<{ kind: OperationKind | ''; status: OperationStatus | '' }>({
+    kind: '',
+    status: '',
+  });
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [taskPicker, setTaskPicker] = useState<{ taskId: string; title: string } | null>(null);
   const [taskSeed, setTaskSeed] = useState<TaskSeed | null>(null);
@@ -95,13 +99,18 @@ export default function App() {
   const loadActivity = useCallback(async () => {
     setActivityLoading(true);
     try {
-      setActivity(await api.activity.list());
+      setActivity(
+        await api.activity.list({
+          ...(activityFilters.kind ? { kind: activityFilters.kind } : {}),
+          ...(activityFilters.status ? { status: activityFilters.status } : {}),
+        }),
+      );
     } catch (err) {
       console.error('Failed to load activity:', err);
     } finally {
       setActivityLoading(false);
     }
-  }, []);
+  }, [activityFilters]);
 
   useEffect(() => {
     loadActivity();
@@ -548,6 +557,8 @@ export default function App() {
           projects={projects}
           tasks={tasks}
           threads={threadMetas}
+          filters={activityFilters}
+          onFiltersChange={setActivityFilters}
           onRefresh={loadActivity}
           onSelectProject={focusProject}
           onSelectThread={selectThread}

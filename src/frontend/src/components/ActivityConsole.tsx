@@ -10,12 +10,19 @@ interface ActivityConsoleProps {
   projects: Project[];
   tasks: Task[];
   threads: ThreadMeta[];
+  filters?: ActivityFilters;
+  onFiltersChange?: (filters: ActivityFilters) => void;
   onRefresh: () => void;
   onSelectProject: (id: string) => void;
   onSelectThread: (projectId: string, threadId: string) => void;
   onAbort: (id: string) => void;
   onRetry: (id: string) => void;
   onCopyDiagnostics: (id: string) => void;
+}
+
+interface ActivityFilters {
+  kind: OperationKind | '';
+  status: OperationStatus | '';
 }
 
 const KIND_LABELS: Record<OperationKind, string> = {
@@ -69,6 +76,8 @@ export default function ActivityConsole({
   projects,
   tasks,
   threads,
+  filters,
+  onFiltersChange,
   onRefresh,
   onSelectProject,
   onSelectThread,
@@ -80,6 +89,8 @@ export default function ActivityConsole({
   const [search, setSearch] = useState('');
   const [kindFilter, setKindFilter] = useState<OperationKind | ''>('');
   const [statusFilter, setStatusFilter] = useState<OperationStatus | ''>('');
+  const activeKindFilter = filters?.kind ?? kindFilter;
+  const activeStatusFilter = filters?.status ?? statusFilter;
 
   const allRows = useMemo(() => {
     if (!operations) return [];
@@ -91,15 +102,15 @@ export default function ActivityConsole({
 
   const filteredRows = useMemo(() => {
     return allRows.filter((row) => {
-      if (kindFilter && row.kind !== kindFilter) return false;
-      if (statusFilter && row.status !== statusFilter) return false;
+      if (activeKindFilter && row.kind !== activeKindFilter) return false;
+      if (activeStatusFilter && row.status !== activeStatusFilter) return false;
       if (search) {
         const hay = `${row.title} ${row.provider ?? ''} ${row.model ?? ''} ${row.error ?? ''}`.toLowerCase();
         if (!hay.includes(search.toLowerCase())) return false;
       }
       return true;
     });
-  }, [allRows, kindFilter, statusFilter, search]);
+  }, [allRows, activeKindFilter, activeStatusFilter, search]);
 
   const selected = useMemo(
     () => operations?.running.find((r) => r.id === selectedId) || operations?.recent.find((r) => r.id === selectedId) || null,
@@ -113,6 +124,18 @@ export default function ActivityConsole({
   const projectName = (id?: string | null) => projects.find((p) => p.id === id)?.name ?? id ?? '—';
   const taskTitle = (id?: string | null) => tasks.find((t) => t.id === id)?.title ?? id ?? null;
   const threadTitle = (id?: string | null) => threads.find((t) => t.thread.id === id)?.thread.title ?? id ?? null;
+
+  const updateKindFilter = (value: string) => {
+    const kind = kindFromQuery(value);
+    setKindFilter(kind);
+    onFiltersChange?.({ kind, status: activeStatusFilter });
+  };
+
+  const updateStatusFilter = (value: string) => {
+    const status = statusFromQuery(value);
+    setStatusFilter(status);
+    onFiltersChange?.({ kind: activeKindFilter, status });
+  };
 
   return (
     <div className="flex-1 overflow-hidden flex flex-col">
@@ -144,8 +167,8 @@ export default function ActivityConsole({
           />
         </div>
         <select
-          value={kindFilter}
-          onChange={(e) => setKindFilter(kindFromQuery(e.target.value))}
+          value={activeKindFilter}
+          onChange={(e) => updateKindFilter(e.target.value)}
           className="text-sm bg-[var(--surface-hover)] border border-subtle rounded-md px-2 py-1.5 text-primary"
         >
           <option value="">All kinds</option>
@@ -156,8 +179,8 @@ export default function ActivityConsole({
           ))}
         </select>
         <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(statusFromQuery(e.target.value))}
+          value={activeStatusFilter}
+          onChange={(e) => updateStatusFilter(e.target.value)}
           className="text-sm bg-[var(--surface-hover)] border border-subtle rounded-md px-2 py-1.5 text-primary"
         >
           <option value="">All statuses</option>
