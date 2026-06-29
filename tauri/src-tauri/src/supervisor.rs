@@ -90,9 +90,50 @@ pub fn spawn_npm(cwd: &Path, args: &[&str]) -> std::io::Result<Child> {
     spawn(cmd, &node)
 }
 
-const DAEMON_HEALTH: &str = "http://127.0.0.1:4100/health";
+const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:4100";
 const BACKEND_HEALTH: &str = "http://127.0.0.1:4173/api/health";
 const FRONTEND_URL: &str = "http://localhost:5173/";
+
+/// Extract `daemon_url:` from the (YAML) config text via a light line-scan —
+/// deliberately avoids pulling a YAML crate into the launcher for one string.
+/// Takes the first whitespace-delimited token so a trailing comment is ignored.
+fn parse_daemon_url(config_text: &str) -> Option<String> {
+    for line in config_text.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("daemon_url:") {
+            if let Some(tok) = rest.split_whitespace().next() {
+                return Some(tok.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the daemon URL with the same precedence as the backend client:
+/// env override → config → loopback default.
+fn resolve_daemon_url(env_override: Option<&str>, config_text: Option<&str>) -> String {
+    if let Some(e) = env_override {
+        if !e.trim().is_empty() { return e.trim().to_string(); }
+    }
+    if let Some(c) = config_text {
+        if let Some(u) = parse_daemon_url(c) { return u; }
+    }
+    DEFAULT_DAEMON_URL.to_string()
+}
+
+/// A daemon URL is "remote" unless it points at this machine's loopback.
+fn is_remote(url: &str) -> bool {
+    !(url.contains("127.0.0.1") || url.contains("localhost") || url.contains("::1"))
+}
+
+/// Read `MEMORY_DAEMON_URL` / `~/.nexus/config.yaml` to find where the daemon
+/// lives. Untested glue over the tested `resolve_daemon_url`.
+fn daemon_url() -> String {
+    let env_override = std::env::var("MEMORY_DAEMON_URL").ok();
+    let config_text = std::env::var("HOME").ok().and_then(|h| {
+        std::fs::read_to_string(std::path::Path::new(&h).join(".nexus/config.yaml")).ok()
+    });
+    resolve_daemon_url(env_override.as_deref(), config_text.as_deref())
+}
 
 pub enum ServiceState { Reused, Up, Failed(String) }
 
@@ -165,20 +206,35 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
         (root.join("services/daemon"), root.join("services/backend"))
     };
 
-    // Daemon (optional, non-gating).
-    emit("memory", "starting", Some("checking…"));
-    let (mstate, mchild) = ensure_service("memory", DAEMON_HEALTH, &|| {
-        if is_dev { spawn_npm(&daemon_dir, &["start"]) }
-        else { spawn_node(&node, &daemon_dir.join("dist/src/index.js"), &daemon_dir) }
-    });
-    let mem_ok = !matches!(mstate, ServiceState::Failed(_));
-    emit("memory", state_label(&mstate), state_detail(&mstate));
-    if let Some(c) = mchild { children.push(c); }
+    // Daemon (optional, non-gating). A remote daemon (e.g. a central brain over
+    // Tailscale, via memory.daemon_url) is a thin-client target — probe it, never
+    // spawn a local one. A loopback URL keeps the spawn-if-down behaviour.
+    let daemon = daemon_url();
+    let daemon_health = format!("{}/health", daemon.trim_end_matches('/'));
+    let remote = is_remote(&daemon);
+    emit("memory", "starting", Some(if remote { "probing remote…" } else { "checking…" }));
+    let mem_ok = if remote {
+        if probe(&daemon_health, std::time::Duration::from_millis(2500)) {
+            emit("memory", "up", Some("remote"));
+            true
+        } else {
+            emit("memory", "warn", Some("remote unreachable"));
+            false
+        }
+    } else {
+        let (mstate, mchild) = ensure_service("memory", &daemon_health, &|| {
+            if is_dev { spawn_npm(&daemon_dir, &["start"]) }
+            else { spawn_node(&node, &daemon_dir.join("dist/src/index.js"), &daemon_dir) }
+        });
+        emit("memory", state_label(&mstate), state_detail(&mstate));
+        if let Some(c) = mchild { children.push(c); }
+        !matches!(mstate, ServiceState::Failed(_))
+    };
 
     // Models off the daemon health blob (warn-only).
     let degraded = if mem_ok {
         emit("models", "starting", Some("probing…"));
-        match reqwest::blocking::get(DAEMON_HEALTH).and_then(|r| r.text()) {
+        match reqwest::blocking::get(&daemon_health).and_then(|r| r.text()) {
             Ok(body) => { let d = degraded_models(&body);
                 emit("models", if d.is_empty() {"up"} else {"warn"}, None); d }
             Err(_) => { emit("models", "warn", Some("unknown")); vec!["gen".into(),"embed".into(),"rerank".into()] }
@@ -242,5 +298,45 @@ mod tests {
         let (state, child) = ensure_service("test", &url, &|| panic!("should not spawn"));
         assert!(matches!(state, ServiceState::Reused));
         assert!(child.is_none());
+    }
+
+    #[test]
+    fn parse_daemon_url_reads_the_key() {
+        let cfg = "memory:\n  daemon_url: https://baker-pro.taileea629.ts.net:8443\n  auto_inject:\n    enabled: true\n";
+        assert_eq!(parse_daemon_url(cfg).as_deref(), Some("https://baker-pro.taileea629.ts.net:8443"));
+    }
+
+    #[test]
+    fn parse_daemon_url_absent_is_none() {
+        assert_eq!(parse_daemon_url("server:\n  port: 4173\n"), None);
+    }
+
+    #[test]
+    fn resolve_prefers_env_over_config() {
+        let r = resolve_daemon_url(Some("http://env:9999"), Some("memory:\n  daemon_url: http://cfg:4100\n"));
+        assert_eq!(r, "http://env:9999");
+    }
+
+    #[test]
+    fn resolve_uses_config_when_no_env() {
+        let r = resolve_daemon_url(None, Some("memory:\n  daemon_url: https://baker-pro.taileea629.ts.net:8443\n"));
+        assert_eq!(r, "https://baker-pro.taileea629.ts.net:8443");
+    }
+
+    #[test]
+    fn resolve_falls_back_to_default() {
+        assert_eq!(resolve_daemon_url(None, None), "http://127.0.0.1:4100");
+    }
+
+    #[test]
+    fn is_remote_localhost_variants_are_false() {
+        assert!(!is_remote("http://127.0.0.1:4100"));
+        assert!(!is_remote("http://localhost:4100/health"));
+        assert!(!is_remote("http://[::1]:4100"));
+    }
+
+    #[test]
+    fn is_remote_tailscale_host_is_true() {
+        assert!(is_remote("https://baker-pro.taileea629.ts.net:8443"));
     }
 }
