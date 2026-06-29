@@ -28,6 +28,7 @@ const thread: ChatThread = {
   id: 'thread-1',
   project_id: project.id,
   title: 'Inspect progress docs first',
+  git_branch: 'feat/session-icons',
   created_at: '2026-06-10T00:00:00.000Z',
   updated_at: '2026-06-10T00:00:00.000Z',
   archived_at: null,
@@ -230,6 +231,18 @@ describe('Sidebar', () => {
     const sessions = screen.getByLabelText('Project sessions');
     expect(sessions).not.toHaveClass('compact-project-session-list');
     expect(sessions.querySelectorAll('.compact-project-session-row')).toHaveLength(2);
+  });
+
+  it('shows a branch awareness icon on session rows', () => {
+    renderSidebar();
+
+    expect(screen.getByTitle('Branch: feat/session-icons')).toBeInTheDocument();
+  });
+
+  it('shows a muted branch icon when branch detection is unavailable', () => {
+    renderSidebar({ threads: [{ thread: { ...thread, git_branch: '' } }] });
+
+    expect(screen.getByTitle('Branch unavailable')).toBeInTheDocument();
   });
 
   it('uses the default sidebar width when no preference is saved', () => {

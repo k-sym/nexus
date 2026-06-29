@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseGitHubRepo, detectGitRemote } from '../github/repo';
+import { parseGitHubRepo, detectGitRemote, detectGitBranch } from '../github/repo';
 
 test('parseGitHubRepo handles SSH form', () => {
   assert.deepEqual(parseGitHubRepo('git@github.com:k-sym/nexus.git'), { owner: 'k-sym', repo: 'nexus' });
@@ -29,4 +29,14 @@ test('detectGitRemote returns the trimmed remote url from the runner', async () 
 test('detectGitRemote returns empty string when the runner throws (no remote / not a repo)', async () => {
   const run = async () => { throw new Error('fatal: No such remote'); };
   assert.equal(await detectGitRemote('/some/path', run), '');
+});
+
+test('detectGitBranch returns the trimmed current branch from the runner', async () => {
+  const run = async () => ({ stdout: 'feat/session-icons\n', stderr: '' });
+  assert.equal(await detectGitBranch('/some/path', run), 'feat/session-icons');
+});
+
+test('detectGitBranch returns empty string when the runner throws (detached / not a repo)', async () => {
+  const run = async () => { throw new Error('fatal: not a git repository'); };
+  assert.equal(await detectGitBranch('/some/path', run), '');
 });

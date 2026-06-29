@@ -28,6 +28,19 @@ export async function detectGitRemote(repoPath: string, run: GitRunner = default
 }
 
 /**
+ * Return the checked-out branch for a local repo, or '' when the path is not a
+ * repo, is detached, or git cannot resolve a branch name.
+ */
+export async function detectGitBranch(repoPath: string, run: GitRunner = defaultRun): Promise<string> {
+  try {
+    const { stdout } = await run('git', ['-C', repoPath, 'branch', '--show-current']);
+    return stdout.trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
  * Parse `owner`/`repo` out of a GitHub remote URL. Returns null for non-GitHub
  * hosts or unparseable input.
  *   git@github.com:owner/repo.git

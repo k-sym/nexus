@@ -252,6 +252,8 @@ export interface ChatThread {
   id: string;
   project_id: string;
   title: string;
+  /** Current branch of the project checkout when the thread list was loaded. Empty when unavailable. */
+  git_branch?: string;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
