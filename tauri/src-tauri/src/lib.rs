@@ -191,11 +191,11 @@ pub fn run() {
 
                     match builder.build() {
                         Err(e) => eprintln!("[boot] main window build failed: {e}"),
-                        Ok(main_window) => {
+                        Ok(_main_window) => {
                             // Dev convenience: pop the webview devtools (debug builds
                             // include them; release does not).
                             #[cfg(debug_assertions)]
-                            main_window.open_devtools();
+                            _main_window.open_devtools();
                             // Close the splash now that the main window is up.
                             if let Some(s) = handle.get_webview_window("splash") {
                                 let _ = s.close();
