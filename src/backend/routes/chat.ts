@@ -26,6 +26,7 @@ import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.j
 import { loadConfig } from '../config.js';
 import { resolveSignalFilterConfig } from '../signal-filters/config.js';
 import { projectToolResultMessages, type SignalProjection } from '../signal-filters/messages.js';
+import { detectGitBranch as detectProjectGitBranch } from '../github/repo.js';
 
 const ABORT_GRACE_MS = 200;
 
@@ -63,6 +64,10 @@ interface ThreadRunClaim {
   owner: symbol;
   title: string;
   modelKey: string;
+}
+
+interface RegisterChatRoutesOptions {
+  detectGitBranch?: (repoPath: string) => Promise<string>;
 }
 
 interface ChatImageAttachment {
@@ -173,10 +178,11 @@ function dbMessages(db: FastifyInstance['db'], threadId: string) {
   });
 }
 
-export async function registerChatRoutes(fastify: FastifyInstance) {
+export async function registerChatRoutes(fastify: FastifyInstance, options: RegisterChatRoutesOptions = {}) {
   const db = fastify.db;
   const pi = fastify.pi;
   const concurrency = fastify.chatConcurrency;
+  const detectGitBranch = options.detectGitBranch ?? detectProjectGitBranch;
   const threadRunClaims = new Map<string, ThreadRunClaim>();
   (fastify as any).activeChatStreams = activeStreams;
 
@@ -223,20 +229,28 @@ export async function registerChatRoutes(fastify: FastifyInstance) {
 
   fastify.get('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
+    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(projectId) as
+      | { repo_path: string }
+      | undefined;
+    const gitBranch = project?.repo_path ? await detectGitBranch(project.repo_path) : '';
     const rows = db
       .prepare('SELECT * FROM chat_threads WHERE project_id = ? AND archived_at IS NULL ORDER BY updated_at DESC')
       .all(projectId);
-    return rows as ChatThread[];
+    return (rows as ChatThread[]).map((thread) => ({ ...thread, git_branch: gitBranch }));
   });
 
   fastify.post('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
     const body = (request.body ?? {}) as { title?: string };
     const now = new Date().toISOString();
+    const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(projectId) as
+      | { repo_path: string }
+      | undefined;
     const thread: ChatThread = {
       id: uuid(),
       project_id: projectId,
       title: body.title?.trim() || 'New Session',
+      git_branch: project?.repo_path ? await detectGitBranch(project.repo_path) : '',
       created_at: now,
       updated_at: now,
       archived_at: null,

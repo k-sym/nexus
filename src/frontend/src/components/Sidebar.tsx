@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
-import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch } from '@phosphor-icons/react';
+import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch, GitBranch } from '@phosphor-icons/react';
 
 export type SubView = 'kanban' | 'memory' | 'chat';
 
@@ -88,6 +88,19 @@ function CountBadge({ children, className = '' }: { children: React.ReactNode; c
   return (
     <span className={`shrink-0 tabular-nums text-[11px] font-semibold accent-text ${className}`}>
       {children}
+    </span>
+  );
+}
+
+function BranchIcon({ branch }: { branch?: string }) {
+  const label = branch ? `Branch: ${branch}` : 'Branch unavailable';
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      className={`inline-flex h-4 w-4 items-center justify-center ${branch ? 'accent-text' : 'text-faint'}`}
+    >
+      <GitBranch size={14} weight="bold" aria-hidden="true" />
     </span>
   );
 }
@@ -337,6 +350,7 @@ export default function Sidebar({
                               key={thread.id}
                               active={activeThreadId === thread.id}
                               depth={0}
+                              icon={<BranchIcon branch={thread.git_branch} />}
                               className="compact-project-session-row"
                               onClick={() => {
                                 if (!isRenaming && !isArchiving) onSelectThread(activeProject.id, thread.id);

@@ -177,7 +177,7 @@ test('run history reloads multiple assistant/tool messages as one logical run ca
   assert.equal(assistant.run.runId, 'run-1');
 });
 
-function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean } = {}) {
+function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean; detectGitBranch?: (repoPath: string) => Promise<string> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-chat-test-'));
   const db = new Database(join(dir, 'test.db'));
   // Minimal schema: projects + chat_threads + chat_messages. (chat_messages
@@ -238,7 +238,7 @@ function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boo
   app.decorate('db', db);
   app.decorate('pi', runtime);
   app.decorate('chatConcurrency', concurrency);
-  app.register(registerChatRoutes);
+  app.register(registerChatRoutes, { detectGitBranch: options.detectGitBranch });
   return { app, db, dir, runtime, concurrency };
 }
 
@@ -2113,6 +2113,27 @@ test('GET /api/projects/:projectId/threads returns threads for the project', asy
     const threads = res.json();
     assert.equal(threads.length, 1);
     assert.equal(threads[0].id, 'thread-1');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:projectId/threads includes the current project git branch', async () => {
+  const seenPaths: string[] = [];
+  const { app, db, dir } = makeApp(undefined, {
+    detectGitBranch: async (repoPath) => {
+      seenPaths.push(repoPath);
+      return 'feat/session-icons';
+    },
+  });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/projects/proj-1/threads' });
+    assert.equal(res.statusCode, 200);
+    const threads = res.json();
+    assert.equal(threads[0].git_branch, 'feat/session-icons');
+    assert.deepEqual(seenPaths, [dir]);
   } finally {
     await app.close();
     db.close();
