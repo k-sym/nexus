@@ -295,6 +295,8 @@ export interface NexusConfig {
     local: {
       base_url: string;
       api_key: string;
+      display_name: string;
+      chat_model: string;
       embedding_model: string;
       rerank_model: string;
     };

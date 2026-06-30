@@ -37,10 +37,13 @@ import { ModelCurationStore } from './pi/model-curation.js';
 import { OAuthFlowManager } from './pi/oauth-flows.js';
 import { backfillOAuthCuratedModels } from './pi/oauth-curation-backfill.js';
 import { loadLocalEnvFile } from './env.js';
+import { writeLocalModelsFile } from './pi/local-models.js';
+import { backfillLocalCuratedModels } from './pi/local-model-curation-backfill.js';
 
 async function main() {
   loadLocalEnvFile();
   const config = loadConfig();
+  writeLocalModelsFile(config);
 
   const db = getDb(getDbPath());
   const pi = new PiRuntime();
@@ -74,6 +77,7 @@ async function main() {
   app.decorate('pi', pi);
   const modelCuration = new ModelCurationStore(join(getNexusDir(), 'model-curation.json'));
   backfillOAuthCuratedModels(pi, modelCuration);
+  backfillLocalCuratedModels(pi, modelCuration);
 
   app.decorate('chatConcurrency', chatConcurrency);
   app.decorate('modelCuration', modelCuration);

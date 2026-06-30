@@ -17,6 +17,8 @@ function config(root: string): NexusConfig {
       local: {
         base_url: 'http://127.0.0.1:4001/v1',
         api_key: 'literal-local-secret',
+        display_name: 'Local Model',
+        chat_model: '',
         embedding_model: '',
         rerank_model: '',
       },

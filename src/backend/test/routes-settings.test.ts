@@ -1,9 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer } from 'node:http';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { registerSettingsRoutes } from '../routes/settings';
+import { registerPiRoutes } from '../routes/pi';
 import { loadConfig, saveConfig } from '../config';
 import { __primeTokenCache } from '../github/token';
+import { PiRuntime } from '../pi/runtime';
+import { ModelCurationStore } from '../pi/model-curation';
 
 // A live GITHUB_TOKEN in the developer's shell (or .env) would flip the
 // "token not detected" assertion below. Mirror the Jira tests' handling of
@@ -123,5 +130,113 @@ test('settings masks and preserves assistant api key', async () => {
   } finally {
     saveConfig(original);
     await app.close();
+  }
+});
+
+test('POST /api/settings/local-model/test verifies the configured chat model responds', async () => {
+  const server = createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/models') {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ data: [{ id: 'qwen2.5-coder:7b' }] }));
+      return;
+    }
+    if (req.method === 'POST' && req.url === '/v1/chat/completions') {
+      let body = '';
+      req.on('data', (chunk) => {
+        body += String(chunk);
+      });
+      req.on('end', () => {
+        const parsed = JSON.parse(body);
+        assert.equal(parsed.model, 'qwen2.5-coder:7b');
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ choices: [{ message: { content: 'pong' } }] }));
+      });
+      return;
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address === 'object');
+  const app = makeApp();
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/settings/local-model/test',
+      payload: {
+        base_url: `http://127.0.0.1:${address.port}/v1`,
+        api_key: 'local',
+        chat_model: 'qwen2.5-coder:7b',
+      },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), {
+      ok: true,
+      message: 'Local model responded.',
+      models: ['qwen2.5-coder:7b'],
+      modelFound: true,
+    });
+  } finally {
+    await app.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
+
+test('PUT /api/settings enables configured local chat model in an existing curated list', async () => {
+  const original = loadConfig();
+  const originalOmlxApiKey = process.env.OMLX_API_KEY;
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-settings-models-'));
+  const localModelId = '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf';
+  const localModelKey = `local/${localModelId}`;
+  const app = Fastify({ logger: false });
+  const pi = new PiRuntime({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+    modelsFile: join(dir, 'models.json'),
+  });
+  const modelCuration = new ModelCurationStore(join(dir, 'model-curation.json'));
+  modelCuration.save([]);
+  app.decorate('pi', pi);
+  app.decorate('modelCuration', modelCuration);
+  app.register(registerSettingsRoutes);
+  app.register(registerPiRoutes);
+  try {
+    delete process.env.OMLX_API_KEY;
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: {
+        ...original,
+        models: {
+          ...original.models,
+          local: {
+            ...original.models.local,
+            base_url: 'http://127.0.0.1:8081/v1',
+            api_key: '${OMLX_API_KEY}',
+            display_name: 'Local Model',
+            chat_model: localModelId,
+          },
+        },
+      },
+    });
+    assert.equal(put.statusCode, 200);
+
+    const models = await app.inject({ method: 'GET', url: '/api/models' });
+    assert.deepEqual(models.json().enabledModelKeys, [localModelKey]);
+    assert.deepEqual(
+      models.json().models.map((model: any) => `${model.provider}/${model.id}`),
+      [localModelKey],
+    );
+    assert.deepEqual(models.json().models.map((model: any) => model.name), ['Local Model']);
+  } finally {
+    if (originalOmlxApiKey === undefined) {
+      delete process.env.OMLX_API_KEY;
+    } else {
+      process.env.OMLX_API_KEY = originalOmlxApiKey;
+    }
+    saveConfig(original);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
   }
 });

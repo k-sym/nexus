@@ -16,6 +16,8 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [testingLocalModel, setTestingLocalModel] = useState(false);
+  const [localModelStatus, setLocalModelStatus] = useState<{ ok: boolean; message: string } | null>(null);
   // Appearance prefs are local-only (localStorage) and apply instantly, so they
   // live outside the config object and the Save Changes flow.
   const [motion, setMotion] = useState<BackgroundMotion>(getBackgroundMotion);
@@ -52,12 +54,31 @@ export default function SettingsPage() {
     try {
       const updated = await api.settings.update(config);
       setConfig(updated);
+      window.dispatchEvent(new Event('nexus:models-refresh'));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (err: any) {
       alert(`Failed to save settings: ${err.message}`);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestLocalModel = async () => {
+    setTestingLocalModel(true);
+    setLocalModelStatus(null);
+    try {
+      const local = config.models.local ?? {};
+      const result = await api.settings.testLocalModel({
+        base_url: local.base_url ?? '',
+        api_key: local.api_key ?? '',
+        chat_model: local.chat_model ?? '',
+      });
+      setLocalModelStatus({ ok: result.ok, message: result.message });
+    } catch (err: any) {
+      setLocalModelStatus({ ok: false, message: err?.message || 'Local model test failed.' });
+    } finally {
+      setTestingLocalModel(false);
     }
   };
 
@@ -152,6 +173,7 @@ export default function SettingsPage() {
           <Section title="Local Model Server">
             <Field label="Base URL">
               <input
+                aria-label="Base URL"
                 type="text"
                 value={config.models.local?.base_url ?? ''}
                 onChange={(e) => update(['models', 'local', 'base_url'], e.target.value)}
@@ -164,6 +186,7 @@ export default function SettingsPage() {
             </Field>
             <Field label="API key (env)">
               <input
+                aria-label="API key"
                 type="text"
                 value={config.models.local?.api_key ?? ''}
                 onChange={(e) => update(['models', 'local', 'api_key'], e.target.value)}
@@ -174,6 +197,47 @@ export default function SettingsPage() {
                 omlx requires this. Supports <span className="font-mono">{'${ENV_VAR}'}</span> interpolation.
               </p>
             </Field>
+            <Field label="Display name">
+              <input
+                aria-label="Display name"
+                type="text"
+                value={config.models.local?.display_name ?? 'Local Model'}
+                onChange={(e) => update(['models', 'local', 'display_name'], e.target.value)}
+                placeholder="Local Model"
+                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">
+                Shown in model pickers while the raw model id is still sent to the local server.
+              </p>
+            </Field>
+            <Field label="Chat model id">
+              <input
+                aria-label="Chat model id"
+                type="text"
+                value={config.models.local?.chat_model ?? ''}
+                onChange={(e) => update(['models', 'local', 'chat_model'], e.target.value)}
+                placeholder="qwen2.5-coder:7b"
+                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">
+                Saved as <span className="font-mono">local/&lt;model id&gt;</span> in the curated model list.
+              </p>
+            </Field>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleTestLocalModel}
+                disabled={testingLocalModel}
+                className="px-3 py-1.5 text-xs rounded surface-elevated text-muted hover:text-primary border border-subtle disabled:opacity-40 transition-colors"
+              >
+                {testingLocalModel ? 'Testing…' : 'Test local model'}
+              </button>
+              {localModelStatus && (
+                <span className={`text-xs ${localModelStatus.ok ? 'text-green-400' : 'text-red-400'}`}>
+                  {localModelStatus.message}
+                </span>
+              )}
+            </div>
           </Section>
 
           {/* Memory */}

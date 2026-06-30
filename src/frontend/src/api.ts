@@ -49,6 +49,19 @@ export interface ModelsResponse {
   customized: boolean;
 }
 
+export interface LocalModelTestRequest {
+  base_url: string;
+  api_key: string;
+  chat_model: string;
+}
+
+export interface LocalModelTestResponse {
+  ok: boolean;
+  message: string;
+  models: string[];
+  modelFound?: boolean;
+}
+
 export type OperationKind = 'chat_turn' | 'assistant_stream' | 'jira_sync' | 'github_sync' | 'memory_archive' | 'memory_index';
 export type OperationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -237,6 +250,11 @@ export const api = {
   settings: {
     get: () => fetchJson<any>(`/api/settings`),
     update: (config: any) => fetchJson<any>(`/api/settings`, { method: 'PUT', body: JSON.stringify(config) }),
+    testLocalModel: (data: LocalModelTestRequest) =>
+      fetchJson<LocalModelTestResponse>(`/api/settings/local-model/test`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
   },
   trust: {
     get: () => fetchJson<TrustSnapshot>('/api/trust'),

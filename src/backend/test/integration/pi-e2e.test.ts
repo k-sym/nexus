@@ -17,7 +17,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -214,6 +214,69 @@ test('PUT /api/models/curation ignores unconfigured model keys', async () => {
     assert.equal(put.statusCode, 200);
     assert.deepEqual(put.json().enabledModelKeys, []);
     assert.deepEqual(put.json().models, []);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/models includes configured Nexus local model from custom registry', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
+  const modelsFile = join(dir, 'models.json');
+  const localModelId = '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf';
+  const localModelKey = `local/${localModelId}`;
+  writeFileSync(modelsFile, JSON.stringify({
+    providers: {
+      local: {
+        name: 'Local Model Server',
+        baseUrl: 'http://127.0.0.1:8081/v1',
+        api: 'openai-completions',
+        apiKey: 'local',
+        compat: {
+          supportsDeveloperRole: false,
+          supportsReasoningEffort: false,
+        },
+        models: [
+          {
+            id: localModelId,
+            name: 'Local Model',
+            input: ['text'],
+            reasoning: false,
+            contextWindow: 128000,
+            maxTokens: 4096,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+      },
+    },
+  }));
+  const runtime = new PiRuntime({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+    modelsFile,
+  });
+  const app = Fastify({ logger: false });
+  app.decorate('pi', runtime);
+  app.decorate('modelCuration', new ModelCurationStore(join(dir, 'model-curation.json')));
+  app.register(registerPiRoutes);
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/models' });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.ok(body.allModels.some((model: any) =>
+      model.provider === 'local' && model.id === localModelId && model.name === 'Local Model',
+    ));
+    assert.ok(body.models.some((model: any) =>
+      model.provider === 'local' && model.id === localModelId && model.name === 'Local Model',
+    ));
+
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/models/curation',
+      payload: { enabledModelKeys: [localModelKey] },
+    });
+    assert.equal(put.statusCode, 200);
+    assert.deepEqual(put.json().enabledModelKeys, [localModelKey]);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });
