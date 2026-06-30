@@ -20,10 +20,13 @@ Implemented `models.local.chat_model`, Nexus-managed Pi custom model output at `
 
 Follow-up: added `models.local.display_name` defaulting to `Local Model`. The generated Pi model keeps the configured raw model id, including filesystem-style ids such as `/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf`, but shows the display name in curated model and chat selectors. When a local API key env reference is unresolved at save time, Nexus writes Pi's local placeholder key so the model is still considered configured and can appear in curation; the health check remains the source of truth for whether the server can answer.
 
+Follow-up: backend startup now backfills configured local models into an existing curated model file. This repairs stale curation created before the local model was added, so chat/session model pickers receive `Local Model` from `/api/models` after restart.
+
 There were no intentional deviations from the design. The health check uses `/models` for discovery and `/chat/completions` when a model id is present, so a successful test means the configured model produced a completion response.
 
 Testing agent verification points:
 
 - Save a base URL, API key/env reference, display name, and chat model id, then confirm the display name appears in Curated Models and the underlying key remains `local/<model id>`.
+- Restart the backend with an existing curated list that lacks local, then confirm the session model picker includes `Local Model`.
 - Enable that curated model and confirm it appears in the chat model selector.
 - Use the Settings test button against both a running local server and an offline port; confirm success and failure messages are clear.
