@@ -39,16 +39,11 @@ coverage/
 
 # Claude Code
 .claude/
-project_docs/database/archive/client_ra_data.sql
 
 # KS Workflows
-project_docs/
-.worktrees/
+# project_docs is a symlink into Dropbox (@Work/@project_docs/nexus); never tracked.
+project_docs
 .worktrees/
 
 # Claude Code local settings
 settings.local.json
-
-project_docs/
-
-project_docs
