@@ -293,6 +293,38 @@ test("memory mutations wait until active maintenance finishes", async () => {
   }
 });
 
+test("session archive summary route uses the daemon generation model", async () => {
+  const f = fixture();
+  const prompts: Array<{ prompt: string; system?: string }> = [];
+  f.ctx.models.complete = async (prompt: string, opts?: { system?: string }) => {
+    prompts.push({ prompt, system: opts?.system });
+    return "Daemon generated archive summary.";
+  };
+  const app = buildServer(f.ctx);
+  try {
+    const res = await app.inject({
+      method: "POST",
+      url: "/operations/summarize-session-archive",
+      payload: {
+        projectName: "Demo",
+        threadTitle: "Remote memory session",
+        transcript: "USER: Keep this remote archive decision.\n\nASSISTANT: Agreed.",
+      },
+    });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), { summary: "Daemon generated archive summary." });
+    assert.equal(prompts.length, 1);
+    assert.match(prompts[0].prompt, /Project: Demo/);
+    assert.match(prompts[0].prompt, /Remote memory session/);
+    assert.match(prompts[0].prompt, /remote archive decision/);
+    assert.match(prompts[0].system ?? "", /long-term project memory/);
+  } finally {
+    await app.close();
+    f.close();
+  }
+});
+
 test("maintenance routes return rebuild stats and relative clear paths", async () => {
   const f = fixture();
   const stats: ReindexStats = { scanned: 1, inserted: 0, updated: 1, noop: 0, removed: 0, reindexed: 1, queued: 1 };

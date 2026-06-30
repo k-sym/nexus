@@ -80,6 +80,16 @@ export interface ClearNexusResult {
   reconciliationError?: string;
 }
 
+export interface SessionArchiveSummaryRequest {
+  projectName: string;
+  threadTitle: string;
+  transcript: string;
+}
+
+export interface SessionArchiveSummaryResponse {
+  summary: string;
+}
+
 export class DaemonRequestError extends Error {
   constructor(readonly status: number, message: string) {
     super(message);
@@ -144,5 +154,8 @@ export const daemon = {
   },
   clearNexusMemory(confirmation: string) {
     return req<ClearNexusResult>('POST', '/operations/clear-nexus', { confirmation });
+  },
+  summarizeSessionArchive(input: SessionArchiveSummaryRequest) {
+    return req<SessionArchiveSummaryResponse>('POST', '/operations/summarize-session-archive', input);
   },
 };
