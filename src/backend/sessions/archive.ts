@@ -3,6 +3,7 @@ import type { ChatThread, Project } from '@nexus/shared';
 import type { PiRuntime } from '../pi/runtime.js';
 import { loadConfig, resolveEnvVars } from '../config.js';
 import { addMemory, type MemoryInput } from '../memory/index.js';
+import { daemon } from '../memory/client.js';
 import { resolveSignalFilterConfig, type ResolvedSignalFilterConfig } from '../signal-filters/config.js';
 import { projectToolResultMessages } from '../signal-filters/messages.js';
 
@@ -43,9 +44,9 @@ export async function archiveThreadToMemory(
     throw new ArchiveThreadError(400, 'Session has no meaningful chat history to archive');
   }
 
-  const summarize = deps.summarize ?? summarizeWithLocalModel;
+  const summarize = deps.summarize ?? summarizeWithMemoryDaemon;
   const summary = (await summarize({ thread, project, transcript })).trim();
-  if (!summary) throw new ArchiveThreadError(502, 'Local model returned an empty archive summary');
+  if (!summary) throw new ArchiveThreadError(502, 'Archive summary model returned an empty summary');
 
   const storeMemory = deps.storeMemory ?? ((input: MemoryInput) => addMemory(db, input));
   const stored = await storeMemory({
@@ -187,4 +188,21 @@ export async function summarizeWithLocalModel(input: {
   }
   const json = await res.json();
   return String(json?.choices?.[0]?.message?.content ?? '').trim();
+}
+
+export async function summarizeWithMemoryDaemon(input: {
+  thread: ChatThread;
+  project: Project;
+  transcript: string;
+}): Promise<string> {
+  try {
+    const res = await daemon.summarizeSessionArchive({
+      projectName: input.project.name,
+      threadTitle: input.thread.title,
+      transcript: input.transcript,
+    });
+    return String(res.summary ?? '').trim();
+  } catch {
+    throw new ArchiveThreadError(502, 'Memory daemon archive summary failed');
+  }
 }

@@ -799,8 +799,8 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       title: `${project?.name ?? 'unknown'} / ${thread?.title ?? threadId}`,
       projectId: thread?.project_id ?? null,
       threadId,
-      provider: 'local',
-      model: 'llama-3.1',
+      provider: 'memory-daemon',
+      model: 'generation',
     });
     try {
       const result = await archiveThreadToMemory(db, pi, threadId);

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { X } from '@phosphor-icons/react';
 import { Project, Task, Ticket, ChatThread, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
 import { api, MissionStatus } from './api';
 import TopBar from './components/TopBar';
@@ -699,10 +700,21 @@ export default function App() {
       {archiveError && (
         <div
           role="alert"
-          className="fixed bottom-4 right-4 z-50 max-w-md rounded-md border border-red-400/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 shadow-lg backdrop-blur"
+          className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-3 rounded-md border border-red-400/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 shadow-lg backdrop-blur"
         >
-          <div className="font-medium">Archive failed</div>
-          <div className="mt-1 text-red-100/80">{archiveError}</div>
+          <div className="min-w-0 flex-1">
+            <div className="font-medium">Archive failed</div>
+            <div className="mt-1 text-red-100/80">{archiveError}</div>
+          </div>
+          <button
+            type="button"
+            title="Dismiss archive error"
+            aria-label="Dismiss archive error"
+            onClick={() => setArchiveError(null)}
+            className="shrink-0 rounded p-0.5 text-red-100/60 transition-colors hover:bg-red-100/10 hover:text-red-50"
+          >
+            <X size={14} />
+          </button>
         </div>
       )}
 

@@ -2558,6 +2558,55 @@ test('archiveThreadToMemory summarizes, stores memory, deletes the thread, and d
   }
 });
 
+test('archiveThreadToMemory requests archive summaries from the memory daemon', async () => {
+  const previousUrl = process.env.MEMORY_DAEMON_URL;
+  const daemon = Fastify({ logger: false });
+  const summaryRequests: any[] = [];
+  daemon.post('/operations/summarize-session-archive', async (request) => {
+    summaryRequests.push(request.body);
+    return { summary: 'Remote daemon summary for archived session.' };
+  });
+  await daemon.listen({ host: '127.0.0.1', port: 0 });
+  const address = daemon.server.address();
+  assert.equal(typeof address, 'object');
+  process.env.MEMORY_DAEMON_URL = `http://127.0.0.1:${address!.port}`;
+
+  const stored: any[] = [];
+  const { archiveThreadToMemory } = await import('../sessions/archive');
+  const { app, db, dir } = makeApp({
+    readMessages: async () => [
+      { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Please preserve this remote archive decision.' }] } },
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Decision: use the remote daemon summarizer.' }] } },
+    ],
+    dropSession: () => {},
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    models: { find: () => undefined },
+  });
+  try {
+    const result = await archiveThreadToMemory(db, app.pi, 'thread-1', {
+      storeMemory: async (input) => {
+        stored.push(input);
+        return { id: 'memory-remote' };
+      },
+    });
+
+    assert.equal(result.memoryId, 'memory-remote');
+    assert.equal(stored[0].content, 'Remote daemon summary for archived session.');
+    assert.equal(summaryRequests.length, 1);
+    assert.equal(summaryRequests[0].projectName, 'Demo');
+    assert.equal(summaryRequests[0].threadTitle, 'T1');
+    assert.match(summaryRequests[0].transcript, /remote archive decision/);
+  } finally {
+    process.env.MEMORY_DAEMON_URL = previousUrl;
+    await daemon.close();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('archiveThreadToMemory keeps the thread when memory storage fails', async () => {
   const { archiveThreadToMemory, ArchiveThreadError } = await import('../sessions/archive');
   const { app, db, dir } = makeApp({

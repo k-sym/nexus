@@ -82,6 +82,7 @@ const alphaThread: ChatThread = {
 describe('App project navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     mockApi.missionControl.get.mockResolvedValue({ memory: { ok: true }, models: [] });
     mockApi.activity.list.mockResolvedValue({ running: [], recent: [], counts: {} });
     mockApi.projects.list.mockResolvedValue(projects);
@@ -107,5 +108,20 @@ describe('App project navigation', () => {
     await waitFor(() => {
       expect(screen.getByTestId('chat-panel-props')).toHaveTextContent('project-b:none');
     });
+  });
+
+  it('lets archive failures be dismissed', async () => {
+    const user = userEvent.setup();
+    mockApi.chat.archiveThread.mockRejectedValue(new Error('Load failed'));
+
+    render(<App />);
+
+    await user.click(await screen.findByLabelText('Switch to Alpha'));
+    await user.click(await screen.findByTitle('Archive to memory'));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Load failed');
+
+    await user.click(screen.getByTitle('Dismiss archive error'));
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
