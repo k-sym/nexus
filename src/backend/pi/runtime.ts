@@ -20,6 +20,7 @@ import {
 import anthropicMessagesBridge from '@blackbelt-technology/pi-anthropic-messages';
 import { QuestionBroker, createQuestionExtension } from './questions.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
+import { defaultLocalModelsFile } from './local-models.js';
 
 type ResourceLoaderOptions = {
   cwd: string;
@@ -56,11 +57,14 @@ export interface PiRuntimePaths {
   authFile: string;
   /** Root directory for session JSONL files. Default: ~/.nexus/sessions */
   sessionsDir: string;
+  /** Path to Nexus-managed Pi custom models. Default: ~/.nexus/models.json */
+  modelsFile?: string;
 }
 
-export const defaultPiRuntimePaths = (): PiRuntimePaths => ({
+export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
   authFile: join(homedir(), '.nexus', 'auth.json'),
   sessionsDir: join(homedir(), '.nexus', 'sessions'),
+  modelsFile: defaultLocalModelsFile(),
 });
 
 /** Encode a repo path as a directory-safe slug for per-cwd session dirs.
@@ -104,18 +108,23 @@ export class PiRuntime {
   readonly auth: AuthStorage;
   readonly models: ModelRegistry;
   /** Internal path config. Exposed read-only for the orchestrator's headless sessions. */
-  readonly paths: PiRuntimePaths;
+  readonly paths: Required<PiRuntimePaths>;
   readonly questions = new QuestionBroker();
   private readonly sessions = new Map<string, AgentSession>();
   private readonly sessionPromises = new Map<string, Promise<AgentSession>>();
   private readonly sessionModels = new Map<string, string>();
 
-  constructor(paths: PiRuntimePaths = defaultPiRuntimePaths()) {
-    this.paths = paths;
-    mkdirSync(join(paths.authFile, '..'), { recursive: true });
-    mkdirSync(paths.sessionsDir, { recursive: true });
-    this.auth = AuthStorage.create(paths.authFile);
-    this.models = ModelRegistry.create(this.auth);
+  constructor(paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths()) {
+    const defaults = defaultPiRuntimePaths();
+    this.paths = {
+      authFile: paths.authFile ?? defaults.authFile,
+      sessionsDir: paths.sessionsDir ?? defaults.sessionsDir,
+      modelsFile: paths.modelsFile ?? defaults.modelsFile,
+    };
+    mkdirSync(join(this.paths.authFile, '..'), { recursive: true });
+    mkdirSync(this.paths.sessionsDir, { recursive: true });
+    this.auth = AuthStorage.create(this.paths.authFile);
+    this.models = ModelRegistry.create(this.auth, this.paths.modelsFile);
   }
 
   /**

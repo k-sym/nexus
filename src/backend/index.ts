@@ -37,10 +37,12 @@ import { ModelCurationStore } from './pi/model-curation.js';
 import { OAuthFlowManager } from './pi/oauth-flows.js';
 import { backfillOAuthCuratedModels } from './pi/oauth-curation-backfill.js';
 import { loadLocalEnvFile } from './env.js';
+import { writeLocalModelsFile } from './pi/local-models.js';
 
 async function main() {
   loadLocalEnvFile();
   const config = loadConfig();
+  writeLocalModelsFile(config);
 
   const db = getDb(getDbPath());
   const pi = new PiRuntime();

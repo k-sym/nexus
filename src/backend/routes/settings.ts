@@ -9,6 +9,8 @@ import { FastifyInstance } from 'fastify';
 import { loadConfig, saveConfig } from '../config.js';
 import { NexusConfig } from '@nexus/shared';
 import { resolveGitHubToken } from '../github/token.js';
+import { testLocalModel, writeLocalModelsFile } from '../pi/local-models.js';
+import { buildModelCatalog } from './pi.js';
 
 const MASK = '••••••••';
 
@@ -70,13 +72,20 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         local: {
           base_url: incoming.models?.local?.base_url ?? current.models.local.base_url,
           api_key: incoming.models?.local?.api_key ?? current.models.local.api_key,
+          chat_model: incoming.models?.local?.chat_model ?? current.models.local.chat_model,
           embedding_model: incoming.models?.local?.embedding_model ?? current.models.local.embedding_model,
           rerank_model: incoming.models?.local?.rerank_model ?? current.models.local.rerank_model,
         },
       },
     };
 
+    const pi = (fastify as any).pi;
     saveConfig(merged);
+    writeLocalModelsFile(merged, pi?.paths?.modelsFile);
+    pi?.models?.refresh?.();
+    if (merged.models.local.base_url.trim() && merged.models.local.chat_model.trim() && pi) {
+      fastify.modelCuration?.enableConfiguredProviderModels('local', buildModelCatalog(fastify));
+    }
 
     return {
       ...merged,
@@ -90,5 +99,14 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       },
       github_token_detected: !!(await resolveGitHubToken()),
     };
+  });
+
+  fastify.post('/api/settings/local-model/test', async (request) => {
+    const body = request.body as {
+      base_url?: string;
+      api_key?: string;
+      chat_model?: string;
+    };
+    return testLocalModel(body ?? {});
   });
 }
