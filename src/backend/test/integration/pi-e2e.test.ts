@@ -223,6 +223,8 @@ test('PUT /api/models/curation ignores unconfigured model keys', async () => {
 test('GET /api/models includes configured Nexus local model from custom registry', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
   const modelsFile = join(dir, 'models.json');
+  const localModelId = '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf';
+  const localModelKey = `local/${localModelId}`;
   writeFileSync(modelsFile, JSON.stringify({
     providers: {
       local: {
@@ -236,8 +238,8 @@ test('GET /api/models includes configured Nexus local model from custom registry
         },
         models: [
           {
-            id: 'qwen2.5-coder:7b',
-            name: 'qwen2.5-coder:7b (Local)',
+            id: localModelId,
+            name: 'Local Model',
             input: ['text'],
             reasoning: false,
             contextWindow: 128000,
@@ -261,16 +263,20 @@ test('GET /api/models includes configured Nexus local model from custom registry
     const res = await app.inject({ method: 'GET', url: '/api/models' });
     assert.equal(res.statusCode, 200);
     const body = res.json();
-    assert.ok(body.allModels.some((model: any) => model.provider === 'local' && model.id === 'qwen2.5-coder:7b'));
-    assert.ok(body.models.some((model: any) => model.provider === 'local' && model.id === 'qwen2.5-coder:7b'));
+    assert.ok(body.allModels.some((model: any) =>
+      model.provider === 'local' && model.id === localModelId && model.name === 'Local Model',
+    ));
+    assert.ok(body.models.some((model: any) =>
+      model.provider === 'local' && model.id === localModelId && model.name === 'Local Model',
+    ));
 
     const put = await app.inject({
       method: 'PUT',
       url: '/api/models/curation',
-      payload: { enabledModelKeys: ['local/qwen2.5-coder:7b'] },
+      payload: { enabledModelKeys: [localModelKey] },
     });
     assert.equal(put.statusCode, 200);
-    assert.deepEqual(put.json().enabledModelKeys, ['local/qwen2.5-coder:7b']);
+    assert.deepEqual(put.json().enabledModelKeys, [localModelKey]);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });

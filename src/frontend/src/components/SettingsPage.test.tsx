@@ -9,7 +9,7 @@ vi.mock('../api', () => ({
     settings: {
       get: vi.fn(async () => ({
         assistant: { url: 'https://assistant.example.test/v1', api_key: '${ASSISTANT_API_KEY}' },
-        models: { local: { base_url: '', api_key: '', chat_model: '' } },
+        models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '' } },
         memory: { auto_inject: { enabled: true, max_memories: 5, token_budget: 1000 } },
         jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
       })),
@@ -88,5 +88,26 @@ describe('SettingsPage', () => {
       });
     });
     expect(await screen.findByText('Local model responded.')).toBeInTheDocument();
+  });
+
+  it('saves a display name separately from a path-like local model id', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    await user.clear(await screen.findByLabelText('Display name'));
+    await user.type(screen.getByLabelText('Display name'), 'Local Model');
+    await user.type(screen.getByLabelText('Chat model id'), '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf');
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(api.settings.update).toHaveBeenCalledWith(expect.objectContaining({
+        models: expect.objectContaining({
+          local: expect.objectContaining({
+            display_name: 'Local Model',
+            chat_model: '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf',
+          }),
+        }),
+      }));
+    });
   });
 });

@@ -25,13 +25,14 @@ export function writeLocalModelsFile(config: NexusConfig, filePath = defaultLoca
   const local = config.models.local;
   const baseUrl = local.base_url.trim();
   const chatModel = local.chat_model.trim();
+  const displayName = local.display_name?.trim() || 'Local Model';
   const providers = baseUrl && chatModel
     ? {
         local: {
           name: 'Local Model Server',
           baseUrl,
           api: 'openai-completions',
-          apiKey: local.api_key.trim() || 'local',
+          apiKey: localModelsApiKey(local.api_key),
           compat: {
             supportsDeveloperRole: false,
             supportsReasoningEffort: false,
@@ -39,7 +40,7 @@ export function writeLocalModelsFile(config: NexusConfig, filePath = defaultLoca
           models: [
             {
               id: chatModel,
-              name: `${chatModel} (Local)`,
+              name: displayName,
               input: ['text'],
               reasoning: false,
               contextWindow: 128000,
@@ -53,6 +54,13 @@ export function writeLocalModelsFile(config: NexusConfig, filePath = defaultLoca
 
   mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
   writeFileSync(filePath, `${JSON.stringify({ providers }, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 });
+}
+
+function localModelsApiKey(value?: string): string {
+  const trimmed = value?.trim() || '';
+  if (!trimmed) return 'local';
+  if (trimmed.includes('$') && !resolveEnvVars(trimmed).trim()) return 'local';
+  return trimmed;
 }
 
 export async function testLocalModel(input: LocalModelTestInput): Promise<LocalModelTestResult> {

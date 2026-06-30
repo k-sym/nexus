@@ -185,7 +185,10 @@ test('POST /api/settings/local-model/test verifies the configured chat model res
 
 test('PUT /api/settings enables configured local chat model in an existing curated list', async () => {
   const original = loadConfig();
+  const originalOmlxApiKey = process.env.OMLX_API_KEY;
   const dir = mkdtempSync(join(tmpdir(), 'nexus-settings-models-'));
+  const localModelId = '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf';
+  const localModelKey = `local/${localModelId}`;
   const app = Fastify({ logger: false });
   const pi = new PiRuntime({
     authFile: join(dir, 'auth.json'),
@@ -199,6 +202,7 @@ test('PUT /api/settings enables configured local chat model in an existing curat
   app.register(registerSettingsRoutes);
   app.register(registerPiRoutes);
   try {
+    delete process.env.OMLX_API_KEY;
     const put = await app.inject({
       method: 'PUT',
       url: '/api/settings',
@@ -209,8 +213,9 @@ test('PUT /api/settings enables configured local chat model in an existing curat
           local: {
             ...original.models.local,
             base_url: 'http://127.0.0.1:8081/v1',
-            api_key: 'local',
-            chat_model: 'qwen2.5-coder:7b',
+            api_key: '${OMLX_API_KEY}',
+            display_name: 'Local Model',
+            chat_model: localModelId,
           },
         },
       },
@@ -218,12 +223,18 @@ test('PUT /api/settings enables configured local chat model in an existing curat
     assert.equal(put.statusCode, 200);
 
     const models = await app.inject({ method: 'GET', url: '/api/models' });
-    assert.deepEqual(models.json().enabledModelKeys, ['local/qwen2.5-coder:7b']);
+    assert.deepEqual(models.json().enabledModelKeys, [localModelKey]);
     assert.deepEqual(
       models.json().models.map((model: any) => `${model.provider}/${model.id}`),
-      ['local/qwen2.5-coder:7b'],
+      [localModelKey],
     );
+    assert.deepEqual(models.json().models.map((model: any) => model.name), ['Local Model']);
   } finally {
+    if (originalOmlxApiKey === undefined) {
+      delete process.env.OMLX_API_KEY;
+    } else {
+      process.env.OMLX_API_KEY = originalOmlxApiKey;
+    }
     saveConfig(original);
     await app.close();
     rmSync(dir, { recursive: true, force: true });

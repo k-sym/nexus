@@ -197,6 +197,19 @@ export default function SettingsPage() {
                 omlx requires this. Supports <span className="font-mono">{'${ENV_VAR}'}</span> interpolation.
               </p>
             </Field>
+            <Field label="Display name">
+              <input
+                aria-label="Display name"
+                type="text"
+                value={config.models.local?.display_name ?? 'Local Model'}
+                onChange={(e) => update(['models', 'local', 'display_name'], e.target.value)}
+                placeholder="Local Model"
+                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">
+                Shown in model pickers while the raw model id is still sent to the local server.
+              </p>
+            </Field>
             <Field label="Chat model id">
               <input
                 aria-label="Chat model id"
