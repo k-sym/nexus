@@ -10,6 +10,7 @@
     "core:default",
     "core:window:allow-start-dragging",
     "dialog:default",
+    "dialog:allow-confirm",
     "shell:allow-open"
   ]
 }

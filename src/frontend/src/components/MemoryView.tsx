@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Copy, Eye, PencilSimple, Trash, X } from '@phosphor-icons/react';
 import { api, type MemoryRecord } from '../api';
+import { confirmDialog } from '../lib/confirm';
 
 interface MemoryViewProps {
   projectId: string;
@@ -195,7 +196,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
   };
 
   const handleDelete = async (memory: MemoryRecord) => {
-    if (!window.confirm('Delete this memory permanently?')) return;
+    if (!(await confirmDialog('Delete this memory permanently?'))) return;
     try {
       await api.memory.delete(memory.id);
       if (selected?.id === memory.id) {

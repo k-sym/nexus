@@ -1,6 +1,7 @@
 import { useState, useRef } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
 import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch, GitBranch } from '@phosphor-icons/react';
+import { confirmDialog } from '../lib/confirm';
 
 export type SubView = 'kanban' | 'memory' | 'chat';
 
@@ -282,8 +283,8 @@ export default function Sidebar({
                     type="button"
                     title="Delete active project"
                     aria-label="Delete active project"
-                    onClick={() => {
-                      if (window.confirm('Delete this project? This cannot be undone.')) onDeleteProject(activeProject.id);
+                    onClick={async () => {
+                      if (await confirmDialog('Delete this project? This cannot be undone.')) onDeleteProject(activeProject.id);
                     }}
                     className="compact-project-action hover:text-red-400"
                   >
@@ -393,9 +394,9 @@ export default function Sidebar({
                                       role="button"
                                       title="Archive to memory"
                                       className="text-faint hover:text-[var(--text-primary)]"
-                                      onClick={(ev) => {
+                                      onClick={async (ev) => {
                                         ev.stopPropagation();
-                                        if (window.confirm('Archive this session to memory and delete it?')) onArchiveThread(thread.id);
+                                        if (await confirmDialog('Archive this session to memory and delete it?')) onArchiveThread(thread.id);
                                       }}
                                     >
                                       <ArchiveBoxIcon size={13} />
@@ -404,9 +405,9 @@ export default function Sidebar({
                                       role="button"
                                       title="Delete"
                                       className="text-faint hover:text-red-400"
-                                      onClick={(ev) => {
+                                      onClick={async (ev) => {
                                         ev.stopPropagation();
-                                        if (window.confirm('Delete this session? This cannot be undone.')) onDeleteThread(thread.id);
+                                        if (await confirmDialog('Delete this session? This cannot be undone.')) onDeleteThread(thread.id);
                                       }}
                                     >
                                       <Trash size={13} />
