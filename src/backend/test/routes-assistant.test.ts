@@ -279,6 +279,104 @@ test('Assistant runs persist attachments and send Hermes saved file references',
   }
 });
 
+test('Assistant foreground stream sends image attachments to Hermes as inline data images', async () => {
+  let createdRemoteSession = '';
+  let hermesChatBody: any = null;
+  const imageData = Buffer.from('fake-png').toString('base64');
+  const fetchImpl: HermesFetch = async (url, init) => {
+    const requestUrl = String(url);
+    if (requestUrl.endsWith('/api/sessions') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      createdRemoteSession = body.id;
+      return new Response(JSON.stringify({ object: 'hermes.session', session: { id: body.id } }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (requestUrl.endsWith(`/api/sessions/${createdRemoteSession}/chat`) && init?.method === 'POST') {
+      hermesChatBody = JSON.parse(String(init.body));
+      return new Response(JSON.stringify({
+        object: 'hermes.session.chat.completion',
+        session_id: createdRemoteSession,
+        message: { role: 'assistant', content: 'I can see the screenshot.' },
+        usage: { total_tokens: 25 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${requestUrl}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Vision' } });
+    const sessionId = created.json().id;
+
+    const streamed = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: {
+        content: 'What do you see?',
+        attachments: [{
+          type: 'image',
+          name: 'screen.png',
+          mimeType: 'image/png',
+          data: imageData,
+          size: 8,
+        }],
+      },
+    });
+
+    assert.equal(streamed.statusCode, 200);
+    assert.equal(createdRemoteSession, sessionId);
+    assert.ok(Array.isArray(hermesChatBody.input));
+    assert.deepEqual(hermesChatBody.input[0], { type: 'text', text: 'What do you see?' });
+    assert.deepEqual(hermesChatBody.input[1], {
+      type: 'image_url',
+      image_url: { url: `data:image/png;base64,${imageData}`, detail: 'high' },
+    });
+    assert.equal(JSON.stringify(hermesChatBody.input).includes('project_docs/uploads'), false);
+
+    const events = streamed.body.trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(events, [
+      { type: 'run_start', runId: events[0].runId },
+      { type: 'text_delta', delta: 'I can see the screenshot.' },
+      { type: 'complete', runId: events[0].runId, status: 'succeeded' },
+    ]);
+    const row = db
+      .prepare('SELECT attachments_json FROM assistant_session_messages WHERE session_id = ? AND role = ?')
+      .get(sessionId, 'user') as { attachments_json: string };
+    const stored = JSON.parse(row.attachments_json);
+    assert.equal(stored[0].type, 'image');
+    assert.match(stored[0].path, /project_docs\/uploads\/screen\.png$/);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant background handoff rejects image attachments instead of dropping them', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Vision background' } });
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${created.json().id}/runs`,
+      payload: {
+        content: 'Check this overnight',
+        attachments: [{
+          type: 'image',
+          name: 'screen.png',
+          mimeType: 'image/png',
+          data: Buffer.from('fake-png').toString('base64'),
+          size: 8,
+        }],
+      },
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.match(response.json().error, /Background Handoff does not support image attachments/);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant sync isolates stale Hermes run_not_found failures and continues other runs', async () => {
   const fetchImpl: HermesFetch = async (url, init) => {
     if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
@@ -348,6 +446,7 @@ test('Assistant sync isolates stale Hermes run_not_found failures and continues 
 
 test('deleting an Assistant session best-effort stops its running Hermes runs without blocking delete', async () => {
   let stopCalls = 0;
+  let deleteCalls = 0;
   const fetchImpl: HermesFetch = async (url, init) => {
     if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
       return new Response(JSON.stringify({ run_id: 'remote-delete-running', status: 'started' }), {
@@ -358,6 +457,10 @@ test('deleting an Assistant session best-effort stops its running Hermes runs wi
     if (String(url).endsWith('/v1/runs/remote-delete-running/stop')) {
       stopCalls += 1;
       return new Response('Hermes stop failed', { status: 500 });
+    }
+    if (String(url).includes('/api/sessions/') && init?.method === 'DELETE') {
+      deleteCalls += 1;
+      return new Response(JSON.stringify({ deleted: true }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
@@ -377,6 +480,7 @@ test('deleting an Assistant session best-effort stops its running Hermes runs wi
     assert.equal(deleted.statusCode, 200);
     assert.equal(deleted.json().ok, true);
     assert.equal(stopCalls, 1);
+    assert.equal(deleteCalls, 1);
     const remaining = (db.prepare('SELECT COUNT(*) AS count FROM assistant_sessions WHERE id = ?').get(sessionId) as { count: number }).count;
     assert.equal(remaining, 0);
   } finally {

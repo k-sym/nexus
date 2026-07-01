@@ -94,6 +94,67 @@ test('stopRun posts to the Hermes stop endpoint', async () => {
   assert.equal(requestedMethod, 'POST');
 });
 
+test('sessionChat posts multimodal input to a Hermes persisted session', async () => {
+  let requestedUrl = '';
+  let requestedInit: RequestInit | undefined;
+  const fetchImpl: HermesFetch = async (url, init) => {
+    requestedUrl = String(url);
+    requestedInit = init;
+    return jsonResponse({
+      object: 'hermes.session.chat.completion',
+      session_id: 'session-1',
+      message: { role: 'assistant', content: 'I can see it.' },
+      usage: { total_tokens: 11 },
+    });
+  };
+
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const result = await client.sessionChat({
+    sessionId: 'session-1',
+    sessionKey: 'nexus:assistant:session-1',
+    input: [
+      { type: 'text', text: 'Describe this.' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,abc', detail: 'high' } },
+    ],
+  });
+
+  assert.equal(requestedUrl, 'http://127.0.0.1:8642/api/sessions/session-1/chat');
+  assert.equal((requestedInit?.headers as Record<string, string>).Authorization, 'Bearer secret');
+  assert.equal((requestedInit?.headers as Record<string, string>)['X-Hermes-Session-Key'], 'nexus:assistant:session-1');
+  assert.deepEqual(JSON.parse(String(requestedInit?.body)), {
+    input: [
+      { type: 'text', text: 'Describe this.' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,abc', detail: 'high' } },
+    ],
+  });
+  assert.deepEqual(result, {
+    sessionId: 'session-1',
+    output: 'I can see it.',
+    usage: { total_tokens: 11 },
+  });
+});
+
+test('createSession and deleteSession call Hermes session control endpoints', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl: HermesFetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    if (init?.method === 'POST') {
+      return jsonResponse({ object: 'hermes.session', session: { id: 'session-1' } }, { status: 201 });
+    }
+    return jsonResponse({ object: 'hermes.session.deleted', id: 'session-1', deleted: true });
+  };
+
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  assert.deepEqual(await client.createSession({ sessionId: 'session-1', title: 'Vision' }), { sessionId: 'session-1' });
+  await client.deleteSession('session-1');
+
+  assert.equal(calls[0].url, 'http://127.0.0.1:8642/api/sessions');
+  assert.equal(calls[0].init?.method, 'POST');
+  assert.deepEqual(JSON.parse(String(calls[0].init?.body)), { id: 'session-1', title: 'Vision' });
+  assert.equal(calls[1].url, 'http://127.0.0.1:8642/api/sessions/session-1');
+  assert.equal(calls[1].init?.method, 'DELETE');
+});
+
 test('streamChatCompletions extracts OpenAI-compatible streamed text deltas', async () => {
   const stream = [
     'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\n',

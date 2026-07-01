@@ -24,6 +24,30 @@ export interface HermesRunStatus {
   error?: string;
 }
 
+export type HermesContentPart =
+  | { type: 'text' | 'input_text'; text: string }
+  | { type: 'image_url'; image_url: { url: string; detail?: string } }
+  | { type: 'input_image'; image_url: string };
+
+export interface HermesSessionInput {
+  sessionId: string;
+  sessionKey?: string;
+  title?: string;
+}
+
+export interface HermesSessionChatInput {
+  sessionId: string;
+  sessionKey?: string;
+  input: string | HermesContentPart[];
+  instructions?: string;
+}
+
+export interface HermesSessionChatResult {
+  sessionId: string;
+  output: string;
+  usage?: unknown;
+}
+
 export interface HermesCapabilities {
   runs: boolean;
   runEvents: boolean;
@@ -39,6 +63,9 @@ export interface HermesClient {
   startRun(input: HermesRunInput): Promise<HermesRunStart>;
   getRun(runId: string): Promise<HermesRunStatus>;
   stopRun(runId: string): Promise<void>;
+  createSession(input: HermesSessionInput): Promise<{ sessionId: string }>;
+  deleteSession(sessionId: string): Promise<void>;
+  sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult>;
   streamChatCompletions(messages: Array<{ role: string; content: string }>): AsyncIterable<string>;
 }
 
@@ -133,6 +160,37 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
 
     async stopRun(runId: string): Promise<void> {
       await requestJson(`/v1/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
+    },
+
+    async createSession(input: HermesSessionInput): Promise<{ sessionId: string }> {
+      const body: Record<string, unknown> = { id: input.sessionId };
+      if (input.title) body.title = input.title;
+      const response = await requestJson('/api/sessions', {
+        method: 'POST',
+        headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
+        body: JSON.stringify(body),
+      });
+      const session = (response as any)?.session ?? {};
+      return { sessionId: String(session.id ?? input.sessionId) };
+    },
+
+    async deleteSession(sessionId: string): Promise<void> {
+      await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    },
+
+    async sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult> {
+      const body: Record<string, unknown> = { input: input.input };
+      if (input.instructions) body.instructions = input.instructions;
+      const response = await requestJson(`/api/sessions/${encodeURIComponent(input.sessionId)}/chat`, {
+        method: 'POST',
+        headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
+        body: JSON.stringify(body),
+      });
+      return {
+        sessionId: String((response as any).session_id ?? (response as any).sessionId ?? input.sessionId),
+        output: String((response as any).message?.content ?? (response as any).output ?? ''),
+        usage: (response as any).usage,
+      };
     },
 
     async *streamChatCompletions(messages: Array<{ role: string; content: string }>): AsyncIterable<string> {

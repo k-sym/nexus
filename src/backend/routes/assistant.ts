@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
 import type { NexusConfig } from '@nexus/shared';
-import { createHermesClient, type HermesFetch, type HermesRunStatus } from '../hermes/client.js';
+import { createHermesClient, type HermesContentPart, type HermesFetch, type HermesRunStatus } from '../hermes/client.js';
 
 interface AssistantMessage {
   id: string;
@@ -385,10 +385,30 @@ function sanitizeFilename(name: string): string {
 }
 
 function promptWithFileReferences(content: string, attachments: AssistantAttachment[]): string {
-  const files = attachments.filter((attachment) => !!attachment.path);
+  const files = attachments.filter((attachment): attachment is AssistantFileAttachment => attachment.type === 'file' && !!attachment.path);
   if (files.length === 0) return content;
   const lines = files.map((file) => `- ${file.name ?? 'attachment'}: ${file.path}`);
   return `${content}\n\nAttached files:\n${lines.join('\n')}`;
+}
+
+function hasImageAttachments(attachments: AssistantAttachment[]): boolean {
+  return attachments.some((attachment) => attachment.type === 'image');
+}
+
+function hermesInlineImageInput(content: string, attachments: AssistantAttachment[]): HermesContentPart[] {
+  const parts: HermesContentPart[] = [];
+  if (content.trim()) parts.push({ type: 'text', text: content });
+  for (const attachment of attachments) {
+    if (attachment.type !== 'image') continue;
+    parts.push({
+      type: 'image_url',
+      image_url: {
+        url: `data:${attachment.mimeType};base64,${attachment.data}`,
+        detail: 'high',
+      },
+    });
+  }
+  return parts;
 }
 
 export function createAssistantRoutes(load: () => NexusConfig = loadConfig, options: AssistantRoutesOptions = {}) {
@@ -401,6 +421,28 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const { url, key } = configuredAssistant(load);
       if (!url || !key) return undefined;
       return createHermesClient({ url, key, fetchImpl: options.fetchImpl });
+    };
+
+    const ensureRemoteSession = async (
+      hermes: ReturnType<typeof createHermesClient>,
+      session: AssistantSession,
+    ): Promise<string> => {
+      const remoteSessionId = session.remote_session_id ?? session.id;
+      try {
+        await hermes.createSession({
+          sessionId: remoteSessionId,
+          sessionKey: `nexus:assistant:${session.id}`,
+          title: session.title,
+        });
+      } catch (err) {
+        const message = errorMessage(err);
+        if (!/session_exists|already exists/i.test(message)) throw err;
+      }
+      if (session.remote_session_id !== remoteSessionId) {
+        const now = new Date().toISOString();
+        db.prepare('UPDATE assistant_sessions SET remote_session_id = ?, updated_at = ? WHERE id = ?').run(remoteSessionId, now, session.id);
+      }
+      return remoteSessionId;
     };
 
     const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, reply: any) => {
@@ -440,15 +482,34 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       });
 
       try {
-        const started = await hermes.startRun({
-          input: promptContent,
-          sessionId: session.remote_session_id ?? session.id,
-          sessionKey: `nexus:assistant:${session.id}`,
-        });
-        updateRunRemote(db, run.id, started.runId);
-        activeRemoteRuns.set(run.id, started.runId);
-        const remote = await hermes.getRun(started.runId);
-        const completed = completeRun(db, { ...run, remote_run_id: started.runId }, remote);
+        let completed: AssistantRun;
+        let remoteRunId: string | undefined;
+        if (hasImageAttachments(savedAttachments)) {
+          const remoteSessionId = await ensureRemoteSession(hermes, session);
+          const result = await hermes.sessionChat({
+            sessionId: remoteSessionId,
+            sessionKey: `nexus:assistant:${session.id}`,
+            input: hermesInlineImageInput(promptContent, savedAttachments),
+          });
+          completed = completeRun(db, run, {
+            runId: run.id,
+            status: 'completed',
+            sessionId: result.sessionId,
+            output: result.output,
+            usage: result.usage,
+          });
+        } else {
+          const started = await hermes.startRun({
+            input: promptContent,
+            sessionId: session.remote_session_id ?? session.id,
+            sessionKey: `nexus:assistant:${session.id}`,
+          });
+          remoteRunId = started.runId;
+          updateRunRemote(db, run.id, started.runId);
+          activeRemoteRuns.set(run.id, started.runId);
+          const remote = await hermes.getRun(started.runId);
+          completed = completeRun(db, { ...run, remote_run_id: started.runId }, remote);
+        }
         if (completed.output) appendMessage(db, session.id, 'assistant', completed.output);
 
         fastify.activity?.bus.emit({
@@ -458,12 +519,12 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           title: session.title,
           status: activityStatusForRun(completed.status),
           lastEvent: RUNNING_STATUSES.has(completed.status) ? 'remote_run_running' : undefined,
-          error: completed.status === 'failed' ? completed.error ?? remote.error : undefined,
+          error: completed.status === 'failed' ? completed.error ?? undefined : undefined,
         });
 
         reply.type('application/x-ndjson; charset=utf-8');
         return [
-          JSON.stringify({ type: 'run_start', runId: run.id, remoteRunId: started.runId }),
+          JSON.stringify({ type: 'run_start', runId: run.id, ...(remoteRunId ? { remoteRunId } : {}) }),
           ...(completed.output ? [JSON.stringify({ type: 'text_delta', delta: completed.output })] : []),
           JSON.stringify({ type: 'complete', runId: run.id, status: completed.status }),
         ].join('\n') + '\n';
@@ -554,6 +615,12 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           if (!run.remote_run_id) continue;
           await hermes.stopRun(run.remote_run_id).catch(() => undefined);
         }
+        const hasRemoteWork = Boolean(session.remote_session_id) || Boolean(
+          db.prepare('SELECT id FROM assistant_runs WHERE session_id = ? LIMIT 1').get(id),
+        );
+        if (hasRemoteWork) {
+          await hermes.deleteSession(session.remote_session_id ?? session.id).catch(() => undefined);
+        }
       }
       db.prepare('DELETE FROM assistant_sessions WHERE id = ?').run(id);
       return { ok: true };
@@ -576,6 +643,10 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot);
       const promptContent = promptWithFileReferences(content, savedAttachments);
+      if (hasImageAttachments(savedAttachments)) {
+        reply.code(400);
+        return { error: 'Background Handoff does not support image attachments yet. Use Send for vision turns.' };
+      }
       if (!content && savedAttachments.length === 0) {
         reply.code(400);
         return { error: 'Message content is required.' };

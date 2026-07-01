@@ -175,10 +175,14 @@ describe('AssistantView', () => {
     });
   });
 
-  it('deletes the selected Assistant session from a visible delete control', async () => {
+  it('deletes the selected Assistant session from a visible delete control without native confirm', async () => {
+    vi.mocked(window.confirm).mockImplementation(() => {
+      throw new Error('confirm unavailable');
+    });
     render(<AssistantView />);
 
     fireEvent.click(await screen.findByRole('button', { name: /Delete Assistant session/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /Confirm delete Assistant session/i }));
 
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1', { method: 'DELETE' });

@@ -58,7 +58,9 @@ export default function AssistantView() {
   const [draggingAttachments, setDraggingAttachments] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [renameDraft, setRenameDraft] = useState('');
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lastSelectedSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     void loadSessions();
@@ -67,6 +69,13 @@ export default function AssistantView() {
   useEffect(() => {
     if (!renaming) setRenameDraft(selectedSession?.title ?? '');
   }, [renaming, selectedSession?.title]);
+
+  useEffect(() => {
+    if (lastSelectedSessionIdRef.current && lastSelectedSessionIdRef.current !== selectedSessionId) {
+      setConfirmingDelete(false);
+    }
+    lastSelectedSessionIdRef.current = selectedSessionId;
+  }, [selectedSessionId]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
@@ -258,10 +267,7 @@ export default function AssistantView() {
             </button>
             <button
               type="button"
-              onClick={async () => {
-                if (!(await confirmDialog('Delete this Assistant session? This cannot be undone.'))) return;
-                await clear();
-              }}
+              onClick={() => setConfirmingDelete(true)}
               disabled={!selectedSessionId}
               className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-red-300 hover:border-strong transition-colors disabled:opacity-40"
               title="Delete Assistant session"
@@ -291,6 +297,34 @@ export default function AssistantView() {
             )}
           </div>
         </header>
+
+        {confirmingDelete && selectedSessionId && (
+          <div
+            role="alertdialog"
+            aria-label="Confirm delete Assistant session"
+            className="surface-panel border-b border-subtle px-6 py-2 flex items-center justify-end gap-2 text-xs text-muted"
+          >
+            <span className="mr-auto text-primary">Delete this Assistant session?</span>
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(false)}
+              className="h-8 px-3 surface-elevated border border-subtle rounded-lg hover:text-[var(--text-primary)] hover:border-strong transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const cleared = await clear();
+                if (cleared) setConfirmingDelete(false);
+              }}
+              className="h-8 px-3 rounded-lg border border-red-400/35 text-red-200 bg-red-950/35 hover:border-red-300 transition-colors"
+              aria-label="Confirm delete Assistant session"
+            >
+              Delete
+            </button>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {messages.length === 0 ? (
