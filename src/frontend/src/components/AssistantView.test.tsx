@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AssistantView from './AssistantView';
 
@@ -147,7 +147,7 @@ describe('AssistantView', () => {
 
     const input = await screen.findByPlaceholderText('Message Assistant...');
     fireEvent.change(input, { target: { value: 'Run overnight' } });
-    fireEvent.click(screen.getByRole('button', { name: /Run in background/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Background Handoff/i }));
 
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1/runs', {
@@ -156,6 +156,89 @@ describe('AssistantView', () => {
         headers: { 'Content-Type': 'application/json' },
       });
     });
+  });
+
+  it('renames the selected Assistant session from the header', async () => {
+    render(<AssistantView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Rename Assistant session/i }));
+    const titleInput = screen.getByDisplayValue('Nightly checks');
+    fireEvent.change(titleInput, { target: { value: 'Renamed checks' } });
+    fireEvent.keyDown(titleInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1', {
+        method: 'PATCH',
+        body: JSON.stringify({ title: 'Renamed checks' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+  });
+
+  it('deletes the selected Assistant session from a visible delete control', async () => {
+    render(<AssistantView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Delete Assistant session/i }));
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1', { method: 'DELETE' });
+    });
+  });
+
+  it('attaches files to Assistant messages', async () => {
+    render(<AssistantView />);
+
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    const dropTarget = screen.getByTestId('assistant-drop-target');
+    const file = new File(['hello'], 'brief.txt', { type: 'text/plain' });
+    fireEvent.drop(dropTarget, { dataTransfer: { files: [file], types: ['Files'] } });
+
+    expect(await screen.findByTestId('pending-assistant-attachment')).toHaveTextContent('brief.txt');
+    fireEvent.change(input, { target: { value: 'Read this' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      const call = apiFetchMock.mock.calls.find(([url]) => url === '/api/assistant/sessions/s1/messages/stream');
+      expect(call).toBeTruthy();
+      const body = JSON.parse(String(call?.[1]?.body));
+      expect(body.content).toBe('Read this');
+      expect(body.attachments).toHaveLength(1);
+      expect(body.attachments[0]).toMatchObject({ type: 'file', name: 'brief.txt', mimeType: 'text/plain' });
+      expect(body.attachments[0].data).toBeTruthy();
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('pending-assistant-attachment')).not.toBeInTheDocument();
+    });
+  });
+
+  it('renders persisted user attachments', async () => {
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/assistant/sessions') {
+        return { ok: true, json: async () => ({ sessions: [sessions[0]] }) } as Response;
+      }
+      if (url === '/api/assistant/sessions/s1') {
+        return {
+          ok: true,
+          json: async () => ({
+            session: sessions[0],
+            messages: [{
+              id: 'm-attached',
+              role: 'user',
+              content: 'see attached',
+              created_at: '2026-07-01T08:00:00.000Z',
+              attachments: [{ type: 'file', name: 'brief.txt', mimeType: 'text/plain', data: 'aGVsbG8=', path: '/tmp/brief.txt' }],
+            }],
+            latestRun: null,
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    const bubble = await screen.findByText('see attached');
+    expect(within(bubble.closest('[data-chat-role="user"]') as HTMLElement).getByText('brief.txt')).toBeInTheDocument();
   });
 
   it('clears the selected running session without calling the global abort endpoint', async () => {

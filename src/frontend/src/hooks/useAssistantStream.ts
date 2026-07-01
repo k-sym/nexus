@@ -18,6 +18,26 @@ export interface AssistantRun {
   updated_at?: string;
 }
 
+export type AssistantImageAttachment = {
+  type: 'image';
+  data: string;
+  mimeType: string;
+  name?: string;
+  size?: number;
+  path?: string;
+};
+
+export type AssistantFileAttachment = {
+  type: 'file';
+  data: string;
+  mimeType: string;
+  name: string;
+  size?: number;
+  path?: string;
+};
+
+export type AssistantAttachment = AssistantImageAttachment | AssistantFileAttachment;
+
 export interface AssistantSession {
   id: string;
   title: string;
@@ -35,15 +55,17 @@ export interface AssistantMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  attachments?: AssistantAttachment[];
   created_at: string;
   isStreaming?: boolean;
 }
 
-function localMessage(role: AssistantMessage['role'], content: string): AssistantMessage {
+function localMessage(role: AssistantMessage['role'], content: string, attachments?: AssistantAttachment[]): AssistantMessage {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role,
     content,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
     created_at: new Date().toISOString(),
   };
 }
@@ -157,16 +179,34 @@ export function useAssistantStream() {
     return loadSession(session.id);
   }, [loadSession]);
 
-  const send = useCallback(async (content: string): Promise<boolean> => {
+  const renameSession = useCallback(async (sessionId: string, title: string): Promise<boolean> => {
+    const trimmed = title.trim();
+    if (!sessionId || !trimmed) return false;
+    setError(null);
+    const res = await apiFetch(`/api/assistant/sessions/${sessionId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ title: trimmed }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      setError(await responseError(res));
+      return false;
+    }
+    const session = (await res.json()) as AssistantSession;
+    setSessions((current) => current.map((item) => item.id === session.id ? { ...item, ...session } : item));
+    return true;
+  }, []);
+
+  const send = useCallback(async (content: string, attachments: AssistantAttachment[] = []): Promise<boolean> => {
     const trimmed = content.trim();
-    if (!trimmed || !selectedSessionId) return false;
+    if ((!trimmed && attachments.length === 0) || !selectedSessionId) return false;
     if (sendingRef.current) return false;
     sendingRef.current = true;
     setError(null);
 
     const res = await apiFetch(`/api/assistant/sessions/${selectedSessionId}/messages/stream`, {
       method: 'POST',
-      body: JSON.stringify({ content: trimmed }),
+      body: JSON.stringify({ content: trimmed, ...(attachments.length > 0 ? { attachments } : {}) }),
       headers: { 'Content-Type': 'application/json' },
     });
     if (!res.ok) {
@@ -187,7 +227,7 @@ export function useAssistantStream() {
     ));
     const assistantDraft = localMessage('assistant', '');
     assistantDraft.isStreaming = true;
-    setMessages((current) => [...current, localMessage('user', trimmed), assistantDraft]);
+    setMessages((current) => [...current, localMessage('user', trimmed, attachments), assistantDraft]);
 
     const reader = res.body.getReader();
     readerRef.current = reader;
@@ -244,13 +284,13 @@ export function useAssistantStream() {
     }
   }, [selectedSessionId]);
 
-  const startBackgroundRun = useCallback(async (content: string): Promise<boolean> => {
+  const startBackgroundRun = useCallback(async (content: string, attachments: AssistantAttachment[] = []): Promise<boolean> => {
     const trimmed = content.trim();
-    if (!trimmed || !selectedSessionId) return false;
+    if ((!trimmed && attachments.length === 0) || !selectedSessionId) return false;
     setError(null);
     const res = await apiFetch(`/api/assistant/sessions/${selectedSessionId}/runs`, {
       method: 'POST',
-      body: JSON.stringify({ content: trimmed }),
+      body: JSON.stringify({ content: trimmed, ...(attachments.length > 0 ? { attachments } : {}) }),
       headers: { 'Content-Type': 'application/json' },
     });
     if (!res.ok) {
@@ -264,7 +304,7 @@ export function useAssistantStream() {
         session.id === selectedSessionId ? { ...session, status: data.run?.status ?? 'running', latestRun: data.run } : session,
       ));
     }
-    setMessages((current) => [...current, localMessage('user', trimmed)]);
+    setMessages((current) => [...current, localMessage('user', trimmed, attachments)]);
     return true;
   }, [selectedSessionId]);
 
@@ -330,6 +370,7 @@ export function useAssistantStream() {
     loadSessions,
     loadSession,
     createSession,
+    renameSession,
     send,
     startBackgroundRun,
     sync,

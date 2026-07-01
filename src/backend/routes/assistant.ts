@@ -1,5 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
 import type { NexusConfig } from '@nexus/shared';
 import { createHermesClient, type HermesFetch, type HermesRunStatus } from '../hermes/client.js';
@@ -9,8 +11,38 @@ interface AssistantMessage {
   session_id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  attachments_json: string | null;
   created_at: string;
 }
+
+interface AssistantImageAttachment {
+  type: 'image';
+  data: string;
+  mimeType: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp';
+  name?: string;
+  size?: number;
+  path?: string;
+}
+
+interface AssistantFileAttachment {
+  type: 'file';
+  data: string;
+  mimeType:
+    | 'application/pdf'
+    | 'text/plain'
+    | 'text/markdown'
+    | 'text/csv'
+    | 'application/csv'
+    | 'application/msword'
+    | 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    | 'application/vnd.ms-excel'
+    | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  name: string;
+  size?: number;
+  path?: string;
+}
+
+type AssistantAttachment = AssistantImageAttachment | AssistantFileAttachment;
 
 interface AssistantSession {
   id: string;
@@ -42,9 +74,30 @@ interface AssistantRun {
 
 interface AssistantRoutesOptions {
   fetchImpl?: HermesFetch;
+  uploadRoot?: string;
 }
 
 const RUNNING_STATUSES = new Set(['running', 'cancelling']);
+const ASSISTANT_BODY_LIMIT_BYTES = 50 * 1024 * 1024;
+
+const allowedImageMimeTypes = new Set<AssistantImageAttachment['mimeType']>([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]);
+
+const allowedFileMimeTypes = new Set<AssistantFileAttachment['mimeType']>([
+  'application/pdf',
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/csv',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
 
 function configuredAssistant(load: () => NexusConfig) {
   const config = load();
@@ -58,6 +111,7 @@ function publicMessage(message: AssistantMessage) {
     id: message.id,
     role: message.role,
     content: message.content,
+    attachments: parseStoredAttachments(message.attachments_json),
     created_at: message.created_at,
   };
 }
@@ -89,7 +143,7 @@ function latestRun(db: FastifyInstance['db'], sessionId: string): AssistantRun |
 
 function readMessages(db: FastifyInstance['db'], sessionId: string): AssistantMessage[] {
   return db
-    .prepare('SELECT id, session_id, role, content, created_at FROM assistant_session_messages WHERE session_id = ? ORDER BY created_at ASC')
+    .prepare('SELECT id, session_id, role, content, attachments_json, created_at FROM assistant_session_messages WHERE session_id = ? ORDER BY created_at ASC')
     .all(sessionId) as AssistantMessage[];
 }
 
@@ -125,16 +179,17 @@ function appendMessage(
   sessionId: string,
   role: AssistantMessage['role'],
   content: string,
+  attachments: AssistantAttachment[] = [],
 ): AssistantMessage {
   const now = new Date().toISOString();
   const id = uuid();
   db.prepare(
     `INSERT INTO assistant_session_messages
-      (id, session_id, remote_message_id, role, content, event_json, created_at)
-     VALUES (?, ?, NULL, ?, ?, NULL, ?)`,
-  ).run(id, sessionId, role, content, now);
+      (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at)
+     VALUES (?, ?, NULL, ?, ?, ?, NULL, ?)`,
+  ).run(id, sessionId, role, content, JSON.stringify(attachments), now);
   db.prepare('UPDATE assistant_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
-  return { id, session_id: sessionId, role, content, created_at: now };
+  return { id, session_id: sessionId, role, content, attachments_json: JSON.stringify(attachments), created_at: now };
 }
 
 function createRun(
@@ -223,10 +278,124 @@ function parseJson(value: string | null): unknown {
   }
 }
 
+function validateAssistantAttachments(input: unknown): { ok: true; attachments: AssistantAttachment[] } | { ok: false; error: string } {
+  if (input === undefined) return { ok: true, attachments: [] };
+  if (!Array.isArray(input)) return { ok: false, error: 'attachments must be an array' };
+  if (input.length > 5) return { ok: false, error: 'attachments must contain at most 5 files' };
+
+  const validated: AssistantAttachment[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    const item = input[index] as any;
+    if (!item || typeof item !== 'object') return { ok: false, error: `attachments[${index}] must be an object` };
+    if (item.type !== 'image' && item.type !== 'file') {
+      return { ok: false, error: `attachments[${index}].type must be "image" or "file"` };
+    }
+    if (typeof item.data !== 'string' || item.data.length === 0) {
+      return { ok: false, error: `attachments[${index}].data must be a non-empty string` };
+    }
+    if (item.type === 'image' && (typeof item.mimeType !== 'string' || !allowedImageMimeTypes.has(item.mimeType))) {
+      return { ok: false, error: `attachments[${index}].mimeType has unsupported image MIME type` };
+    }
+    if (item.type === 'file' && (typeof item.mimeType !== 'string' || !allowedFileMimeTypes.has(item.mimeType))) {
+      return { ok: false, error: `attachments[${index}].mimeType has unsupported file MIME type` };
+    }
+    if (item.type === 'file' && (typeof item.name !== 'string' || item.name.trim().length === 0)) {
+      return { ok: false, error: `attachments[${index}].name must be a non-empty string` };
+    }
+    if (item.name !== undefined && typeof item.name !== 'string') {
+      return { ok: false, error: `attachments[${index}].name must be a string` };
+    }
+    if (item.size !== undefined && (!Number.isFinite(item.size) || item.size < 0)) {
+      return { ok: false, error: `attachments[${index}].size must be a non-negative number` };
+    }
+    if (item.path !== undefined && typeof item.path !== 'string') {
+      return { ok: false, error: `attachments[${index}].path must be a string` };
+    }
+
+    if (item.type === 'image') {
+      validated.push({
+        type: 'image',
+        data: item.data,
+        mimeType: item.mimeType,
+        ...(item.name !== undefined ? { name: item.name } : {}),
+        ...(item.size !== undefined ? { size: item.size } : {}),
+        ...(item.path !== undefined ? { path: item.path } : {}),
+      });
+    } else {
+      validated.push({
+        type: 'file',
+        data: item.data,
+        mimeType: item.mimeType,
+        name: item.name,
+        ...(item.size !== undefined ? { size: item.size } : {}),
+        ...(item.path !== undefined ? { path: item.path } : {}),
+      });
+    }
+  }
+  return { ok: true, attachments: validated };
+}
+
+function parseStoredAttachments(value: string | null): AssistantAttachment[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    const validated = validateAssistantAttachments(parsed);
+    return validated.ok ? validated.attachments : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveAssistantAttachments(attachments: AssistantAttachment[], uploadRoot: string): AssistantAttachment[] {
+  if (attachments.length === 0) return attachments;
+  const uploadsDir = path.join(uploadRoot, 'project_docs', 'uploads');
+  mkdirSync(uploadsDir, { recursive: true });
+  return attachments.map((attachment, index) => {
+    const originalName = attachment.name?.trim() || `assistant-image-${index + 1}${extensionForMime(attachment.mimeType)}`;
+    const filename = uniqueUploadFilename(uploadsDir, originalName);
+    const filePath = path.join(uploadsDir, filename);
+    writeFileSync(filePath, Buffer.from(attachment.data, 'base64'));
+    return { ...attachment, name: filename, path: filePath };
+  });
+}
+
+function extensionForMime(mimeType: string): string {
+  if (mimeType === 'image/png') return '.png';
+  if (mimeType === 'image/jpeg') return '.jpg';
+  if (mimeType === 'image/gif') return '.gif';
+  if (mimeType === 'image/webp') return '.webp';
+  return '';
+}
+
+function uniqueUploadFilename(dir: string, name: string): string {
+  const safe = sanitizeFilename(name) || 'attachment';
+  if (!existsSync(path.join(dir, safe))) return safe;
+  const ext = path.extname(safe);
+  const stem = path.basename(safe, ext);
+  for (let index = 1; index < 1000; index += 1) {
+    const candidate = `${stem}-${index}${ext}`;
+    if (!existsSync(path.join(dir, candidate))) return candidate;
+  }
+  return `${stem}-${uuid()}${ext}`;
+}
+
+function sanitizeFilename(name: string): string {
+  const base = path.basename(name).replace(/[^a-zA-Z0-9._ -]/g, '_').trim();
+  return base === '.' || base === '..' ? 'attachment' : base;
+}
+
+function promptWithFileReferences(content: string, attachments: AssistantAttachment[]): string {
+  const files = attachments.filter((attachment) => !!attachment.path);
+  if (files.length === 0) return content;
+  const lines = files.map((file) => `- ${file.name ?? 'attachment'}: ${file.path}`);
+  return `${content}\n\nAttached files:\n${lines.join('\n')}`;
+}
+
 export function createAssistantRoutes(load: () => NexusConfig = loadConfig, options: AssistantRoutesOptions = {}) {
   return async function registerAssistantRoutes(fastify: FastifyInstance) {
     const db = fastify.db;
     const activeRemoteRuns = new Map<string, string>();
+    const uploadRoot = options.uploadRoot ?? process.cwd();
 
     const client = () => {
       const { url, key } = configuredAssistant(load);
@@ -234,9 +403,16 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return createHermesClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
-    const streamSessionTurn = async (sessionId: string, content: string, reply: any) => {
+    const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, reply: any) => {
       const trimmed = content.trim();
-      if (!trimmed) {
+      const attachmentsResult = validateAssistantAttachments(attachmentsInput);
+      if (!attachmentsResult.ok) {
+        reply.code(400);
+        return { error: attachmentsResult.error };
+      }
+      const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot);
+      const promptContent = promptWithFileReferences(trimmed, savedAttachments);
+      if (!trimmed && savedAttachments.length === 0) {
         reply.code(400);
         return { error: 'Message content is required.' };
       }
@@ -251,8 +427,8 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         return { error: 'Assistant session not found' };
       }
 
-      appendMessage(db, session.id, 'user', trimmed);
-      const run = createRun(db, session.id, 'chat', trimmed);
+      appendMessage(db, session.id, 'user', trimmed, savedAttachments);
+      const run = createRun(db, session.id, 'chat', promptContent);
       activeRemoteRuns.set(run.id, '');
       fastify.activity?.bus.emit({
         type: 'start',
@@ -265,7 +441,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
 
       try {
         const started = await hermes.startRun({
-          input: trimmed,
+          input: promptContent,
           sessionId: session.remote_session_id ?? session.id,
           sessionKey: `nexus:assistant:${session.id}`,
         });
@@ -383,17 +559,24 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return { ok: true };
     });
 
-    fastify.post('/api/assistant/sessions/:id/messages/stream', async (request, reply) => {
+    fastify.post('/api/assistant/sessions/:id/messages/stream', { bodyLimit: ASSISTANT_BODY_LIMIT_BYTES }, async (request, reply) => {
       const { id } = request.params as { id: string };
-      const body = (request.body ?? {}) as { content?: string };
-      return streamSessionTurn(id, body.content ?? '', reply);
+      const body = (request.body ?? {}) as { content?: string; attachments?: unknown };
+      return streamSessionTurn(id, body.content ?? '', body.attachments, reply);
     });
 
-    fastify.post('/api/assistant/sessions/:id/runs', async (request, reply) => {
+    fastify.post('/api/assistant/sessions/:id/runs', { bodyLimit: ASSISTANT_BODY_LIMIT_BYTES }, async (request, reply) => {
       const { id } = request.params as { id: string };
-      const body = (request.body ?? {}) as { content?: string };
+      const body = (request.body ?? {}) as { content?: string; attachments?: unknown };
       const content = body.content?.trim() ?? '';
-      if (!content) {
+      const attachmentsResult = validateAssistantAttachments(body.attachments);
+      if (!attachmentsResult.ok) {
+        reply.code(400);
+        return { error: attachmentsResult.error };
+      }
+      const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot);
+      const promptContent = promptWithFileReferences(content, savedAttachments);
+      if (!content && savedAttachments.length === 0) {
         reply.code(400);
         return { error: 'Message content is required.' };
       }
@@ -407,10 +590,10 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
-      appendMessage(db, session.id, 'user', content);
-      const run = createRun(db, session.id, 'overnight', content);
+      appendMessage(db, session.id, 'user', content, savedAttachments);
+      const run = createRun(db, session.id, 'overnight', promptContent);
       const remote = await hermes.startRun({
-        input: content,
+        input: promptContent,
         sessionId: session.remote_session_id ?? session.id,
         sessionKey: `nexus:assistant:${session.id}`,
       });
@@ -488,7 +671,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     fastify.post('/api/assistant/messages/stream', async (request, reply) => {
       const body = (request.body ?? {}) as { content?: string };
       const session = ensureDefaultSession(db);
-      return streamSessionTurn(session.id, body.content ?? '', reply);
+      return streamSessionTurn(session.id, body.content ?? '', undefined, reply);
     });
 
     fastify.post('/api/assistant/abort', async () => {

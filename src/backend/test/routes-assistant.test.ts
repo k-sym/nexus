@@ -24,7 +24,7 @@ function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: 
   app.register(createAssistantRoutes(() => options.config ?? {
     ...loadConfig(),
     assistant: { url: 'http://127.0.0.1:8642', api_key: 'secret' },
-  }, { fetchImpl: options.fetchImpl }));
+  }, { fetchImpl: options.fetchImpl, uploadRoot: dir }));
   return { app, db, dir, stopActivity };
 }
 
@@ -220,6 +220,60 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
       ['assistant', 'The overnight run is complete.'],
     ]);
     assert.equal(detail.json().latestRun.status, 'succeeded');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant runs persist attachments and send Hermes saved file references', async () => {
+  let hermesInput = '';
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
+      const body = JSON.parse(String(init?.body));
+      hermesInput = body.input;
+      return new Response(JSON.stringify({ run_id: 'remote-file-run', status: 'started' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (String(url).endsWith('/v1/runs/remote-file-run')) {
+      return new Response(JSON.stringify({
+        run_id: 'remote-file-run',
+        status: 'completed',
+        output: 'Read the attached brief.',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Files' } });
+    const sessionId = created.json().id;
+    const streamed = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: {
+        content: 'Summarise this',
+        attachments: [{
+          type: 'file',
+          name: 'brief.txt',
+          mimeType: 'text/plain',
+          data: Buffer.from('hello from file').toString('base64'),
+          size: 15,
+        }],
+      },
+    });
+
+    assert.equal(streamed.statusCode, 200);
+    assert.match(hermesInput, /^Summarise this\n\nAttached files:\n- brief\.txt: /);
+    assert.match(hermesInput, /project_docs\/uploads\/brief\.txt/);
+    const row = db
+      .prepare('SELECT content, attachments_json FROM assistant_session_messages WHERE session_id = ? AND role = ?')
+      .get(sessionId, 'user') as { content: string; attachments_json: string };
+    assert.equal(row.content, 'Summarise this');
+    const stored = JSON.parse(row.attachments_json);
+    assert.equal(stored[0].name, 'brief.txt');
+    assert.match(stored[0].path, /project_docs\/uploads\/brief\.txt$/);
   } finally {
     await cleanup(app, db, dir);
   }

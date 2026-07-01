@@ -169,6 +169,7 @@ function runMigrations(db: Database.Database) {
       remote_message_id TEXT,
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system', 'tool')),
       content TEXT NOT NULL,
+      attachments_json TEXT DEFAULT '[]',
       event_json TEXT,
       created_at TEXT NOT NULL
     );
@@ -238,6 +239,11 @@ function runMigrations(db: Database.Database) {
   const chatCols = db.pragma('table_info(chat_messages)') as { name: string }[];
   if (!chatCols.some((c) => c.name === 'attachments_json')) {
     db.exec('ALTER TABLE chat_messages ADD COLUMN attachments_json TEXT DEFAULT \'[]\'');
+  }
+
+  const assistantMessageCols = db.pragma('table_info(assistant_session_messages)') as { name: string }[];
+  if (!assistantMessageCols.some((c) => c.name === 'attachments_json')) {
+    db.exec('ALTER TABLE assistant_session_messages ADD COLUMN attachments_json TEXT DEFAULT \'[]\'');
   }
 
   const ticketCols = db.pragma('table_info(tickets)') as { name: string }[];
@@ -441,8 +447,8 @@ function migrateLegacyAssistantMessages(db: Database.Database): void {
 
     db.prepare(
       `INSERT OR IGNORE INTO assistant_session_messages
-        (id, session_id, remote_message_id, role, content, event_json, created_at)
-       SELECT id, ?, NULL, role, content, NULL, created_at
+        (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at)
+       SELECT id, ?, NULL, role, content, '[]', NULL, created_at
        FROM assistant_messages
        ORDER BY created_at ASC`,
     ).run(sessionId);
