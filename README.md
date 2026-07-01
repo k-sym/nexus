@@ -45,7 +45,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Missions** | Bounded, recurring or self-paced autonomous jobs against a project's tasks/tickets. Hard ceilings (iterations / wall-clock / token budget / run window), a per-iteration audit ledger, and pause/resume/stop controls. Off by default; can never run unbounded. |
 | **Models & curation** | A model registry (the Pi runtime) knows every model reachable from your configured auth — API keys (OpenRouter, local servers) and OAuth (Anthropic, OpenAI/Codex, GitHub Copilot). You curate which models show up in the picker; per-thread model selection with image/document attachments. No more YAML "personas". |
 | **Multi-provider chat** | One runtime drives Claude Code, Codex, OpenCode, OpenRouter, local OpenAI-compatible servers (omlx, LM Studio, llama.cpp), and remote Hermes-style endpoints — each reached through the Pi SDK's provider bridges. |
-| **Assistant** | A separate, project-less streaming chat against a single configured assistant endpoint (any OpenAI-compatible URL + bearer key). Its own message log, independent of project sessions. |
+| **Assistant** | A separate, project-less Hermes Assistant surface with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs that can be reconciled after restart. |
 | **Braindump** | Capture free-form ideas before they become tasks; triage them into a project's Kanban from the Braindump view. |
 | **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
@@ -530,7 +530,7 @@ Each project has a sessions interface:
 
 ### Assistant
 
-A project-less streaming chat against a single configured OpenAI-compatible endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It has its own message log (the `assistant_messages` table), its own view in the top bar, and is independent of project sessions — handy for "ask the herd" style quick questions that don't belong to a repo. Streams over NDJSON; supports abort and clear.
+A project-less Hermes Assistant surface against the configured endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It is independent of project sessions and stores its own local Assistant sessions, transcripts, and run ledger in `assistant_sessions`, `assistant_session_messages`, and `assistant_runs`. Each session can be reopened from the Assistant rail, foreground turns stream over NDJSON, and detached background runs store the remote Hermes run ID so Nexus can poll `/api/assistant/sync` after restart. The legacy single-thread Assistant endpoints remain as wrappers over the newest/default session for compatibility.
 
 ### Braindump
 
@@ -703,10 +703,20 @@ Base URL: `http://127.0.0.1:4173`
 ### Assistant
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/assistant/thread` | The single assistant message log (`{ id: 'global', messages }`) |
-| DELETE | `/api/assistant/thread` | Clear the assistant conversation |
-| POST | `/api/assistant/messages/stream` | Send a message; streams NDJSON (`text_delta` / `complete` / `error`) |
-| POST | `/api/assistant/abort` | Abort the active assistant stream |
+| GET | `/api/assistant/sessions` | List non-archived Assistant sessions with latest run status |
+| POST | `/api/assistant/sessions` | Create an Assistant session |
+| GET | `/api/assistant/sessions/:id` | Load one session, its transcript, and latest run |
+| PATCH | `/api/assistant/sessions/:id` | Rename or archive a session |
+| DELETE | `/api/assistant/sessions/:id` | Delete a local Assistant session |
+| POST | `/api/assistant/sessions/:id/messages/stream` | Send a foreground message; streams NDJSON (`run_start` / `text_delta` / `complete` / `error`) |
+| POST | `/api/assistant/sessions/:id/runs` | Start a detached Hermes background run for a session |
+| GET | `/api/assistant/runs/:runId` | Read local run state, refreshed from Hermes when possible |
+| POST | `/api/assistant/runs/:runId/stop` | Stop a remote Hermes run |
+| POST | `/api/assistant/sync` | Poll running Assistant runs and append completed output |
+| GET | `/api/assistant/thread` | Compatibility wrapper over the newest/default Assistant session |
+| DELETE | `/api/assistant/thread` | Compatibility wrapper that clears the newest/default session |
+| POST | `/api/assistant/messages/stream` | Compatibility wrapper for foreground stream on the newest/default session |
+| POST | `/api/assistant/abort` | Abort the latest active Assistant run when possible |
 
 ### Braindump
 | Method | Path | Description |
@@ -908,7 +918,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 
 ### Tables
 
-`projects`, `tasks`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`, `braindump_ideas`, `notifications`, `assistant_messages`, `operations`, `missions`, `mission_runs`.
+`projects`, `tasks`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`, `braindump_ideas`, `notifications`, `assistant_messages`, `assistant_sessions`, `assistant_session_messages`, `assistant_runs`, `operations`, `missions`, `mission_runs`.
 
 (The legacy `personas` and `providers` tables are still created by `db.ts` for one more release as back-compat shims and are not surfaced in the UI or API. There is no `memories` table — memory lives in the daemon's own index, not `nexus.db`.)
 

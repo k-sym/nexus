@@ -670,30 +670,32 @@ export default function App() {
       />
 
       <div className="flex flex-1 min-h-0">
-        <Sidebar
-          projects={projects}
-          activeProjectId={activeProjectId}
-          subView={subView}
-          activeThreadId={activeThreadId}
-          threads={activeProjectId ? threadMetas : []}
-          activeSessionIds={activeSessionIds}
-          waitingSessionIds={waitingSessionIds}
-          activeProjectIds={activeProjectIds}
-          waitingProjectIds={waitingProjectIds}
-          archivingThreadIds={archivingThreadIds}
-          projectCounts={sidebarProjectCounts}
-          onSelectProject={focusProject}
-          onSelectSubView={selectSubView}
-          onSelectThread={selectThread}
-          onRenameThread={handleRenameThread}
-          onArchiveThread={handleArchiveThread}
-          onDeleteThread={handleDeleteThread}
-          onNewChat={(projectId) => void startNewSession(projectId)}
-          onNewProject={openNewProjectModal}
-          onEditProject={openEditProjectModal}
-          onDeleteProject={(projectId) => void handleDeleteProject(projectId)}
-          onReorderProjects={(projectIds) => void handleReorderProjects(projectIds)}
-        />
+        {globalView !== 'assistant' && (
+          <Sidebar
+            projects={projects}
+            activeProjectId={activeProjectId}
+            subView={subView}
+            activeThreadId={activeThreadId}
+            threads={activeProjectId ? threadMetas : []}
+            activeSessionIds={activeSessionIds}
+            waitingSessionIds={waitingSessionIds}
+            activeProjectIds={activeProjectIds}
+            waitingProjectIds={waitingProjectIds}
+            archivingThreadIds={archivingThreadIds}
+            projectCounts={sidebarProjectCounts}
+            onSelectProject={focusProject}
+            onSelectSubView={selectSubView}
+            onSelectThread={selectThread}
+            onRenameThread={handleRenameThread}
+            onArchiveThread={handleArchiveThread}
+            onDeleteThread={handleDeleteThread}
+            onNewChat={(projectId) => void startNewSession(projectId)}
+            onNewProject={openNewProjectModal}
+            onEditProject={openEditProjectModal}
+            onDeleteProject={(projectId) => void handleDeleteProject(projectId)}
+            onReorderProjects={(projectIds) => void handleReorderProjects(projectIds)}
+          />
+        )}
 
         <main className="flex-1 flex flex-col min-w-0">{renderMain()}</main>
       </div>

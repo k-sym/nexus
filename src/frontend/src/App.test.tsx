@@ -35,6 +35,9 @@ vi.mock('./components/ChatPanel', () => ({
     <div data-testid="chat-panel-props">{projectId}:{threadId ?? 'none'}</div>
   ),
 }));
+vi.mock('./components/AssistantView', () => ({
+  default: () => <div data-testid="assistant-view">Assistant</div>,
+}));
 vi.mock('./components/MemoryRail', () => ({ default: () => <div data-testid="memory-rail" /> }));
 vi.mock('./components/DaemonToasts', () => ({ default: () => null }));
 vi.mock('./components/NotificationToasts', () => ({ default: () => null }));
@@ -123,5 +126,17 @@ describe('App project navigation', () => {
     await user.click(screen.getByTitle('Dismiss archive error'));
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('hides the Projects sidebar on the Assistant view', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByLabelText('Navigation sidebar')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Assistant/i }));
+
+    expect(await screen.findByTestId('assistant-view')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Navigation sidebar')).not.toBeInTheDocument();
   });
 });
