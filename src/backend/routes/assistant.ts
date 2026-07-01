@@ -189,6 +189,12 @@ function mapRemoteStatus(status: string): string {
   return 'running';
 }
 
+function activityStatusForRun(status: string): 'succeeded' | 'failed' | 'cancelled' {
+  if (status === 'failed') return 'failed';
+  if (status === 'cancelled') return 'cancelled';
+  return 'succeeded';
+}
+
 function parseJson(value: string | null): unknown {
   if (!value) return undefined;
   try {
@@ -255,7 +261,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           operationId: run.id,
           kind: 'assistant_stream',
           title: session.title,
-          status: completed.status === 'succeeded' ? 'succeeded' : completed.status === 'cancelled' ? 'cancelled' : 'failed',
+          status: activityStatusForRun(completed.status),
+          lastEvent: RUNNING_STATUSES.has(completed.status) ? 'remote_run_running' : undefined,
+          error: completed.status === 'failed' ? completed.error ?? remote.error : undefined,
         });
 
         reply.type('application/x-ndjson; charset=utf-8');

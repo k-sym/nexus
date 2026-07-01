@@ -8,20 +8,28 @@ import { createAssistantRoutes } from '../routes/assistant';
 import { loadConfig } from '../config';
 import { getDb } from '../db';
 import type { HermesFetch } from '../hermes/client';
+import { ActivityManager } from '../activity/manager';
 
-function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: HermesFetch } = {}) {
+function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: HermesFetch; activity?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-assistant-test-'));
   const db = getDb(join(dir, 'test.db'));
   const app = Fastify({ logger: false });
   app.decorate('db', db);
+  let stopActivity: (() => void) | undefined;
+  if (options.activity) {
+    const activity = new ActivityManager(db);
+    stopActivity = activity.startListening();
+    app.decorate('activity', activity);
+  }
   app.register(createAssistantRoutes(() => options.config ?? {
     ...loadConfig(),
     assistant: { url: 'http://127.0.0.1:8642', api_key: 'secret' },
   }, { fetchImpl: options.fetchImpl }));
-  return { app, db, dir };
+  return { app, db, dir, stopActivity };
 }
 
-async function cleanup(app: ReturnType<typeof Fastify>, db: ReturnType<typeof getDb>, dir: string) {
+async function cleanup(app: ReturnType<typeof Fastify>, db: ReturnType<typeof getDb>, dir: string, stopActivity?: () => void) {
+  stopActivity?.();
   await app.close();
   db.close();
   rmSync(dir, { recursive: true, force: true });
@@ -119,6 +127,57 @@ test('Assistant foreground stream stores user assistant messages and completed r
     });
   } finally {
     await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant foreground stream treats a still-running remote run as accepted work, not a failed stream', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
+      return new Response(JSON.stringify({ run_id: 'remote-run-live', status: 'started' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (String(url).endsWith('/v1/runs/remote-run-live')) {
+      return new Response(JSON.stringify({
+        run_id: 'remote-run-live',
+        status: 'running',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir, stopActivity } = makeApp({ fetchImpl, activity: true });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Live remote run' } });
+    const sessionId = created.json().id;
+
+    const streamed = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'Start long work' },
+    });
+
+    assert.equal(streamed.statusCode, 200);
+    const events = streamed.body.trim().split('\n').map((line) => JSON.parse(line));
+    assert.deepEqual(events, [
+      { type: 'run_start', runId: events[0].runId, remoteRunId: 'remote-run-live' },
+      { type: 'complete', runId: events[0].runId, status: 'running' },
+    ]);
+
+    const run = db.prepare('SELECT remote_run_id, status, error FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    assert.deepEqual(run, {
+      remote_run_id: 'remote-run-live',
+      status: 'running',
+      error: null,
+    });
+    const operation = db.prepare('SELECT status, error, last_event FROM operations WHERE id = ?').get(events[0].runId) as any;
+    assert.deepEqual(operation, {
+      status: 'succeeded',
+      error: null,
+      last_event: 'remote_run_running',
+    });
+  } finally {
+    await cleanup(app, db, dir, stopActivity);
   }
 });
 
