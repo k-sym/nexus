@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AssistantView from './AssistantView';
 
 const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
@@ -8,134 +8,147 @@ vi.mock('../api-base', () => ({
   apiFetch: apiFetchMock,
 }));
 
-apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-  if (url === '/api/assistant/thread' && init?.method === 'DELETE') {
-    return { ok: true, json: async () => ({ ok: true, id: 'global' }) } as Response;
-  }
-  if (url === '/api/assistant/thread') {
-    return { ok: true, json: async () => ({ id: 'global', messages: [] }) } as Response;
-  }
-  if (url === '/api/assistant/messages/stream') {
-    return {
-      ok: false,
-      json: async () => ({ error: 'Assistant URL and key must be configured in Settings.' }),
-    } as Response;
-  }
-  return { ok: true, json: async () => ({ ok: true }) } as Response;
-});
+const sessions = [
+  { id: 's1', title: 'Nightly checks', status: 'idle', updated_at: '2026-07-01T08:00:00.000Z', latestRun: null },
+  { id: 's2', title: 'Release watch', status: 'running', updated_at: '2026-07-01T09:00:00.000Z', latestRun: { id: 'r2', status: 'running' } },
+];
 
-describe('AssistantView', () => {
-  const originalConfirm = window.confirm;
-  let confirmSpy: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    apiFetchMock.mockClear();
-    confirmSpy = vi.fn(() => true);
-    window.confirm = confirmSpy;
+function streamResponse(lines: unknown[]): Response {
+  return new Response(lines.map((line) => JSON.stringify(line)).join('\n') + '\n', {
+    status: 200,
+    headers: { 'content-type': 'application/x-ndjson' },
   });
+}
 
-  afterEach(() => {
-    window.confirm = originalConfirm;
-  });
-
-  it('renders a project-independent assistant chat with the New Session button disabled when empty', async () => {
-    render(<AssistantView />);
-
-    expect(await screen.findByRole('heading', { name: 'Assistant' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Message Assistant...')).toBeInTheDocument();
-    expect(screen.getByText(/Send a message to start/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /New Session/i })).toBeDisabled();
-  });
-
-  it('shows missing configuration errors returned by the assistant stream route', async () => {
-    render(<AssistantView />);
-
-    const input = await screen.findByPlaceholderText('Message Assistant...');
-    fireEvent.change(input, { target: { value: 'Run this overnight' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('alert')).toHaveTextContent('Assistant URL and key must be configured in Settings.');
-    });
-    expect(screen.getByDisplayValue('Run this overnight')).toBeInTheDocument();
-  });
-
-  it('clears the session when the user types /new instead of sending it as a message', async () => {
-    render(<AssistantView />);
-
-    const input = await screen.findByPlaceholderText('Message Assistant...');
-    fireEvent.change(input, { target: { value: '/new' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-
-    await waitFor(() => {
-      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/thread', { method: 'DELETE' });
-    });
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Message Assistant...')).toHaveValue('');
-    });
-    expect(apiFetchMock).not.toHaveBeenCalledWith('/api/assistant/messages/stream', expect.anything());
-  });
-
-  it('clears the session via the New Session button after confirming', async () => {
-    apiFetchMock.mockImplementationOnce(async (url: string) => {
-      if (url === '/api/assistant/thread') {
+function installDefaultMock() {
+  apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === '/api/assistant/sessions') {
+      if (init?.method === 'POST') {
         return {
           ok: true,
-          json: async () => ({
-            id: 'global',
-            messages: [
-              { id: 'm1', role: 'user', content: 'hello', created_at: '2026-06-25T00:00:00Z' },
-              { id: 'm2', role: 'assistant', content: 'hi there', created_at: '2026-06-25T00:00:01Z' },
-            ],
-          }),
+          json: async () => ({ id: 's3', title: 'New Assistant Session', status: 'idle', updated_at: '2026-07-01T10:00:00.000Z' }),
         } as Response;
       }
+      return { ok: true, json: async () => ({ sessions }) } as Response;
+    }
+    if (url === '/api/assistant/sessions/s1') {
+      return {
+        ok: true,
+        json: async () => ({
+          session: sessions[0],
+          messages: [
+            { id: 'm1', role: 'user', content: 'run checks', created_at: '2026-07-01T08:00:00.000Z' },
+            { id: 'm2', role: 'assistant', content: 'checks queued', created_at: '2026-07-01T08:01:00.000Z' },
+          ],
+          latestRun: null,
+        }),
+      } as Response;
+    }
+    if (url === '/api/assistant/sessions/s2') {
+      return {
+        ok: true,
+        json: async () => ({
+          session: sessions[1],
+          messages: [{ id: 'm3', role: 'user', content: 'watch releases', created_at: '2026-07-01T09:00:00.000Z' }],
+          latestRun: { id: 'r2', status: 'running' },
+        }),
+      } as Response;
+    }
+    if (url === '/api/assistant/sessions/s3') {
+      return {
+        ok: true,
+        json: async () => ({ session: { id: 's3', title: 'New Assistant Session', status: 'idle' }, messages: [], latestRun: null }),
+      } as Response;
+    }
+    if (url === '/api/assistant/sessions/s1/messages/stream') {
+      return streamResponse([
+        { type: 'run_start', runId: 'r1', remoteRunId: 'remote-r1' },
+        { type: 'text_delta', delta: 'done' },
+        { type: 'complete', runId: 'r1', status: 'succeeded' },
+      ]);
+    }
+    if (url === '/api/assistant/sessions/s1/runs') {
+      return { ok: true, json: async () => ({ run: { id: 'r-bg', status: 'running' } }) } as Response;
+    }
+    if (url === '/api/assistant/sync') {
+      return { ok: true, json: async () => ({ updated: 1 }) } as Response;
+    }
+    if (url === '/api/assistant/abort') {
       return { ok: true, json: async () => ({ ok: true }) } as Response;
-    });
+    }
+    return { ok: true, json: async () => ({ ok: true }) } as Response;
+  });
+}
 
-    render(<AssistantView />);
-
-    const newSession = await screen.findByRole('button', { name: /New Session/i });
-    await waitFor(() => expect(newSession).not.toBeDisabled());
-    fireEvent.click(newSession);
-
-    await waitFor(() => {
-      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/thread', { method: 'DELETE' });
-    });
-    expect(confirmSpy).toHaveBeenCalled();
+describe('AssistantView', () => {
+  beforeEach(() => {
+    apiFetchMock.mockReset();
+    installDefaultMock();
   });
 
-  it('does not fire a second stream request while one is already in flight', async () => {
-    let resolveStream: (res: Response) => void;
-    const streamPromise = new Promise<Response>((resolve) => { resolveStream = resolve; });
-    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
-      if (url === '/api/assistant/thread' && init?.method === 'DELETE') {
-        return { ok: true, json: async () => ({ ok: true, id: 'global' }) } as Response;
-      }
-      if (url === '/api/assistant/thread') {
-        return { ok: true, json: async () => ({ id: 'global', messages: [] }) } as Response;
-      }
-      if (url === '/api/assistant/messages/stream') {
-        return streamPromise;
-      }
-      return { ok: true, json: async () => ({ ok: true }) } as Response;
-    });
+  it('renders Assistant sessions and the selected session transcript', async () => {
+    render(<AssistantView />);
 
+    expect(await screen.findByRole('button', { name: /Nightly checks/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Release watch/i })).toBeInTheDocument();
+    expect(await screen.findByText('checks queued')).toBeInTheDocument();
+    expect(screen.getByText('Idle')).toBeInTheDocument();
+  });
+
+  it('switches sessions from the session rail', async () => {
+    render(<AssistantView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Release watch/i }));
+
+    expect(await screen.findByText('watch releases')).toBeInTheDocument();
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s2');
+  });
+
+  it('creates a new Assistant session from the rail', async () => {
+    render(<AssistantView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /New Session/i }));
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ title: 'New Assistant Session' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    expect(await screen.findByText(/Send a message to start/)).toBeInTheDocument();
+  });
+
+  it('sends foreground messages to the selected Assistant session stream', async () => {
     render(<AssistantView />);
 
     const input = await screen.findByPlaceholderText('Message Assistant...');
-    fireEvent.change(input, { target: { value: 'Hi' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
-    // Fire a second send immediately while the first is still pending.
-    fireEvent.change(input, { target: { value: 'Hi again' } });
+    fireEvent.change(input, { target: { value: 'Run now' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
     await waitFor(() => {
-      const streamCalls = apiFetchMock.mock.calls.filter(([url]) => url === '/api/assistant/messages/stream');
-      expect(streamCalls.length).toBe(1);
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1/messages/stream', {
+        method: 'POST',
+        body: JSON.stringify({ content: 'Run now' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
     });
+    expect(await screen.findByText('done')).toBeInTheDocument();
+  });
 
-    // Release the hanging stream so the component unmounts cleanly.
-    resolveStream!(new Response('{}'));
+  it('starts a detached background run for the selected session', async () => {
+    render(<AssistantView />);
+
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    fireEvent.change(input, { target: { value: 'Run overnight' } });
+    fireEvent.click(screen.getByRole('button', { name: /Run in background/i }));
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1/runs', {
+        method: 'POST',
+        body: JSON.stringify({ content: 'Run overnight' }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
   });
 });

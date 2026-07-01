@@ -1,109 +1,213 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Stop, ArrowsClockwise } from '@phosphor-icons/react';
-import { AssistantMessage, useAssistantStream } from '../hooks/useAssistantStream';
+import { useCallback, useEffect, useState, type KeyboardEvent } from 'react';
+import { ArrowsClockwise, CloudArrowUp, PaperPlaneRight, Plus, Stop } from '@phosphor-icons/react';
+import {
+  AssistantMessage,
+  AssistantSession,
+  AssistantSessionStatus,
+  useAssistantStream,
+} from '../hooks/useAssistantStream';
 import { confirmDialog } from '../lib/confirm';
 
 export default function AssistantView() {
-  const { messages, isRunning, error, loadThread, send, abort, clear } = useAssistantStream();
+  const {
+    sessions,
+    selectedSession,
+    selectedSessionId,
+    messages,
+    latestRun,
+    isRunning,
+    error,
+    loadSessions,
+    loadSession,
+    createSession,
+    send,
+    startBackgroundRun,
+    sync,
+    abort,
+    clear,
+  } = useAssistantStream();
   const [input, setInput] = useState('');
 
   useEffect(() => {
-    void loadThread();
-  }, [loadThread]);
+    void loadSessions();
+  }, [loadSessions]);
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning) return;
-    if (text === '/new' || text === '/clear') {
+    if (!text || isRunning || !selectedSessionId) return;
+    if (text === '/new') {
+      const created = await createSession();
+      if (created) setInput('');
+      return;
+    }
+    if (text === '/clear') {
+      if (!(await confirmDialog('Delete this Assistant session? This cannot be undone.'))) return;
       const cleared = await clear();
       if (cleared) setInput('');
       return;
     }
     const sent = await send(text);
     if (sent) setInput('');
-  }, [input, isRunning, send, clear]);
+  }, [clear, createSession, input, isRunning, selectedSessionId, send]);
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleBackgroundRun = useCallback(async () => {
+    const text = input.trim();
+    if (!text || !selectedSessionId) return;
+    const started = await startBackgroundRun(text);
+    if (started) setInput('');
+  }, [input, selectedSessionId, startBackgroundRun]);
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
     }
   };
 
-  const handleNewSession = useCallback(async () => {
-    if (isRunning || messages.length === 0) return;
-    if (!(await confirmDialog('Clear the Assistant conversation? This cannot be undone.'))) return;
-    void clear();
-  }, [isRunning, messages.length, clear]);
-
   return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <header className="surface-glass flex items-center justify-between px-6 py-3 border-b border-subtle shrink-0">
-        <div>
-          <h1 className="text-lg font-semibold">Assistant</h1>
-          <p className="text-xs text-faint">Global remote assistant</p>
-        </div>
-        <div className="flex items-center gap-3">
+    <div className="flex-1 flex min-h-0">
+      <aside className="w-72 shrink-0 surface-glass border-r border-subtle flex flex-col min-h-0">
+        <div className="px-4 py-3 border-b border-subtle flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-lg font-semibold">Assistant</h1>
+            <p className="text-xs text-faint">Hermes sessions</p>
+          </div>
           <button
             type="button"
-            onClick={handleNewSession}
-            disabled={isRunning || messages.length === 0}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-muted rounded-lg border border-subtle hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
-            title="Clear the conversation and start fresh (or type /new)"
+            onClick={() => void createSession()}
+            className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors"
+            title="New Assistant session"
+            aria-label="New Session"
           >
-            <ArrowsClockwise size={14} />
-            New Session
+            <Plus size={16} weight="bold" />
           </button>
-          <span className="text-xs text-faint uppercase tracking-wider">Project independent</span>
         </div>
-      </header>
 
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        {messages.length === 0 ? (
-          <p className="text-faint text-sm">Send a message to start. Type <code className="text-muted">/new</code> to clear anytime.</p>
-        ) : (
-          messages.map((message) => <AssistantBubble key={message.id} message={message} />)
-        )}
-      </div>
-
-      {error && (
-        <div className="px-4 py-2 border-t border-subtle text-xs text-red-300" role="alert">
-          {error}
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          {sessions.length === 0 ? (
+            <p className="px-2 py-3 text-sm text-faint">No Assistant sessions yet.</p>
+          ) : (
+            sessions.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                selected={session.id === selectedSessionId}
+                onSelect={() => void loadSession(session.id)}
+              />
+            ))
+          )}
         </div>
-      )}
+      </aside>
 
-      <div className="border-t border-subtle surface-glass p-3">
-        <div className="flex gap-2 items-end">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Message Assistant..."
-            rows={2}
-            className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
-          />
-          {isRunning ? (
+      <section className="flex-1 flex flex-col min-w-0 min-h-0">
+        <header className="surface-glass flex items-center justify-between px-6 py-3 border-b border-subtle shrink-0">
+          <div className="min-w-0">
+            <h2 className="text-lg font-semibold truncate">{selectedSession?.title ?? 'Assistant'}</h2>
+            <div className="flex items-center gap-2 text-xs text-faint">
+              <span>{statusLabel(selectedSession?.status ?? latestRun?.status ?? 'idle')}</span>
+              {latestRun?.remote_run_id && (
+                <>
+                  <span aria-hidden="true">/</span>
+                  <span className="truncate">remote {latestRun.remote_run_id}</span>
+                </>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => void abort()}
-              className="px-3 py-2 surface-elevated text-muted rounded-lg hover:text-[var(--text-primary)] transition-colors"
-              title="Stop the current Assistant response"
+              onClick={() => void sync()}
+              className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors"
+              title="Sync Assistant sessions"
+              aria-label="Sync"
             >
-              <Stop className="w-5 h-5" weight="fill" />
+              <ArrowsClockwise size={16} />
             </button>
+            {(isRunning || latestRun?.status === 'running' || latestRun?.status === 'cancelling') && (
+              <button
+                type="button"
+                onClick={() => void abort()}
+                className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors"
+                title="Stop the current Assistant run"
+                aria-label="Stop"
+              >
+                <Stop size={16} weight="fill" />
+              </button>
+            )}
+          </div>
+        </header>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          {messages.length === 0 ? (
+            <p className="text-faint text-sm">Send a message to start.</p>
           ) : (
+            messages.map((message) => <AssistantBubble key={message.id} message={message} />)
+          )}
+        </div>
+
+        {error && (
+          <div className="px-4 py-2 border-t border-subtle text-xs text-red-300" role="alert">
+            {error}
+          </div>
+        )}
+
+        <div className="border-t border-subtle surface-glass p-3">
+          <div className="flex gap-2 items-end">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Message Assistant..."
+              rows={2}
+              disabled={!selectedSessionId}
+              className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={() => void handleBackgroundRun()}
+              disabled={!input.trim() || !selectedSessionId}
+              className="h-10 px-3 surface-elevated border border-subtle rounded-lg flex items-center gap-2 text-sm text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Start a detached Hermes run for this session"
+            >
+              <CloudArrowUp size={17} />
+              Run in background
+            </button>
             <button
               type="button"
               onClick={() => void handleSend()}
-              disabled={!input.trim()}
-              className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
+              disabled={!input.trim() || isRunning || !selectedSessionId}
+              className="h-10 px-4 accent-button rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2"
             >
+              <PaperPlaneRight size={17} weight="fill" />
               Send
             </button>
-          )}
+          </div>
         </div>
-      </div>
+      </section>
     </div>
+  );
+}
+
+function SessionRow({ session, selected, onSelect }: { session: AssistantSession; selected: boolean; onSelect: () => void }) {
+  const active = session.status === 'running' || session.latestRun?.status === 'running';
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`w-full text-left rounded-lg px-3 py-2 border transition-colors ${
+        selected
+          ? 'surface-elevated border-strong text-primary'
+          : 'border-transparent text-muted hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
+      }`}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <span className={`h-2 w-2 rounded-full shrink-0 ${active ? 'bg-emerald-400' : 'bg-[var(--border-strong)]'}`} aria-hidden="true" />
+        <span className="text-sm font-medium truncate">{session.title}</span>
+      </div>
+      {session.updated_at && (
+        <div className="text-[11px] text-faint mt-1 truncate">{relativeUpdatedAt(session.updated_at)}</div>
+      )}
+    </button>
   );
 }
 
@@ -123,4 +227,26 @@ function AssistantBubble({ message }: { message: AssistantMessage }) {
       </div>
     </div>
   );
+}
+
+function statusLabel(status: AssistantSessionStatus): string {
+  const normalized = String(status || 'idle');
+  if (normalized === 'idle') return 'Idle';
+  if (normalized === 'running') return 'Running';
+  if (normalized === 'succeeded') return 'Completed';
+  if (normalized === 'failed') return 'Failed';
+  if (normalized === 'cancelled') return 'Cancelled';
+  if (normalized === 'cancelling') return 'Cancelling';
+  return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
+}
+
+function relativeUpdatedAt(value: string): string {
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return value;
+  const minutes = Math.max(0, Math.round((Date.now() - time) / 60000));
+  if (minutes < 1) return 'Updated just now';
+  if (minutes < 60) return `Updated ${minutes}m ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `Updated ${hours}h ago`;
+  return `Updated ${Math.round(hours / 24)}d ago`;
 }

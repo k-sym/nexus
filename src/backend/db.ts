@@ -151,6 +151,44 @@ function runMigrations(db: Database.Database) {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS assistant_sessions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL DEFAULT 'New Assistant Session',
+      remote_session_id TEXT,
+      remote_conversation_key TEXT,
+      status TEXT NOT NULL DEFAULT 'idle',
+      last_run_id TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      archived_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS assistant_session_messages (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES assistant_sessions(id) ON DELETE CASCADE,
+      remote_message_id TEXT,
+      role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system', 'tool')),
+      content TEXT NOT NULL,
+      event_json TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS assistant_runs (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL REFERENCES assistant_sessions(id) ON DELETE CASCADE,
+      remote_run_id TEXT,
+      remote_job_id TEXT,
+      kind TEXT NOT NULL CHECK(kind IN ('chat', 'overnight', 'scheduled')),
+      status TEXT NOT NULL,
+      input TEXT NOT NULL DEFAULT '',
+      output TEXT NOT NULL DEFAULT '',
+      error TEXT,
+      usage_json TEXT,
+      started_at TEXT NOT NULL,
+      completed_at TEXT,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS operations (
       id TEXT PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -180,6 +218,11 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
     CREATE INDEX IF NOT EXISTS idx_braindump_status ON braindump_ideas(status);
     CREATE INDEX IF NOT EXISTS idx_assistant_messages_created ON assistant_messages(created_at);
+    CREATE INDEX IF NOT EXISTS idx_assistant_sessions_updated ON assistant_sessions(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_assistant_session_messages_session ON assistant_session_messages(session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_assistant_runs_session ON assistant_runs(session_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_assistant_runs_remote ON assistant_runs(remote_run_id);
+    CREATE INDEX IF NOT EXISTS idx_assistant_runs_status ON assistant_runs(status);
     CREATE INDEX IF NOT EXISTS idx_operations_status ON operations(status);
     CREATE INDEX IF NOT EXISTS idx_operations_kind ON operations(kind);
     CREATE INDEX IF NOT EXISTS idx_operations_started_at ON operations(started_at);
@@ -189,6 +232,8 @@ function runMigrations(db: Database.Database) {
 
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
   db.exec('DROP TABLE IF EXISTS memories;');
+
+  migrateLegacyAssistantMessages(db);
 
   const chatCols = db.pragma('table_info(chat_messages)') as { name: string }[];
   if (!chatCols.some((c) => c.name === 'attachments_json')) {
@@ -365,4 +410,41 @@ function runMigrations(db: Database.Database) {
     );
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_mission_runs_mission ON mission_runs(mission_id, run_number)');
+}
+
+function migrateLegacyAssistantMessages(db: Database.Database): void {
+  const legacyTable = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'")
+    .get();
+  if (!legacyTable) return;
+
+  const legacyCount = (db.prepare('SELECT COUNT(*) AS count FROM assistant_messages').get() as { count: number }).count;
+  if (legacyCount === 0) return;
+
+  const sessionCount = (db.prepare('SELECT COUNT(*) AS count FROM assistant_sessions').get() as { count: number }).count;
+  if (sessionCount > 0) return;
+
+  const bounds = db
+    .prepare('SELECT MIN(created_at) AS first_created_at, MAX(created_at) AS last_created_at FROM assistant_messages')
+    .get() as { first_created_at: string | null; last_created_at: string | null };
+  const now = new Date().toISOString();
+  const sessionId = 'legacy-assistant-import';
+  const createdAt = bounds.first_created_at ?? now;
+  const updatedAt = bounds.last_created_at ?? createdAt;
+
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO assistant_sessions
+        (id, title, status, created_at, updated_at, archived_at)
+       VALUES (?, ?, ?, ?, ?, NULL)`,
+    ).run(sessionId, 'Imported Assistant Session', 'idle', createdAt, updatedAt);
+
+    db.prepare(
+      `INSERT OR IGNORE INTO assistant_session_messages
+        (id, session_id, remote_message_id, role, content, event_json, created_at)
+       SELECT id, ?, NULL, role, content, NULL, created_at
+       FROM assistant_messages
+       ORDER BY created_at ASC`,
+    ).run(sessionId);
+  })();
 }
