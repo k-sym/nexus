@@ -58,6 +58,10 @@ function sessionStatusFromRun(session: AssistantSession, latestRun: AssistantRun
   return session.status ?? 'idle';
 }
 
+function isActiveRunStatus(status: AssistantSessionStatus | undefined): boolean {
+  return status === 'running' || status === 'cancelling';
+}
+
 export function useAssistantStream() {
   const [sessions, setSessions] = useState<AssistantSession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -189,6 +193,7 @@ export function useAssistantStream() {
     readerRef.current = reader;
     const decoder = new TextDecoder();
     let pending = '';
+    let remoteStillRunning = false;
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -213,6 +218,7 @@ export function useAssistantStream() {
             ));
           } else if (event.type === 'complete') {
             const status = String(event.status ?? 'succeeded');
+            remoteStillRunning = isActiveRunStatus(status);
             setLatestRun((run) => run ? { ...run, status } : { id: String(event.runId ?? ''), status });
             setSessions((current) => current.map((session) =>
               session.id === selectedSessionId ? { ...session, status: status === 'succeeded' ? 'idle' : status } : session,
@@ -223,7 +229,7 @@ export function useAssistantStream() {
         }
       }
       setMessages((current) => current.map((message) =>
-        message.id === assistantDraft.id ? { ...message, isStreaming: false } : message,
+        message.id === assistantDraft.id ? { ...message, isStreaming: remoteStillRunning } : message,
       ));
       return true;
     } catch (err) {
@@ -234,7 +240,7 @@ export function useAssistantStream() {
     } finally {
       if (readerRef.current === reader) readerRef.current = null;
       sendingRef.current = false;
-      setIsRunning(false);
+      setIsRunning(remoteStillRunning);
     }
   }, [selectedSessionId]);
 
@@ -276,6 +282,14 @@ export function useAssistantStream() {
     return true;
   }, [loadSession, loadSessions, selectedSessionId]);
 
+  useEffect(() => {
+    if (!selectedSessionId || !isActiveRunStatus(latestRun?.status)) return undefined;
+    const timer = window.setInterval(() => {
+      void sync();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [latestRun?.status, selectedSessionId, sync]);
+
   const abort = useCallback(async () => {
     cancelActiveReader();
     await apiFetch('/api/assistant/abort', { method: 'POST' }).catch(() => undefined);
@@ -311,7 +325,7 @@ export function useAssistantStream() {
     selectedSession: sessions.find((session) => session.id === selectedSessionId) ?? null,
     messages,
     latestRun,
-    isRunning,
+    isRunning: isRunning || isActiveRunStatus(latestRun?.status),
     error,
     loadSessions,
     loadSession,

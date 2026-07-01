@@ -227,7 +227,7 @@ function AssistantBubble({ message }: { message: AssistantMessage }) {
             : 'surface-glass border border-subtle text-primary'
         }`}
       >
-        <p className="whitespace-pre-wrap">{message.content}</p>
+        <p className="whitespace-pre-wrap">{message.content || (message.isStreaming ? 'Running...' : '')}</p>
       </div>
     </div>
   );

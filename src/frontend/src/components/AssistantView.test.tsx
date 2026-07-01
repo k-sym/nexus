@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AssistantView from './AssistantView';
 
 const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
@@ -87,6 +87,11 @@ describe('AssistantView', () => {
     installDefaultMock();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it('renders Assistant sessions and the selected session transcript', async () => {
     render(<AssistantView />);
 
@@ -165,5 +170,65 @@ describe('AssistantView', () => {
       expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s2', { method: 'DELETE' });
     });
     expect(apiFetchMock).not.toHaveBeenCalledWith('/api/assistant/abort', { method: 'POST' });
+  });
+
+  it('keeps foreground Hermes runs visible and syncs while the remote run is still running', async () => {
+    let started = false;
+    let synced = false;
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/sessions') {
+        return { ok: true, json: async () => ({ sessions: [sessions[0]] }) } as Response;
+      }
+      if (url === '/api/assistant/sessions/s1') {
+        const active = started && !synced;
+        return {
+          ok: true,
+          json: async () => ({
+            session: { ...sessions[0], status: active ? 'running' : 'idle' },
+            messages: synced
+              ? [
+                  { id: 'm4', role: 'user', content: 'Run now', created_at: '2026-07-01T10:00:00.000Z' },
+                  { id: 'm5', role: 'assistant', content: 'Hermes finished.', created_at: '2026-07-01T10:01:00.000Z' },
+                ]
+              : [],
+            latestRun: active ? { id: 'r-live', status: 'running' } : synced ? { id: 'r-live', status: 'succeeded' } : null,
+          }),
+        } as Response;
+      }
+      if (url === '/api/assistant/sessions/s1/messages/stream') {
+        started = true;
+        return streamResponse([
+          { type: 'run_start', runId: 'r-live', remoteRunId: 'remote-live' },
+          { type: 'complete', runId: 'r-live', status: 'running' },
+        ]);
+      }
+      if (url === '/api/assistant/sync') {
+        synced = true;
+        return { ok: true, json: async () => ({ updated: 1 }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    vi.useFakeTimers();
+    fireEvent.change(input, { target: { value: 'Run now' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(screen.getByText('Running...')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sync', { method: 'POST' });
+    expect(screen.getByText('Hermes finished.')).toBeInTheDocument();
   });
 });
