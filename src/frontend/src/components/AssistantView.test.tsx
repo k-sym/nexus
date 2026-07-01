@@ -83,6 +83,7 @@ function installDefaultMock() {
 describe('AssistantView', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
     installDefaultMock();
   });
 
@@ -150,5 +151,19 @@ describe('AssistantView', () => {
         headers: { 'Content-Type': 'application/json' },
       });
     });
+  });
+
+  it('clears the selected running session without calling the global abort endpoint', async () => {
+    render(<AssistantView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Release watch/i }));
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    fireEvent.change(input, { target: { value: '/clear' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s2', { method: 'DELETE' });
+    });
+    expect(apiFetchMock).not.toHaveBeenCalledWith('/api/assistant/abort', { method: 'POST' });
   });
 });

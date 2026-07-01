@@ -225,6 +225,44 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
   }
 });
 
+test('deleting an Assistant session best-effort stops its running Hermes runs without blocking delete', async () => {
+  let stopCalls = 0;
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
+      return new Response(JSON.stringify({ run_id: 'remote-delete-running', status: 'started' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (String(url).endsWith('/v1/runs/remote-delete-running/stop')) {
+      stopCalls += 1;
+      return new Response('Hermes stop failed', { status: 500 });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Clear running' } });
+    const sessionId = created.json().id;
+    const detached = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/runs`,
+      payload: { content: 'Long running work' },
+    });
+    assert.equal(detached.statusCode, 200);
+
+    const deleted = await app.inject({ method: 'DELETE', url: `/api/assistant/sessions/${sessionId}` });
+
+    assert.equal(deleted.statusCode, 200);
+    assert.equal(deleted.json().ok, true);
+    assert.equal(stopCalls, 1);
+    const remaining = (db.prepare('SELECT COUNT(*) AS count FROM assistant_sessions WHERE id = ?').get(sessionId) as { count: number }).count;
+    assert.equal(remaining, 0);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('legacy Assistant thread endpoints wrap the newest Assistant session', async () => {
   const { app, db, dir } = makeApp();
   try {

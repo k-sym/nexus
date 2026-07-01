@@ -350,6 +350,16 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
+      const hermes = client();
+      const runningRuns = db
+        .prepare('SELECT * FROM assistant_runs WHERE session_id = ? AND remote_run_id IS NOT NULL AND status IN (?, ?, ?)')
+        .all(id, ...Array.from(RUNNING_STATUSES)) as AssistantRun[];
+      if (hermes) {
+        for (const run of runningRuns) {
+          if (!run.remote_run_id) continue;
+          await hermes.stopRun(run.remote_run_id).catch(() => undefined);
+        }
+      }
       db.prepare('DELETE FROM assistant_sessions WHERE id = ?').run(id);
       return { ok: true };
     });

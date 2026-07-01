@@ -291,7 +291,6 @@ export function useAssistantStream() {
     if (!selectedSessionId) return false;
     setError(null);
     cancelActiveReader();
-    await apiFetch('/api/assistant/abort', { method: 'POST' }).catch(() => undefined);
     const res = await apiFetch(`/api/assistant/sessions/${selectedSessionId}`, { method: 'DELETE' });
     if (!res.ok) {
       setError(await responseError(res));

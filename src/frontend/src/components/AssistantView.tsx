@@ -34,7 +34,7 @@ export default function AssistantView() {
 
   const handleSend = useCallback(async () => {
     const text = input.trim();
-    if (!text || isRunning || !selectedSessionId) return;
+    if (!text || !selectedSessionId) return;
     if (text === '/new') {
       const created = await createSession();
       if (created) setInput('');
@@ -46,6 +46,7 @@ export default function AssistantView() {
       if (cleared) setInput('');
       return;
     }
+    if (isRunning) return;
     const sent = await send(text);
     if (sent) setInput('');
   }, [clear, createSession, input, isRunning, selectedSessionId, send]);
@@ -63,6 +64,9 @@ export default function AssistantView() {
       void handleSend();
     }
   };
+
+  const trimmedInput = input.trim();
+  const isCommand = trimmedInput === '/clear' || trimmedInput === '/new';
 
   return (
     <div className="flex-1 flex min-h-0">
@@ -175,7 +179,7 @@ export default function AssistantView() {
             <button
               type="button"
               onClick={() => void handleSend()}
-              disabled={!input.trim() || isRunning || !selectedSessionId}
+              disabled={!trimmedInput || (isRunning && !isCommand) || !selectedSessionId}
               className="h-10 px-4 accent-button rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2"
             >
               <PaperPlaneRight size={17} weight="fill" />
