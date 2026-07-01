@@ -225,6 +225,73 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
   }
 });
 
+test('Assistant sync isolates stale Hermes run_not_found failures and continues other runs', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
+      const body = JSON.parse(String(init?.body));
+      const runId = body.input === 'stale work' ? 'remote-stale' : 'remote-current';
+      return new Response(JSON.stringify({ run_id: runId, status: 'started' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (String(url).endsWith('/v1/runs/remote-stale')) {
+      return new Response(JSON.stringify({
+        error: {
+          message: 'Run not found: remote-stale',
+          type: 'invalid_request_error',
+          code: 'run_not_found',
+        },
+      }), { status: 404, headers: { 'content-type': 'application/json' } });
+    }
+    if (String(url).endsWith('/v1/runs/remote-current')) {
+      return new Response(JSON.stringify({
+        run_id: 'remote-current',
+        status: 'completed',
+        output: 'Current run completed.',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const staleSession = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Stale' } });
+    const staleSessionId = staleSession.json().id;
+    const staleRun = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${staleSessionId}/runs`,
+      payload: { content: 'stale work' },
+    });
+    assert.equal(staleRun.statusCode, 200);
+
+    const currentSession = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Current' } });
+    const currentSessionId = currentSession.json().id;
+    const currentRun = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${currentSessionId}/runs`,
+      payload: { content: 'current work' },
+    });
+    assert.equal(currentRun.statusCode, 200);
+
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+
+    assert.equal(sync.statusCode, 200);
+    assert.equal(sync.json().updated, 2);
+    const stale = db.prepare('SELECT status, error FROM assistant_runs WHERE remote_run_id = ?').get('remote-stale') as any;
+    assert.equal(stale.status, 'unknown');
+    assert.match(stale.error, /Run not found: remote-stale/);
+    const current = db.prepare('SELECT status, output FROM assistant_runs WHERE remote_run_id = ?').get('remote-current') as any;
+    assert.deepEqual(current, { status: 'succeeded', output: 'Current run completed.' });
+    const detail = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${currentSessionId}` });
+    assert.deepEqual(detail.json().messages.map((message: any) => [message.role, message.content]), [
+      ['user', 'current work'],
+      ['assistant', 'Current run completed.'],
+    ]);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('deleting an Assistant session best-effort stops its running Hermes runs without blocking delete', async () => {
   let stopCalls = 0;
   const fetchImpl: HermesFetch = async (url, init) => {

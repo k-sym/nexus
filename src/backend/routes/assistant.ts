@@ -44,7 +44,7 @@ interface AssistantRoutesOptions {
   fetchImpl?: HermesFetch;
 }
 
-const RUNNING_STATUSES = new Set(['running', 'cancelling', 'unknown']);
+const RUNNING_STATUSES = new Set(['running', 'cancelling']);
 
 function configuredAssistant(load: () => NexusConfig) {
   const config = load();
@@ -193,6 +193,25 @@ function activityStatusForRun(status: string): 'succeeded' | 'failed' | 'cancell
   if (status === 'failed') return 'failed';
   if (status === 'cancelled') return 'cancelled';
   return 'succeeded';
+}
+
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err || 'Assistant request failed.');
+}
+
+function markRunUnknown(db: FastifyInstance['db'], run: AssistantRun, message: string): void {
+  const now = new Date().toISOString();
+  db.prepare(
+    `UPDATE assistant_runs
+     SET status = 'unknown', error = ?, completed_at = ?, updated_at = ?
+     WHERE id = ?`,
+  ).run(message, now, now, run.id);
+  db.prepare(
+    `UPDATE assistant_sessions
+     SET status = 'unknown', updated_at = ?
+     WHERE id = ? AND last_run_id = ?`,
+  ).run(now, run.session_id, run.id);
 }
 
 function parseJson(value: string | null): unknown {
@@ -352,7 +371,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       const hermes = client();
       const runningRuns = db
-        .prepare('SELECT * FROM assistant_runs WHERE session_id = ? AND remote_run_id IS NOT NULL AND status IN (?, ?, ?)')
+        .prepare('SELECT * FROM assistant_runs WHERE session_id = ? AND remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(id, ...Array.from(RUNNING_STATUSES)) as AssistantRun[];
       if (hermes) {
         for (const run of runningRuns) {
@@ -431,19 +450,24 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const hermes = client();
       if (!hermes) return { updated: 0 };
       const runs = db
-        .prepare('SELECT * FROM assistant_runs WHERE remote_run_id IS NOT NULL AND status IN (?, ?, ?)')
+        .prepare('SELECT * FROM assistant_runs WHERE remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(...Array.from(RUNNING_STATUSES)) as AssistantRun[];
       let updated = 0;
       for (const run of runs) {
         if (!run.remote_run_id) continue;
-        const remote = await hermes.getRun(run.remote_run_id);
-        const completed = completeRun(db, run, remote);
-        if (completed.status !== run.status) updated += 1;
-        if (completed.status === 'succeeded' && completed.output) {
-          const existing = db
-            .prepare('SELECT id FROM assistant_session_messages WHERE session_id = ? AND role = ? AND content = ?')
-            .get(run.session_id, 'assistant', completed.output);
-          if (!existing) appendMessage(db, run.session_id, 'assistant', completed.output);
+        try {
+          const remote = await hermes.getRun(run.remote_run_id);
+          const completed = completeRun(db, run, remote);
+          if (completed.status !== run.status) updated += 1;
+          if (completed.status === 'succeeded' && completed.output) {
+            const existing = db
+              .prepare('SELECT id FROM assistant_session_messages WHERE session_id = ? AND role = ? AND content = ?')
+              .get(run.session_id, 'assistant', completed.output);
+            if (!existing) appendMessage(db, run.session_id, 'assistant', completed.output);
+          }
+        } catch (err) {
+          markRunUnknown(db, run, errorMessage(err));
+          updated += 1;
         }
       }
       return { updated };
