@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Sidebar, { type ThreadMeta } from './Sidebar';
@@ -295,7 +295,7 @@ describe('Sidebar', () => {
     await user.click(screen.getByTitle('Delete active project'));
 
     expect(window.confirm).toHaveBeenCalledWith('Delete this project? This cannot be undone.');
-    expect(onDeleteProject).toHaveBeenCalledWith(project.id);
+    await waitFor(() => expect(onDeleteProject).toHaveBeenCalledWith(project.id));
   });
 
   it('offers an archive action for sessions', async () => {
@@ -307,7 +307,7 @@ describe('Sidebar', () => {
     await user.click(screen.getByTitle('Archive to memory'));
 
     expect(window.confirm).toHaveBeenCalledWith('Archive this session to memory and delete it?');
-    expect(onArchiveThread).toHaveBeenCalledWith(thread.id);
+    await waitFor(() => expect(onArchiveThread).toHaveBeenCalledWith(thread.id));
   });
 
   it('shows archive progress and prevents duplicate archive actions', async () => {

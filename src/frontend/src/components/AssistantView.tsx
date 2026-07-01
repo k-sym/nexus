@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Stop, ArrowsClockwise } from '@phosphor-icons/react';
 import { AssistantMessage, useAssistantStream } from '../hooks/useAssistantStream';
+import { confirmDialog } from '../lib/confirm';
 
 export default function AssistantView() {
   const { messages, isRunning, error, loadThread, send, abort, clear } = useAssistantStream();
@@ -29,9 +30,9 @@ export default function AssistantView() {
     }
   };
 
-  const handleNewSession = useCallback(() => {
+  const handleNewSession = useCallback(async () => {
     if (isRunning || messages.length === 0) return;
-    if (!window.confirm('Clear the Assistant conversation? This cannot be undone.')) return;
+    if (!(await confirmDialog('Clear the Assistant conversation? This cannot be undone.'))) return;
     void clear();
   }, [isRunning, messages.length, clear]);
 

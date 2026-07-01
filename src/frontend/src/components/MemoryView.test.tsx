@@ -117,7 +117,7 @@ describe('MemoryView', () => {
 
     await user.click(screen.getByRole('button', { name: 'Delete memory' }));
     expect(window.confirm).toHaveBeenCalledWith('Delete this memory permanently?');
-    expect(memoryApi.delete).toHaveBeenCalledWith('mem-1');
+    await waitFor(() => expect(memoryApi.delete).toHaveBeenCalledWith('mem-1'));
   });
 
   it('uses current shell accent styling instead of legacy purple memory controls', async () => {
