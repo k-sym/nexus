@@ -24,7 +24,7 @@ import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { AgentRunCard } from './AgentRunCard';
-import { runPhaseLabel } from './AgentRunHeader';
+import { runPhaseLabel } from './runLabels';
 import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 import ArtifactPreviewRail from './ArtifactPreviewRail';
 import ChatMessageContent from './ChatMessageContent';
