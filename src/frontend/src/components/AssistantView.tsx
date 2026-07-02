@@ -189,7 +189,7 @@ export default function AssistantView() {
         <div className="px-4 py-3 border-b border-subtle flex items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold">Assistant</h1>
-            <p className="text-xs text-faint">Hermes sessions</p>
+            <p className="text-xs text-faint">Sessions</p>
           </div>
           <button
             type="button"
@@ -395,7 +395,7 @@ export default function AssistantView() {
               onClick={() => void handleBackgroundRun()}
               disabled={!canSubmit}
               className="h-10 px-3 surface-elevated border border-subtle rounded-lg flex items-center gap-2 text-sm text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Hand this run to Hermes and keep tracking it after Nexus restarts"
+              title="Hand this run off to keep it running in the background after Nexus restarts"
             >
               <CloudArrowUp size={17} />
               Background Handoff

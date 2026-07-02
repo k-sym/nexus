@@ -8,6 +8,7 @@ interface TopBarProps {
   onSelectGlobal: (v: GlobalView) => void;
   onSelectManage: (v: ManageView) => void;
   onOpenPalette: () => void;
+  assistantActive?: boolean;
 }
 
 const item = (active: boolean) =>
@@ -15,7 +16,7 @@ const item = (active: boolean) =>
     active ? 'surface-active accent-text' : 'text-muted hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
   }`;
 
-export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPalette }: TopBarProps) {
+export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPalette, assistantActive }: TopBarProps) {
   // The Tauri shell hides the native title bar (TitleBarStyle::Overlay) and drags
   // via the `data-tauri-drag-region` attribute on the header below, so the TopBar
   // doubles as the drag handle. On macOS the traffic-light buttons overlay the
@@ -45,7 +46,17 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
       <button onClick={() => onSelectGlobal('missions')} className={item(view === 'missions')}><Rocket size={16} weight={view === 'missions' ? 'fill' : 'regular'} /> Missions</button>
       <button onClick={() => onSelectGlobal('tickets')} className={item(view === 'tickets')}><Ticket size={16} weight={view === 'tickets' ? 'fill' : 'regular'} /> Tickets</button>
       <button onClick={() => onSelectGlobal('braindump')} className={item(view === 'braindump')}><Brain size={16} weight={view === 'braindump' ? 'fill' : 'regular'} /> Braindump</button>
-      <button onClick={() => onSelectGlobal('assistant')} className={item(view === 'assistant')}><ChatCircle size={16} weight={view === 'assistant' ? 'fill' : 'regular'} /> Assistant</button>
+      <button onClick={() => onSelectGlobal('assistant')} className={item(view === 'assistant')}>
+        <ChatCircle size={16} weight={view === 'assistant' ? 'fill' : 'regular'} /> Assistant
+        {assistantActive && (
+          <span
+            role="img"
+            className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"
+            title="Assistant run active"
+            aria-label="Assistant run active"
+          />
+        )}
+      </button>
 
       {/* Management group, right-aligned */}
       <div className="ml-auto flex items-center gap-1.5">
