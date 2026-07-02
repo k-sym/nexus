@@ -1,4 +1,4 @@
-import { WarningCircle, Check, Circle, Prohibit, Spinner } from '@phosphor-icons/react';
+import { WarningCircle, Check, Circle, Prohibit, Spinner, CaretDown, CaretUp, Wrench } from '@phosphor-icons/react';
 import { useState } from 'react';
 import { QuestionCard } from './QuestionCard';
 import { normalizeQuestionRequest, parseQuestionResult, type QuestionAnswer, type QuestionToolResult } from '../lib/questions';
@@ -149,6 +149,56 @@ function ToolCallBlock({
           <ToolContent toolCall={toolCall} />
         </div>
       )}
+    </div>
+  );
+}
+
+interface ToolActivityProps {
+  toolCalls: ToolCallInfo[];
+  running: boolean;
+  detailsExpanded?: boolean;
+  terminalLabel?: string;
+}
+
+/** Compact tool view for an agent run: while running, only the active tool is
+ *  shown with the rest folded into a clickable count; when finished, a single
+ *  summary row expands the full timeline on demand. Keeps model text on screen. */
+export function ToolActivity({ toolCalls, running, detailsExpanded, terminalLabel }: ToolActivityProps) {
+  const [expanded, setExpanded] = useState(false);
+  const tools = toolCalls.filter((tc) => !isQuestionTool(tc));
+  if (tools.length === 0) return null;
+
+  const showFull = !!detailsExpanded || expanded;
+  const failed = tools.filter((tc) => tc.status === 'failed' || tc.status === 'error').length;
+  const activeTool = running
+    ? [...tools].reverse().find((tc) => tc.status === 'running')
+    : undefined;
+  const count = tools.length;
+  const summaryText = `${count} tool call${count === 1 ? '' : 's'}${failed > 0 ? ` · ${failed} failed` : ''}`;
+
+  return (
+    <div className="flex flex-col gap-1 my-1.5">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={showFull}
+        className="flex items-center gap-1.5 px-1 py-0.5 w-full text-left text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+      >
+        <Wrench className="w-3 h-3 flex-shrink-0 text-zinc-500" />
+        <span>{summaryText}</span>
+        {!running && terminalLabel && (
+          <span className={failed > 0 ? 'text-red-400' : 'text-emerald-400'}>· {terminalLabel}</span>
+        )}
+        {showFull ? <CaretUp className="ml-auto w-3 h-3" /> : <CaretDown className="ml-auto w-3 h-3" />}
+      </button>
+
+      {showFull
+        ? tools.map((tc) => (
+            <ToolCallBlock key={tc.id} toolCall={tc} detailsExpanded={detailsExpanded} />
+          ))
+        : activeTool && (
+            <ToolCallBlock key={activeTool.id} toolCall={activeTool} detailsExpanded={detailsExpanded} />
+          )}
     </div>
   );
 }
