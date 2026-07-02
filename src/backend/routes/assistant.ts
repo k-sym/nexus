@@ -485,9 +485,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
             else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
             else if (ev.kind === 'function_call') { write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
             else if (ev.kind === 'function_call_output') { write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
-            else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; }
+            else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; write({ type: 'error', error: ev.error }); }
           }
-          completeRun(db, run, { runId: run.id, status: status as any, output: accumulated });
+          completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
         }
         if (accumulated) appendMessage(db, session.id, 'assistant', accumulated);
       } catch (err: any) {

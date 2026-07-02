@@ -182,6 +182,49 @@ test('streamSessionTurn streams structured run/tool/text events from /v1/respons
   }
 });
 
+test('streamSessionTurn emits error event when /v1/responses stream yields failed event mid-stream', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Starting work."}\n\n',
+        'data: {"type":"response.failed","response":{"id":"resp_1","error":{"message":"API rate limit exceeded"}}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Error test' } });
+    const sessionId = created.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'do work' },
+    });
+    assert.equal(res.statusCode, 200);
+    const events = ndjsonEvents(res.payload);
+    const kinds = events.map((e) => e.kind ?? e.type);
+    assert.deepEqual(kinds, ['run_start', 'message_update', 'error', 'run_end']);
+
+    const errorEvent = events.find((e) => e.type === 'error');
+    assert.ok(errorEvent, 'error event should be present');
+    assert.equal(errorEvent.error, 'API rate limit exceeded');
+
+    const runEnd = events.find((e) => e.kind === 'run_end');
+    assert.equal(runEnd.run.status, 'failed');
+    assert.equal(runEnd.run.error, 'API rate limit exceeded');
+
+    const run = db.prepare('SELECT status, error FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(run.status, 'failed');
+    assert.equal(run.error, 'API rate limit exceeded');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant detached run sync reconciles completed Hermes output after restart', async () => {
   const fetchImpl: HermesFetch = async (url, init) => {
     if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
