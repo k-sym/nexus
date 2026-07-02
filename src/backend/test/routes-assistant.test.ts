@@ -10,6 +10,21 @@ import { getDb } from '../db';
 import type { HermesFetch } from '../hermes/client';
 import { ActivityManager } from '../activity/manager';
 
+function sseResponse(chunks: string[]): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enc = new TextEncoder();
+      for (const c of chunks) controller.enqueue(enc.encode(c));
+      controller.close();
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+function ndjsonEvents(payload: string): any[] {
+  return payload.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+}
+
 function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: HermesFetch; activity?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-assistant-test-'));
   const db = getDb(join(dir, 'test.db'));
@@ -75,21 +90,14 @@ test('Assistant session routes create list read rename and delete sessions', asy
 });
 
 test('Assistant foreground stream stores user assistant messages and completed run', async () => {
-  const fetchImpl: HermesFetch = async (url, init) => {
-    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
-      return new Response(JSON.stringify({ run_id: 'remote-run-1', status: 'started' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    if (String(url).endsWith('/v1/runs/remote-run-1')) {
-      return new Response(JSON.stringify({
-        run_id: 'remote-run-1',
-        status: 'completed',
-        session_id: 'local-session',
-        output: 'Finished overnight checks.',
-        usage: { total_tokens: 42 },
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Finished overnight checks."}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_1"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
@@ -105,12 +113,11 @@ test('Assistant foreground stream stores user assistant messages and completed r
     });
 
     assert.equal(streamed.statusCode, 200);
-    const events = streamed.body.trim().split('\n').map((line) => JSON.parse(line));
-    assert.deepEqual(events, [
-      { type: 'run_start', runId: events[0].runId, remoteRunId: 'remote-run-1' },
-      { type: 'text_delta', delta: 'Finished overnight checks.' },
-      { type: 'complete', runId: events[0].runId, status: 'succeeded' },
-    ]);
+    const events = ndjsonEvents(streamed.body);
+    const kinds = events.map((e) => e.kind ?? e.type);
+    assert.deepEqual(kinds, ['run_start', 'message_update', 'run_end']);
+    const runEnd = events.find((e) => e.kind === 'run_end');
+    assert.equal(runEnd.run.status, 'completed');
 
     const messages = db
       .prepare('SELECT role, content FROM assistant_session_messages WHERE session_id = ? ORDER BY created_at ASC')
@@ -119,9 +126,8 @@ test('Assistant foreground stream stores user assistant messages and completed r
       { role: 'user', content: 'Run checks tonight' },
       { role: 'assistant', content: 'Finished overnight checks.' },
     ]);
-    const run = db.prepare('SELECT remote_run_id, status, output FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    const run = db.prepare('SELECT status, output FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
     assert.deepEqual(run, {
-      remote_run_id: 'remote-run-1',
       status: 'succeeded',
       output: 'Finished overnight checks.',
     });
@@ -130,54 +136,92 @@ test('Assistant foreground stream stores user assistant messages and completed r
   }
 });
 
-test('Assistant foreground stream treats a still-running remote run as accepted work, not a failed stream', async () => {
-  const fetchImpl: HermesFetch = async (url, init) => {
-    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
-      return new Response(JSON.stringify({ run_id: 'remote-run-live', status: 'started' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    if (String(url).endsWith('/v1/runs/remote-run-live')) {
-      return new Response(JSON.stringify({
-        run_id: 'remote-run-live',
-        status: 'running',
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+test('streamSessionTurn streams structured run/tool/text events from /v1/responses', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Reading."}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"call_1","name":"read_file","arguments":{"path":"/tmp/x"}}}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call_output","call_id":"call_1","output":"hi"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":" Done."}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_1"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir, stopActivity } = makeApp({ fetchImpl, activity: true });
+  const { app, db, dir } = makeApp({ fetchImpl });
   try {
-    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Live remote run' } });
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
     const sessionId = created.json().id;
 
-    const streamed = await app.inject({
+    const res = await app.inject({
       method: 'POST',
       url: `/api/assistant/sessions/${sessionId}/messages/stream`,
-      payload: { content: 'Start long work' },
+      payload: { content: 'read the file' },
     });
-
-    assert.equal(streamed.statusCode, 200);
-    const events = streamed.body.trim().split('\n').map((line) => JSON.parse(line));
-    assert.deepEqual(events, [
-      { type: 'run_start', runId: events[0].runId, remoteRunId: 'remote-run-live' },
-      { type: 'complete', runId: events[0].runId, status: 'running' },
+    assert.equal(res.statusCode, 200);
+    const events = ndjsonEvents(res.payload);
+    const kinds = events.map((e) => e.kind ?? e.type);
+    assert.deepEqual(kinds, [
+      'run_start', 'message_update', 'tool_execution_start', 'tool_execution_end', 'message_update', 'run_end',
     ]);
-
-    const run = db.prepare('SELECT remote_run_id, status, error FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
-    assert.deepEqual(run, {
-      remote_run_id: 'remote-run-live',
-      status: 'running',
-      error: null,
-    });
-    const operation = db.prepare('SELECT status, error, last_event FROM operations WHERE id = ?').get(events[0].runId) as any;
-    assert.deepEqual(operation, {
-      status: 'succeeded',
-      error: null,
-      last_event: 'remote_run_running',
-    });
+    const toolStart = events.find((e) => e.type === 'tool_execution_start');
+    assert.equal(toolStart.toolName, 'read_file');
+    const toolEnd = events.find((e) => e.type === 'tool_execution_end');
+    assert.equal(toolEnd.result.content[0].text, 'hi');
+    const runEnd = events.find((e) => e.kind === 'run_end');
+    assert.equal(runEnd.run.status, 'completed');
+    // The assistant message is persisted from the accumulated text.
+    const detail = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    const assistantMsg = detail.json().messages.find((m: any) => m.role === 'assistant');
+    assert.equal(assistantMsg.content, 'Reading. Done.');
   } finally {
-    await cleanup(app, db, dir, stopActivity);
+    await cleanup(app, db, dir);
+  }
+});
+
+test('streamSessionTurn emits error event when /v1/responses stream yields failed event mid-stream', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Starting work."}\n\n',
+        'data: {"type":"response.failed","response":{"id":"resp_1","error":{"message":"API rate limit exceeded"}}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Error test' } });
+    const sessionId = created.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'do work' },
+    });
+    assert.equal(res.statusCode, 200);
+    const events = ndjsonEvents(res.payload);
+    const kinds = events.map((e) => e.kind ?? e.type);
+    assert.deepEqual(kinds, ['run_start', 'message_update', 'error', 'run_end']);
+
+    const errorEvent = events.find((e) => e.type === 'error');
+    assert.ok(errorEvent, 'error event should be present');
+    assert.equal(errorEvent.error, 'API rate limit exceeded');
+
+    const runEnd = events.find((e) => e.kind === 'run_end');
+    assert.equal(runEnd.run.status, 'failed');
+    assert.equal(runEnd.run.error, 'API rate limit exceeded');
+
+    const run = db.prepare('SELECT status, error FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(run.status, 'failed');
+    assert.equal(run.error, 'API rate limit exceeded');
+  } finally {
+    await cleanup(app, db, dir);
   }
 });
 
@@ -228,20 +272,15 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
 test('Assistant runs persist attachments and send Hermes saved file references', async () => {
   let hermesInput = '';
   const fetchImpl: HermesFetch = async (url, init) => {
-    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
+    if (String(url).endsWith('/v1/responses')) {
       const body = JSON.parse(String(init?.body));
       hermesInput = body.input;
-      return new Response(JSON.stringify({ run_id: 'remote-file-run', status: 'started' }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }
-    if (String(url).endsWith('/v1/runs/remote-file-run')) {
-      return new Response(JSON.stringify({
-        run_id: 'remote-file-run',
-        status: 'completed',
-        output: 'Read the attached brief.',
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_file"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Read the attached brief."}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_file"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
@@ -334,12 +373,14 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
     });
     assert.equal(JSON.stringify(hermesChatBody.input).includes('project_docs/uploads'), false);
 
-    const events = streamed.body.trim().split('\n').map((line) => JSON.parse(line));
-    assert.deepEqual(events, [
-      { type: 'run_start', runId: events[0].runId },
-      { type: 'text_delta', delta: 'I can see the screenshot.' },
-      { type: 'complete', runId: events[0].runId, status: 'succeeded' },
-    ]);
+    const events = ndjsonEvents(streamed.body);
+    const kinds = events.map((e) => e.kind ?? e.type);
+    assert.deepEqual(kinds, ['run_start', 'message_update', 'run_end']);
+    const textDelta = events.find((e) => e.type === 'message_update');
+    assert.equal(textDelta.assistantMessageEvent.type, 'text_delta');
+    assert.equal(textDelta.assistantMessageEvent.delta, 'I can see the screenshot.');
+    const runEnd = events.find((e) => e.kind === 'run_end');
+    assert.equal(runEnd.run.status, 'completed');
     const row = db
       .prepare('SELECT attachments_json FROM assistant_session_messages WHERE session_id = ? AND role = ?')
       .get(sessionId, 'user') as { attachments_json: string };
@@ -511,6 +552,68 @@ test('legacy Assistant thread endpoints wrap the newest Assistant session', asyn
     assert.equal(cleared.json().ok, true);
     const remaining = (db.prepare('SELECT COUNT(*) AS count FROM assistant_session_messages').get() as { count: number }).count;
     assert.equal(remaining, 0);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+function abortAwareSseResponse(chunks: string[], signal: AbortSignal | undefined): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enc = new TextEncoder();
+      for (const c of chunks) controller.enqueue(enc.encode(c));
+      // Do NOT close here — the stream only closes when the request is aborted,
+      // simulating a remote model that keeps generating until the client hangs up.
+      const onAbort = () => {
+        try { controller.close(); } catch { /* already closed */ }
+      };
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+test('POST /api/assistant/abort tears down the in-flight /v1/responses stream and finalizes the run as cancelled', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return abortAwareSseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"call_1","name":"read_file","arguments":{"path":"/tmp/x"}}}\n\n',
+      ], init?.signal ?? undefined);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Abort me' } });
+    const sessionId = created.json().id;
+
+    const streamP = app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'do a long task' },
+    });
+
+    // Give the handler a tick to register the run and start consuming the stream.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const abortRes = await app.inject({ method: 'POST', url: '/api/assistant/abort' });
+    assert.equal(abortRes.statusCode, 200);
+    assert.equal(abortRes.json().ok, true);
+
+    const res = await streamP;
+    assert.equal(res.statusCode, 200);
+    const events = ndjsonEvents(res.payload);
+    const runEnd = events[events.length - 1];
+    assert.equal(runEnd.kind, 'run_end');
+    assert.equal(runEnd.run.status, 'cancelled');
+    assert.equal(runEnd.run.abortSource, 'user');
+
+    const run = db.prepare('SELECT status FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(run.status, 'cancelled');
   } finally {
     await cleanup(app, db, dir);
   }

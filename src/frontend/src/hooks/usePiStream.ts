@@ -14,6 +14,7 @@ import {
   type AgentRunAction,
   type AgentRunView,
 } from '../chat/agent-run-state';
+import { agentRunActionsFor } from '../chat/agent-run-events';
 
 /** Granular tool execution phase for richer status display. */
 export type ToolPhase =
@@ -440,12 +441,13 @@ export function usePiStream() {
     
     const type = ev?.type;
     const now = Date.now();
+    for (const action of agentRunActionsFor(ev, now)) {
+      dispatch({ type: 'RUN_ACTION', action });
+    }
     if (ev?.kind === 'run_start') {
-      dispatch({ type: 'RUN_ACTION', action: { type: 'RUN_STARTED', run: ev.run } });
       return null;
     }
     if (ev?.kind === 'run_end') {
-      dispatch({ type: 'RUN_ACTION', action: { type: 'RUN_ENDED', run: ev.run } });
       dispatch({ type: 'STREAM_COMPLETE' });
       return null;
     }
@@ -463,7 +465,6 @@ export function usePiStream() {
       if (!ame) return null;
       if (ame.type === 'thinking_delta') {
         dispatch({ type: 'THINKING_DELTA', delta: ame.delta });
-        dispatch({ type: 'RUN_ACTION', action: { type: 'MODEL_RESPONDING', at: now } });
       }
       else if (ame.type === 'thinking_end') {
         const thinking = extractThinkingEventContent(ame);
@@ -471,11 +472,9 @@ export function usePiStream() {
       }
       else if (ame.type === 'text_delta') {
         dispatch({ type: 'TEXT_DELTA', delta: ame.delta });
-        dispatch({ type: 'RUN_ACTION', action: { type: 'MODEL_RESPONDING', at: now } });
       }
       else if (ame.type === 'toolcall_end') {
         dispatch({ type: 'TOOL_CALL_START', toolCall: { id: ame.toolCall.id, name: ame.toolCall.name, args: ame.toolCall.arguments ?? {} } });
-        dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_QUEUED', id: ame.toolCall.id, name: ame.toolCall.name, args: ame.toolCall.arguments ?? {}, at: now } });
       } else if (ame.type === 'error') {
         const reason =
           ame.message ??
@@ -498,14 +497,12 @@ export function usePiStream() {
         type: 'TOOL_CALL_START',
         toolCall: { id: ev.toolCallId, name: ev.toolName, args: ev.args ?? {} },
       });
-      dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_STARTED', id: ev.toolCallId, name: ev.toolName, args: ev.args ?? {}, at: now } });
     } else if (type === 'tool_execution_update') {
       const partial = (ev.partialResult?.content ?? [])
         .map((c: { text?: string }) => c.text ?? '')
         .join('');
       dispatch({ type: 'TOOL_CALL_UPDATE', id: ev.toolCallId, patch: { status: 'running' } });
       dispatch({ type: 'TOOL_PARTIAL_OUTPUT', id: ev.toolCallId, partialOutput: partial });
-      dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_OUTPUT', id: ev.toolCallId, output: partial, at: now } });
     } else if (type === 'tool_execution_end') {
       const result = (ev.result?.content ?? [])
         .map((c: { text?: string }) => c.text ?? '')
@@ -520,7 +517,6 @@ export function usePiStream() {
           is_error: ev.isError,
         },
       });
-      dispatch({ type: 'RUN_ACTION', action: { type: 'TOOL_FINISHED', id: ev.toolCallId, result, details: ev.result?.details, isError: !!ev.isError, at: now } });
     } else if (type === 'done') {
       dispatch({ type: 'STREAM_COMPLETE' });
     } else if (type === 'error') {

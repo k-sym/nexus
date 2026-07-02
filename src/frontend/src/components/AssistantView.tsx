@@ -4,10 +4,11 @@ import {
   AssistantAttachment,
   AssistantMessage,
   AssistantSession,
-  AssistantSessionStatus,
   useAssistantStream,
 } from '../hooks/useAssistantStream';
 import { confirmDialog } from '../lib/confirm';
+import { AgentRunCard } from './AgentRunCard';
+import { RunStatusStrip } from './RunStatusStrip';
 
 const MAX_PENDING_ATTACHMENTS = 5;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -154,7 +155,6 @@ export default function AssistantView() {
   }, []);
 
   const trimmedInput = input.trim();
-  const isCommand = pendingAttachments.length === 0 && (trimmedInput === '/clear' || trimmedInput === '/new');
   const canSubmit = !!selectedSessionId && (!!trimmedInput || pendingAttachments.length > 0);
 
   return (
@@ -241,15 +241,11 @@ export default function AssistantView() {
             ) : (
               <h2 className="text-lg font-semibold truncate">{selectedSession?.title ?? 'Assistant'}</h2>
             )}
-            <div className="flex items-center gap-2 text-xs text-faint">
-              <span>{statusLabel(selectedSession?.status ?? latestRun?.status ?? 'idle')}</span>
-              {latestRun?.remote_run_id && (
-                <>
-                  <span aria-hidden="true">/</span>
-                  <span className="truncate">remote {latestRun.remote_run_id}</span>
-                </>
-              )}
-            </div>
+            {latestRun?.remote_run_id && (
+              <div className="flex items-center gap-2 text-xs text-faint">
+                <span className="truncate">remote {latestRun.remote_run_id}</span>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -284,17 +280,6 @@ export default function AssistantView() {
             >
               <ArrowsClockwise size={16} />
             </button>
-            {(isRunning || latestRun?.status === 'running' || latestRun?.status === 'cancelling') && (
-              <button
-                type="button"
-                onClick={() => void abort()}
-                className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors"
-                title="Stop the current Assistant run"
-                aria-label="Stop"
-              >
-                <Stop size={16} weight="fill" />
-              </button>
-            )}
           </div>
         </header>
 
@@ -330,7 +315,20 @@ export default function AssistantView() {
           {messages.length === 0 ? (
             <p className="text-faint text-sm">Send a message to start.</p>
           ) : (
-            messages.map((message) => <AssistantBubble key={message.id} message={message} />)
+            messages.map((message) =>
+              message.role !== 'user' && message.run ? (
+                <div key={message.id} className="flex justify-start">
+                  <AgentRunCard
+                    run={message.run}
+                    content={message.content}
+                    thinking={message.thinking}
+                    detailsExpanded={false}
+                  />
+                </div>
+              ) : (
+                <AssistantBubble key={message.id} message={message} />
+              ),
+            )
           )}
         </div>
 
@@ -338,6 +336,13 @@ export default function AssistantView() {
           <div className="px-4 py-2 border-t border-subtle text-xs text-red-300" role="alert">
             {error}
           </div>
+        )}
+
+        {isRunning && (
+          <RunStatusStrip
+            run={messages.slice().reverse().find((m) => m.run)?.run ?? null}
+            fallbackLabel="Working…"
+          />
         )}
 
         <div className="border-t border-subtle surface-glass p-3">
@@ -400,15 +405,27 @@ export default function AssistantView() {
               <CloudArrowUp size={17} />
               Background Handoff
             </button>
-            <button
-              type="button"
-              onClick={() => void handleSend()}
-              disabled={!canSubmit || (isRunning && !isCommand)}
-              className="h-10 px-4 accent-button rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2"
-            >
-              <PaperPlaneRight size={17} weight="fill" />
-              Send
-            </button>
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={() => void abort()}
+                aria-label="Stop current run"
+                className="h-10 px-4 accent-button rounded-lg transition-colors flex items-center gap-2"
+              >
+                <Stop size={17} weight="fill" />
+                Stop
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleSend()}
+                disabled={!canSubmit}
+                className="h-10 px-4 accent-button rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2"
+              >
+                <PaperPlaneRight size={17} weight="fill" />
+                Send
+              </button>
+            )}
           </div>
         </div>
       </section>
@@ -558,17 +575,6 @@ function fileToAttachment(file: File): Promise<AssistantAttachment> {
 function fileExtensionLabel(name?: string): string {
   if (!name || !name.includes('.')) return 'file';
   return name.split('.').pop()?.slice(0, 5) || 'file';
-}
-
-function statusLabel(status: AssistantSessionStatus): string {
-  const normalized = String(status || 'idle');
-  if (normalized === 'idle') return 'Idle';
-  if (normalized === 'running') return 'Running';
-  if (normalized === 'succeeded') return 'Completed';
-  if (normalized === 'failed') return 'Failed';
-  if (normalized === 'cancelled') return 'Cancelled';
-  if (normalized === 'cancelling') return 'Cancelling';
-  return normalized.slice(0, 1).toUpperCase() + normalized.slice(1);
 }
 
 function relativeUpdatedAt(value: string): string {

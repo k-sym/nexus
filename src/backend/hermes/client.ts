@@ -24,6 +24,23 @@ export interface HermesRunStatus {
   error?: string;
 }
 
+export interface HermesResponsesInput {
+  input: string;
+  sessionId?: string;
+  sessionKey?: string;
+  instructions?: string;
+  signal?: AbortSignal;
+}
+
+export type HermesResponseEvent =
+  | { kind: 'created'; responseId?: string }
+  | { kind: 'text_delta'; delta: string }
+  | { kind: 'reasoning_delta'; delta: string }
+  | { kind: 'function_call'; id: string; name: string; args: Record<string, unknown> }
+  | { kind: 'function_call_output'; callId: string; output: string; isError: boolean }
+  | { kind: 'completed'; responseId?: string }
+  | { kind: 'failed'; error: string };
+
 export type HermesContentPart =
   | { type: 'text' | 'input_text'; text: string }
   | { type: 'image_url'; image_url: { url: string; detail?: string } }
@@ -67,6 +84,7 @@ export interface HermesClient {
   deleteSession(sessionId: string): Promise<void>;
   sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult>;
   streamChatCompletions(messages: Array<{ role: string; content: string }>): AsyncIterable<string>;
+  streamResponses(input: HermesResponsesInput): AsyncIterable<HermesResponseEvent>;
 }
 
 interface CreateHermesClientOptions {
@@ -222,6 +240,40 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       const delta = extractOpenAiDelta(pending);
       if (delta) yield delta;
     },
+
+    async *streamResponses(input: HermesResponsesInput): AsyncIterable<HermesResponseEvent> {
+      const body: Record<string, unknown> = { input: input.input, stream: true };
+      if (input.sessionId) body.session_id = input.sessionId;
+      if (input.instructions) body.instructions = input.instructions;
+      const response = await fetchImpl(`${baseUrl}/v1/responses`, {
+        method: 'POST',
+        headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
+        body: JSON.stringify(body),
+        signal: input.signal,
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(text || `Hermes request failed with ${response.status}`);
+      }
+      if (!response.body) throw new Error('Hermes response did not include a stream.');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      const flush = function* (line: string): Generator<HermesResponseEvent> {
+        const ev = parseResponsesEvent(line);
+        if (ev) yield ev;
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        const lines = pending.split(/\r?\n/);
+        pending = lines.pop() ?? '';
+        for (const line of lines) yield* flush(line);
+      }
+      yield* flush(pending);
+    },
   };
 }
 
@@ -240,4 +292,55 @@ export function extractOpenAiDelta(line: string): string {
   } catch {
     return '';
   }
+}
+
+export function parseResponsesEvent(line: string): HermesResponseEvent | null {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed === 'data: [DONE]') return null;
+  const jsonText = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed;
+  if (!jsonText) return null;
+  let e: any;
+  try { e = JSON.parse(jsonText); } catch { return null; }
+  switch (e?.type) {
+    case 'response.created':
+      return { kind: 'created', responseId: e.response?.id };
+    case 'response.output_text.delta':
+      return typeof e.delta === 'string' ? { kind: 'text_delta', delta: e.delta } : null;
+    case 'response.reasoning_summary_text.delta':
+    case 'response.reasoning_text.delta':
+      return typeof e.delta === 'string' ? { kind: 'reasoning_delta', delta: e.delta } : null;
+    case 'response.output_item.done': {
+      const item = e.item ?? {};
+      if (item.type === 'function_call') {
+        return {
+          kind: 'function_call',
+          id: String(item.id ?? item.call_id ?? ''),
+          name: String(item.name ?? ''),
+          args: coerceArgs(item.arguments),
+        };
+      }
+      if (item.type === 'function_call_output') {
+        return {
+          kind: 'function_call_output',
+          callId: String(item.call_id ?? item.id ?? ''),
+          output: typeof item.output === 'string' ? item.output : JSON.stringify(item.output ?? ''),
+          isError: Boolean(item.is_error),
+        };
+      }
+      return null;
+    }
+    case 'response.completed':
+      return { kind: 'completed', responseId: e.response?.id };
+    case 'response.failed':
+    case 'response.incomplete':
+      return { kind: 'failed', error: String(e.response?.error?.message ?? e.error?.message ?? 'Assistant run failed.') };
+    default:
+      return null;
+  }
+}
+
+function coerceArgs(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return {}; } }
+  return {};
 }
