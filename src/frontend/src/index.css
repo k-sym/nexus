@@ -624,21 +624,12 @@ body {
   }
 }
 
-/* ───── Frameless window title bar (Electron, titleBarStyle: hiddenInset) ─────
-   The native title bar is hidden, so the app's TopBar doubles as the drag
-   handle while its interactive children opt back out. On macOS the traffic-light
-   buttons overlay the top-left, so we reserve space for them. Classes are
-   toggled in TopBar only when running inside Electron — browser/web mode has
-   neither a hidden title bar nor traffic lights. */
-.titlebar-drag {
-  -webkit-app-region: drag;
-}
-.titlebar-drag button,
-.titlebar-drag input,
-.titlebar-drag a,
-.titlebar-drag [role='button'] {
-  -webkit-app-region: no-drag;
-}
+/* ───── Frameless window title bar (Tauri, TitleBarStyle::Overlay) ─────
+   The native title bar is hidden and the window is dragged via the
+   `data-tauri-drag-region` attribute on the TopBar header. On macOS the
+   traffic-light buttons overlay the top-left, so we reserve space for them.
+   The class is toggled in TopBar only inside Tauri on macOS — browser/web mode
+   has neither a hidden title bar nor traffic lights. */
 .mac-traffic-lights {
   padding-left: 80px;
 }
