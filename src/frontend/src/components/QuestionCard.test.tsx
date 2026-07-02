@@ -32,21 +32,24 @@ const request: QuestionRequest = {
 };
 
 describe('QuestionCard', () => {
-  it('submits exact answers only after every question is complete', async () => {
+  it('walks the stepper and submits exact answers on the last step', async () => {
     const user = userEvent.setup();
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     render(<QuestionCard request={request} onSubmit={onSubmit} />);
 
+    // Step 1 of 2: Scope. Next is disabled until answered; no Submit yet.
+    expect(screen.getByText('Step 1 of 2')).toBeInTheDocument();
     expect(screen.getByRole('group', { name: 'Scope' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Delivery' })).toBeInTheDocument();
-    expect(screen.getByText('Minimal change')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit answers' })).toBeDisabled();
-
+    expect(screen.queryByRole('group', { name: 'Delivery' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeDisabled();
     await user.click(screen.getByText('Complete change'));
-    expect(screen.getByRole('radio', { name: /Full/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+
+    // Step 2 of 2: Delivery. Submit replaces Next, disabled until answered.
+    expect(screen.getByText('Step 2 of 2')).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Delivery' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Submit answers' })).toBeDisabled();
     await user.click(screen.getByRole('radio', { name: /Now/ }));
-    expect(screen.getByRole('button', { name: 'Submit answers' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Submit answers' }));
 
     expect(onSubmit).toHaveBeenCalledWith([
@@ -55,9 +58,21 @@ describe('QuestionCard', () => {
     ]);
   });
 
-  it('uses the shared accent button styling for submitting answers', () => {
-    render(<QuestionCard request={request} onSubmit={vi.fn()} />);
+  it('lets the user step back to a previous question', async () => {
+    const user = userEvent.setup();
+    render(<QuestionCard request={request} onSubmit={vi.fn().mockResolvedValue(undefined)} />);
+    await user.click(screen.getByText('Complete change'));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
+    await user.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByRole('group', { name: 'Scope' })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /Full/ })).toBeChecked();
+  });
 
+  it('uses the shared accent button styling for submitting answers', async () => {
+    const user = userEvent.setup();
+    render(<QuestionCard request={request} onSubmit={vi.fn()} />);
+    await user.click(screen.getByText('Complete change'));
+    await user.click(screen.getByRole('button', { name: 'Next' }));
     expect(screen.getByRole('button', { name: 'Submit answers' })).toHaveClass('accent-button');
   });
 

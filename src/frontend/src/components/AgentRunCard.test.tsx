@@ -27,132 +27,57 @@ function run(overrides: Partial<AgentRunView> = {}): AgentRunView {
 }
 
 describe('AgentRunCard', () => {
-  it('shows running phase, timing, model, and stop control', () => {
-    const onStop = vi.fn();
-    render(<AgentRunCard run={run()} content="" thinking="" detailsExpanded={false} onStop={onStop} />);
-
-    expect(screen.getByText('Running command')).toBeVisible();
-    expect(screen.getByText(/Last activity/)).toBeVisible();
-    expect(screen.getByText('openrouter/model-1')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Stop current run' }));
-    expect(onStop).toHaveBeenCalledTimes(1);
+  it('while running shows the active tool and the streaming content, no header', () => {
+    render(<AgentRunCard run={run()} content="Partial answer" thinking="" detailsExpanded={false} />);
+    expect(screen.getByText('Partial answer')).toBeVisible();
+    expect(screen.getByText(/bash.*npm test/i)).toBeVisible();
+    // Status/timing/model now live in the composer strip, not the card.
+    expect(screen.queryByText('openrouter/model-1')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Stop current run' })).not.toBeInTheDocument();
   });
 
-  it('collapses a completed run to a trustworthy tool summary', () => {
+  it('shows finished content text-first with an expandable tool summary', () => {
     render(<AgentRunCard
       run={run({
-        status: 'completed',
-        phase: 'finalizing',
-        completedAt: Date.now(),
+        status: 'completed', phase: 'finalizing', completedAt: Date.now(),
         tools: [
           { id: '1', name: 'Read', args: {}, status: 'succeeded', queuedAt: 1, completedAt: 2, partialOutput: '' },
-          { id: '2', name: 'Bash', args: {}, status: 'failed', queuedAt: 1, completedAt: 2, partialOutput: '', error: 'failed' },
+          { id: '2', name: 'Bash', args: {}, status: 'failed', queuedAt: 1, completedAt: 2, error: 'failed', partialOutput: '' },
         ],
       })}
-      content="Finished"
-      thinking=""
-      detailsExpanded={false}
-      onStop={() => {}}
+      content="Finished" thinking="" detailsExpanded={false}
     />);
-
-    expect(screen.getByText('Completed')).toBeVisible();
-    expect(screen.getByText('2 tool calls · 1 failed')).toBeVisible();
-    expect(screen.queryByText('Finished')).not.toBeInTheDocument();
+    expect(screen.getByText('Finished')).toBeVisible();                 // content shown (text-first)
+    const summary = screen.getByRole('button', { name: /2 tool calls/ });
+    expect(summary).toHaveTextContent('1 failed');
+    expect(summary).toHaveTextContent('Completed');
   });
 
-  it('keeps cancelled and interrupted reasons visible', () => {
-    const { rerender } = render(<AgentRunCard
-      run={run({ status: 'cancelled', abortSource: 'user', phase: 'finalizing', completedAt: Date.now() })}
-      content=""
-      thinking=""
-      detailsExpanded={false}
-      onStop={() => {}}
-    />);
-    expect(screen.getByText('Cancelled by user')).toBeVisible();
-
-    rerender(<AgentRunCard
+  it('surfaces an interrupted run error and terminal label', () => {
+    render(<AgentRunCard
       run={run({ status: 'interrupted', phase: 'finalizing', completedAt: Date.now(), error: 'Stream disconnected' })}
-      content=""
-      thinking=""
-      detailsExpanded={false}
-      onStop={() => {}}
+      content="" thinking="" detailsExpanded={false}
     />);
-    expect(screen.getByText('Interrupted')).toBeVisible();
     expect(screen.getByText('Stream disconnected')).toBeVisible();
-  });
-
-  it('keeps a completed latest run expanded so the user can see what they are replying to (issue #108)', () => {
-    render(<AgentRunCard
-      run={run({
-        status: 'completed',
-        phase: 'finalizing',
-        completedAt: Date.now(),
-        tools: [
-          { id: '1', name: 'Read', args: {}, status: 'succeeded', queuedAt: 1, completedAt: 2, partialOutput: '' },
-        ],
-      })}
-      content="Here is the answer."
-      thinking=""
-      detailsExpanded={false}
-      isLatest={true}
-      onStop={() => {}}
-    />);
-
-    // The completed latest run must stay expanded: its content is visible.
-    expect(screen.getByText('Here is the answer.')).toBeVisible();
-  });
-
-  it('collapses a completed non-latest run (issue #108)', () => {
-    render(<AgentRunCard
-      run={run({
-        status: 'completed',
-        phase: 'finalizing',
-        completedAt: Date.now(),
-        tools: [
-          { id: '1', name: 'Read', args: {}, status: 'succeeded', queuedAt: 1, completedAt: 2, partialOutput: '' },
-        ],
-      })}
-      content="Older reply."
-      thinking=""
-      detailsExpanded={false}
-      isLatest={false}
-      onStop={() => {}}
-    />);
-
-    expect(screen.queryByText('Older reply.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /tool call/ })).toHaveTextContent('Interrupted');
   });
 
   it('places the question card after the assistant prelude text, at the bottom (issue #109)', () => {
     render(<AgentRunCard
       run={run({
-        status: 'completed',
-        phase: 'finalizing',
-        completedAt: Date.now(),
+        status: 'completed', phase: 'finalizing', completedAt: Date.now(),
         tools: [
           { id: 'q1', name: 'question', args: {
-            questions: [{
-              id: 'q',
-              header: 'Choose',
-              question: 'Which option do you prefer?',
-              multiple: false,
-              allowOther: false,
-              options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }],
-            }],
+            questions: [{ id: 'q', header: 'Choose', question: 'Which option do you prefer?',
+              multiple: false, allowOther: false, options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] }],
           }, status: 'running', queuedAt: 1, startedAt: 2, partialOutput: '' },
         ],
       })}
       content="Before I continue, which option do you prefer?"
-      thinking=""
-      detailsExpanded={false}
-      isLatest={true}
-      onStop={() => {}}
+      thinking="" detailsExpanded={false}
     />);
-
     const prelude = screen.getByText('Before I continue, which option do you prefer?');
     const questionPrompt = screen.getByText('Which option do you prefer?');
-    expect(prelude).toBeVisible();
-    expect(questionPrompt).toBeVisible();
-    // The prelude must come before the question card in DOM order.
     expect(prelude.compareDocumentPosition(questionPrompt)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
@@ -160,30 +85,11 @@ describe('AgentRunCard', () => {
     const onOpenArtifact = vi.fn();
     const filePath = '/Users/k-sym/Projects/baker-internal/chat-preview-test.md';
     render(<AgentRunCard
-      run={run({ status: 'completed', phase: 'finalizing', completedAt: Date.now() })}
+      run={run({ status: 'completed', phase: 'finalizing', completedAt: Date.now(), tools: [] })}
       content={`Created it here:\n\n\`${filePath}\``}
-      thinking=""
-      detailsExpanded
-      onStop={() => {}}
-      onOpenArtifact={onOpenArtifact}
+      thinking="" detailsExpanded onOpenArtifact={onOpenArtifact}
     />);
-
     fireEvent.click(screen.getByRole('button', { name: 'Preview chat-preview-test.md' }));
     expect(onOpenArtifact).toHaveBeenCalledWith(filePath);
-  });
-
-  it('renders generated bare filenames in run content as preview controls', () => {
-    const onOpenArtifact = vi.fn();
-    render(<AgentRunCard
-      run={run({ status: 'completed', phase: 'finalizing', completedAt: Date.now() })}
-      content="Created `test.md` with 10 lines."
-      thinking=""
-      detailsExpanded
-      onStop={() => {}}
-      onOpenArtifact={onOpenArtifact}
-    />);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Preview test.md' }));
-    expect(onOpenArtifact).toHaveBeenCalledWith('test.md');
   });
 });

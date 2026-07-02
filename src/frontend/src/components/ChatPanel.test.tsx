@@ -271,10 +271,10 @@ describe('ChatPanel', () => {
     persisted = true;
     rerender(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set(['t1'])} />);
 
-    // Once the poller reconciles (the completed run's header renders), the
+    // Once the poller reconciles (the persisted assistant reply renders), the
     // prompt must still appear exactly once — not duplicated across the
     // persisted history and the stale optimistic buffer.
-    await waitFor(() => expect(screen.getByText('Completed')).toBeInTheDocument(), { timeout: 4000 });
+    await waitFor(() => expect(screen.getByText('done')).toBeInTheDocument(), { timeout: 4000 });
     expect(container.querySelectorAll('[data-chat-role="user"]').length).toBe(1);
   }, 15000);
 

@@ -25,6 +25,7 @@ export function QuestionCard({
 }: QuestionCardProps) {
   const [drafts, setDrafts] = useState<Record<string, DraftAnswer>>(() =>
     Object.fromEntries(request.questions.map((question) => [question.id, { selected: [], custom: '' }])));
+  const [step, setStep] = useState(0);
 
   const inactive = unavailable || answeredResult?.status === 'cancelled';
 
@@ -101,9 +102,23 @@ export function QuestionCard({
     }));
   }
 
+  const total = request.questions.length;
+  const current = request.questions[step];
+  const multiStep = total > 1;
+
+  const currentComplete = (() => {
+    const draft = drafts[current.id];
+    return draft.selected.length > 0 || (current.allowOther && draft.custom.trim().length > 0);
+  })();
+  const isLast = step === total - 1;
+
   return (
     <form onSubmit={submit} className="space-y-4 rounded-lg border border-slate-700 bg-slate-900/60 p-4">
-      {request.questions.map((question) => {
+      {multiStep && (
+        <p className="text-xs font-medium text-slate-400" aria-live="polite">Step {step + 1} of {total}</p>
+      )}
+      {(() => {
+        const question = current;
         const draft = drafts[question.id];
         const inputType = question.multiple ? 'checkbox' : 'radio';
         return (
@@ -142,15 +157,38 @@ export function QuestionCard({
             )}
           </fieldset>
         );
-      })}
+      })()}
       {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
-      <button
-        type="submit"
-        disabled={!complete || submitting}
-        className="accent-button rounded-lg px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
-      >
-        {submitting ? 'Submitting…' : 'Submit answers'}
-      </button>
+      <div className="flex items-center gap-2">
+        {multiStep && step > 0 && (
+          <button
+            type="button"
+            onClick={() => setStep((s) => Math.max(0, s - 1))}
+            disabled={submitting}
+            className="rounded-lg border border-slate-700 px-4 py-2 text-sm text-slate-200 disabled:opacity-50 transition-colors"
+          >
+            Back
+          </button>
+        )}
+        {isLast ? (
+          <button
+            type="submit"
+            disabled={!complete || submitting}
+            className="accent-button rounded-lg px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+          >
+            {submitting ? 'Submitting…' : 'Submit answers'}
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setStep((s) => Math.min(total - 1, s + 1))}
+            disabled={!currentComplete || submitting}
+            className="accent-button rounded-lg px-4 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50 transition-colors"
+          >
+            Next
+          </button>
+        )}
+      </div>
     </form>
   );
 }

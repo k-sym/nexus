@@ -24,11 +24,11 @@ import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { AgentRunCard } from './AgentRunCard';
-import { runPhaseLabel } from './AgentRunHeader';
+import { RunStatusStrip } from './RunStatusStrip';
+import type { AgentRunView } from '../chat/agent-run-state';
 import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 import ArtifactPreviewRail from './ArtifactPreviewRail';
 import ChatMessageContent from './ChatMessageContent';
-import { Spinner } from '@phosphor-icons/react';
 
 interface ChatPanelProps {
   projectId: string;
@@ -632,22 +632,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     : loadedMessages.concat(state.messages);
   const streaming = state.streamingMessage;
   const isEmpty = visible.length === 0 && !streaming;
-  // The latest assistant response stays expanded so the user can see what
-  // they're replying to (issue #108). While a new run is streaming, none of
-  // the existing assistant messages is "latest" — the new one is in flight —
-  // so they collapse and the streaming response takes focus.
-  const latestAssistantId = isRunning ? null : findLatestAssistantId(visible);
   // Persistent status pinned above the composer so "is it still working?" is
   // always visible without scrolling back up to the run card's header, which
   // climbs out of view as tool output streams in.
   const attachedRun = loadedMessages.find((m) => m.run?.status === 'running')?.run;
-  const runStatusLabel = isRunning
-    ? (state.isRunning && state.activeRun
-        ? runPhaseLabel(state.activeRun)
-        : attachedRun
-          ? runPhaseLabel(attachedRun)
-          : streamStatusLabel(state.status))
-    : null;
+  const activeRunView: AgentRunView | null =
+    (state.isRunning && state.activeRun) ? state.activeRun : (attachedRun ?? null);
+  const runFallbackLabel = streamStatusLabel(state.status);
 
   return (
     <div className="flex-1 flex min-w-0 h-full">
@@ -724,13 +715,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               key={m.id}
               msg={m}
               detailsExpanded={detailsExpanded}
-              isLatest={m.id === latestAssistantId}
               questionState={questionSubmissions}
               fallbackState={fallbackSubmissions[m.id]}
               onAnswerQuestion={answerNativeQuestion}
               onAnswerFallback={answerFallbackQuestion}
               onOpenArtifact={openArtifactPreview}
-              onStop={handleStop}
             />
           ))
         )}
@@ -742,7 +731,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             onAnswerQuestion={answerNativeQuestion}
             onAnswerFallback={answerFallbackQuestion}
             onOpenArtifact={openArtifactPreview}
-            onStop={handleStop}
           />
         )}
       </div>
@@ -763,15 +751,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         </div>
       )}
 
-      {runStatusLabel && (
-        <div
-          className="flex items-center gap-2 border-t border-subtle px-4 py-1.5 text-xs text-indigo-200"
-          data-testid="run-status"
-          aria-live="polite"
-        >
-          <Spinner className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-          <span>{runStatusLabel}</span>
-        </div>
+      {isRunning && (
+        <RunStatusStrip run={activeRunView} fallbackLabel={runFallbackLabel} />
       )}
 
       <div className="border-t border-subtle surface-glass p-3">
@@ -837,7 +818,16 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           />
           <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
             <ContextUsageLabel usage={state.contextUsage} />
-            {!isRunning && (
+            {isRunning ? (
+              <button
+                type="button"
+                onClick={handleStop}
+                aria-label="Stop current run"
+                className="px-4 py-2 accent-button rounded-lg transition-colors"
+              >
+                Stop
+              </button>
+            ) : (
               <button
                 type="button"
                 onClick={handleSend}
@@ -865,23 +855,19 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 function MessageBubble({
   msg,
   detailsExpanded,
-  isLatest,
   questionState,
   fallbackState,
   onAnswerQuestion,
   onAnswerFallback,
   onOpenArtifact,
-  onStop,
 }: {
   msg: StreamMessage;
   detailsExpanded: boolean;
-  isLatest?: boolean;
   questionState: QuestionSubmissionState;
   fallbackState?: QuestionSubmissionState[string];
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onAnswerFallback: (messageId: string, request: QuestionRequest, answers: QuestionAnswer[]) => Promise<void>;
   onOpenArtifact: (path: string) => void;
-  onStop: () => void;
 }) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'toolResult';
@@ -897,8 +883,6 @@ function MessageBubble({
           content={msg.content}
           thinking={msg.thinking}
           detailsExpanded={detailsExpanded}
-          isLatest={isLatest}
-          onStop={onStop}
           questionState={questionState}
           onAnswerQuestion={onAnswerQuestion}
           onOpenArtifact={onOpenArtifact}
@@ -1024,15 +1008,4 @@ function streamStatusLabel(status: StreamState['status']): string {
     case 'responding': return 'Model responding';
     default: return 'Working…';
   }
-}
-
-/** Id of the last assistant (non-user, non-toolResult) message in the list,
- *  or null if there is none. Used to mark the latest response so it stays
- *  expanded until the user replies (issue #108). */
-function findLatestAssistantId(messages: StreamMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const m = messages[i];
-    if (m.role !== 'user' && m.role !== 'toolResult') return m.id;
-  }
-  return null;
 }
