@@ -322,6 +322,39 @@ describe('ChatPanel', () => {
     expect(screen.queryByText('Load failed')).not.toBeInTheDocument();
   }, 15000);
 
+  it('loads the completed turn when a fast re-attached run finishes between polls', async () => {
+    // Mirrors the fast-run cold-start case: the backend marks the thread active
+    // but persists nothing until run_end, so the poller only ever sees empty
+    // history and then stops when the run leaves the active set. The final
+    // reconciliation must still fetch the completed turn.
+    let done = false;
+    const completed = {
+      thread: { id: 't1' },
+      messages: [
+        { id: 'u1', role: 'user', content: 'Hey GLM!', timestamp: 1 },
+        { id: 'a1', role: 'assistant', content: 'the reply', timestamp: 2, run: { runId: 'r1', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [] } },
+      ],
+    };
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') return { ok: true, json: async () => (done ? completed : { thread: { id: 't1' }, messages: [] }) } as Response;
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    // Backend reports the thread active (run in flight), but history is empty.
+    const { rerender } = render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set(['t1'])} />);
+    await waitFor(() => expect(screen.getByTestId('chat-input')).toBeDisabled());
+
+    // Run finishes: it's persisted now and drops out of the active set.
+    done = true;
+    rerender(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set()} />);
+
+    // The completed reply must render via the final reconciliation load.
+    await waitFor(() => expect(screen.getByText('the reply')).toBeInTheDocument(), { timeout: 4000 });
+  }, 15000);
+
   it('renders a terminal fallback question and submits one readable continuation turn', async () => {
     const encoder = new TextEncoder();
     const ask = JSON.stringify({ questions: [{

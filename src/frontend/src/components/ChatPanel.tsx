@@ -349,6 +349,24 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     return () => { cancelled = true; clearInterval(interval); };
   }, [attachedRunActive, threadId, fetchThreadMessages]);
 
+  // Final reconciliation when a re-attached run finishes. The poller above stops
+  // the moment the run leaves the active set, so a run that completes between
+  // poll ticks (fast turns) could persist its result AFTER the last poll — never
+  // getting loaded. On the active→inactive transition, do one more history fetch
+  // so the completed turn always renders regardless of run duration.
+  const wasAttachedRef = useRef(false);
+  useEffect(() => {
+    const justFinished = wasAttachedRef.current && !attachedRunActive;
+    wasAttachedRef.current = attachedRunActive;
+    if (!justFinished || !threadId) return;
+    let cancelled = false;
+    void (async () => {
+      const msgs = await fetchThreadMessages(threadId);
+      if (!cancelled && msgs.length > 0) setLoadedMessages(msgs);
+    })();
+    return () => { cancelled = true; };
+  }, [attachedRunActive, threadId, fetchThreadMessages]);
+
   // A task-seeded first turn fires exactly once per thread. The ref guard
   // keeps it from re-firing on remount, thread-switch, or the re-render that
   // clears the seed after `onSeedConsumed`. Runs after the load-messages
