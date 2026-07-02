@@ -28,7 +28,7 @@ function run(overrides: Partial<AgentRunView> = {}): AgentRunView {
 
 describe('AgentRunCard', () => {
   it('while running shows the active tool and the streaming content, no header', () => {
-    render(<AgentRunCard run={run()} content="Partial answer" thinking="" detailsExpanded={false} onStop={vi.fn()} />);
+    render(<AgentRunCard run={run()} content="Partial answer" thinking="" detailsExpanded={false} />);
     expect(screen.getByText('Partial answer')).toBeVisible();
     expect(screen.getByText(/bash.*npm test/i)).toBeVisible();
     // Status/timing/model now live in the composer strip, not the card.
@@ -45,7 +45,7 @@ describe('AgentRunCard', () => {
           { id: '2', name: 'Bash', args: {}, status: 'failed', queuedAt: 1, completedAt: 2, error: 'failed', partialOutput: '' },
         ],
       })}
-      content="Finished" thinking="" detailsExpanded={false} onStop={() => {}}
+      content="Finished" thinking="" detailsExpanded={false}
     />);
     expect(screen.getByText('Finished')).toBeVisible();                 // content shown (text-first)
     const summary = screen.getByRole('button', { name: /2 tool calls/ });
@@ -56,7 +56,7 @@ describe('AgentRunCard', () => {
   it('surfaces an interrupted run error and terminal label', () => {
     render(<AgentRunCard
       run={run({ status: 'interrupted', phase: 'finalizing', completedAt: Date.now(), error: 'Stream disconnected' })}
-      content="" thinking="" detailsExpanded={false} onStop={() => {}}
+      content="" thinking="" detailsExpanded={false}
     />);
     expect(screen.getByText('Stream disconnected')).toBeVisible();
     expect(screen.getByRole('button', { name: /tool call/ })).toHaveTextContent('Interrupted');
@@ -74,7 +74,7 @@ describe('AgentRunCard', () => {
         ],
       })}
       content="Before I continue, which option do you prefer?"
-      thinking="" detailsExpanded={false} onStop={() => {}}
+      thinking="" detailsExpanded={false}
     />);
     const prelude = screen.getByText('Before I continue, which option do you prefer?');
     const questionPrompt = screen.getByText('Which option do you prefer?');
@@ -87,7 +87,7 @@ describe('AgentRunCard', () => {
     render(<AgentRunCard
       run={run({ status: 'completed', phase: 'finalizing', completedAt: Date.now(), tools: [] })}
       content={`Created it here:\n\n\`${filePath}\``}
-      thinking="" detailsExpanded onStop={() => {}} onOpenArtifact={onOpenArtifact}
+      thinking="" detailsExpanded onOpenArtifact={onOpenArtifact}
     />);
     fireEvent.click(screen.getByRole('button', { name: 'Preview chat-preview-test.md' }));
     expect(onOpenArtifact).toHaveBeenCalledWith(filePath);

@@ -10,7 +10,6 @@ interface AgentRunCardProps {
   content: string;
   thinking?: string | null;
   detailsExpanded: boolean;
-  onStop: () => void;
   questionState?: Record<string, { submitting?: boolean; error?: string; result?: QuestionToolResult }>;
   onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onOpenArtifact?: (path: string) => void;

@@ -720,7 +720,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               onAnswerQuestion={answerNativeQuestion}
               onAnswerFallback={answerFallbackQuestion}
               onOpenArtifact={openArtifactPreview}
-              onStop={handleStop}
             />
           ))
         )}
@@ -732,7 +731,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             onAnswerQuestion={answerNativeQuestion}
             onAnswerFallback={answerFallbackQuestion}
             onOpenArtifact={openArtifactPreview}
-            onStop={handleStop}
           />
         )}
       </div>
@@ -862,7 +860,6 @@ function MessageBubble({
   onAnswerQuestion,
   onAnswerFallback,
   onOpenArtifact,
-  onStop,
 }: {
   msg: StreamMessage;
   detailsExpanded: boolean;
@@ -871,7 +868,6 @@ function MessageBubble({
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onAnswerFallback: (messageId: string, request: QuestionRequest, answers: QuestionAnswer[]) => Promise<void>;
   onOpenArtifact: (path: string) => void;
-  onStop: () => void;
 }) {
   const isUser = msg.role === 'user';
   const isTool = msg.role === 'toolResult';
@@ -887,7 +883,6 @@ function MessageBubble({
           content={msg.content}
           thinking={msg.thinking}
           detailsExpanded={detailsExpanded}
-          onStop={onStop}
           questionState={questionState}
           onAnswerQuestion={onAnswerQuestion}
           onOpenArtifact={onOpenArtifact}
