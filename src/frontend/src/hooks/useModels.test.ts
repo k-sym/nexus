@@ -38,6 +38,26 @@ describe('useModels', () => {
     expect(result.current.models).toEqual([]);
   });
 
+  it('retries the model load when the fetch rejects (cold-start "Load failed")', async () => {
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new TypeError('Load failed'))
+      .mockRejectedValueOnce(new TypeError('Load failed'))
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ models: mockModels }) });
+    global.fetch = fetchMock;
+    const { result } = renderHook(() => useModels());
+    await waitFor(() => expect(result.current.models.length).toBe(2), { timeout: 4000 });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('does NOT retry a non-ok server response (real error, not transport drop)', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    global.fetch = fetchMock;
+    const { result } = renderHook(() => useModels());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.models).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps full model catalog separate from curated selector models', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,

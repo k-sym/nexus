@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import ChatPanel from './ChatPanel';
@@ -63,6 +63,35 @@ describe('ChatPanel', () => {
     fireEvent.change(input, { target: { value: 'second prompt' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(streamCalls).toBe(1);
+  });
+
+  it('shows a persistent run-status strip while a turn is running', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        return { ok: true, status: 200, body: new ReadableStream({ start() {} }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    // No strip before a run starts.
+    expect(screen.queryByTestId('run-status')).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByTestId('chat-input'), 'hello');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    const strip = await screen.findByTestId('run-status');
+    expect(strip).toHaveTextContent(/Thinking|Model responding|Working/);
   });
 
   it('submits a native question answer without starting a continuation turn', async () => {
@@ -189,6 +218,141 @@ describe('ChatPanel', () => {
 
     // Polling reconciles progress: once the run is no longer running, the composer re-enables.
     await waitFor(() => expect(input).not.toBeDisabled(), { timeout: 4000 });
+  }, 15000);
+
+  it('does not duplicate the user prompt when a dropped stream is reconciled by the re-attach poller', async () => {
+    const encoder = new TextEncoder();
+    let persisted = false;
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const persistedMessages = {
+      thread: { id: 't1' },
+      messages: [
+        { id: 'user-1', role: 'user', content: 'hi there', timestamp: 1 },
+        {
+          id: 'assistant-1', role: 'assistant', content: 'done', timestamp: 2,
+          run: { runId: 'run-1', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [] },
+        },
+      ],
+    };
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => (persisted ? persistedMessages : { thread: { id: 't1' }, messages: [] }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        return { ok: true, status: 200, body: new ReadableStream({ start(c) { streamController = c; } }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    const { container, rerender } = render(
+      <ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set()} />,
+    );
+
+    await userEvent.type(screen.getByTestId('chat-input'), 'hi there');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    // Backend accepts the run, then the stream connection drops (cold-start "Load failed").
+    await waitFor(() => expect(streamController).toBeDefined());
+    await act(async () => {
+      streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_start', run: { runId: 'run-1', threadId: 't1', startedAt: 1 } })}\n`));
+    });
+    await act(async () => {
+      streamController.error(new TypeError('Load failed'));
+    });
+
+    // The optimistic user prompt is shown exactly once so far.
+    await waitFor(() => expect(container.querySelectorAll('[data-chat-role="user"]').length).toBe(1));
+
+    // The backend run is still alive; the parent marks the thread active and the
+    // history now includes the persisted copy. The re-attach poller adopts it.
+    persisted = true;
+    rerender(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set(['t1'])} />);
+
+    // Once the poller reconciles (the completed run's header renders), the
+    // prompt must still appear exactly once — not duplicated across the
+    // persisted history and the stale optimistic buffer.
+    await waitFor(() => expect(screen.getByText('Completed')).toBeInTheDocument(), { timeout: 4000 });
+    expect(container.querySelectorAll('[data-chat-role="user"]').length).toBe(1);
+  }, 15000);
+
+  it('keeps the just-sent prompt visible when a stream drops on a thread with prior history', async () => {
+    const encoder = new TextEncoder();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    // Existing thread: one completed prior turn. The backend only persists a
+    // new turn at run_end, so during a dropped run the history stays stale.
+    const priorHistory = {
+      thread: { id: 't1' },
+      messages: [
+        { id: 'user-0', role: 'user', content: 'earlier question', timestamp: 1 },
+        { id: 'assistant-0', role: 'assistant', content: 'earlier answer', timestamp: 2, run: { runId: 'run-0', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [] } },
+      ],
+    };
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') return { ok: true, json: async () => priorHistory } as Response;
+      if (url === '/api/threads/t1/messages/stream') {
+        return { ok: true, status: 200, body: new ReadableStream({ start(c) { streamController = c; } }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set()} />);
+    await screen.findByText('earlier question');
+
+    await userEvent.type(screen.getByTestId('chat-input'), 'brand new prompt');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => expect(streamController).toBeDefined());
+    await act(async () => {
+      streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_start', run: { runId: 'run-2', threadId: 't1', startedAt: 3 } })}\n`));
+    });
+    await act(async () => {
+      streamController.error(new TypeError('Load failed'));
+    });
+
+    // The prompt must NOT vanish just because stale history (older turn) exists;
+    // the persisted copy of this turn isn't written until run_end.
+    await waitFor(() => expect(screen.getByText('brand new prompt')).toBeInTheDocument());
+    // And no hard error banner for a transport drop after the run started.
+    expect(screen.queryByText('Load failed')).not.toBeInTheDocument();
+  }, 15000);
+
+  it('loads the completed turn when a fast re-attached run finishes between polls', async () => {
+    // Mirrors the fast-run cold-start case: the backend marks the thread active
+    // but persists nothing until run_end, so the poller only ever sees empty
+    // history and then stops when the run leaves the active set. The final
+    // reconciliation must still fetch the completed turn.
+    let done = false;
+    const completed = {
+      thread: { id: 't1' },
+      messages: [
+        { id: 'u1', role: 'user', content: 'Hey GLM!', timestamp: 1 },
+        { id: 'a1', role: 'assistant', content: 'the reply', timestamp: 2, run: { runId: 'r1', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [] } },
+      ],
+    };
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') return { ok: true, json: async () => (done ? completed : { thread: { id: 't1' }, messages: [] }) } as Response;
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    // Backend reports the thread active (run in flight), but history is empty.
+    const { rerender } = render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set(['t1'])} />);
+    await waitFor(() => expect(screen.getByTestId('chat-input')).toBeDisabled());
+
+    // Run finishes: it's persisted now and drops out of the active set.
+    done = true;
+    rerender(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set()} />);
+
+    // The completed reply must render via the final reconciliation load.
+    await waitFor(() => expect(screen.getByText('the reply')).toBeInTheDocument(), { timeout: 4000 });
   }, 15000);
 
   it('renders a terminal fallback question and submits one readable continuation turn', async () => {

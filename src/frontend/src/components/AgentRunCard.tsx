@@ -4,7 +4,7 @@ import type { QuestionAnswer, QuestionToolResult } from '../lib/questions';
 import { AgentRunHeader } from './AgentRunHeader';
 import { ThinkingBlock } from './ThinkingBlock';
 import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
-import ChatArtifactLinks from './ChatArtifactLinks';
+import ChatMessageContent from './ChatMessageContent';
 
 interface AgentRunCardProps {
   run: AgentRunView;
@@ -80,9 +80,9 @@ export function AgentRunCard({
             />
           )}
           {content && (
-            <p className="whitespace-pre-wrap text-sm">
-              {onOpenArtifact ? <ChatArtifactLinks text={content} onOpenPath={onOpenArtifact} /> : content}
-            </p>
+            <div className="whitespace-pre-wrap text-sm">
+              {onOpenArtifact ? <ChatMessageContent text={content} onOpenPath={onOpenArtifact} /> : content}
+            </div>
           )}
           {run.error && run.status !== 'completed' && (
             <p className="text-xs text-red-300" role="alert">{run.error}</p>
