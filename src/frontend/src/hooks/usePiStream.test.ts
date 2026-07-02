@@ -211,6 +211,48 @@ describe('usePiStream', () => {
     expect(result.current.state.messages[1].run?.tools[0].status).toBe('interrupted');
   });
 
+  it('treats a mid-stream transport drop as a soft interruption, not a hard error', async () => {
+    const encoder = new TextEncoder();
+    const onError = vi.fn();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      body: new ReadableStream({
+        start(streamController) {
+          controller = streamController;
+        },
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    let streamPromise!: Promise<unknown>;
+    act(() => {
+      streamPromise = result.current.startStream('thread-1', 'hi', { onError });
+    });
+    // The run starts on the backend...
+    act(() => {
+      controller.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_start', run: { runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' } })}\n`));
+    });
+    await waitFor(() => expect(result.current.state.activeRun?.runId).toBe('run-1'));
+    // ...then the connection drops (WebKit surfaces this as a TypeError "Load failed").
+    act(() => {
+      controller.error(new TypeError('Load failed'));
+    });
+    await act(async () => {
+      await streamPromise;
+    });
+
+    // The backend keeps the run alive and the poller reconciles it, so we must
+    // NOT raise a hard error for a transport drop.
+    expect(result.current.state.status).not.toBe('error');
+    expect(result.current.state.error).toBeNull();
+    expect(result.current.state.isRunning).toBe(false);
+    expect(onError).not.toHaveBeenCalled();
+    // The started run is preserved as interrupted (recoverable), not lost.
+    expect(result.current.state.messages[1]?.run?.status).toBe('interrupted');
+  });
+
   it('detaches the visible stream without aborting the transport or backend run after the visible thread changes', async () => {
     const requestedUrls: string[] = [];
     let requestSignal: AbortSignal | undefined;

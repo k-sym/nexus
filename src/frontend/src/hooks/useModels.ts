@@ -24,6 +24,16 @@ export function parseModelKey(key: string): { provider: string; id: string } | u
   return { provider: key.slice(0, idx), id: key.slice(idx + 1) };
 }
 
+/** Total attempts (1 initial + retries) for the cold-start model load. */
+const MODEL_LOAD_ATTEMPTS = 4;
+/** Base backoff between retries; multiplied by the attempt number. */
+const MODEL_LOAD_BACKOFF_MS = 250;
+
+/** Resolve after `ms`. Callers re-check their own cancellation after awaiting. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 export function useModels() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [allModels, setAllModels] = useState<ModelInfo[]>([]);
@@ -35,9 +45,35 @@ export function useModels() {
   const [loading, setLoading] = useState(true);
 
   const loadModels = useCallback(async (cancelled?: () => boolean) => {
-    try {
-      const res = await apiFetch('/api/models');
-      if (!res.ok) throw new Error(`models: ${res.status}`);
+    const clearModels = () => {
+      setModels([]);
+      setAllModels([]);
+      setEnabledModelKeys([]);
+      setCustomized(false);
+    };
+    // The packaged (WebKit) app can drop the very first requests at cold
+    // start: `fetch` rejects with a TypeError ("Load failed") before it ever
+    // reaches the backend. That leaves the model dropdown empty until the
+    // panel remounts. Retry transport rejections with a short backoff so a
+    // cold-start miss recovers on its own. A *response* (even non-ok) means
+    // the backend answered — that's a real error, so we don't retry it.
+    for (let attempt = 1; ; attempt += 1) {
+      let res: Response;
+      try {
+        res = await apiFetch('/api/models');
+      } catch (err) {
+        if (cancelled?.()) return;
+        if (attempt < MODEL_LOAD_ATTEMPTS) {
+          await delay(MODEL_LOAD_BACKOFF_MS * attempt);
+          if (cancelled?.()) return;
+          continue;
+        }
+        console.error('useModels: models fetch failed after retries', err);
+        if (!cancelled?.()) { clearModels(); setLoading(false); }
+        return;
+      }
+      try {
+        if (!res.ok) throw new Error(`models: ${res.status}`);
         const data = (await res.json()) as {
           models: ModelInfo[];
           allModels?: ModelInfo[];
@@ -51,14 +87,11 @@ export function useModels() {
         setCustomized(data.customized === true);
       } catch (err) {
         console.error('useModels: failed to load models', err);
-        if (!cancelled?.()) {
-          setModels([]);
-          setAllModels([]);
-          setEnabledModelKeys([]);
-          setCustomized(false);
-        }
-    } finally {
-      if (!cancelled?.()) setLoading(false);
+        if (!cancelled?.()) clearModels();
+      } finally {
+        if (!cancelled?.()) setLoading(false);
+      }
+      return;
     }
   }, []);
 

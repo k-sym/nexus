@@ -326,7 +326,8 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
       if (!m) {
         return { ...state, isRunning: false, status: 'idle', streamingMessage: null };
       }
-      const isEmpty = !m.content && !m.thinking && (!m.toolCalls || m.toolCalls.length === 0);
+      const hasRun = !!(state.activeRun ?? m.run);
+      const isEmpty = !m.content && !m.thinking && (!m.toolCalls || m.toolCalls.length === 0) && !hasRun;
       if (isEmpty) {
         return { ...state, isRunning: false, status: 'idle', streamingMessage: null };
       }
@@ -401,6 +402,11 @@ export function usePiStream() {
   const abortRef = useRef<AbortController | null>(null);
   const activeThreadRef = useRef<string | null>(null);
   const streamingThreadRef = useRef<string | null>(null);
+  // Outcome of the most recent startStream call. 'disconnected' means the
+  // transport dropped mid-run (the backend run may still be alive); callers use
+  // this to decide whether to adopt persisted history or keep the optimistic
+  // turn until the re-attach poller reconciles it.
+  const lastOutcomeRef = useRef<'completed' | 'disconnected' | 'error'>('completed');
 
   const setActiveThread = useCallback((threadId: string | null) => {
     activeThreadRef.current = threadId;
@@ -515,6 +521,7 @@ export function usePiStream() {
       streamingThreadRef.current = threadId;
       const attachments = opts.attachments ?? opts.images ?? [];
       dispatch({ type: 'START_STREAM', prompt: text, attachments });
+      lastOutcomeRef.current = 'completed';
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       const clearRequestRefs = () => {
@@ -621,10 +628,28 @@ export function usePiStream() {
         }
       } catch (err) {
         if ((err as Error).name === 'AbortError') {
+          lastOutcomeRef.current = 'disconnected';
           return lastContextUsage;
         }
-        dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
-        opts.onError?.((err as Error).message);
+        // We only reach here after an ok response whose body we began reading,
+        // then the read threw. A `TypeError` is a transport drop (WebKit surfaces
+        // a dropped connection as "Load failed"): the request was accepted, the
+        // backend keeps the run alive, and the re-attach poller reconciles the
+        // result — so degrade softly rather than showing a scary error. (A true
+        // *first-connection* cold-start rejection throws earlier from apiFetch and
+        // is handled by the outer catch above.) Any other reader error is genuine
+        // and has nothing to reconcile, so surface it.
+        if (err instanceof TypeError) {
+          lastOutcomeRef.current = 'disconnected';
+          if (sawRunStart && !sawRunEnd) {
+            dispatch({ type: 'RUN_ACTION', action: { type: 'RUN_INTERRUPTED', at: Date.now(), error: 'Stream disconnected' } });
+          }
+          dispatch({ type: 'STREAM_COMPLETE' });
+        } else {
+          lastOutcomeRef.current = 'error';
+          dispatch({ type: 'STREAM_ERROR', error: (err as Error).message });
+          opts.onError?.((err as Error).message);
+        }
       } finally {
         clearRequestRefs();
       }
@@ -675,5 +700,5 @@ export function usePiStream() {
     }
   }, []);
 
-  return { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread };
+  return { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread, lastOutcomeRef };
 }

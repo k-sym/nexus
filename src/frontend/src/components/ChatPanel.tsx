@@ -14,7 +14,7 @@
  *   - Session resume: pi owns sessions natively; no terminal hand-off
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage } from '../hooks/usePiStream';
+import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage, type StreamState } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
 import { api } from '../api';
@@ -24,9 +24,11 @@ import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { AgentRunCard } from './AgentRunCard';
+import { runPhaseLabel } from './AgentRunHeader';
 import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 import ArtifactPreviewRail from './ArtifactPreviewRail';
-import ChatArtifactLinks from './ChatArtifactLinks';
+import ChatMessageContent from './ChatMessageContent';
+import { Spinner } from '@phosphor-icons/react';
 
 interface ChatPanelProps {
   projectId: string;
@@ -142,7 +144,7 @@ function fileToAttachment(file: File): Promise<ChatAttachment> {
 
 export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, backendActiveThreadIds, seed, onSeedConsumed }: ChatPanelProps) {
   const { models, activeModelId, setModel, setThread } = useModels();
-  const { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread } = usePiStream();
+  const { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread, lastOutcomeRef } = usePiStream();
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
@@ -156,6 +158,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
   const [artifactPath, setArtifactPath] = useState<string | null>(null);
   const [artifactRailOpen, setArtifactRailOpen] = useState(false);
+  // Live mirror of loadedMessages + the persisted-history length captured when
+  // the current turn started. Used to decide when the optimistic in-flight turn
+  // has been superseded by persisted history (see `visible` below) — keeping it
+  // until history grows past the baseline avoids both duplicating the prompt and
+  // making it vanish before the backend has written the turn (persist is at run_end).
+  const loadedMessagesRef = useRef<StreamMessage[]>([]);
+  loadedMessagesRef.current = loadedMessages;
+  const turnBaselineRef = useRef<number | null>(null);
   const streamContentVersion = [
     loadedMessages.length,
     state.messages.length,
@@ -330,8 +340,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     const poll = async () => {
       const msgs = await fetchThreadMessages(threadId);
       if (cancelled) return;
+      // `visible` dedups the optimistic turn against this history by baseline,
+      // so the poller only needs to keep persisted history fresh.
       setLoadedMessages(msgs);
     };
+    void poll();
     const interval = setInterval(poll, 1500);
     return () => { cancelled = true; clearInterval(interval); };
   }, [attachedRunActive, threadId, fetchThreadMessages]);
@@ -371,6 +384,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       setError(null);
       const attachments = opts.attachments ?? pendingAttachments;
       let streamError: string | null = null;
+      // Snapshot the persisted-history length as this turn begins; `visible`
+      // uses it to know when the turn has been written to history.
+      turnBaselineRef.current = loadedMessagesRef.current.length;
       try {
         const contextUsage = await startStream(threadId, text, {
           confirmCancel: opts.confirmCancel,
@@ -386,7 +402,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         onThreadsChanged?.();
         const msgs = await fetchThreadMessages(threadId);
         if (msgs.length > 0) {
-          dispatch({ type: 'RESET', contextUsage });
+          // On a clean completion, adopt persisted history as the source of
+          // truth and clear the optimistic turn. On a transport DROP, the turn
+          // isn't persisted yet, so keep the optimistic turn (RESET would make
+          // the just-sent prompt vanish) and let `visible`'s baseline check
+          // dedup it once the re-attach poller lands the persisted copy.
+          if (lastOutcomeRef.current !== 'disconnected') {
+            dispatch({ type: 'RESET', contextUsage });
+          }
           setLoadedMessages(msgs);
         }
         setPendingAttachments([]);
@@ -580,7 +603,15 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     );
   }
 
-  const visible = loadedMessages.concat(state.messages);
+  // Merge persisted history with the optimistic in-flight turn. Once persisted
+  // history has grown past the baseline captured at turn start, the turn has
+  // been written, so the optimistic copy is dropped (no duplicate). Until then
+  // it's kept (so the just-sent prompt never vanishes on a dropped stream).
+  const baseline = turnBaselineRef.current;
+  const turnPersisted = baseline !== null && loadedMessages.length > baseline;
+  const visible = state.messages.length === 0 || turnPersisted
+    ? loadedMessages
+    : loadedMessages.concat(state.messages);
   const streaming = state.streamingMessage;
   const isEmpty = visible.length === 0 && !streaming;
   // The latest assistant response stays expanded so the user can see what
@@ -588,6 +619,17 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   // the existing assistant messages is "latest" — the new one is in flight —
   // so they collapse and the streaming response takes focus.
   const latestAssistantId = isRunning ? null : findLatestAssistantId(visible);
+  // Persistent status pinned above the composer so "is it still working?" is
+  // always visible without scrolling back up to the run card's header, which
+  // climbs out of view as tool output streams in.
+  const attachedRun = loadedMessages.find((m) => m.run?.status === 'running')?.run;
+  const runStatusLabel = isRunning
+    ? (state.isRunning && state.activeRun
+        ? runPhaseLabel(state.activeRun)
+        : attachedRun
+          ? runPhaseLabel(attachedRun)
+          : streamStatusLabel(state.status))
+    : null;
 
   return (
     <div className="flex-1 flex min-w-0 h-full">
@@ -700,6 +742,17 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       {error && (
         <div className="px-4 py-2 border-t border-subtle text-xs text-red-300" role="alert">
           {error}
+        </div>
+      )}
+
+      {runStatusLabel && (
+        <div
+          className="flex items-center gap-2 border-t border-subtle px-4 py-1.5 text-xs text-indigo-200"
+          data-testid="run-status"
+          aria-live="polite"
+        >
+          <Spinner className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+          <span>{runStatusLabel}</span>
         </div>
       )}
 
@@ -919,9 +972,9 @@ function MessageBubble({
           </div>
         ) : (
           <>
-            <p className="whitespace-pre-wrap">
-              {isUser ? msg.content : <ChatArtifactLinks text={msg.content} onOpenPath={onOpenArtifact} />}
-            </p>
+            <div className="whitespace-pre-wrap">
+              <ChatMessageContent text={msg.content} onOpenPath={onOpenArtifact} linkifyPaths={!isUser} />
+            </div>
             {/* Native question tools render after the prelude text, at the
                 bottom of the bubble (issue #109). */}
             {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
@@ -942,6 +995,17 @@ function fileExtensionLabel(name: string): string {
   const dot = name.lastIndexOf('.');
   if (dot < 0 || dot === name.length - 1) return 'file';
   return name.slice(dot + 1, dot + 5);
+}
+
+/** Short label for the persistent run-status strip when no detailed run view
+ *  is available (e.g. before the first run event, or a re-attached backend run). */
+function streamStatusLabel(status: StreamState['status']): string {
+  switch (status) {
+    case 'thinking': return 'Thinking';
+    case 'tool_call': return 'Running tool';
+    case 'responding': return 'Model responding';
+    default: return 'Working…';
+  }
 }
 
 /** Id of the last assistant (non-user, non-toolResult) message in the list,
