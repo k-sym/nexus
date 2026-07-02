@@ -295,6 +295,10 @@ export const api = {
   },
   assistant: {
     thread: () => fetchJson<{ id: 'global'; messages: any[] }>(`/api/assistant/thread`),
+    sessions: () =>
+      fetchJson<{ sessions: Array<{ id: string; status?: string; latestRun?: { status?: string } | null }> }>(
+        `/api/assistant/sessions`,
+      ),
   },
   notifications: {
     list: () => fetchJson<NotificationItem[]>(`/api/notifications`),

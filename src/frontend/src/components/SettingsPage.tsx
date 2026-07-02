@@ -147,7 +147,7 @@ export default function SettingsPage() {
                 className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
-                Remote OpenAI-compatible assistant endpoint for Hermes, OpenClaw, or similar.
+                Remote OpenAI-compatible assistant endpoint (e.g. Hermes, OpenClaw).
               </p>
             </Field>
             <Field label="Key">

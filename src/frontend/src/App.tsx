@@ -83,6 +83,7 @@ export default function App() {
   const [activeRuns, setActiveRuns] = useState<ActiveSessionRun[]>([]);
   const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [assistantActive, setAssistantActive] = useState(false);
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -221,6 +222,25 @@ export default function App() {
     const interval = setInterval(refreshActiveChatRuns, 2000);
     return () => clearInterval(interval);
   }, [refreshActiveChatRuns]);
+
+  const refreshAssistantActive = useCallback(async () => {
+    try {
+      const { sessions } = await api.assistant.sessions();
+      const active = sessions.some(
+        (s) => s.status === 'running' || s.status === 'cancelling'
+          || s.latestRun?.status === 'running' || s.latestRun?.status === 'cancelling',
+      );
+      setAssistantActive(active);
+    } catch (err) {
+      console.error('Failed to load assistant active state:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshAssistantActive();
+    const interval = setInterval(refreshAssistantActive, 5000);
+    return () => clearInterval(interval);
+  }, [refreshAssistantActive]);
 
   useEffect(() => {
     if (!activeProjectId) return;
@@ -675,6 +695,7 @@ export default function App() {
         onSelectGlobal={selectGlobal}
         onSelectManage={selectGlobal}
         onOpenPalette={() => setPaletteOpen(true)}
+        assistantActive={assistantActive}
       />
 
       <div className="flex flex-1 min-h-0">
