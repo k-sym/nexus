@@ -450,43 +450,38 @@ export default function Sidebar({
                   )}
                 </>
               </section>
-
-            {activeRuns.length > 0 && (
-              <section aria-label="Active sessions">
-                <div className="mb-1.5 text-[10px] uppercase tracking-wider text-faint font-medium">Active sessions</div>
-                <div className="space-y-1.5">
-                  {activeRuns.map((run) => {
-                    const runProject = projects.find((p) => p.id === run.projectId);
-                    return (
-                      <button
-                        type="button"
-                        key={run.threadId}
-                        onClick={() => { if (run.projectId) onSelectThread(run.projectId, run.threadId); }}
-                        className="compact-session-card group w-full px-2.5 py-2 text-left transition-colors cursor-pointer"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="min-w-0 truncate text-xs font-semibold text-primary">{run.title}</span>
-                          <span className={`compact-session-status shrink-0 ${
-                            run.waitingForResponse ? 'compact-session-status-wait' : 'compact-session-status-run'
-                          }`}>
-                            {run.waitingForResponse ? 'WAIT' : 'RUN'}
-                          </span>
-                        </div>
-                        <div className="mt-1 text-[11px] text-faint truncate">{runProject?.name ?? 'Unknown project'}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            <section className="compact-project-future-space" aria-label="Future project information">
-              <div className="text-[10px] uppercase tracking-wider text-faint font-medium">Project intelligence</div>
-              <div className="mt-1 text-[11px] text-faint leading-snug">Reserved for archived sessions, Git history, and project signals.</div>
-            </section>
           </section>
         ) : (
           <div className="px-3 py-2 text-xs text-faint">No projects yet</div>
+        )}
+
+        {activeRuns.length > 0 && (
+          <section aria-label="Active sessions" className="mt-auto px-3 pt-3 pb-2 border-t border-subtle">
+            <div className="mb-1.5 text-[10px] uppercase tracking-wider text-faint font-medium">Active sessions</div>
+            <div className="space-y-1.5">
+              {activeRuns.map((run) => {
+                const runProject = projects.find((p) => p.id === run.projectId);
+                return (
+                  <button
+                    type="button"
+                    key={run.threadId}
+                    onClick={() => { if (run.projectId) onSelectThread(run.projectId, run.threadId); }}
+                    className="compact-session-card group w-full px-2.5 py-2 text-left transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <span className="min-w-0 truncate text-xs font-semibold text-primary">{run.title}</span>
+                      <span className={`compact-session-status shrink-0 ${
+                        run.waitingForResponse ? 'compact-session-status-wait' : 'compact-session-status-run'
+                      }`}>
+                        {run.waitingForResponse ? 'WAIT' : 'RUN'}
+                      </span>
+                    </div>
+                    <div className="mt-1 text-[11px] text-faint truncate">{runProject?.name ?? 'Unknown project'}</div>
+                  </button>
+                );
+              })}
+            </div>
+          </section>
         )}
 
         <div className="mt-auto px-3 py-3 border-t border-subtle">
