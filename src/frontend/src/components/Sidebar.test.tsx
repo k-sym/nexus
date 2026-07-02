@@ -2,7 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import Sidebar, { type ThreadMeta, type ActiveSessionRun } from './Sidebar';
+import { confirmDialog } from '../lib/confirm';
 import type { ChatThread, Project } from '@nexus/shared';
+
+vi.mock('../lib/confirm', () => ({ confirmDialog: vi.fn() }));
 
 const project: Project = {
   id: 'project-1',
@@ -104,6 +107,7 @@ function renderSidebar({
 describe('Sidebar', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.mocked(confirmDialog).mockReset().mockResolvedValue(true);
   });
 
   it('labels chat threads as sessions and shows active session activity', () => {
@@ -311,31 +315,28 @@ describe('Sidebar', () => {
   it('confirms before deleting a project', async () => {
     const user = userEvent.setup();
     const onDeleteProject = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSidebar({ onDeleteProject });
 
     await user.click(screen.getByTitle('Delete active project'));
 
-    expect(window.confirm).toHaveBeenCalledWith('Delete this project? This cannot be undone.');
+    expect(confirmDialog).toHaveBeenCalledWith('Delete this project? This cannot be undone.');
     await waitFor(() => expect(onDeleteProject).toHaveBeenCalledWith(project.id));
   });
 
   it('offers an archive action for sessions', async () => {
     const user = userEvent.setup();
     const onArchiveThread = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSidebar({ onArchiveThread });
 
     await user.click(screen.getByTitle('Archive to memory'));
 
-    expect(window.confirm).toHaveBeenCalledWith('Archive this session to memory and delete it?');
+    expect(confirmDialog).toHaveBeenCalledWith('Archive this session to memory and delete it?');
     await waitFor(() => expect(onArchiveThread).toHaveBeenCalledWith(thread.id));
   });
 
   it('shows archive progress and prevents duplicate archive actions', async () => {
     const user = userEvent.setup();
     const onArchiveThread = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSidebar({ archivingThreadIds: new Set([thread.id]), onArchiveThread });
 
     expect(screen.getByTitle('Archiving to memory')).toBeInTheDocument();
@@ -345,19 +346,18 @@ describe('Sidebar', () => {
     await user.click(screen.getByText(thread.title));
 
     expect(onArchiveThread).not.toHaveBeenCalled();
-    expect(window.confirm).not.toHaveBeenCalled();
+    expect(confirmDialog).not.toHaveBeenCalled();
   });
 
   it('keeps delete separate from archive', async () => {
     const user = userEvent.setup();
     const onArchiveThread = vi.fn();
     const onDeleteThread = vi.fn();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     renderSidebar({ onArchiveThread, onDeleteThread });
 
     await user.click(screen.getAllByTitle('Delete').at(-1)!);
 
-    expect(onDeleteThread).toHaveBeenCalledWith(thread.id);
+    await waitFor(() => expect(onDeleteThread).toHaveBeenCalledWith(thread.id));
     expect(onArchiveThread).not.toHaveBeenCalled();
   });
 
