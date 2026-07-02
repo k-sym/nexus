@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api-base';
+import { agentRunReducer, type AgentRunView } from '../chat/agent-run-state';
+import { agentRunActionsFor } from '../chat/agent-run-events';
 
 export type AssistantSessionStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'cancelling' | string;
 
@@ -55,6 +57,8 @@ export interface AssistantMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
+  thinking?: string;
+  run?: AgentRunView;
   attachments?: AssistantAttachment[];
   created_at: string;
   isStreaming?: boolean;
@@ -234,6 +238,7 @@ export function useAssistantStream() {
     const decoder = new TextDecoder();
     let pending = '';
     let remoteStillRunning = false;
+    let runView: AgentRunView | null = null;
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -244,6 +249,53 @@ export function useAssistantStream() {
         for (const line of lines) {
           if (!line.trim()) continue;
           const event = JSON.parse(line);
+
+          for (const action of agentRunActionsFor(event, Date.now())) {
+            runView = agentRunReducer(runView, action);
+          }
+          if (event.kind === 'run_start') {
+            setLatestRun({
+              id: String(event.run?.runId ?? ''),
+              remote_run_id: event.run?.runId ? String(event.run.runId) : null,
+              status: 'running',
+            });
+            setMessages((current) => current.map((message) =>
+              message.id === assistantDraft.id ? { ...message, run: runView ?? undefined } : message,
+            ));
+          } else if (event.type === 'message_update') {
+            const ame = event.assistantMessageEvent;
+            if (ame?.type === 'text_delta') {
+              setMessages((current) => current.map((message) =>
+                message.id === assistantDraft.id
+                  ? { ...message, content: message.content + String(ame.delta ?? ''), run: runView ?? message.run }
+                  : message,
+              ));
+            } else if (ame?.type === 'thinking_delta') {
+              setMessages((current) => current.map((message) =>
+                message.id === assistantDraft.id
+                  ? { ...message, thinking: (message.thinking ?? '') + String(ame.delta ?? ''), run: runView ?? message.run }
+                  : message,
+              ));
+            }
+          } else if (event.type === 'tool_execution_start' || event.type === 'tool_execution_end' || event.type === 'tool_execution_update') {
+            setMessages((current) => current.map((message) =>
+              message.id === assistantDraft.id ? { ...message, run: runView ?? message.run } : message,
+            ));
+          } else if (event.kind === 'run_end') {
+            const status = String(event.run?.status ?? 'completed');
+            remoteStillRunning = false;
+            setLatestRun((run) => run ? { ...run, status } : { id: String(event.run?.runId ?? ''), status });
+            setMessages((current) => current.map((message) =>
+              message.id === assistantDraft.id ? { ...message, run: runView ?? message.run, isStreaming: false } : message,
+            ));
+            setSessions((current) => current.map((session) =>
+              session.id === selectedSessionId ? { ...session, status: status === 'completed' ? 'idle' : status } : session,
+            ));
+          } else if (event.type === 'error') {
+            setError(String(event.error ?? 'Assistant request failed.'));
+          }
+
+          // Back-compat: still honor the legacy flat events if the backend degraded.
           if (event.type === 'run_start') {
             setLatestRun({
               id: String(event.runId ?? ''),
@@ -263,8 +315,6 @@ export function useAssistantStream() {
             setSessions((current) => current.map((session) =>
               session.id === selectedSessionId ? { ...session, status: status === 'succeeded' ? 'idle' : status } : session,
             ));
-          } else if (event.type === 'error') {
-            setError(String(event.error ?? 'Assistant request failed.'));
           }
         }
       }

@@ -23,6 +23,17 @@ function streamResponse(lines: unknown[]): Response {
   });
 }
 
+function ndjsonStreamResponse(events: any[]): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      const enc = new TextEncoder();
+      for (const e of events) c.enqueue(enc.encode(JSON.stringify(e) + '\n'));
+      c.close();
+    },
+  });
+  return { ok: true, body, json: async () => ({}) } as unknown as Response;
+}
+
 function installDefaultMock() {
   apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
     if (url === '/api/assistant/sessions') {
@@ -319,5 +330,31 @@ describe('AssistantView', () => {
 
     expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sync', { method: 'POST' });
     expect(screen.getByText('Hermes finished.')).toBeInTheDocument();
+  });
+
+  it('builds an AgentRunView from the structured NDJSON stream and accumulates text', async () => {
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/sessions') return { ok: true, json: async () => ({ sessions: [{ id: 's1', title: 'S', status: 'idle' }] }) } as Response;
+      if (url === '/api/assistant/sessions/s1') return { ok: true, json: async () => ({ session: { id: 's1', title: 'S', status: 'idle' }, messages: [], latestRun: null }) } as Response;
+      if (url.endsWith('/messages/stream')) {
+        return ndjsonStreamResponse([
+          { kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: '2026-07-02T00:00:00.000Z', provider: 'assistant', model: 'hermes-agent' } },
+          { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'Bash', args: { command: 'ls' } },
+          { type: 'tool_execution_end', toolCallId: 'c1', toolName: 'Bash', result: { content: [{ type: 'text', text: 'ok' }] }, isError: false },
+          { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Done.' } },
+          { kind: 'run_end', run: { runId: 'r1', threadId: 's1', completedAt: '2026-07-02T00:00:01.000Z', status: 'completed' } },
+        ]);
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<AssistantView />);
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    fireEvent.change(input, { target: { value: 'run ls' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    // Task 5 renders the tool row (AgentRunCard/ToolActivity); here we only assert
+    // the hook accumulates streamed text into the draft assistant message.
+    expect(await screen.findByText('Done.')).toBeInTheDocument();
   });
 });
