@@ -234,3 +234,16 @@ test('streamResponses maps a failed response to a failed event', async () => {
   const events = await collect(client.streamResponses({ input: 'x' }));
   assert.deepEqual(events, [{ kind: 'failed', error: 'boom' }]);
 });
+
+test('streamResponses forwards the provided AbortSignal to fetchImpl', async () => {
+  const controller = new AbortController();
+  let capturedSignal: AbortSignal | null | undefined;
+  const fetchImpl: HermesFetch = async (_url, init) => {
+    capturedSignal = init?.signal;
+    return sseResponse(['data: [DONE]\n\n']);
+  };
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  await collect(client.streamResponses({ input: 'hi', signal: controller.signal }));
+
+  assert.equal(capturedSignal, controller.signal);
+});

@@ -29,6 +29,7 @@ export interface HermesResponsesInput {
   sessionId?: string;
   sessionKey?: string;
   instructions?: string;
+  signal?: AbortSignal;
 }
 
 export type HermesResponseEvent =
@@ -248,6 +249,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
         method: 'POST',
         headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
         body: JSON.stringify(body),
+        signal: input.signal,
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');

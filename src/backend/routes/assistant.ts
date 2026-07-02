@@ -415,6 +415,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
   return async function registerAssistantRoutes(fastify: FastifyInstance) {
     const db = fastify.db;
     const activeRemoteRuns = new Map<string, string>();
+    const activeStreamControllers = new Map<string, AbortController>();
     const uploadRoot = options.uploadRoot ?? process.cwd();
 
     const client = () => {
@@ -471,6 +472,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let accumulated = '';
       let status: string = 'completed';
       let errorMsg: string | undefined;
+      let abortSource: string | undefined;
       try {
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
@@ -480,14 +482,43 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
           completeRun(db, run, { runId: run.id, status: 'completed', sessionId: result.sessionId, output: accumulated, usage: result.usage });
         } else {
-          for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}` })) {
-            if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
-            else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
-            else if (ev.kind === 'function_call') { write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
-            else if (ev.kind === 'function_call_output') { write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
-            else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; write({ type: 'error', error: ev.error }); }
+          const ac = new AbortController();
+          activeStreamControllers.set(run.id, ac);
+          try {
+            for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}`, signal: ac.signal })) {
+              if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
+              else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
+              else if (ev.kind === 'function_call') { write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
+              else if (ev.kind === 'function_call_output') { write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
+              else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; write({ type: 'error', error: ev.error }); }
+            }
+          } catch (streamErr: any) {
+            if (ac.signal.aborted || streamErr?.name === 'AbortError') {
+              status = 'cancelled';
+              errorMsg = undefined;
+              abortSource = 'user';
+            } else {
+              throw streamErr;
+            }
           }
-          completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
+          if (ac.signal.aborted && status !== 'cancelled') {
+            // The stream ended (cleanly or otherwise) after we requested an abort —
+            // treat it as a user cancellation rather than a normal completion.
+            status = 'cancelled';
+            errorMsg = undefined;
+            abortSource = 'user';
+          }
+          if (status === 'cancelled') {
+            const now = new Date().toISOString();
+            db.prepare(
+              `UPDATE assistant_runs
+               SET status = 'cancelled', output = ?, error = NULL, completed_at = ?, updated_at = ?
+               WHERE id = ?`,
+            ).run(accumulated, now, now, run.id);
+            db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('cancelled', now, session.id);
+          } else {
+            completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
+          }
         }
         if (accumulated) appendMessage(db, session.id, 'assistant', accumulated);
       } catch (err: any) {
@@ -499,9 +530,10 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         write({ type: 'error', error: errorMsg });
       } finally {
         const completedAtIso = new Date().toISOString();
-        write({ kind: 'run_end', run: { runId: run.id, threadId: session.id, completedAt: completedAtIso, status, ...(errorMsg ? { error: errorMsg } : {}) } });
+        write({ kind: 'run_end', run: { runId: run.id, threadId: session.id, completedAt: completedAtIso, status, ...(abortSource ? { abortSource } : {}), ...(errorMsg ? { error: errorMsg } : {}) } });
         fastify.activity?.bus.emit({ type: 'stop', operationId: run.id, kind: 'assistant_stream', title: session.title, status: activityStatusForRun(status as any), error: status === 'failed' ? errorMsg : undefined });
         activeRemoteRuns.delete(run.id);
+        activeStreamControllers.delete(run.id);
         try { reply.raw.end(); } catch { /* already closed */ }
       }
     };
@@ -705,6 +737,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const hermes = client();
       const remoteRunId = latest.remote_run_id || activeRemoteRuns.get(latest.id);
       if (hermes && remoteRunId) await hermes.stopRun(remoteRunId);
+      activeStreamControllers.get(latest.id)?.abort();
       const now = new Date().toISOString();
       db.prepare('UPDATE assistant_runs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?').run(
         'cancelled',

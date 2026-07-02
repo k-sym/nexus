@@ -557,6 +557,68 @@ test('legacy Assistant thread endpoints wrap the newest Assistant session', asyn
   }
 });
 
+function abortAwareSseResponse(chunks: string[], signal: AbortSignal | undefined): Response {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const enc = new TextEncoder();
+      for (const c of chunks) controller.enqueue(enc.encode(c));
+      // Do NOT close here — the stream only closes when the request is aborted,
+      // simulating a remote model that keeps generating until the client hangs up.
+      const onAbort = () => {
+        try { controller.close(); } catch { /* already closed */ }
+      };
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+    },
+  });
+  return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+}
+
+test('POST /api/assistant/abort tears down the in-flight /v1/responses stream and finalizes the run as cancelled', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return abortAwareSseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"call_1","name":"read_file","arguments":{"path":"/tmp/x"}}}\n\n',
+      ], init?.signal ?? undefined);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Abort me' } });
+    const sessionId = created.json().id;
+
+    const streamP = app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'do a long task' },
+    });
+
+    // Give the handler a tick to register the run and start consuming the stream.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const abortRes = await app.inject({ method: 'POST', url: '/api/assistant/abort' });
+    assert.equal(abortRes.statusCode, 200);
+    assert.equal(abortRes.json().ok, true);
+
+    const res = await streamP;
+    assert.equal(res.statusCode, 200);
+    const events = ndjsonEvents(res.payload);
+    const runEnd = events[events.length - 1];
+    assert.equal(runEnd.kind, 'run_end');
+    assert.equal(runEnd.run.status, 'cancelled');
+    assert.equal(runEnd.run.abortSource, 'user');
+
+    const run = db.prepare('SELECT status FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(run.status, 'cancelled');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('POST /api/assistant/messages/stream returns a clear error when assistant config is missing', async () => {
   const { app, db, dir } = makeApp({ config: { ...loadConfig(), assistant: { url: '', api_key: '${ASSISTANT_API_KEY}' } } });
   const originalKey = process.env.ASSISTANT_API_KEY;

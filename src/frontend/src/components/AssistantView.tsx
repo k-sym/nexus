@@ -155,7 +155,6 @@ export default function AssistantView() {
   }, []);
 
   const trimmedInput = input.trim();
-  const isCommand = pendingAttachments.length === 0 && (trimmedInput === '/clear' || trimmedInput === '/new');
   const canSubmit = !!selectedSessionId && (!!trimmedInput || pendingAttachments.length > 0);
 
   return (
@@ -420,7 +419,7 @@ export default function AssistantView() {
               <button
                 type="button"
                 onClick={() => void handleSend()}
-                disabled={!canSubmit || (isRunning && !isCommand)}
+                disabled={!canSubmit}
                 className="h-10 px-4 accent-button rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2"
               >
                 <PaperPlaneRight size={17} weight="fill" />
