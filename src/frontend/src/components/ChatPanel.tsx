@@ -24,11 +24,11 @@ import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
 import { AgentRunCard } from './AgentRunCard';
-import { runPhaseLabel } from './runLabels';
+import { RunStatusStrip } from './RunStatusStrip';
+import type { AgentRunView } from '../chat/agent-run-state';
 import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 import ArtifactPreviewRail from './ArtifactPreviewRail';
 import ChatMessageContent from './ChatMessageContent';
-import { Spinner } from '@phosphor-icons/react';
 
 interface ChatPanelProps {
   projectId: string;
@@ -641,13 +641,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   // always visible without scrolling back up to the run card's header, which
   // climbs out of view as tool output streams in.
   const attachedRun = loadedMessages.find((m) => m.run?.status === 'running')?.run;
-  const runStatusLabel = isRunning
-    ? (state.isRunning && state.activeRun
-        ? runPhaseLabel(state.activeRun)
-        : attachedRun
-          ? runPhaseLabel(attachedRun)
-          : streamStatusLabel(state.status))
-    : null;
+  const activeRunView: AgentRunView | null =
+    (state.isRunning && state.activeRun) ? state.activeRun : (attachedRun ?? null);
+  const runFallbackLabel = streamStatusLabel(state.status);
 
   return (
     <div className="flex-1 flex min-w-0 h-full">
@@ -763,15 +759,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         </div>
       )}
 
-      {runStatusLabel && (
-        <div
-          className="flex items-center gap-2 border-t border-subtle px-4 py-1.5 text-xs text-indigo-200"
-          data-testid="run-status"
-          aria-live="polite"
-        >
-          <Spinner className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-          <span>{runStatusLabel}</span>
-        </div>
+      {isRunning && (
+        <RunStatusStrip run={activeRunView} fallbackLabel={runFallbackLabel} />
       )}
 
       <div className="border-t border-subtle surface-glass p-3">
@@ -837,7 +826,23 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           />
           <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
             <ContextUsageLabel usage={state.contextUsage} />
-            {!isRunning && (
+            {isRunning ? (
+              // A re-attached run (this instance isn't driving the stream)
+              // already exposes its Stop control on the message's own
+              // AgentRunHeader; showing a second "Stop current run" button
+              // here would duplicate it. Only render the composer's Stop
+              // for a run this instance is actively streaming.
+              state.isRunning && (
+                <button
+                  type="button"
+                  onClick={handleStop}
+                  aria-label="Stop current run"
+                  className="px-4 py-2 accent-button rounded-lg transition-colors"
+                >
+                  Stop
+                </button>
+              )
+            ) : (
               <button
                 type="button"
                 onClick={handleSend}
