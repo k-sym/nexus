@@ -448,109 +448,61 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, reply: any) => {
       const trimmed = content.trim();
       const attachmentsResult = validateAssistantAttachments(attachmentsInput);
-      if (!attachmentsResult.ok) {
-        reply.code(400);
-        return { error: attachmentsResult.error };
-      }
+      if (!attachmentsResult.ok) { reply.code(400); return { error: attachmentsResult.error }; }
       const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot);
       const promptContent = promptWithFileReferences(trimmed, savedAttachments);
-      if (!trimmed && savedAttachments.length === 0) {
-        reply.code(400);
-        return { error: 'Message content is required.' };
-      }
+      if (!trimmed && savedAttachments.length === 0) { reply.code(400); return { error: 'Message content is required.' }; }
       const hermes = client();
-      if (!hermes) {
-        reply.code(400);
-        return { error: 'Assistant URL and key must be configured in Settings.' };
-      }
+      if (!hermes) { reply.code(400); return { error: 'Assistant URL and key must be configured in Settings.' }; }
       const session = getSession(db, sessionId);
-      if (!session) {
-        reply.code(404);
-        return { error: 'Assistant session not found' };
-      }
+      if (!session) { reply.code(404); return { error: 'Assistant session not found' }; }
 
       appendMessage(db, session.id, 'user', trimmed, savedAttachments);
       const run = createRun(db, session.id, 'chat', promptContent);
       activeRemoteRuns.set(run.id, '');
-      fastify.activity?.bus.emit({
-        type: 'start',
-        operationId: run.id,
-        kind: 'assistant_stream',
-        title: session.title,
-        provider: 'assistant',
-        model: 'hermes-agent',
-      });
+      fastify.activity?.bus.emit({ type: 'start', operationId: run.id, kind: 'assistant_stream', title: session.title, provider: 'assistant', model: 'hermes-agent' });
 
+      reply.hijack();
+      reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
+      const write = (ev: unknown) => { try { reply.raw.write(JSON.stringify(ev) + '\n'); } catch { /* client gone */ } };
+      const startedAtIso = new Date().toISOString();
+      write({ kind: 'run_start', run: { runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' } });
+
+      let accumulated = '';
+      let status: string = 'completed';
+      let errorMsg: string | undefined;
       try {
-        let completed: AssistantRun;
-        let remoteRunId: string | undefined;
         if (hasImageAttachments(savedAttachments)) {
+          // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
           const remoteSessionId = await ensureRemoteSession(hermes, session);
-          const result = await hermes.sessionChat({
-            sessionId: remoteSessionId,
-            sessionKey: `nexus:assistant:${session.id}`,
-            input: hermesInlineImageInput(promptContent, savedAttachments),
-          });
-          completed = completeRun(db, run, {
-            runId: run.id,
-            status: 'completed',
-            sessionId: result.sessionId,
-            output: result.output,
-            usage: result.usage,
-          });
+          const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey: `nexus:assistant:${session.id}`, input: hermesInlineImageInput(promptContent, savedAttachments) });
+          accumulated = result.output ?? '';
+          if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
+          completeRun(db, run, { runId: run.id, status: 'completed', sessionId: result.sessionId, output: accumulated, usage: result.usage });
         } else {
-          const started = await hermes.startRun({
-            input: promptContent,
-            sessionId: session.remote_session_id ?? session.id,
-            sessionKey: `nexus:assistant:${session.id}`,
-          });
-          remoteRunId = started.runId;
-          updateRunRemote(db, run.id, started.runId);
-          activeRemoteRuns.set(run.id, started.runId);
-          const remote = await hermes.getRun(started.runId);
-          completed = completeRun(db, { ...run, remote_run_id: started.runId }, remote);
+          for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}` })) {
+            if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
+            else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
+            else if (ev.kind === 'function_call') { write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
+            else if (ev.kind === 'function_call_output') { write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
+            else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; }
+          }
+          completeRun(db, run, { runId: run.id, status: status as any, output: accumulated });
         }
-        if (completed.output) appendMessage(db, session.id, 'assistant', completed.output);
-
-        fastify.activity?.bus.emit({
-          type: 'stop',
-          operationId: run.id,
-          kind: 'assistant_stream',
-          title: session.title,
-          status: activityStatusForRun(completed.status),
-          lastEvent: RUNNING_STATUSES.has(completed.status) ? 'remote_run_running' : undefined,
-          error: completed.status === 'failed' ? completed.error ?? undefined : undefined,
-        });
-
-        reply.type('application/x-ndjson; charset=utf-8');
-        return [
-          JSON.stringify({ type: 'run_start', runId: run.id, ...(remoteRunId ? { remoteRunId } : {}) }),
-          ...(completed.output ? [JSON.stringify({ type: 'text_delta', delta: completed.output })] : []),
-          JSON.stringify({ type: 'complete', runId: run.id, status: completed.status }),
-        ].join('\n') + '\n';
+        if (accumulated) appendMessage(db, session.id, 'assistant', accumulated);
       } catch (err: any) {
-        const message = err?.message || 'Assistant request failed.';
+        status = 'failed';
+        errorMsg = err?.message || 'Assistant request failed.';
         const now = new Date().toISOString();
-        db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?').run(
-          'failed',
-          message,
-          now,
-          now,
-          run.id,
-        );
+        db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?').run('failed', errorMsg, now, now, run.id);
         db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
-        fastify.activity?.bus.emit({
-          type: 'stop',
-          operationId: run.id,
-          kind: 'assistant_stream',
-          title: session.title,
-          status: 'failed',
-          error: message,
-        });
-        reply.type('application/x-ndjson; charset=utf-8');
-        return JSON.stringify({ type: 'error', error: message }) + '\n';
+        write({ type: 'error', error: errorMsg });
       } finally {
+        const completedAtIso = new Date().toISOString();
+        write({ kind: 'run_end', run: { runId: run.id, threadId: session.id, completedAt: completedAtIso, status, ...(errorMsg ? { error: errorMsg } : {}) } });
+        fastify.activity?.bus.emit({ type: 'stop', operationId: run.id, kind: 'assistant_stream', title: session.title, status: activityStatusForRun(status as any), error: status === 'failed' ? errorMsg : undefined });
         activeRemoteRuns.delete(run.id);
+        try { reply.raw.end(); } catch { /* already closed */ }
       }
     };
 
