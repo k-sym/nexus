@@ -50,6 +50,7 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
         <ChatCircle size={16} weight={view === 'assistant' ? 'fill' : 'regular'} /> Assistant
         {assistantActive && (
           <span
+            role="img"
             className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"
             title="Assistant run active"
             aria-label="Assistant run active"
