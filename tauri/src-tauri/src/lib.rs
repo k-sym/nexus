@@ -9,8 +9,9 @@ use std::sync::{
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 
-/// Set to `true` by the SIGTERM handler; a watcher thread polls this and calls
-/// `AppHandle::exit(0)` in normal context so the real teardown runs via `RunEvent::Exit`.
+/// Set to `true` by the termination-signal handler (SIGINT/SIGTERM); a watcher
+/// thread polls this and calls `AppHandle::exit(0)` in normal context so the real
+/// teardown runs via `RunEvent::Exit`.
 static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Managed state: children spawned by `supervisor::boot`.
@@ -38,12 +39,19 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
 
-            // ── SIGTERM handler + watcher thread ─────────────────────────
+            // ── Termination-signal handler + watcher thread ─────────────
             // The signal handler only sets an atomic flag (async-signal-safe).
             // A watcher thread polls the flag and calls AppHandle::exit(0) in
             // normal thread context, which triggers RunEvent::Exit → kill_spawned.
+            //
+            // Both SIGINT (Ctrl+C from a terminal-launched instance) and SIGTERM
+            // (kill / crash-adjacent teardown) are wired here. Without SIGINT, a
+            // terminal Ctrl+C would bypass kill_spawned and orphan the Node backend
+            // on port 4173, so the next launch reuses a stale backend.
             unsafe {
-                libc::signal(libc::SIGTERM, sigterm_handler as *const () as libc::sighandler_t);
+                let handler = signal_handler as *const () as libc::sighandler_t;
+                libc::signal(libc::SIGINT, handler);
+                libc::signal(libc::SIGTERM, handler);
             }
             {
                 let shutdown_handle = handle.clone();
@@ -240,15 +248,15 @@ pub fn run() {
     });
 }
 
-/// SIGTERM signal handler: sets `SHUTDOWN_REQUESTED` so the watcher thread
-/// (spawned in `setup`) can call `AppHandle::exit(0)` in normal thread context,
-/// which triggers `RunEvent::Exit` → `kill_spawned`.
+/// Termination-signal handler (SIGINT/SIGTERM): sets `SHUTDOWN_REQUESTED` so the
+/// watcher thread (spawned in `setup`) can call `AppHandle::exit(0)` in normal
+/// thread context, which triggers `RunEvent::Exit` → `kill_spawned`.
 ///
 /// # Safety
 /// This handler performs ONLY an atomic store, which is async-signal-safe.
 /// All blocking work (Mutex lock, process-group kill, `waitpid`) is deferred
 /// to the watcher thread that polls `SHUTDOWN_REQUESTED` in normal context.
-extern "C" fn sigterm_handler(_: libc::c_int) {
+extern "C" fn signal_handler(_: libc::c_int) {
     SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
 }
 
