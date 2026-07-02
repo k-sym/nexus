@@ -14,6 +14,14 @@ export interface SidebarProjectCounts {
   sessions: number;
 }
 
+/** A currently-running (or waiting) chat run, surfaced globally in the sidebar. */
+export interface ActiveSessionRun {
+  threadId: string;
+  title: string;
+  projectId: string | null;
+  waitingForResponse: boolean;
+}
+
 interface SidebarProps {
   projects: Project[];
   activeProjectId: string | null;
@@ -24,6 +32,10 @@ interface SidebarProps {
   waitingSessionIds: Set<string>;
   activeProjectIds: Set<string>;
   waitingProjectIds: Set<string>;
+  /** Active runs across ALL projects (from the backend active-runs feed), so a
+   *  running session stays visible in the Active sessions list even after the
+   *  user navigates to a different project. */
+  activeRuns: ActiveSessionRun[];
   archivingThreadIds: Set<string>;
   projectCounts: Record<string, SidebarProjectCounts>;
   onSelectProject: (id: string) => void;
@@ -116,7 +128,7 @@ function pluralize(count: number, singular: string): string {
 
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
-  waitingSessionIds, activeProjectIds, waitingProjectIds,
+  waitingSessionIds, activeProjectIds, waitingProjectIds, activeRuns,
   archivingThreadIds,
   projectCounts,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onArchiveThread, onDeleteThread, onNewChat, onNewProject,
@@ -137,9 +149,6 @@ export default function Sidebar({
 
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
   const activeProjectCounts = activeProject ? projectCounts[activeProject.id] ?? { tasks: 0, sessions: 0 } : null;
-  const promotedSessions = activeProject
-    ? threads.filter(({ thread }) => activeSessionIds.has(thread.id) || waitingSessionIds.has(thread.id))
-    : [];
 
   const handleProjectDragStart = (ev: React.DragEvent<HTMLButtonElement>, projectId: string) => {
     ev.dataTransfer.setData('application/x-nexus-project-id', projectId);
@@ -442,28 +451,28 @@ export default function Sidebar({
                 </>
               </section>
 
-            {promotedSessions.length > 0 && (
+            {activeRuns.length > 0 && (
               <section aria-label="Active sessions">
                 <div className="mb-1.5 text-[10px] uppercase tracking-wider text-faint font-medium">Active sessions</div>
                 <div className="space-y-1.5">
-                  {promotedSessions.map(({ thread }) => {
-                    const isWaitingForResponse = waitingSessionIds.has(thread.id);
+                  {activeRuns.map((run) => {
+                    const runProject = projects.find((p) => p.id === run.projectId);
                     return (
                       <button
                         type="button"
-                        key={thread.id}
-                        onClick={() => onSelectThread(activeProject.id, thread.id)}
+                        key={run.threadId}
+                        onClick={() => { if (run.projectId) onSelectThread(run.projectId, run.threadId); }}
                         className="compact-session-card group w-full px-2.5 py-2 text-left transition-colors cursor-pointer"
                       >
                         <div className="flex items-start justify-between gap-2">
-                          <span className="min-w-0 truncate text-xs font-semibold text-primary">{thread.title}</span>
+                          <span className="min-w-0 truncate text-xs font-semibold text-primary">{run.title}</span>
                           <span className={`compact-session-status shrink-0 ${
-                            isWaitingForResponse ? 'compact-session-status-wait' : 'compact-session-status-run'
+                            run.waitingForResponse ? 'compact-session-status-wait' : 'compact-session-status-run'
                           }`}>
-                            {isWaitingForResponse ? 'WAIT' : 'RUN'}
+                            {run.waitingForResponse ? 'WAIT' : 'RUN'}
                           </span>
                         </div>
-                        <div className="mt-1 text-[11px] text-faint truncate">{activeProject.name}</div>
+                        <div className="mt-1 text-[11px] text-faint truncate">{runProject?.name ?? 'Unknown project'}</div>
                       </button>
                     );
                   })}

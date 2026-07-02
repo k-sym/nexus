@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import Sidebar, { type ThreadMeta } from './Sidebar';
+import Sidebar, { type ThreadMeta, type ActiveSessionRun } from './Sidebar';
 import type { ChatThread, Project } from '@nexus/shared';
 
 const project: Project = {
@@ -44,6 +44,7 @@ function renderSidebar({
   waitingSessionIds = new Set<string>(),
   activeProjectIds = new Set<string>(),
   waitingProjectIds = new Set<string>(),
+  activeRuns = [],
   archivingThreadIds = new Set<string>(),
   onEditProject = noop,
   onDeleteProject = noop,
@@ -59,6 +60,7 @@ function renderSidebar({
   waitingSessionIds?: Set<string>;
   activeProjectIds?: Set<string>;
   waitingProjectIds?: Set<string>;
+  activeRuns?: ActiveSessionRun[];
   archivingThreadIds?: Set<string>;
   onEditProject?: (project: Project) => void;
   onDeleteProject?: (projectId: string) => void;
@@ -78,6 +80,7 @@ function renderSidebar({
       waitingSessionIds={waitingSessionIds}
       activeProjectIds={activeProjectIds}
       waitingProjectIds={waitingProjectIds}
+      activeRuns={activeRuns}
       archivingThreadIds={archivingThreadIds}
       projectCounts={{
         [project.id]: { tasks: 3, sessions: threads.length },
@@ -168,6 +171,10 @@ describe('Sidebar', () => {
       threads: [{ thread }, { thread: waitingThread }],
       activeSessionIds: new Set([thread.id, waitingThread.id]),
       waitingSessionIds: new Set([waitingThread.id]),
+      activeRuns: [
+        { threadId: thread.id, title: thread.title, projectId: project.id, waitingForResponse: false },
+        { threadId: waitingThread.id, title: waitingThread.title, projectId: project.id, waitingForResponse: true },
+      ],
     });
 
     const activeSection = screen.getByLabelText('Active sessions');
@@ -175,6 +182,21 @@ describe('Sidebar', () => {
     expect(activeSection).toHaveTextContent('RUN');
     expect(activeSection).toHaveTextContent('Waiting on approval');
     expect(activeSection).toHaveTextContent('WAIT');
+  });
+
+  it('shows active sessions from OTHER projects (global), so a run stays visible after navigating away', () => {
+    // Active run lives in secondProject while the user is viewing `project`.
+    renderSidebar({
+      activeRuns: [
+        { threadId: 'other-1', title: 'Long build in other project', projectId: secondProject.id, waitingForResponse: false },
+      ],
+    });
+
+    const activeSection = screen.getByLabelText('Active sessions');
+    expect(activeSection).toHaveTextContent('Long build in other project');
+    expect(activeSection).toHaveTextContent('RUN');
+    // Labeled with the owning project's name, not the currently-viewed one.
+    expect(activeSection).toHaveTextContent(secondProject.name);
   });
 
   it('uses compact dark rail styling hooks and removes the repeated project list', () => {

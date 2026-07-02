@@ -4,7 +4,7 @@ import { Project, Task, Ticket, ChatThread, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS
 import { api, MissionStatus } from './api';
 import TopBar from './components/TopBar';
 import CommandPalette, { Command } from './components/CommandPalette';
-import Sidebar, { SubView, ThreadMeta } from './components/Sidebar';
+import Sidebar, { SubView, ThreadMeta, type ActiveSessionRun } from './components/Sidebar';
 import MissionControl from './components/MissionControl';
 import TicketsView from './components/TicketsView';
 import BraindumpView from './components/BraindumpView';
@@ -79,6 +79,7 @@ export default function App() {
   const [waitingSessionIds, setWaitingSessionIds] = useState<Set<string>>(() => new Set());
   const [activeProjectIds, setActiveProjectIds] = useState<Set<string>>(() => new Set());
   const [waitingProjectIds, setWaitingProjectIds] = useState<Set<string>>(() => new Set());
+  const [activeRuns, setActiveRuns] = useState<ActiveSessionRun[]>([]);
   const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
   const [archiveError, setArchiveError] = useState<string | null>(null);
 
@@ -199,6 +200,12 @@ export default function App() {
   const refreshActiveChatRuns = useCallback(async () => {
     try {
       const data = await api.chat.activeRuns();
+      setActiveRuns(data.runs.map((run) => ({
+        threadId: run.threadId,
+        title: run.title,
+        projectId: run.projectId,
+        waitingForResponse: run.waitingForResponse,
+      })));
       setActiveSessionIds(new Set(data.activeThreadIds));
       setWaitingSessionIds(new Set(data.runs.filter((run) => run.waitingForResponse).map((run) => run.threadId)));
       setActiveProjectIds(new Set(data.runs.filter((run) => run.projectId).map((run) => run.projectId!)));
@@ -681,6 +688,7 @@ export default function App() {
             waitingSessionIds={waitingSessionIds}
             activeProjectIds={activeProjectIds}
             waitingProjectIds={waitingProjectIds}
+            activeRuns={activeRuns}
             archivingThreadIds={archivingThreadIds}
             projectCounts={sidebarProjectCounts}
             onSelectProject={focusProject}
