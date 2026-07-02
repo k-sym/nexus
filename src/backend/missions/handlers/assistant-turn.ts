@@ -55,7 +55,7 @@ function spendDelta(before: SessionStats | undefined, after: SessionStats | unde
  * Detection: walk up the directory tree; a directory is considered "Nexus" when
  * ALL of:
  *   - src/memory-daemon subdirectory exists
- *   - electron subdirectory exists
+ *   - tauri subdirectory exists
  *   - package.json exists and has name === 'nexus'
  */
 function isInsideNexus(dir: string): boolean {
@@ -63,7 +63,7 @@ function isInsideNexus(dir: string): boolean {
   while (true) {
     if (
       existsSync(join(current, 'src/memory-daemon')) &&
-      existsSync(join(current, 'electron'))
+      existsSync(join(current, 'tauri'))
     ) {
       // Check package.json name field
       try {

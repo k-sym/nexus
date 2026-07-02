@@ -16,20 +16,16 @@ const item = (active: boolean) =>
   }`;
 
 export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPalette }: TopBarProps) {
-  // Desktop shells hide the native title bar (Electron: titleBarStyle hiddenInset;
-  // Tauri: TitleBarStyle::Overlay), so the TopBar doubles as the drag handle and,
-  // on macOS, must clear the traffic-light buttons drawn over the top-left. Browser
-  // ("web") mode has neither. Electron drags via CSS `-webkit-app-region` (the
-  // `titlebar-drag` class); Tauri ignores that and drags via the
-  // `data-tauri-drag-region` attribute instead (added below, inert outside Tauri).
+  // The Tauri shell hides the native title bar (TitleBarStyle::Overlay) and drags
+  // via the `data-tauri-drag-region` attribute on the header below, so the TopBar
+  // doubles as the drag handle. On macOS the traffic-light buttons overlay the
+  // top-left, so we reserve space for them. Browser ("web") mode has neither.
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-  const isElectron = /Electron/i.test(ua);
   const isTauri =
     typeof window !== 'undefined' &&
     ('__TAURI_INTERNALS__' in window || (window as { isTauri?: boolean }).isTauri === true);
-  const isDesktop = isElectron || isTauri;
   const isMac = /Mac/i.test(ua);
-  const chrome = `${isDesktop ? ' titlebar-drag' : ''}${isDesktop && isMac ? ' mac-traffic-lights' : ''}`;
+  const chrome = isTauri && isMac ? ' mac-traffic-lights' : '';
 
   return (
     <header

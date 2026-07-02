@@ -125,7 +125,7 @@ test('assistant_turn: Nexus self-guard → failed with error "refusing to run ag
   const nexusDir = mkdtempSync(join(tmpdir(), 'nexus-fake-'));
   try {
     mkdirSync(join(nexusDir, 'src', 'memory-daemon'), { recursive: true });
-    mkdirSync(join(nexusDir, 'electron'), { recursive: true });
+    mkdirSync(join(nexusDir, 'tauri'), { recursive: true });
     writeFileSync(join(nexusDir, 'package.json'), JSON.stringify({ name: 'nexus' }));
 
     const db = makeDb('proj-nexus', nexusDir);
