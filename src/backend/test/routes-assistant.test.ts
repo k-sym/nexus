@@ -638,3 +638,134 @@ test('POST /api/assistant/messages/stream returns a clear error when assistant c
     await cleanup(app, db, dir);
   }
 });
+
+test('Assistant session list includes filtered remote Hermes API sessions only', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).includes('/api/sessions?')) {
+      assert.match(String(url), /source=api_server/);
+      return new Response(JSON.stringify({
+        sessions: [
+          { id: 'remote-api-1', title: 'Remote API session', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' },
+          { id: 'remote-cron-1', title: 'Cron work', source: 'cron', updated_at: '2026-07-02T09:00:00.000Z' },
+        ],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const list = await app.inject({ method: 'GET', url: '/api/assistant/sessions' });
+    assert.equal(list.statusCode, 200);
+    assert.deepEqual(list.json().sessions.map((session: any) => ({
+      id: session.id,
+      title: session.title,
+      remoteOnly: session.remoteOnly,
+      remote_session_id: session.remote_session_id,
+    })), [
+      {
+        id: 'remote:remote-api-1',
+        title: 'Remote API session',
+        remoteOnly: true,
+        remote_session_id: 'remote-api-1',
+      },
+    ]);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant session list merges remote sessions that already have local rows', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).includes('/api/sessions?')) {
+      return new Response(JSON.stringify({
+        sessions: [{ id: 'remote-api-1', title: 'Remote title', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    db.prepare(
+      `INSERT INTO assistant_sessions (id, title, remote_session_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'idle', ?, ?)`,
+    ).run('local-1', 'Local title', 'remote-api-1', '2026-07-02T08:00:00.000Z', '2026-07-02T08:00:00.000Z');
+
+    const list = await app.inject({ method: 'GET', url: '/api/assistant/sessions' });
+    assert.deepEqual(list.json().sessions.map((session: any) => session.id), ['local-1']);
+    assert.equal(list.json().sessions[0].remoteOnly, false);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant import route adopts a remote Hermes session and imports messages', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    const requestUrl = String(url);
+    if (requestUrl.endsWith('/api/sessions/remote-api-1')) {
+      return new Response(JSON.stringify({
+        session: { id: 'remote-api-1', title: 'Remote API session', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (requestUrl.endsWith('/api/sessions/remote-api-1/messages')) {
+      return new Response(JSON.stringify({
+        messages: [
+          { id: 'hm1', role: 'user', content: 'continue this', created_at: '2026-07-02T10:01:00.000Z' },
+          { id: 'hm2', role: 'assistant', content: 'I can continue.', created_at: '2026-07-02T10:02:00.000Z' },
+        ],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${requestUrl}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const imported = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/import',
+      payload: { remoteSessionId: 'remote-api-1' },
+    });
+    assert.equal(imported.statusCode, 200);
+    assert.equal(imported.json().session.remote_session_id, 'remote-api-1');
+    assert.deepEqual(imported.json().messages.map((message: any) => [message.role, message.content]), [
+      ['user', 'continue this'],
+      ['assistant', 'I can continue.'],
+    ]);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant foreground send resumes an adopted remote Hermes session', async () => {
+  // The foreground turn streams over /v1/responses; assert the request carries the
+  // adopted remote session id rather than the local Nexus row id.
+  let responsesBody: any = null;
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/responses') && init?.method === 'POST') {
+      responsesBody = JSON.parse(String(init.body));
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_resume"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"resumed"}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_resume"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    db.prepare(
+      `INSERT INTO assistant_sessions (id, title, remote_session_id, status, created_at, updated_at)
+       VALUES (?, ?, ?, 'idle', ?, ?)`,
+    ).run('local-adopted', 'Adopted', 'remote-api-1', '2026-07-02T08:00:00.000Z', '2026-07-02T08:00:00.000Z');
+
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/local-adopted/messages/stream',
+      payload: { content: 'keep going' },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(responsesBody.session_id, 'remote-api-1');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});

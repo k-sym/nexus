@@ -530,7 +530,7 @@ Each project has a sessions interface:
 
 ### Assistant
 
-A project-less Hermes Assistant surface against the configured endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It is independent of project sessions and stores its own local Assistant sessions, transcripts, and run ledger in `assistant_sessions`, `assistant_session_messages`, and `assistant_runs`. Each session can be reopened from the Assistant rail, foreground turns stream over NDJSON, and detached background runs store the remote Hermes run ID so Nexus can poll `/api/assistant/sync` after restart. The legacy single-thread Assistant endpoints remain as wrappers over the newest/default session for compatibility.
+A project-less Hermes Assistant surface against the configured endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It is independent of project sessions and stores its own local Assistant sessions, transcripts, and run ledger in `assistant_sessions`, `assistant_session_messages`, and `assistant_runs`. Each session can be reopened from the Assistant rail, foreground turns stream over NDJSON, and detached background runs store the remote Hermes run ID so Nexus can poll `/api/assistant/sync` after restart. When Hermes exposes session listing, the Assistant rail can also show filtered remote API sessions; selecting one adopts it into Nexus, imports message history, and resumes future turns against the mapped Hermes `remote_session_id`. The legacy single-thread Assistant endpoints remain as wrappers over the newest/default session for compatibility.
 
 ### Braindump
 
@@ -703,8 +703,9 @@ Base URL: `http://127.0.0.1:4173`
 ### Assistant
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/assistant/sessions` | List non-archived Assistant sessions with latest run status |
+| GET | `/api/assistant/sessions` | List non-archived Assistant sessions with latest run status, plus any filtered adoptable remote Hermes API sessions (`remoteOnly: true`) |
 | POST | `/api/assistant/sessions` | Create an Assistant session |
+| POST | `/api/assistant/sessions/import` | Adopt a remote Hermes session by `remoteSessionId`: upsert a local row, import its transcript, and map `remote_session_id` |
 | GET | `/api/assistant/sessions/:id` | Load one session, its transcript, and latest run |
 | PATCH | `/api/assistant/sessions/:id` | Rename or archive a session |
 | DELETE | `/api/assistant/sessions/:id` | Delete a local Assistant session |

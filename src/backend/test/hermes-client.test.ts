@@ -247,3 +247,45 @@ test('streamResponses forwards the provided AbortSignal to fetchImpl', async () 
 
   assert.equal(capturedSignal, controller.signal);
 });
+
+test('listSessions calls Hermes sessions API with source filtering', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const fetchImpl: HermesFetch = async (url, init) => {
+    calls.push({ url: String(url), init });
+    return jsonResponse({
+      sessions: [
+        { id: 'remote-api-1', title: 'API run', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' },
+      ],
+      next_offset: null,
+    });
+  };
+
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642/v1', key: 'secret', fetchImpl });
+  const result = await client.listSessions({ limit: 50, offset: 0, source: 'api_server', includeChildren: false });
+
+  assert.equal(calls[0].url, 'http://127.0.0.1:8642/api/sessions?limit=50&offset=0&source=api_server&include_children=false');
+  assert.equal((calls[0].init?.headers as Record<string, string>).Authorization, 'Bearer secret');
+  assert.deepEqual(result.sessions, [
+    { id: 'remote-api-1', title: 'API run', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' },
+  ]);
+  assert.equal(result.nextOffset, null);
+});
+
+test('getSessionMessages maps Hermes message history', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    assert.equal(String(url), 'http://127.0.0.1:8642/api/sessions/remote-api-1/messages');
+    assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer secret');
+    return jsonResponse({
+      messages: [
+        { id: 'hm1', role: 'user', content: 'resume this', created_at: '2026-07-02T10:01:00.000Z' },
+        { id: 'hm2', role: 'assistant', content: 'ready', created_at: '2026-07-02T10:02:00.000Z' },
+      ],
+    });
+  };
+
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  assert.deepEqual(await client.getSessionMessages('remote-api-1'), [
+    { id: 'hm1', role: 'user', content: 'resume this', created_at: '2026-07-02T10:01:00.000Z' },
+    { id: 'hm2', role: 'assistant', content: 'ready', created_at: '2026-07-02T10:02:00.000Z' },
+  ]);
+});
