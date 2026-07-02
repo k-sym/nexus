@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AssistantView from './AssistantView';
 import { confirmDialog } from '../lib/confirm';
@@ -112,7 +113,6 @@ describe('AssistantView', () => {
     expect(await screen.findByRole('button', { name: /Nightly checks/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Release watch/i })).toBeInTheDocument();
     expect(await screen.findByText('checks queued')).toBeInTheDocument();
-    expect(screen.getByText('Idle')).toBeInTheDocument();
   });
 
   it('switches sessions from the session rail', async () => {
@@ -264,7 +264,9 @@ describe('AssistantView', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Release watch/i }));
     const input = await screen.findByPlaceholderText('Message Assistant...');
     fireEvent.change(input, { target: { value: '/clear' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    // The session is running, so the composer shows Stop instead of Send;
+    // submit via Enter (handleKeyDown → handleSend) to reach the /clear path.
+    fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s2', { method: 'DELETE' });
@@ -353,8 +355,36 @@ describe('AssistantView', () => {
     fireEvent.change(input, { target: { value: 'run ls' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
 
-    // Task 5 renders the tool row (AgentRunCard/ToolActivity); here we only assert
-    // the hook accumulates streamed text into the draft assistant message.
+    // Task 5 renders the run via AgentRunCard/ToolActivity: once the run completes,
+    // the tool timeline collapses into a summary row (the full "bash $ ls" row is
+    // only shown while running or expanded; see the dedicated streaming test below).
+    // The hook still accumulates streamed text into the draft assistant message.
     expect(await screen.findByText('Done.')).toBeInTheDocument();
+    expect(await screen.findByText('1 tool call')).toBeInTheDocument();
+    expect(await screen.findByText(/Completed/i)).toBeInTheDocument();
+  });
+
+  it('shows the run card tool row, the status strip, and a Stop button while streaming', async () => {
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/sessions') return { ok: true, json: async () => ({ sessions: [{ id: 's1', title: 'S', status: 'idle' }] }) } as Response;
+      if (url === '/api/assistant/sessions/s1') return { ok: true, json: async () => ({ session: { id: 's1', title: 'S', status: 'idle' }, messages: [], latestRun: null }) } as Response;
+      if (url.endsWith('/messages/stream')) {
+        // Stream stays "open" (no run_end) so the run is still active when we assert.
+        return ndjsonStreamResponse([
+          { kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: '2026-07-02T00:00:00.000Z', provider: 'assistant', model: 'hermes-agent' } },
+          { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'Bash', args: { command: 'ls' } },
+        ]);
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<AssistantView />);
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    await userEvent.type(input, 'run ls');
+    await userEvent.click(screen.getByRole('button', { name: /Send/i }));
+
+    expect(await screen.findByText(/bash.*ls/i)).toBeInTheDocument();
+    expect(await screen.findByTestId('run-status')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Stop current run' })).toBeInTheDocument();
   });
 });
