@@ -51,6 +51,8 @@ export interface AssistantSession {
   updated_at?: string;
   archived_at?: string | null;
   latestRun?: AssistantRun | null;
+  remoteOnly?: boolean;
+  source?: string | null;
 }
 
 export interface AssistantMessage {
@@ -101,10 +103,15 @@ export function useAssistantStream() {
   const sendingRef = useRef(false);
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const selectedSessionIdRef = useRef<string | null>(null);
+  const sessionsRef = useRef<AssistantSession[]>([]);
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId]);
+
+  useEffect(() => {
+    sessionsRef.current = sessions;
+  }, [sessions]);
 
   const cancelActiveReader = useCallback(() => {
     const reader = readerRef.current;
@@ -119,8 +126,43 @@ export function useAssistantStream() {
     ));
   }, []);
 
+  // Adopt a remote-only Hermes session into Nexus: import its metadata + transcript,
+  // then treat it as a normal local session for the rest of the UI.
+  const importRemoteSession = useCallback(async (session: AssistantSession): Promise<boolean> => {
+    setError(null);
+    const remoteSessionId = session.remote_session_id ?? session.id.replace(/^remote:/, '');
+    const res = await apiFetch('/api/assistant/sessions/import', {
+      method: 'POST',
+      body: JSON.stringify({ remoteSessionId }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!res.ok) {
+      setError(await responseError(res));
+      return false;
+    }
+    const data = (await res.json()) as {
+      session: AssistantSession;
+      messages?: AssistantMessage[];
+      latestRun?: AssistantRun | null;
+    };
+    const run = data.latestRun ?? null;
+    setSelectedSessionId(data.session.id);
+    setMessages(data.messages ?? []);
+    setLatestRun(run);
+    setIsRunning(isActiveRunStatus(run?.status));
+    setSessions((current) => [
+      { ...data.session, remoteOnly: false, latestRun: run },
+      ...current.filter((item) => item.id !== session.id && item.id !== data.session.id),
+    ]);
+    return true;
+  }, []);
+
   const loadSession = useCallback(async (sessionId: string): Promise<boolean> => {
     setError(null);
+    // Remote-only rows have a synthetic `remote:` id and no local transcript yet;
+    // clicking one adopts it instead of fetching a (non-existent) local session.
+    const remoteCandidate = sessionsRef.current.find((session) => session.id === sessionId && session.remoteOnly);
+    if (remoteCandidate) return importRemoteSession(remoteCandidate);
     const res = await apiFetch(`/api/assistant/sessions/${sessionId}`);
     if (!res.ok) {
       setError(await responseError(res));
@@ -138,7 +180,7 @@ export function useAssistantStream() {
     setIsRunning(run?.status === 'running' || run?.status === 'cancelling');
     applySessionStatus(data.session, run);
     return true;
-  }, [applySessionStatus]);
+  }, [applySessionStatus, importRemoteSession]);
 
   const loadSessions = useCallback(async (): Promise<boolean> => {
     setError(null);
@@ -151,10 +193,12 @@ export function useAssistantStream() {
     const nextSessions = data.sessions ?? [];
     setSessions(nextSessions);
 
+    // Only auto-select local sessions; remote-only rows are adopted on explicit
+    // click, never implicitly on load.
     const currentSelectedId = selectedSessionIdRef.current;
-    const target = currentSelectedId && nextSessions.some((session) => session.id === currentSelectedId)
+    const target = currentSelectedId && nextSessions.some((session) => session.id === currentSelectedId && !session.remoteOnly)
       ? currentSelectedId
-      : nextSessions[0]?.id;
+      : nextSessions.find((session) => !session.remoteOnly)?.id;
 
     if (target) {
       return loadSession(target);

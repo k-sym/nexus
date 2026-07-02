@@ -448,6 +448,11 @@ function SessionRow({ session, selected, onSelect }: { session: AssistantSession
       <div className="flex items-center gap-2 min-w-0">
         <span className={`h-2 w-2 rounded-full shrink-0 ${active ? 'bg-emerald-400' : 'bg-[var(--border-strong)]'}`} aria-hidden="true" />
         <span className="text-sm font-medium truncate">{session.title}</span>
+        {session.remoteOnly && (
+          <span className="ml-auto rounded border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-faint shrink-0">
+            Remote
+          </span>
+        )}
       </div>
       {session.updated_at && (
         <div className="text-[11px] text-faint mt-1 truncate">{relativeUpdatedAt(session.updated_at)}</div>

@@ -65,6 +65,35 @@ export interface HermesSessionChatResult {
   usage?: unknown;
 }
 
+export interface HermesListSessionsInput {
+  limit?: number;
+  offset?: number;
+  source?: string;
+  includeChildren?: boolean;
+}
+
+export interface HermesListedSession {
+  id: string;
+  title?: string;
+  source?: string;
+  created_at?: string;
+  updated_at?: string;
+  archived_at?: string | null;
+  end_reason?: string | null;
+}
+
+export interface HermesListSessionsResult {
+  sessions: HermesListedSession[];
+  nextOffset: number | null;
+}
+
+export interface HermesSessionMessage {
+  id?: string;
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string;
+  created_at?: string;
+}
+
 export interface HermesCapabilities {
   runs: boolean;
   runEvents: boolean;
@@ -82,6 +111,9 @@ export interface HermesClient {
   stopRun(runId: string): Promise<void>;
   createSession(input: HermesSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
+  listSessions(input?: HermesListSessionsInput): Promise<HermesListSessionsResult>;
+  getSession(sessionId: string): Promise<HermesListedSession | null>;
+  getSessionMessages(sessionId: string): Promise<HermesSessionMessage[]>;
   sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult>;
   streamChatCompletions(messages: Array<{ role: string; content: string }>): AsyncIterable<string>;
   streamResponses(input: HermesResponsesInput): AsyncIterable<HermesResponseEvent>;
@@ -194,6 +226,32 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
 
     async deleteSession(sessionId: string): Promise<void> {
       await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    },
+
+    async listSessions(input: HermesListSessionsInput = {}): Promise<HermesListSessionsResult> {
+      const params = new URLSearchParams();
+      if (input.limit !== undefined) params.set('limit', String(input.limit));
+      if (input.offset !== undefined) params.set('offset', String(input.offset));
+      if (input.source !== undefined) params.set('source', input.source);
+      if (input.includeChildren !== undefined) params.set('include_children', String(input.includeChildren));
+      const query = params.toString();
+      const body = (await requestJson(`/api/sessions${query ? `?${query}` : ''}`)) as any;
+      const sessions: HermesListedSession[] = Array.isArray(body) ? body : body?.sessions ?? [];
+      const rawNext = body?.next_offset ?? body?.nextOffset ?? null;
+      const nextOffset = rawNext === null || rawNext === undefined ? null : Number(rawNext);
+      return { sessions, nextOffset };
+    },
+
+    async getSession(sessionId: string): Promise<HermesListedSession | null> {
+      const body = (await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`)) as any;
+      const session = body?.session ?? body;
+      return session && typeof session === 'object' ? (session as HermesListedSession) : null;
+    },
+
+    async getSessionMessages(sessionId: string): Promise<HermesSessionMessage[]> {
+      const body = (await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`)) as any;
+      const messages = Array.isArray(body) ? body : body?.messages ?? [];
+      return messages as HermesSessionMessage[];
     },
 
     async sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult> {

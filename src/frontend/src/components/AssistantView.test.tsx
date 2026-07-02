@@ -387,4 +387,52 @@ describe('AssistantView', () => {
     expect(await screen.findByTestId('run-status')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Stop current run' })).toBeInTheDocument();
   });
+
+  it('renders remote Hermes sessions in the Assistant rail and imports on click', async () => {
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/sessions') {
+        return { ok: true, json: async () => ({ sessions: [
+          { id: 'remote:remote-api-1', title: 'Remote API session', status: 'remote', remoteOnly: true, remote_session_id: 'remote-api-1', updated_at: '2026-07-02T10:00:00.000Z' },
+        ] }) } as Response;
+      }
+      if (url === '/api/assistant/sessions/import') {
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual({ remoteSessionId: 'remote-api-1' });
+        return { ok: true, json: async () => ({
+          session: { id: 'local-imported', title: 'Remote API session', status: 'idle', remote_session_id: 'remote-api-1' },
+          messages: [{ id: 'm1', role: 'assistant', content: 'imported transcript', created_at: '2026-07-02T10:02:00.000Z' }],
+          latestRun: null,
+        }) } as Response;
+      }
+      if (url === '/api/assistant/sessions/local-imported') {
+        return { ok: true, json: async () => ({
+          session: { id: 'local-imported', title: 'Remote API session', status: 'idle', remote_session_id: 'remote-api-1' },
+          messages: [{ id: 'm1', role: 'assistant', content: 'imported transcript', created_at: '2026-07-02T10:02:00.000Z' }],
+          latestRun: null,
+        }) } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /Remote API session/i }));
+    expect(await screen.findByText('imported transcript')).toBeInTheDocument();
+  });
+
+  it('marks remote-only Hermes sessions without changing local session controls', async () => {
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/assistant/sessions') {
+        return { ok: true, json: async () => ({ sessions: [
+          { id: 'remote:remote-api-1', title: 'Remote API session', status: 'remote', remoteOnly: true, remote_session_id: 'remote-api-1' },
+        ] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ session: null, messages: [], latestRun: null }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    const row = await screen.findByRole('button', { name: /Remote API session/i });
+    expect(within(row).getByText('Remote')).toBeInTheDocument();
+  });
 });

@@ -4,7 +4,14 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
 import type { NexusConfig } from '@nexus/shared';
-import { createHermesClient, type HermesContentPart, type HermesFetch, type HermesRunStatus } from '../hermes/client.js';
+import {
+  createHermesClient,
+  type HermesContentPart,
+  type HermesFetch,
+  type HermesListedSession,
+  type HermesRunStatus,
+  type HermesSessionMessage,
+} from '../hermes/client.js';
 
 interface AssistantMessage {
   id: string;
@@ -104,6 +111,33 @@ function configuredAssistant(load: () => NexusConfig) {
   const url = resolveEnvVars(config.assistant.url || '').trim();
   const key = resolveAssistantKey(config);
   return { url, key };
+}
+
+const HERMES_ASSISTANT_SOURCE = 'api_server';
+
+// Accept only unfiltered/api_server sessions; this rejects cron, job, scheduled,
+// cli, and dashboard work that must not appear in the Assistant rail.
+function isAdoptableRemoteSource(source: string | undefined): boolean {
+  return source === undefined || source === HERMES_ASSISTANT_SOURCE;
+}
+
+function remoteSyntheticId(remoteSessionId: string): string {
+  return `remote:${remoteSessionId}`;
+}
+
+function publicRemoteSession(remote: HermesListedSession) {
+  return {
+    id: remoteSyntheticId(remote.id),
+    title: remote.title?.trim() || 'Remote Hermes Session',
+    remote_session_id: remote.id,
+    status: 'remote',
+    remoteOnly: true,
+    source: remote.source ?? null,
+    created_at: remote.created_at,
+    updated_at: remote.updated_at,
+    archived_at: null,
+    latestRun: null,
+  };
 }
 
 function publicMessage(message: AssistantMessage) {
@@ -539,17 +573,123 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     };
 
     fastify.get('/api/assistant/sessions', async () => {
-      const sessions = db
+      const localSessions = db
         .prepare('SELECT * FROM assistant_sessions WHERE archived_at IS NULL ORDER BY updated_at DESC')
         .all() as AssistantSession[];
-      return {
-        sessions: sessions.map((session) => ({ ...session, latestRun: publicRun(latestRun(db, session.id)) })),
-      };
+      const localRows = localSessions.map((session) => ({
+        ...session,
+        remoteOnly: false,
+        latestRun: publicRun(latestRun(db, session.id)),
+      }));
+
+      // Local-first: only augment with adoptable remote Hermes sessions when the
+      // assistant is configured and listing succeeds. Any failure falls back to locals.
+      const remoteRows: ReturnType<typeof publicRemoteSession>[] = [];
+      const hermes = client();
+      if (hermes) {
+        try {
+          const claimed = new Set<string>();
+          for (const session of localSessions) {
+            claimed.add(session.id);
+            if (session.remote_session_id) claimed.add(session.remote_session_id);
+          }
+          const { sessions: remoteSessions } = await hermes.listSessions({
+            limit: 100,
+            offset: 0,
+            source: HERMES_ASSISTANT_SOURCE,
+            includeChildren: false,
+          });
+          for (const remote of remoteSessions) {
+            if (!remote?.id) continue;
+            if (!isAdoptableRemoteSource(remote.source)) continue;
+            if (claimed.has(remote.id) || claimed.has(remoteSyntheticId(remote.id))) continue;
+            claimed.add(remote.id);
+            remoteRows.push(publicRemoteSession(remote));
+          }
+        } catch {
+          // Hermes listing unavailable — keep rendering local sessions only.
+        }
+      }
+
+      const merged = [...localRows, ...remoteRows].sort((a, b) =>
+        (b.updated_at ?? '').localeCompare(a.updated_at ?? ''),
+      );
+      return { sessions: merged };
     });
 
     fastify.post('/api/assistant/sessions', async (request) => {
       const body = (request.body ?? {}) as { title?: string };
       return createSession(db, body.title);
+    });
+
+    fastify.post('/api/assistant/sessions/import', async (request, reply) => {
+      const body = (request.body ?? {}) as { remoteSessionId?: string };
+      const remoteSessionId = String(body.remoteSessionId ?? '').trim();
+      if (!remoteSessionId) {
+        reply.code(400);
+        return { error: 'remoteSessionId is required' };
+      }
+      const hermes = client();
+      if (!hermes) {
+        reply.code(400);
+        return { error: 'Assistant URL and key must be configured in Settings.' };
+      }
+
+      let remoteTitle: string | undefined;
+      try {
+        const detail = await hermes.getSession(remoteSessionId);
+        remoteTitle = detail?.title?.trim() || undefined;
+      } catch {
+        // Tolerate a missing detail endpoint; adoption still proceeds with a fallback title.
+      }
+
+      const now = new Date().toISOString();
+      let session = db
+        .prepare('SELECT * FROM assistant_sessions WHERE remote_session_id = ? AND archived_at IS NULL')
+        .get(remoteSessionId) as AssistantSession | undefined;
+      if (!session) {
+        const id = uuid();
+        db.prepare(
+          `INSERT INTO assistant_sessions
+            (id, title, remote_session_id, status, created_at, updated_at, archived_at)
+           VALUES (?, ?, ?, 'idle', ?, ?, NULL)`,
+        ).run(id, remoteTitle || 'Remote Hermes Session', remoteSessionId, now, now);
+        session = db.prepare('SELECT * FROM assistant_sessions WHERE id = ?').get(id) as AssistantSession;
+      } else if (remoteTitle && remoteTitle !== session.title) {
+        db.prepare('UPDATE assistant_sessions SET title = ?, updated_at = ? WHERE id = ?').run(remoteTitle, now, session.id);
+        session = db.prepare('SELECT * FROM assistant_sessions WHERE id = ?').get(session.id) as AssistantSession;
+      }
+
+      let remoteMessages: HermesSessionMessage[] = [];
+      try {
+        remoteMessages = await hermes.getSessionMessages(remoteSessionId);
+      } catch {
+        // Tolerate message-history fetch failures; the local session is still adopted.
+      }
+      const insertMessage = db.prepare(
+        `INSERT OR IGNORE INTO assistant_session_messages
+          (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+      );
+      for (const message of remoteMessages) {
+        if (!message?.content && message?.content !== '') continue;
+        const localId = message.id ? `remote:${remoteSessionId}:${message.id}` : uuid();
+        insertMessage.run(
+          localId,
+          session.id,
+          message.id ?? null,
+          message.role,
+          message.content,
+          JSON.stringify([]),
+          message.created_at ?? now,
+        );
+      }
+
+      return {
+        session,
+        messages: readMessages(db, session.id).map(publicMessage),
+        latestRun: publicRun(latestRun(db, session.id)),
+      };
     });
 
     fastify.get('/api/assistant/sessions/:id', async (request, reply) => {
