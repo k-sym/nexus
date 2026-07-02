@@ -1,9 +1,8 @@
-import { useState } from 'react';
 import type { AgentRunView } from '../chat/agent-run-state';
 import type { QuestionAnswer, QuestionToolResult } from '../lib/questions';
-import { AgentRunHeader } from './AgentRunHeader';
+import { terminalLabel } from './runLabels';
 import { ThinkingBlock } from './ThinkingBlock';
-import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
+import { ToolActivity, QuestionCards } from './ToolCallTimeline';
 import ChatMessageContent from './ChatMessageContent';
 
 interface AgentRunCardProps {
@@ -11,25 +10,10 @@ interface AgentRunCardProps {
   content: string;
   thinking?: string | null;
   detailsExpanded: boolean;
-  /** When true, this is the latest assistant response in the thread. A
-   *  completed latest run stays expanded so the user can see what they're
-   *  replying to; it collapses once the user sends a reply (isLatest becomes
-   *  false). The user's manual toggle is always respected. (issue #108) */
-  isLatest?: boolean;
   onStop: () => void;
   questionState?: Record<string, { submitting?: boolean; error?: string; result?: QuestionToolResult }>;
   onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
   onOpenArtifact?: (path: string) => void;
-}
-
-function runSummary(run: AgentRunView): string {
-  const count = run.tools.length;
-  const failed = run.tools.filter((tool) => tool.status === 'failed').length;
-  const interrupted = run.tools.filter((tool) => tool.status === 'interrupted' || tool.status === 'cancelled').length;
-  const parts = [`${count} tool call${count === 1 ? '' : 's'}`];
-  if (failed > 0) parts.push(`${failed} failed`);
-  if (interrupted > 0) parts.push(`${interrupted} interrupted`);
-  return parts.join(' · ');
 }
 
 export function AgentRunCard({
@@ -37,66 +21,63 @@ export function AgentRunCard({
   content,
   thinking,
   detailsExpanded,
-  isLatest = false,
-  onStop,
   questionState,
   onAnswerQuestion,
   onOpenArtifact,
 }: AgentRunCardProps) {
-  // Expansion model (issue #108): a run auto-expands while running, when it
-  // ended badly (failed/cancelled/interrupted), or when it's the latest
-  // assistant response the user is replying to. The user's manual toggle is
-  // captured as an override that always wins over the auto state, so once
-  // they explicitly open/close a card it stays that way.
-  const [userOverride, setUserOverride] = useState<boolean | null>(null);
-  const autoExpanded =
-    run.status === 'running' ||
-    run.status === 'failed' ||
-    run.status === 'cancelled' ||
-    run.status === 'interrupted' ||
-    isLatest;
-  const expanded = userOverride ?? (autoExpanded || detailsExpanded);
+  const running = run.status === 'running';
+
+  const toolActivity = (
+    <ToolActivity
+      toolCalls={run.tools}
+      running={running}
+      detailsExpanded={detailsExpanded}
+      terminalLabel={running ? undefined : terminalLabel(run)}
+    />
+  );
+
+  const thinkingBlock = thinking ? (
+    <ThinkingBlock
+      thinking={thinking}
+      isThinking={running && run.phase === 'model_responding'}
+      expanded={detailsExpanded}
+    />
+  ) : null;
+
+  const contentBlock = content ? (
+    <div className="whitespace-pre-wrap text-sm">
+      {onOpenArtifact ? <ChatMessageContent text={content} onOpenPath={onOpenArtifact} /> : content}
+    </div>
+  ) : null;
 
   return (
-    <section className="agent-run-card w-full max-w-[88%] overflow-hidden rounded-xl border border-subtle surface-glass text-primary">
-      <AgentRunHeader
-        run={run}
-        expanded={expanded}
-        onToggle={() => setUserOverride(!expanded)}
-        onStop={onStop}
-        summary={runSummary(run)}
-      />
-      {expanded && (
-        <div className="space-y-2 px-3 py-2">
-          <ToolCallTimeline
-            toolCalls={run.tools}
-            detailsExpanded={detailsExpanded}
-          />
-          {thinking && (
-            <ThinkingBlock
-              thinking={thinking}
-              isThinking={run.status === 'running' && run.phase === 'model_responding'}
-              expanded={detailsExpanded}
-            />
-          )}
-          {content && (
-            <div className="whitespace-pre-wrap text-sm">
-              {onOpenArtifact ? <ChatMessageContent text={content} onOpenPath={onOpenArtifact} /> : content}
-            </div>
-          )}
-          {run.error && run.status !== 'completed' && (
-            <p className="text-xs text-red-300" role="alert">{run.error}</p>
-          )}
-          {/* Question cards render last, after the prelude text, so the ask
-              sits at the bottom of the bubble next to where the user replies
-              (issue #109). */}
-          <QuestionCards
-            toolCalls={run.tools}
-            questionState={questionState}
-            onAnswerQuestion={onAnswerQuestion}
-          />
-        </div>
+    <section className="agent-run-card w-full max-w-[88%] space-y-2 overflow-hidden rounded-xl border border-subtle surface-glass px-3 py-2 text-primary">
+      {/* Running: show live tool activity first, then the emerging text. Finished:
+          lead with the model's text and tuck tool detail into the summary below
+          (issue: keep model output on screen; header removed). */}
+      {running ? (
+        <>
+          {toolActivity}
+          {thinkingBlock}
+          {contentBlock}
+        </>
+      ) : (
+        <>
+          {thinkingBlock}
+          {contentBlock}
+          {toolActivity}
+        </>
       )}
+      {run.error && run.status !== 'completed' && (
+        <p className="text-xs text-red-300" role="alert">{run.error}</p>
+      )}
+      {/* Question cards render last so the ask sits at the bottom of the bubble
+          next to where the user replies (issue #109). */}
+      <QuestionCards
+        toolCalls={run.tools}
+        questionState={questionState}
+        onAnswerQuestion={onAnswerQuestion}
+      />
     </section>
   );
 }

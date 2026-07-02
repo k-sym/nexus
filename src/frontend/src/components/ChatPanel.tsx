@@ -632,11 +632,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     : loadedMessages.concat(state.messages);
   const streaming = state.streamingMessage;
   const isEmpty = visible.length === 0 && !streaming;
-  // The latest assistant response stays expanded so the user can see what
-  // they're replying to (issue #108). While a new run is streaming, none of
-  // the existing assistant messages is "latest" — the new one is in flight —
-  // so they collapse and the streaming response takes focus.
-  const latestAssistantId = isRunning ? null : findLatestAssistantId(visible);
   // Persistent status pinned above the composer so "is it still working?" is
   // always visible without scrolling back up to the run card's header, which
   // climbs out of view as tool output streams in.
@@ -720,7 +715,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               key={m.id}
               msg={m}
               detailsExpanded={detailsExpanded}
-              isLatest={m.id === latestAssistantId}
               questionState={questionSubmissions}
               fallbackState={fallbackSubmissions[m.id]}
               onAnswerQuestion={answerNativeQuestion}
@@ -827,21 +821,14 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
             <ContextUsageLabel usage={state.contextUsage} />
             {isRunning ? (
-              // A re-attached run (this instance isn't driving the stream)
-              // already exposes its Stop control on the message's own
-              // AgentRunHeader; showing a second "Stop current run" button
-              // here would duplicate it. Only render the composer's Stop
-              // for a run this instance is actively streaming.
-              state.isRunning && (
-                <button
-                  type="button"
-                  onClick={handleStop}
-                  aria-label="Stop current run"
-                  className="px-4 py-2 accent-button rounded-lg transition-colors"
-                >
-                  Stop
-                </button>
-              )
+              <button
+                type="button"
+                onClick={handleStop}
+                aria-label="Stop current run"
+                className="px-4 py-2 accent-button rounded-lg transition-colors"
+              >
+                Stop
+              </button>
             ) : (
               <button
                 type="button"
@@ -870,7 +857,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 function MessageBubble({
   msg,
   detailsExpanded,
-  isLatest,
   questionState,
   fallbackState,
   onAnswerQuestion,
@@ -880,7 +866,6 @@ function MessageBubble({
 }: {
   msg: StreamMessage;
   detailsExpanded: boolean;
-  isLatest?: boolean;
   questionState: QuestionSubmissionState;
   fallbackState?: QuestionSubmissionState[string];
   onAnswerQuestion: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
@@ -902,7 +887,6 @@ function MessageBubble({
           content={msg.content}
           thinking={msg.thinking}
           detailsExpanded={detailsExpanded}
-          isLatest={isLatest}
           onStop={onStop}
           questionState={questionState}
           onAnswerQuestion={onAnswerQuestion}
@@ -1029,15 +1013,4 @@ function streamStatusLabel(status: StreamState['status']): string {
     case 'responding': return 'Model responding';
     default: return 'Working…';
   }
-}
-
-/** Id of the last assistant (non-user, non-toolResult) message in the list,
- *  or null if there is none. Used to mark the latest response so it stays
- *  expanded until the user replies (issue #108). */
-function findLatestAssistantId(messages: StreamMessage[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const m = messages[i];
-    if (m.role !== 'user' && m.role !== 'toolResult') return m.id;
-  }
-  return null;
 }
