@@ -290,13 +290,6 @@ body {
     background: rgba(50, 66, 74, 0.74);
   }
 
-  .compact-project-future-space {
-    border: 1px dashed rgba(124, 151, 166, 0.16);
-    border-radius: 0.7rem;
-    background: rgba(21, 29, 33, 0.38);
-    padding: 0.7rem 0.8rem;
-  }
-
   .compact-project-list-card {
     border: 1px solid rgba(124, 151, 166, 0.14);
     border-radius: 0.7rem;
