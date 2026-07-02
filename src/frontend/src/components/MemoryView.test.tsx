@@ -2,7 +2,10 @@ import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
+import { confirmDialog } from '../lib/confirm';
 import MemoryView from './MemoryView';
+
+vi.mock('../lib/confirm', () => ({ confirmDialog: vi.fn() }));
 
 vi.mock('../api', () => ({
   api: {
@@ -65,7 +68,7 @@ describe('MemoryView', () => {
     memoryApi.update.mockResolvedValue(undefined);
     memoryApi.delete.mockResolvedValue(undefined);
     stubClipboard();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(confirmDialog).mockReset().mockResolvedValue(true);
   });
 
   it('renders recent memories with visible management actions and copies content', async () => {
@@ -116,7 +119,7 @@ describe('MemoryView', () => {
     await waitFor(() => expect(memoryApi.list).toHaveBeenCalledTimes(2));
 
     await user.click(screen.getByRole('button', { name: 'Delete memory' }));
-    expect(window.confirm).toHaveBeenCalledWith('Delete this memory permanently?');
+    expect(confirmDialog).toHaveBeenCalledWith('Delete this memory permanently?');
     await waitFor(() => expect(memoryApi.delete).toHaveBeenCalledWith('mem-1'));
   });
 

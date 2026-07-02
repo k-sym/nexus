@@ -1,6 +1,9 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AssistantView from './AssistantView';
+import { confirmDialog } from '../lib/confirm';
+
+vi.mock('../lib/confirm', () => ({ confirmDialog: vi.fn() }));
 
 const { apiFetchMock } = vi.hoisted(() => ({ apiFetchMock: vi.fn() }));
 
@@ -83,7 +86,7 @@ function installDefaultMock() {
 describe('AssistantView', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.mocked(confirmDialog).mockReset().mockResolvedValue(true);
     installDefaultMock();
   });
 
@@ -175,10 +178,7 @@ describe('AssistantView', () => {
     });
   });
 
-  it('deletes the selected Assistant session from a visible delete control without native confirm', async () => {
-    vi.mocked(window.confirm).mockImplementation(() => {
-      throw new Error('confirm unavailable');
-    });
+  it('deletes the selected Assistant session from a visible delete control without a confirm dialog', async () => {
     render(<AssistantView />);
 
     fireEvent.click(await screen.findByRole('button', { name: /Delete Assistant session/i }));
@@ -187,6 +187,8 @@ describe('AssistantView', () => {
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1', { method: 'DELETE' });
     });
+    // The inline two-step control is self-contained; it must not route through confirmDialog.
+    expect(confirmDialog).not.toHaveBeenCalled();
   });
 
   it('attaches files to Assistant messages', async () => {

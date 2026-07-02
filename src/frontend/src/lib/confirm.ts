@@ -1,17 +1,48 @@
-// A confirm() that works in both the Tauri webview and a plain browser.
+// An in-app confirmation dialog that works identically in the Tauri webview and
+// a plain browser.
 //
-// In a browser, window.confirm is a synchronous boolean. Inside the Tauri
-// webview the dialog plugin overrides window.confirm with an async shim that
-// returns a Promise<boolean> and is gated by the `dialog:allow-confirm`
-// capability — so `if (window.confirm(...))` is always truthy (a Promise) and
-// rejects when the permission is missing (the "dialog.confirm not allowed"
-// error). Awaiting Promise.resolve() collapses both shapes to a real boolean;
-// on any failure we fail safe and treat it as "no" so a destructive action is
-// never taken on an unhandled dialog error.
-export async function confirmDialog(message: string): Promise<boolean> {
-  try {
-    return Boolean(await Promise.resolve(window.confirm(message) as boolean | Promise<boolean>));
-  } catch {
-    return false;
+// We deliberately do NOT use window.confirm here. In the Tauri webview the
+// dialog plugin replaces window.confirm with an async, capability-gated shim:
+// when the `dialog:allow-confirm` capability isn't compiled into the running
+// binary the command is rejected, and a naive guard either always fires (the
+// Promise is truthy) or silently fails safe to "no" — which is exactly how
+// Archive/Delete once broke. Instead we render our own modal (ConfirmHost) and
+// resolve a real boolean, so the flow is fully in our control and traceable.
+//
+// confirmDialog() keeps the same `await confirmDialog(msg)` call shape the rest
+// of the app already uses; only the implementation changed.
+
+export interface ConfirmRequest {
+  message: string;
+  /** Called by the host with the user's choice; also dismisses the dialog. */
+  resolve: (result: boolean) => void;
+}
+
+type Listener = (request: ConfirmRequest | null) => void;
+
+let listener: Listener | null = null;
+
+/** Register the single mounted ConfirmHost. Pass null to unregister. */
+export function setConfirmListener(fn: Listener | null): void {
+  listener = fn;
+}
+
+export function confirmDialog(message: string): Promise<boolean> {
+  console.debug('[confirm] requested:', message);
+  if (!listener) {
+    // No modal host mounted — refuse rather than silently proceeding, so a
+    // destructive action is never taken on an unhandled confirm.
+    console.warn('[confirm] no ConfirmHost mounted; denying (fail-safe):', message);
+    return Promise.resolve(false);
   }
+  return new Promise<boolean>((resolve) => {
+    listener!({
+      message,
+      resolve: (result: boolean) => {
+        console.debug('[confirm] resolved:', message, '→', result);
+        listener?.(null); // dismiss the dialog
+        resolve(result);
+      },
+    });
+  });
 }

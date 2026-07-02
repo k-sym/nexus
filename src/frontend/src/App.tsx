@@ -10,6 +10,7 @@ import TicketsView from './components/TicketsView';
 import BraindumpView from './components/BraindumpView';
 import DaemonToasts from './components/DaemonToasts';
 import NotificationToasts from './components/NotificationToasts';
+import ConfirmHost from './components/ConfirmHost';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import AssistantView from './components/AssistantView';
@@ -732,6 +733,7 @@ export default function App() {
 
       <DaemonToasts status={status} />
       <NotificationToasts />
+      <ConfirmHost />
 
       {diffReviewTask && activeProjectId && (
         <DiffReviewPanel
