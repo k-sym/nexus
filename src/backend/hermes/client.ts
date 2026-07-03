@@ -28,6 +28,7 @@ export interface HermesResponsesInput {
   input: string;
   sessionId?: string;
   sessionKey?: string;
+  previousResponseId?: string;
   instructions?: string;
   signal?: AbortSignal;
 }
@@ -236,7 +237,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       if (input.includeChildren !== undefined) params.set('include_children', String(input.includeChildren));
       const query = params.toString();
       const body = (await requestJson(`/api/sessions${query ? `?${query}` : ''}`)) as any;
-      const sessions: HermesListedSession[] = Array.isArray(body) ? body : body?.sessions ?? [];
+      const sessions: HermesListedSession[] = Array.isArray(body) ? body : body?.sessions ?? body?.data ?? [];
       const rawNext = body?.next_offset ?? body?.nextOffset ?? null;
       const nextOffset = rawNext === null || rawNext === undefined ? null : Number(rawNext);
       return { sessions, nextOffset };
@@ -250,7 +251,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
 
     async getSessionMessages(sessionId: string): Promise<HermesSessionMessage[]> {
       const body = (await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`)) as any;
-      const messages = Array.isArray(body) ? body : body?.messages ?? [];
+      const messages = Array.isArray(body) ? body : body?.messages ?? body?.data ?? [];
       return messages as HermesSessionMessage[];
     },
 
@@ -302,6 +303,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
     async *streamResponses(input: HermesResponsesInput): AsyncIterable<HermesResponseEvent> {
       const body: Record<string, unknown> = { input: input.input, stream: true };
       if (input.sessionId) body.session_id = input.sessionId;
+      if (input.previousResponseId) body.previous_response_id = input.previousResponseId;
       if (input.instructions) body.instructions = input.instructions;
       const response = await fetchImpl(`${baseUrl}/v1/responses`, {
         method: 'POST',
