@@ -868,7 +868,14 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
-      appendMessage(db, session.id, 'user', content, savedAttachments);
+      // Note: the background prompt is NOT written to the Pi store here. Pi's SessionManager
+      // only flushes a session file to disk once it contains an assistant message (see
+      // node_modules/@earendil-works/pi-coding-agent SessionManager#_persist/#resetToPath) — a
+      // lone appendUserMessage() on a SessionManager instance that is discarded at the end of
+      // this request would silently never reach disk. Instead /sync appends both the user
+      // prompt (from the run's stored input) and the assistant output on the same
+      // SessionManager instance once the run completes, so the pair flushes together. Plain
+      // messages only — no run-start/run-end markers (see /sync for rationale).
       const run = createRun(db, session.id, 'overnight', promptContent);
       const remote = await hermes.startRun({
         input: promptContent,
@@ -921,10 +928,25 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           const completed = completeRun(db, run, remote);
           if (completed.status !== run.status) updated += 1;
           if (completed.status === 'succeeded' && completed.output) {
-            const existing = db
-              .prepare('SELECT id FROM assistant_session_messages WHERE session_id = ? AND role = ? AND content = ?')
-              .get(run.session_id, 'assistant', completed.output);
-            if (!existing) appendMessage(db, run.session_id, 'assistant', completed.output);
+            // Persist the background turn to the Pi store (the canonical transcript store) as
+            // plain messages — no run-start/run-end markers. A background run's lifetime spans
+            // two requests (handoff, then this sync); an open run-start/run-end pair here could
+            // wrongly swallow a foreground turn appended in between when flattenEntries merges
+            // the span.
+            //
+            // Both the user prompt and the assistant output are appended here, on the same
+            // SessionManager instance, rather than writing the user message back at handoff
+            // time: Pi's SessionManager only flushes a session file to disk once it contains an
+            // assistant message, so a lone appendUserMessage() on a SessionManager instance that
+            // is discarded at the end of the handoff request would silently never reach disk.
+            // Appending both messages here, before either is flushed, means they land together.
+            const syncSm = await openAssistantSession(run.session_id, assistantSessionDir);
+            const existing = (await readAssistantEntries(run.session_id, assistantSessionDir)) as any[];
+            const hasUserPrompt = existing.some((e: any) =>
+              e.type === 'message' && e.message.role === 'user' && e.message.content === run.input,
+            );
+            if (!hasUserPrompt) appendUserMessage(syncSm, run.input);
+            appendAssistantMessage(syncSm, { text: completed.output });
           }
         } catch (err) {
           markRunUnknown(db, run, errorMessage(err));

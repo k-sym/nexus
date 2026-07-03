@@ -328,7 +328,7 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Overnight' } });
     const sessionId = created.json().id;
@@ -350,6 +350,83 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
       ['assistant', 'The overnight run is complete.'],
     ]);
     assert.equal(detail.json().latestRun.status, 'succeeded');
+
+    // The background turn is persisted in the Pi store (the canonical transcript store), not
+    // the legacy table — the same store a foreground turn uses.
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e: any) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => [e.message.role, e.message.content]), [
+      ['user', 'Work while Nexus is closed'],
+      ['assistant', [{ type: 'text', text: 'The overnight run is complete.' }]],
+    ]);
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'background turns are persisted to Pi, not the legacy table');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant background run turns survive reload when the Pi store already has a foreground turn', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_fg"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Hi there."}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_fg"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
+      return new Response(JSON.stringify({ run_id: 'remote-run-bg', status: 'started' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (String(url).endsWith('/v1/runs/remote-run-bg')) {
+      return new Response(JSON.stringify({
+        run_id: 'remote-run-bg',
+        status: 'completed',
+        output: 'The background run is complete.',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Mixed fg/bg' } });
+    const sessionId = created.json().id;
+
+    // Foreground turn first, so the Pi store is non-empty before the background run happens.
+    const streamed = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'Hello' },
+    });
+    assert.equal(streamed.statusCode, 200);
+
+    // Background handoff, then sync picks up the completed remote run.
+    const detached = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/runs`,
+      payload: { content: 'Work while Nexus is closed' },
+    });
+    assert.equal(detached.statusCode, 200);
+
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(sync.statusCode, 200);
+    assert.equal(sync.json().updated, 1);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.deepEqual(detail.json().messages.map((message: any) => [message.role, message.content]), [
+      ['user', 'Hello'],
+      ['assistant', 'Hi there.'],
+      ['user', 'Work while Nexus is closed'],
+      ['assistant', 'The background run is complete.'],
+    ]);
+
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'background turns are persisted to Pi, not the legacy table');
   } finally {
     await cleanup(app, db, dir);
   }
@@ -599,7 +676,7 @@ test('Assistant sync isolates stale Hermes run_not_found failures and continues 
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const staleSession = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Stale' } });
     const staleSessionId = staleSession.json().id;
@@ -633,6 +710,17 @@ test('Assistant sync isolates stale Hermes run_not_found failures and continues 
       ['user', 'current work'],
       ['assistant', 'Current run completed.'],
     ]);
+
+    // The successful background turn is persisted in the Pi store, not the legacy table —
+    // the stale/failed run contributes nothing to either store.
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const currentEntries = (await readAssistantEntries(currentSessionId, assistantSessionDir)) as any[];
+    const currentMessages = currentEntries.filter((e: any) => e.type === 'message');
+    assert.deepEqual(currentMessages.map((e: any) => e.message.role), ['user', 'assistant']);
+    const staleEntries = (await readAssistantEntries(staleSessionId, assistantSessionDir)) as any[];
+    assert.deepEqual(staleEntries.filter((e: any) => e.type === 'message'), []);
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id IN (?, ?)').get(staleSessionId, currentSessionId) as any;
+    assert.equal(legacyCount.c, 0, 'background turns are persisted to Pi, not the legacy table');
   } finally {
     await cleanup(app, db, dir);
   }
