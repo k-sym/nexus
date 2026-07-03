@@ -183,6 +183,41 @@ test('streamSessionTurn streams structured run/tool/text events from /v1/respons
   }
 });
 
+test('foreground turn persists user/assistant/tool/run entries to the Pi session', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Reading."}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"call_1","name":"read_file","arguments":{"path":"/tmp/x"}}}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call_output","call_id":"call_1","output":"hi"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":" Done."}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_1"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
+    const sessionId = created.json().id;
+    await app.inject({ method: 'POST', url: `/api/assistant/sessions/${sessionId}/messages/stream`, payload: { content: 'read it' } });
+
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const roles = entries.filter((e) => e.type === 'message').map((e) => e.message.role);
+    assert.deepEqual(roles, ['user', 'assistant', 'toolResult']);
+    const assistant = entries.find((e) => e.type === 'message' && e.message.role === 'assistant') as any;
+    assert.equal(assistant.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''), 'Reading. Done.');
+    assert.equal(assistant.message.content.find((c: any) => c.type === 'toolCall').id, 'call_1');
+    const toolResult = entries.find((e) => e.type === 'message' && e.message.role === 'toolResult') as any;
+    assert.equal(toolResult.message.content[0].text, 'hi');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('streamSessionTurn emits error event when /v1/responses stream yields failed event mid-stream', async () => {
   const fetchImpl: HermesFetch = async (url) => {
     if (String(url).endsWith('/v1/responses')) {

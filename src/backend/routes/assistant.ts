@@ -3,7 +3,16 @@ import { v4 as uuid } from 'uuid';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
-import { ASSISTANT_CWD } from '../pi/assistant-session.js';
+import {
+  ASSISTANT_CWD,
+  openAssistantSession,
+  appendUserMessage,
+  appendAssistantMessage,
+  appendToolResult,
+  appendRunStart,
+  appendRunEnd,
+} from '../pi/assistant-session.js';
+import type { ToolCall } from '@earendil-works/pi-ai';
 import type { NexusConfig } from '@nexus/shared';
 import {
   createHermesClient,
@@ -512,6 +521,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let status: string = 'completed';
       let errorMsg: string | undefined;
       let abortSource: string | undefined;
+      let piRunEndPersisted = false;
       try {
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
@@ -521,6 +531,14 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
           completeRun(db, run, { runId: run.id, status: 'completed', sessionId: result.sessionId, output: accumulated, usage: result.usage });
         } else {
+          const sm = await openAssistantSession(session.id, assistantSessionDir);
+          appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
+          appendUserMessage(sm, trimmed);
+
+          let thinking = '';
+          const toolCalls: ToolCall[] = [];
+          const toolOutputs: Array<{ toolCallId: string; toolName: string; output: string; isError: boolean }> = [];
+
           const ac = new AbortController();
           activeStreamControllers.set(run.id, ac);
           let responseId: string | undefined;
@@ -530,9 +548,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
             for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}`, previousResponseId: session.last_response_id ?? undefined, signal: ac.signal })) {
               if (ev.kind === 'created' || ev.kind === 'completed') { if (ev.responseId) responseId = ev.responseId; }
               else if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
-              else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
-              else if (ev.kind === 'function_call') { write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
-              else if (ev.kind === 'function_call_output') { write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
+              else if (ev.kind === 'reasoning_delta') { thinking += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
+              else if (ev.kind === 'function_call') { toolCalls.push({ type: 'toolCall', id: ev.id, name: ev.name, arguments: ev.args }); write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
+              else if (ev.kind === 'function_call_output') { toolOutputs.push({ toolCallId: ev.callId, toolName: '', output: ev.output, isError: ev.isError }); write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
               else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; write({ type: 'error', error: ev.error }); }
             }
           } catch (streamErr: any) {
@@ -562,6 +580,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           } else {
             completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
           }
+
+          const assistantEntryId = appendAssistantMessage(sm, { text: accumulated, thinking: thinking || undefined, toolCalls });
+          for (const out of toolOutputs) {
+            const name = toolCalls.find((c) => c.id === out.toolCallId)?.name ?? out.toolName;
+            appendToolResult(sm, { toolCallId: out.toolCallId, toolName: name, output: out.output, isError: out.isError });
+          }
+          const piStatus = status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'failed';
+          appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, assistantEntryId, completedAt: new Date().toISOString(), status: piStatus, ...(abortSource ? { abortSource: abortSource as any } : {}), ...(errorMsg ? { error: errorMsg } : {}) });
+          piRunEndPersisted = true;
           if (responseId) {
             db.prepare('UPDATE assistant_sessions SET last_response_id = ? WHERE id = ?').run(responseId, session.id);
           }
@@ -574,6 +601,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?').run('failed', errorMsg, now, now, run.id);
         db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
         write({ type: 'error', error: errorMsg });
+        if (!piRunEndPersisted && !hasImageAttachments(savedAttachments)) {
+          try {
+            const sm = await openAssistantSession(session.id, assistantSessionDir);
+            appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, completedAt: now, status: 'failed', error: errorMsg });
+            piRunEndPersisted = true;
+          } catch {
+            // Best-effort: don't let Pi-persistence failures mask the original error response.
+          }
+        }
       } finally {
         const completedAtIso = new Date().toISOString();
         write({ kind: 'run_end', run: { runId: run.id, threadId: session.id, completedAt: completedAtIso, status, ...(abortSource ? { abortSource } : {}), ...(errorMsg ? { error: errorMsg } : {}) } });
