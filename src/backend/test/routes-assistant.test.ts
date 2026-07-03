@@ -797,7 +797,7 @@ test('Assistant import route adopts a remote Hermes session and imports messages
     }
     throw new Error(`unexpected Hermes request ${requestUrl}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const imported = await app.inject({
       method: 'POST',
@@ -810,6 +810,20 @@ test('Assistant import route adopts a remote Hermes session and imports messages
       ['user', 'continue this'],
       ['assistant', 'I can continue.'],
     ]);
+
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(imported.json().session.id, assistantSessionDir)) as any[];
+    assert.deepEqual(entries.filter((e) => e.type === 'message').map((e: any) => e.message.role), ['user', 'assistant']);
+
+    // Re-import is idempotent: no duplicate messages in the Pi store.
+    const again = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/import',
+      payload: { remoteSessionId: 'remote-api-1' },
+    });
+    assert.equal(again.statusCode, 200);
+    const entries2 = (await readAssistantEntries(again.json().session.id, assistantSessionDir)) as any[];
+    assert.equal(entries2.filter((e) => e.type === 'message').length, 2, 'no duplicate messages on re-import');
   } finally {
     await cleanup(app, db, dir);
   }

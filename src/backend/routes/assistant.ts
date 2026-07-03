@@ -736,28 +736,35 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       } catch {
         // Tolerate message-history fetch failures; the local session is still adopted.
       }
-      const insertMessage = db.prepare(
-        `INSERT OR IGNORE INTO assistant_session_messages
-          (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+
+      const sm = await openAssistantSession(session.id, assistantSessionDir);
+      const existing = (await readAssistantEntries(session.id, assistantSessionDir)) as any[];
+      const seen = new Set(
+        existing
+          .filter((e) => e.type === 'message')
+          .map((e: any) => {
+            const content = e.message.content;
+            const text =
+              typeof content === 'string'
+                ? content
+                : Array.isArray(content)
+                  ? content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
+                  : '';
+            return `${e.message.role}:${text}`;
+          }),
       );
       for (const message of remoteMessages) {
         if (!message?.content && message?.content !== '') continue;
-        const localId = message.id ? `remote:${remoteSessionId}:${message.id}` : uuid();
-        insertMessage.run(
-          localId,
-          session.id,
-          message.id ?? null,
-          message.role,
-          message.content,
-          JSON.stringify([]),
-          message.created_at ?? now,
-        );
+        const key = `${message.role}:${message.content}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (message.role === 'user') appendUserMessage(sm, message.content);
+        else appendAssistantMessage(sm, { text: message.content });
       }
 
       return {
         session,
-        messages: readMessages(db, session.id).map(publicMessage),
+        messages: await assistantMessages(db, session.id, assistantSessionDir),
         latestRun: publicRun(latestRun(db, session.id)),
       };
     });
