@@ -58,6 +58,7 @@ interface AssistantSession {
   remote_conversation_key: string | null;
   status: string;
   last_run_id: string | null;
+  last_response_id: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -518,9 +519,13 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         } else {
           const ac = new AbortController();
           activeStreamControllers.set(run.id, ac);
+          let responseId: string | undefined;
           try {
-            for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}`, signal: ac.signal })) {
-              if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
+            // Hermes /v1/responses ignores session_id; conversation continuity is threaded via
+            // previous_response_id. Send the session's last response id and capture the new one.
+            for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}`, previousResponseId: session.last_response_id ?? undefined, signal: ac.signal })) {
+              if (ev.kind === 'created' || ev.kind === 'completed') { if (ev.responseId) responseId = ev.responseId; }
+              else if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
               else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
               else if (ev.kind === 'function_call') { write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
               else if (ev.kind === 'function_call_output') { write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
@@ -552,6 +557,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
             db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('cancelled', now, session.id);
           } else {
             completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
+          }
+          if (responseId) {
+            db.prepare('UPDATE assistant_sessions SET last_response_id = ? WHERE id = ?').run(responseId, session.id);
           }
         }
         if (accumulated) appendMessage(db, session.id, 'assistant', accumulated);

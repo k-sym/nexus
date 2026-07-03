@@ -289,3 +289,24 @@ test('getSessionMessages maps Hermes message history', async () => {
     { id: 'hm2', role: 'assistant', content: 'ready', created_at: '2026-07-02T10:02:00.000Z' },
   ]);
 });
+
+test('listSessions parses Hermes {object:"list", data:[...]} response shape', async () => {
+  const fetchImpl: HermesFetch = async () => jsonResponse({
+    object: 'list',
+    data: [{ id: 'api-1', source: 'api_server', title: null }],
+  });
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const result = await client.listSessions({ source: 'api_server' });
+  assert.deepEqual(result.sessions, [{ id: 'api-1', source: 'api_server', title: null }]);
+});
+
+test('streamResponses sends previous_response_id when provided', async () => {
+  let sentBody: any = null;
+  const fetchImpl: HermesFetch = async (_url, init) => {
+    sentBody = JSON.parse(String(init?.body));
+    return sseResponse(['data: [DONE]\n\n']);
+  };
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  for await (const _ of client.streamResponses({ input: 'hi', previousResponseId: 'resp_prev' })) { /* drain */ }
+  assert.equal(sentBody.previous_response_id, 'resp_prev');
+});

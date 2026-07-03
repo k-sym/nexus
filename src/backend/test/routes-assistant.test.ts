@@ -769,3 +769,39 @@ test('Assistant foreground send resumes an adopted remote Hermes session', async
     await cleanup(app, db, dir);
   }
 });
+
+test('foreground turns thread previous_response_id for Hermes continuity', async () => {
+  const bodies: any[] = [];
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/responses')) {
+      bodies.push(JSON.parse(String(init?.body)));
+      const rid = `resp_${bodies.length}`;
+      return sseResponse([
+        `data: {"type":"response.created","response":{"id":"${rid}"}}\n\n`,
+        'data: {"type":"response.output_text.delta","delta":"ok"}\n\n',
+        `data: {"type":"response.completed","response":{"id":"${rid}"}}\n\n`,
+        'data: [DONE]\n\n',
+      ]);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
+    const sessionId = created.json().id;
+
+    await app.inject({ method: 'POST', url: `/api/assistant/sessions/${sessionId}/messages/stream`, payload: { content: 'turn 1' } });
+    // First turn: no prior response id sent; the returned response id is persisted.
+    assert.equal(bodies[0].previous_response_id, undefined);
+    const afterTurn1 = db.prepare('SELECT last_response_id FROM assistant_sessions WHERE id = ?').get(sessionId) as any;
+    assert.equal(afterTurn1.last_response_id, 'resp_1');
+
+    await app.inject({ method: 'POST', url: `/api/assistant/sessions/${sessionId}/messages/stream`, payload: { content: 'turn 2' } });
+    // Second turn threads the first turn's response id, and stores the new one.
+    assert.equal(bodies[1].previous_response_id, 'resp_1');
+    const afterTurn2 = db.prepare('SELECT last_response_id FROM assistant_sessions WHERE id = ?').get(sessionId) as any;
+    assert.equal(afterTurn2.last_response_id, 'resp_2');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});

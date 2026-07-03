@@ -158,6 +158,7 @@ function runMigrations(db: Database.Database) {
       remote_conversation_key TEXT,
       status TEXT NOT NULL DEFAULT 'idle',
       last_run_id TEXT,
+      last_response_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
       archived_at TEXT
@@ -244,6 +245,13 @@ function runMigrations(db: Database.Database) {
   const assistantMessageCols = db.pragma('table_info(assistant_session_messages)') as { name: string }[];
   if (!assistantMessageCols.some((c) => c.name === 'attachments_json')) {
     db.exec('ALTER TABLE assistant_session_messages ADD COLUMN attachments_json TEXT DEFAULT \'[]\'');
+  }
+
+  // Continuity for foreground /v1/responses turns: Hermes ignores session_id and threads
+  // conversation state via previous_response_id, so we persist the last response id per session.
+  const assistantSessionCols = db.pragma('table_info(assistant_sessions)') as { name: string }[];
+  if (!assistantSessionCols.some((c) => c.name === 'last_response_id')) {
+    db.exec('ALTER TABLE assistant_sessions ADD COLUMN last_response_id TEXT');
   }
 
   const ticketCols = db.pragma('table_info(tickets)') as { name: string }[];
