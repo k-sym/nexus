@@ -242,24 +242,6 @@ function ensureDefaultSession(db: FastifyInstance['db']): AssistantSession {
   return newestSession(db) ?? createSession(db, 'Assistant');
 }
 
-function appendMessage(
-  db: FastifyInstance['db'],
-  sessionId: string,
-  role: AssistantMessage['role'],
-  content: string,
-  attachments: AssistantAttachment[] = [],
-): AssistantMessage {
-  const now = new Date().toISOString();
-  const id = uuid();
-  db.prepare(
-    `INSERT INTO assistant_session_messages
-      (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at)
-     VALUES (?, ?, NULL, ?, ?, ?, NULL, ?)`,
-  ).run(id, sessionId, role, content, JSON.stringify(attachments), now);
-  db.prepare('UPDATE assistant_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
-  return { id, session_id: sessionId, role, content, attachments_json: JSON.stringify(attachments), created_at: now };
-}
-
 function createRun(
   db: FastifyInstance['db'],
   sessionId: string,
@@ -543,10 +525,11 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let errorMsg: string | undefined;
       let abortSource: string | undefined;
       let piRunEndPersisted = false;
+      let sm: Awaited<ReturnType<typeof openAssistantSession>> | undefined;
       try {
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
-          const sm = await openAssistantSession(session.id, assistantSessionDir);
+          sm = await openAssistantSession(session.id, assistantSessionDir);
           appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
           appendUserMessage(sm, trimmed);
 
@@ -560,7 +543,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, assistantEntryId, completedAt: new Date().toISOString(), status: 'completed' });
           piRunEndPersisted = true;
         } else {
-          const sm = await openAssistantSession(session.id, assistantSessionDir);
+          sm = await openAssistantSession(session.id, assistantSessionDir);
           appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
           appendUserMessage(sm, trimmed);
 
@@ -629,9 +612,14 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?').run('failed', errorMsg, now, now, run.id);
         db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
         write({ type: 'error', error: errorMsg });
-        if (!piRunEndPersisted) {
+        if (!piRunEndPersisted && sm) {
+          // Reuse the SAME instance that already buffered run-start + the user message.
+          // Appending an assistant message triggers Pi's flush of the whole buffered turn
+          // (SessionManager only writes once an assistant message exists). On a non-empty
+          // store the earlier entries were already written, so only the assistant + run-end
+          // are new — no duplication.
           try {
-            const sm = await openAssistantSession(session.id, assistantSessionDir);
+            appendAssistantMessage(sm, { text: accumulated });
             appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, completedAt: now, status: 'failed', error: errorMsg });
             piRunEndPersisted = true;
           } catch {

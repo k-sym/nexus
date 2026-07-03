@@ -311,6 +311,55 @@ test('streamSessionTurn emits error event when /v1/responses stream yields faile
   }
 });
 
+test('streamSessionTurn persists the errored turn to Pi when the /v1/responses stream throws mid-stream', async () => {
+  // A body that emits a valid delta then ERRORS the stream — this surfaces as a thrown
+  // (non-abort) error out of hermes.streamResponses, NOT an ev.kind:'failed' SSE event.
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      const enc = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(enc.encode('data: {"type":"response.created","response":{"id":"resp_1"}}\n\n'));
+          controller.enqueue(enc.encode('data: {"type":"response.output_text.delta","delta":"partial"}\n\n'));
+          controller.error(new Error('boom'));
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Throw test' } });
+    const sessionId = created.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'do work that explodes' },
+    });
+    assert.equal(res.statusCode, 200);
+    const events = ndjsonEvents(res.payload);
+    const runEnd = events.find((e) => e.kind === 'run_end');
+    assert.equal(runEnd.run.status, 'failed');
+
+    const run = db.prepare('SELECT status FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(run.status, 'failed');
+
+    // The whole errored turn must reach the Pi store: user prompt + assistant message + run-end.
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => e.message.role), ['user', 'assistant'], 'user prompt and assistant message both persisted');
+    assert.equal((messageEntries[0] as any).message.content, 'do work that explodes');
+    const runEndEntry = entries.find((e) => e.type === 'custom' && e.customType === 'nexus.agent_run' && e.data?.event === 'end');
+    assert.ok(runEndEntry, 'a nexus.agent_run end entry is persisted');
+    assert.equal(runEndEntry.data.status, 'failed');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant detached run sync reconciles completed Hermes output after restart', async () => {
   const fetchImpl: HermesFetch = async (url, init) => {
     if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
