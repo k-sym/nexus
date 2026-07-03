@@ -9,6 +9,7 @@ import {
 import { confirmDialog } from '../lib/confirm';
 import { AgentRunCard } from './AgentRunCard';
 import { RunStatusStrip } from './RunStatusStrip';
+import { ToolCallTimeline } from './ToolCallTimeline';
 
 const MAX_PENDING_ATTACHMENTS = 5;
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
@@ -156,6 +157,11 @@ export default function AssistantView() {
 
   const trimmedInput = input.trim();
   const canSubmit = !!selectedSessionId && (!!trimmedInput || pendingAttachments.length > 0);
+
+  // The Assistant is project-less: there's no preview rail to open an artifact
+  // into. Presence of the handler is what enables ChatMessageContent's
+  // markdown/path rendering inside AgentRunCard; the no-op is intentional.
+  const openArtifact = useCallback((_path: string) => { /* project-less: no preview rail */ }, []);
 
   return (
     <div
@@ -316,15 +322,22 @@ export default function AssistantView() {
             <p className="text-faint text-sm">Send a message to start.</p>
           ) : (
             messages.map((message) =>
-              message.role !== 'user' && message.run ? (
-                <div key={message.id} className="flex justify-start">
-                  <AgentRunCard
-                    run={message.run}
-                    content={message.content}
-                    thinking={message.thinking}
-                    detailsExpanded={false}
-                  />
-                </div>
+              message.role !== 'user' ? (
+                message.run ? (
+                  <div key={message.id} className="flex justify-start">
+                    <AgentRunCard
+                      run={message.run}
+                      content={message.content}
+                      thinking={message.thinking}
+                      detailsExpanded={false}
+                      onOpenArtifact={openArtifact}
+                    />
+                  </div>
+                ) : (
+                  // Fallback for assistant messages that somehow lack a `run`
+                  // (e.g. legacy rows seeded before Pi-backed sessions existed).
+                  <AssistantBubble key={message.id} message={message} />
+                )
               ) : (
                 <AssistantBubble key={message.id} message={message} />
               ),
@@ -495,6 +508,11 @@ function AssistantBubble({ message }: { message: AssistantMessage }) {
                 </div>
               )
             ))}
+          </div>
+        )}
+        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="mb-2">
+            <ToolCallTimeline toolCalls={message.toolCalls as any} detailsExpanded={false} />
           </div>
         )}
         <p className="whitespace-pre-wrap">{message.content || (message.isStreaming ? 'Running...' : '')}</p>

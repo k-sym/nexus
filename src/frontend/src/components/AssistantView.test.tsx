@@ -420,6 +420,107 @@ describe('AssistantView', () => {
     expect(await screen.findByText('imported transcript')).toBeInTheDocument();
   });
 
+  it('renders a reloaded assistant turn through the shared run card, not a plain bubble', async () => {
+    // Mirrors the real `flattenEntries` reconstructed shape (captured from the
+    // Task 4 backend test 'session detail reconstructs a rich transcript from
+    // Pi entries'): assistant messages carry a flattened string `content`,
+    // top-level `tool_calls`, and a `run` object whose `tools` duplicates them.
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/assistant/sessions') {
+        return { ok: true, json: async () => ({ sessions: [{ id: 's1', title: 'T', status: 'idle', updated_at: '2026-07-02T10:00:00.000Z' }] }) } as Response;
+      }
+      if (url === '/api/assistant/sessions/s1') {
+        return {
+          ok: true,
+          json: async () => ({
+            session: { id: 's1', title: 'T', status: 'idle' },
+            messages: [
+              { id: 'u1', role: 'user', content: 'hi', timestamp: 1783059305766 },
+              {
+                id: 'a1',
+                role: 'assistant',
+                content: 'read the file',
+                thinking: null,
+                tool_calls: [
+                  { id: 'c1', name: 'read_file', args: {}, status: 'succeeded', queuedAt: 1783059305766, partialOutput: '', result: 'body', completedAt: 1783059305766 },
+                ],
+                model: 'hermes-agent',
+                provider: 'hermes',
+                isError: false,
+                timestamp: 1783059305766,
+                run: {
+                  runId: 'r1',
+                  threadId: 's1',
+                  status: 'completed',
+                  phase: 'finalizing',
+                  startedAt: 1782986400000,
+                  lastEventAt: 1782986401000,
+                  completedAt: 1782986401000,
+                  provider: 'hermes',
+                  model: 'hermes-agent',
+                  tools: [
+                    { id: 'c1', name: 'read_file', args: {}, status: 'succeeded', queuedAt: 1783059305766, partialOutput: '', result: 'body', completedAt: 1783059305766 },
+                  ],
+                },
+              },
+            ],
+            latestRun: null,
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    // The assistant content renders inside the shared run card (tool activity
+    // summary + terminal status visible), not a bare AssistantBubble.
+    const contentNode = await screen.findByText('read the file');
+    expect(contentNode.closest('.agent-run-card')).not.toBeNull();
+    expect(contentNode.closest('[data-chat-role="assistant"]')).toBeNull();
+    expect(await screen.findByText('1 tool call')).toBeInTheDocument();
+    expect(await screen.findByText(/Completed/i)).toBeInTheDocument();
+  });
+
+  it('shows tool activity for a legacy assistant message that has tool_calls but no run', async () => {
+    // Guards the fallback bubble path: a message without a reconstructed `run`
+    // (e.g. a legacy row) should still surface its tool_calls, not silently drop them.
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/assistant/sessions') {
+        return { ok: true, json: async () => ({ sessions: [{ id: 's1', title: 'T', status: 'idle', updated_at: '2026-07-02T10:00:00.000Z' }] }) } as Response;
+      }
+      if (url === '/api/assistant/sessions/s1') {
+        return {
+          ok: true,
+          json: async () => ({
+            session: { id: 's1', title: 'T', status: 'idle' },
+            messages: [
+              {
+                id: 'a-legacy',
+                role: 'assistant',
+                content: 'legacy answer',
+                tool_calls: [
+                  { id: 'c9', name: 'read_file', args: {}, status: 'succeeded', result: 'body' },
+                ],
+                timestamp: 1783059305766,
+              },
+            ],
+            latestRun: null,
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    const contentNode = await screen.findByText('legacy answer');
+    // No run card for this message (there's no `run`); it still shows in the bubble.
+    expect(contentNode.closest('[data-chat-role="assistant"]')).not.toBeNull();
+    expect(contentNode.closest('.agent-run-card')).toBeNull();
+    expect(await screen.findByText(/read_file/i)).toBeInTheDocument();
+  });
+
   it('marks remote-only Hermes sessions without changing local session controls', async () => {
     apiFetchMock.mockImplementation(async (url: string) => {
       if (url === '/api/assistant/sessions') {
