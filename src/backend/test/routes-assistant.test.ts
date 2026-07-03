@@ -90,6 +90,51 @@ test('Assistant session routes create list read rename and delete sessions', asy
   }
 });
 
+test('session detail reconstructs a rich transcript from Pi entries', async () => {
+  const { app, db, dir, assistantSessionDir } = makeApp({});
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
+    const sessionId = created.json().id;
+    // Seed Pi store directly with a completed tool turn.
+    const s = await import('../pi/assistant-session');
+    const sm = await s.openAssistantSession(sessionId, assistantSessionDir);
+    s.appendRunStart(sm, { event: 'start', runId: 'r1', threadId: sessionId, startedAt: '2026-07-02T10:00:00.000Z' });
+    s.appendUserMessage(sm, 'hi');
+    const aId = s.appendAssistantMessage(sm, { text: 'ok', toolCalls: [{ type: 'toolCall', id: 'c1', name: 'read_file', arguments: {} }] });
+    s.appendToolResult(sm, { toolCallId: 'c1', toolName: 'read_file', output: 'body' });
+    s.appendRunEnd(sm, { event: 'end', runId: 'r1', threadId: sessionId, assistantEntryId: aId, completedAt: '2026-07-02T10:00:01.000Z', status: 'completed' });
+
+    const res = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    const msgs = res.json().messages as any[];
+    const assistant = msgs.find((m) => m.role === 'assistant' || m.message?.role === 'assistant');
+    assert.ok(assistant, 'assistant message reconstructed');
+    assert.ok(JSON.stringify(assistant).includes('read_file'), 'tool activity present on reload');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('session detail lazily seeds Pi store from legacy messages', async () => {
+  const { app, db, dir, assistantSessionDir } = makeApp({});
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Old' } });
+    const sessionId = created.json().id;
+    const now = '2026-07-01T00:00:00.000Z';
+    db.prepare(`INSERT INTO assistant_session_messages (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at) VALUES (?, ?, NULL, ?, ?, '[]', NULL, ?)`)
+      .run('m1', sessionId, 'user', 'legacy question', now);
+    db.prepare(`INSERT INTO assistant_session_messages (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at) VALUES (?, ?, NULL, ?, ?, '[]', NULL, ?)`)
+      .run('m2', sessionId, 'assistant', 'legacy answer', now);
+
+    const res = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    const blob = JSON.stringify(res.json().messages);
+    assert.ok(blob.includes('legacy question') && blob.includes('legacy answer'));
+    const entries = (await (await import('../pi/assistant-session')).readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    assert.equal(entries.filter((e) => e.type === 'message').length, 2, 'legacy rows seeded into Pi store');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant foreground stream stores user assistant messages and completed run', async () => {
   const fetchImpl: HermesFetch = async (url) => {
     if (String(url).endsWith('/v1/responses')) {
