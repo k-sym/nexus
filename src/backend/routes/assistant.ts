@@ -6,6 +6,7 @@ import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
 import {
   ASSISTANT_CWD,
   openAssistantSession,
+  readAssistantEntries,
   appendUserMessage,
   appendAssistantMessage,
   appendToolResult,
@@ -22,6 +23,7 @@ import {
   type HermesRunStatus,
   type HermesSessionMessage,
 } from '../hermes/client.js';
+import { flattenEntries } from './chat.js';
 
 interface AssistantMessage {
   id: string;
@@ -191,6 +193,26 @@ function readMessages(db: FastifyInstance['db'], sessionId: string): AssistantMe
   return db
     .prepare('SELECT id, session_id, role, content, attachments_json, created_at FROM assistant_session_messages WHERE session_id = ? ORDER BY created_at ASC')
     .all(sessionId) as AssistantMessage[];
+}
+
+async function seedPiFromLegacy(db: FastifyInstance['db'], sessionId: string, sessionDir: string): Promise<void> {
+  const legacy = readMessages(db, sessionId);
+  if (legacy.length === 0) return;
+  const sm = await openAssistantSession(sessionId, sessionDir);
+  for (const m of legacy) {
+    if (m.role === 'user') appendUserMessage(sm, m.content);
+    else if (m.role === 'assistant') appendAssistantMessage(sm, { text: m.content });
+    // system/tool legacy rows (rare) are skipped; they were never richly rendered.
+  }
+}
+
+async function assistantMessages(db: FastifyInstance['db'], sessionId: string, sessionDir: string): Promise<unknown[]> {
+  let entries = await readAssistantEntries(sessionId, sessionDir);
+  if (entries.length === 0) {
+    await seedPiFromLegacy(db, sessionId, sessionDir);
+    entries = await readAssistantEntries(sessionId, sessionDir);
+  }
+  return flattenEntries(entries, ASSISTANT_CWD, {});
 }
 
 function getSession(db: FastifyInstance['db'], sessionId: string): AssistantSession | undefined {
@@ -749,7 +771,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       return {
         session,
-        messages: readMessages(db, id).map(publicMessage),
+        messages: await assistantMessages(db, id, assistantSessionDir),
         latestRun: publicRun(latestRun(db, id)),
       };
     });
