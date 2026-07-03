@@ -546,11 +546,19 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       try {
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
+          const sm = await openAssistantSession(session.id, assistantSessionDir);
+          appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
+          appendUserMessage(sm, trimmed);
+
           const remoteSessionId = await ensureRemoteSession(hermes, session);
           const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey: `nexus:assistant:${session.id}`, input: hermesInlineImageInput(promptContent, savedAttachments) });
           accumulated = result.output ?? '';
           if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
           completeRun(db, run, { runId: run.id, status: 'completed', sessionId: result.sessionId, output: accumulated, usage: result.usage });
+
+          const assistantEntryId = appendAssistantMessage(sm, { text: accumulated });
+          appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, assistantEntryId, completedAt: new Date().toISOString(), status: 'completed' });
+          piRunEndPersisted = true;
         } else {
           const sm = await openAssistantSession(session.id, assistantSessionDir);
           appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
@@ -621,7 +629,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?').run('failed', errorMsg, now, now, run.id);
         db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
         write({ type: 'error', error: errorMsg });
-        if (!piRunEndPersisted && !hasImageAttachments(savedAttachments)) {
+        if (!piRunEndPersisted) {
           try {
             const sm = await openAssistantSession(session.id, assistantSessionDir);
             appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, completedAt: now, status: 'failed', error: errorMsg });
