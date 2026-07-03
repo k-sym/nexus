@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createAssistantRoutes } from '../routes/assistant';
@@ -27,6 +27,7 @@ function ndjsonEvents(payload: string): any[] {
 
 function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: HermesFetch; activity?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-assistant-test-'));
+  const assistantSessionDir = join(dir, 'assistant-sessions');
   const db = getDb(join(dir, 'test.db'));
   const app = Fastify({ logger: false });
   app.decorate('db', db);
@@ -39,8 +40,8 @@ function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: 
   app.register(createAssistantRoutes(() => options.config ?? {
     ...loadConfig(),
     assistant: { url: 'http://127.0.0.1:8642', api_key: 'secret' },
-  }, { fetchImpl: options.fetchImpl, uploadRoot: dir }));
-  return { app, db, dir, stopActivity };
+  }, { fetchImpl: options.fetchImpl, uploadRoot: dir, assistantSessionDir }));
+  return { app, db, dir, assistantSessionDir, stopActivity };
 }
 
 async function cleanup(app: ReturnType<typeof Fastify>, db: ReturnType<typeof getDb>, dir: string, stopActivity?: () => void) {
@@ -89,6 +90,51 @@ test('Assistant session routes create list read rename and delete sessions', asy
   }
 });
 
+test('session detail reconstructs a rich transcript from Pi entries', async () => {
+  const { app, db, dir, assistantSessionDir } = makeApp({});
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
+    const sessionId = created.json().id;
+    // Seed Pi store directly with a completed tool turn.
+    const s = await import('../pi/assistant-session');
+    const sm = await s.openAssistantSession(sessionId, assistantSessionDir);
+    s.appendRunStart(sm, { event: 'start', runId: 'r1', threadId: sessionId, startedAt: '2026-07-02T10:00:00.000Z' });
+    s.appendUserMessage(sm, 'hi');
+    const aId = s.appendAssistantMessage(sm, { text: 'ok', toolCalls: [{ type: 'toolCall', id: 'c1', name: 'read_file', arguments: {} }] });
+    s.appendToolResult(sm, { toolCallId: 'c1', toolName: 'read_file', output: 'body' });
+    s.appendRunEnd(sm, { event: 'end', runId: 'r1', threadId: sessionId, assistantEntryId: aId, completedAt: '2026-07-02T10:00:01.000Z', status: 'completed' });
+
+    const res = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    const msgs = res.json().messages as any[];
+    const assistant = msgs.find((m) => m.role === 'assistant' || m.message?.role === 'assistant');
+    assert.ok(assistant, 'assistant message reconstructed');
+    assert.ok(JSON.stringify(assistant).includes('read_file'), 'tool activity present on reload');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('session detail lazily seeds Pi store from legacy messages', async () => {
+  const { app, db, dir, assistantSessionDir } = makeApp({});
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Old' } });
+    const sessionId = created.json().id;
+    const now = '2026-07-01T00:00:00.000Z';
+    db.prepare(`INSERT INTO assistant_session_messages (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at) VALUES (?, ?, NULL, ?, ?, '[]', NULL, ?)`)
+      .run('m1', sessionId, 'user', 'legacy question', now);
+    db.prepare(`INSERT INTO assistant_session_messages (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at) VALUES (?, ?, NULL, ?, ?, '[]', NULL, ?)`)
+      .run('m2', sessionId, 'assistant', 'legacy answer', now);
+
+    const res = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    const blob = JSON.stringify(res.json().messages);
+    assert.ok(blob.includes('legacy question') && blob.includes('legacy answer'));
+    const entries = (await (await import('../pi/assistant-session')).readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    assert.equal(entries.filter((e) => e.type === 'message').length, 2, 'legacy rows seeded into Pi store');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant foreground stream stores user assistant messages and completed run', async () => {
   const fetchImpl: HermesFetch = async (url) => {
     if (String(url).endsWith('/v1/responses')) {
@@ -101,7 +147,7 @@ test('Assistant foreground stream stores user assistant messages and completed r
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Checks' } });
     const sessionId = created.json().id;
@@ -119,13 +165,18 @@ test('Assistant foreground stream stores user assistant messages and completed r
     const runEnd = events.find((e) => e.kind === 'run_end');
     assert.equal(runEnd.run.status, 'completed');
 
-    const messages = db
-      .prepare('SELECT role, content FROM assistant_session_messages WHERE session_id = ? ORDER BY created_at ASC')
-      .all(sessionId) as Array<{ role: string; content: string }>;
-    assert.deepEqual(messages, [
-      { role: 'user', content: 'Run checks tonight' },
-      { role: 'assistant', content: 'Finished overnight checks.' },
-    ]);
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => e.message.role), ['user', 'assistant']);
+    const userEntry = messageEntries[0] as any;
+    assert.equal(userEntry.message.content, 'Run checks tonight');
+    const assistantEntry = messageEntries[1] as any;
+    assert.equal(assistantEntry.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''), 'Finished overnight checks.');
+
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'live turns no longer write legacy messages');
+
     const run = db.prepare('SELECT status, output FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
     assert.deepEqual(run, {
       status: 'succeeded',
@@ -182,6 +233,41 @@ test('streamSessionTurn streams structured run/tool/text events from /v1/respons
   }
 });
 
+test('foreground turn persists user/assistant/tool/run entries to the Pi session', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Reading."}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call","id":"call_1","name":"read_file","arguments":{"path":"/tmp/x"}}}\n\n',
+        'data: {"type":"response.output_item.done","item":{"type":"function_call_output","call_id":"call_1","output":"hi"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":" Done."}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_1"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
+    const sessionId = created.json().id;
+    await app.inject({ method: 'POST', url: `/api/assistant/sessions/${sessionId}/messages/stream`, payload: { content: 'read it' } });
+
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const roles = entries.filter((e) => e.type === 'message').map((e) => e.message.role);
+    assert.deepEqual(roles, ['user', 'assistant', 'toolResult']);
+    const assistant = entries.find((e) => e.type === 'message' && e.message.role === 'assistant') as any;
+    assert.equal(assistant.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''), 'Reading. Done.');
+    assert.equal(assistant.message.content.find((c: any) => c.type === 'toolCall').id, 'call_1');
+    const toolResult = entries.find((e) => e.type === 'message' && e.message.role === 'toolResult') as any;
+    assert.equal(toolResult.message.content[0].text, 'hi');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('streamSessionTurn emits error event when /v1/responses stream yields failed event mid-stream', async () => {
   const fetchImpl: HermesFetch = async (url) => {
     if (String(url).endsWith('/v1/responses')) {
@@ -225,6 +311,55 @@ test('streamSessionTurn emits error event when /v1/responses stream yields faile
   }
 });
 
+test('streamSessionTurn persists the errored turn to Pi when the /v1/responses stream throws mid-stream', async () => {
+  // A body that emits a valid delta then ERRORS the stream — this surfaces as a thrown
+  // (non-abort) error out of hermes.streamResponses, NOT an ev.kind:'failed' SSE event.
+  const fetchImpl: HermesFetch = async (url) => {
+    if (String(url).endsWith('/v1/responses')) {
+      const enc = new TextEncoder();
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(enc.encode('data: {"type":"response.created","response":{"id":"resp_1"}}\n\n'));
+          controller.enqueue(enc.encode('data: {"type":"response.output_text.delta","delta":"partial"}\n\n'));
+          controller.error(new Error('boom'));
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Throw test' } });
+    const sessionId = created.json().id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'do work that explodes' },
+    });
+    assert.equal(res.statusCode, 200);
+    const events = ndjsonEvents(res.payload);
+    const runEnd = events.find((e) => e.kind === 'run_end');
+    assert.equal(runEnd.run.status, 'failed');
+
+    const run = db.prepare('SELECT status FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(run.status, 'failed');
+
+    // The whole errored turn must reach the Pi store: user prompt + assistant message + run-end.
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => e.message.role), ['user', 'assistant'], 'user prompt and assistant message both persisted');
+    assert.equal((messageEntries[0] as any).message.content, 'do work that explodes');
+    const runEndEntry = entries.find((e) => e.type === 'custom' && e.customType === 'nexus.agent_run' && e.data?.event === 'end');
+    assert.ok(runEndEntry, 'a nexus.agent_run end entry is persisted');
+    assert.equal(runEndEntry.data.status, 'failed');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant detached run sync reconciles completed Hermes output after restart', async () => {
   const fetchImpl: HermesFetch = async (url, init) => {
     if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
@@ -242,7 +377,7 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Overnight' } });
     const sessionId = created.json().id;
@@ -264,6 +399,83 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
       ['assistant', 'The overnight run is complete.'],
     ]);
     assert.equal(detail.json().latestRun.status, 'succeeded');
+
+    // The background turn is persisted in the Pi store (the canonical transcript store), not
+    // the legacy table — the same store a foreground turn uses.
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e: any) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => [e.message.role, e.message.content]), [
+      ['user', 'Work while Nexus is closed'],
+      ['assistant', [{ type: 'text', text: 'The overnight run is complete.' }]],
+    ]);
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'background turns are persisted to Pi, not the legacy table');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant background run turns survive reload when the Pi store already has a foreground turn', async () => {
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/responses')) {
+      return sseResponse([
+        'data: {"type":"response.created","response":{"id":"resp_fg"}}\n\n',
+        'data: {"type":"response.output_text.delta","delta":"Hi there."}\n\n',
+        'data: {"type":"response.completed","response":{"id":"resp_fg"}}\n\n',
+        'data: [DONE]\n\n',
+      ]);
+    }
+    if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
+      return new Response(JSON.stringify({ run_id: 'remote-run-bg', status: 'started' }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (String(url).endsWith('/v1/runs/remote-run-bg')) {
+      return new Response(JSON.stringify({
+        run_id: 'remote-run-bg',
+        status: 'completed',
+        output: 'The background run is complete.',
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${String(url)}`);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Mixed fg/bg' } });
+    const sessionId = created.json().id;
+
+    // Foreground turn first, so the Pi store is non-empty before the background run happens.
+    const streamed = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'Hello' },
+    });
+    assert.equal(streamed.statusCode, 200);
+
+    // Background handoff, then sync picks up the completed remote run.
+    const detached = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/runs`,
+      payload: { content: 'Work while Nexus is closed' },
+    });
+    assert.equal(detached.statusCode, 200);
+
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(sync.statusCode, 200);
+    assert.equal(sync.json().updated, 1);
+
+    const detail = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.deepEqual(detail.json().messages.map((message: any) => [message.role, message.content]), [
+      ['user', 'Hello'],
+      ['assistant', 'Hi there.'],
+      ['user', 'Work while Nexus is closed'],
+      ['assistant', 'The background run is complete.'],
+    ]);
+
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'background turns are persisted to Pi, not the legacy table');
   } finally {
     await cleanup(app, db, dir);
   }
@@ -284,7 +496,7 @@ test('Assistant runs persist attachments and send Hermes saved file references',
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Files' } });
     const sessionId = created.json().id;
@@ -306,13 +518,17 @@ test('Assistant runs persist attachments and send Hermes saved file references',
     assert.equal(streamed.statusCode, 200);
     assert.match(hermesInput, /^Summarise this\n\nAttached files:\n- brief\.txt: /);
     assert.match(hermesInput, /project_docs\/uploads\/brief\.txt/);
-    const row = db
-      .prepare('SELECT content, attachments_json FROM assistant_session_messages WHERE session_id = ? AND role = ?')
-      .get(sessionId, 'user') as { content: string; attachments_json: string };
-    assert.equal(row.content, 'Summarise this');
-    const stored = JSON.parse(row.attachments_json);
-    assert.equal(stored[0].name, 'brief.txt');
-    assert.match(stored[0].path, /project_docs\/uploads\/brief\.txt$/);
+
+    // The attachment is saved to disk at the referenced path regardless of message persistence.
+    const savedPath = join(dir, 'project_docs', 'uploads', 'brief.txt');
+    assert.equal(existsSync(savedPath), true, 'attachment file saved to disk');
+    assert.equal(readFileSync(savedPath, 'utf8'), 'hello from file');
+
+    // The turn's user text is persisted in the Pi store (the canonical transcript store).
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const userEntry = entries.find((e) => e.type === 'message' && e.message.role === 'user') as any;
+    assert.equal(userEntry.message.content, 'Summarise this');
   } finally {
     await cleanup(app, db, dir);
   }
@@ -381,12 +597,75 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
     assert.equal(textDelta.assistantMessageEvent.delta, 'I can see the screenshot.');
     const runEnd = events.find((e) => e.kind === 'run_end');
     assert.equal(runEnd.run.status, 'completed');
-    const row = db
-      .prepare('SELECT attachments_json FROM assistant_session_messages WHERE session_id = ? AND role = ?')
-      .get(sessionId, 'user') as { attachments_json: string };
-    const stored = JSON.parse(row.attachments_json);
-    assert.equal(stored[0].type, 'image');
-    assert.match(stored[0].path, /project_docs\/uploads\/screen\.png$/);
+
+    // The image attachment is saved to disk at the expected path regardless of message persistence.
+    const savedPath = join(dir, 'project_docs', 'uploads', 'screen.png');
+    assert.equal(existsSync(savedPath), true, 'image attachment file saved to disk');
+    assert.equal(readFileSync(savedPath).toString('base64'), imageData);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant foreground vision turn persists to Pi SessionManager instead of vanishing', async () => {
+  let createdRemoteSession = '';
+  const imageData = Buffer.from('fake-png').toString('base64');
+  const fetchImpl: HermesFetch = async (url, init) => {
+    const requestUrl = String(url);
+    if (requestUrl.endsWith('/api/sessions') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      createdRemoteSession = body.id;
+      return new Response(JSON.stringify({ object: 'hermes.session', session: { id: body.id } }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (requestUrl.endsWith(`/api/sessions/${createdRemoteSession}/chat`) && init?.method === 'POST') {
+      return new Response(JSON.stringify({
+        object: 'hermes.session.chat.completion',
+        session_id: createdRemoteSession,
+        message: { role: 'assistant', content: 'I can see the screenshot.' },
+        usage: { total_tokens: 25 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${requestUrl}`);
+  };
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Vision persistence' } });
+    const sessionId = created.json().id;
+
+    const streamed = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: {
+        content: 'What do you see?',
+        attachments: [{
+          type: 'image',
+          name: 'screen.png',
+          mimeType: 'image/png',
+          data: imageData,
+          size: 8,
+        }],
+      },
+    });
+
+    assert.equal(streamed.statusCode, 200);
+
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => e.message.role), ['user', 'assistant']);
+    const userEntry = messageEntries[0] as any;
+    assert.equal(userEntry.message.content, 'What do you see?');
+    const assistantEntry = messageEntries[1] as any;
+    assert.equal(
+      assistantEntry.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''),
+      'I can see the screenshot.',
+    );
+
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'vision turns do not write legacy messages either');
   } finally {
     await cleanup(app, db, dir);
   }
@@ -446,7 +725,7 @@ test('Assistant sync isolates stale Hermes run_not_found failures and continues 
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const staleSession = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Stale' } });
     const staleSessionId = staleSession.json().id;
@@ -480,6 +759,17 @@ test('Assistant sync isolates stale Hermes run_not_found failures and continues 
       ['user', 'current work'],
       ['assistant', 'Current run completed.'],
     ]);
+
+    // The successful background turn is persisted in the Pi store, not the legacy table —
+    // the stale/failed run contributes nothing to either store.
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const currentEntries = (await readAssistantEntries(currentSessionId, assistantSessionDir)) as any[];
+    const currentMessages = currentEntries.filter((e: any) => e.type === 'message');
+    assert.deepEqual(currentMessages.map((e: any) => e.message.role), ['user', 'assistant']);
+    const staleEntries = (await readAssistantEntries(staleSessionId, assistantSessionDir)) as any[];
+    assert.deepEqual(staleEntries.filter((e: any) => e.type === 'message'), []);
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id IN (?, ?)').get(staleSessionId, currentSessionId) as any;
+    assert.equal(legacyCount.c, 0, 'background turns are persisted to Pi, not the legacy table');
   } finally {
     await cleanup(app, db, dir);
   }
@@ -716,7 +1006,7 @@ test('Assistant import route adopts a remote Hermes session and imports messages
     }
     throw new Error(`unexpected Hermes request ${requestUrl}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const imported = await app.inject({
       method: 'POST',
@@ -729,6 +1019,20 @@ test('Assistant import route adopts a remote Hermes session and imports messages
       ['user', 'continue this'],
       ['assistant', 'I can continue.'],
     ]);
+
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(imported.json().session.id, assistantSessionDir)) as any[];
+    assert.deepEqual(entries.filter((e) => e.type === 'message').map((e: any) => e.message.role), ['user', 'assistant']);
+
+    // Re-import is idempotent: no duplicate messages in the Pi store.
+    const again = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/import',
+      payload: { remoteSessionId: 'remote-api-1' },
+    });
+    assert.equal(again.statusCode, 200);
+    const entries2 = (await readAssistantEntries(again.json().session.id, assistantSessionDir)) as any[];
+    assert.equal(entries2.filter((e) => e.type === 'message').length, 2, 'no duplicate messages on re-import');
   } finally {
     await cleanup(app, db, dir);
   }

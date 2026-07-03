@@ -1,8 +1,19 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import path, { join } from 'node:path';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
+import {
+  ASSISTANT_CWD,
+  openAssistantSession,
+  readAssistantEntries,
+  appendUserMessage,
+  appendAssistantMessage,
+  appendToolResult,
+  appendRunStart,
+  appendRunEnd,
+} from '../pi/assistant-session.js';
+import type { ToolCall } from '@earendil-works/pi-ai';
 import type { NexusConfig } from '@nexus/shared';
 import {
   createHermesClient,
@@ -12,6 +23,7 @@ import {
   type HermesRunStatus,
   type HermesSessionMessage,
 } from '../hermes/client.js';
+import { flattenEntries } from './chat.js';
 
 interface AssistantMessage {
   id: string;
@@ -83,6 +95,7 @@ interface AssistantRun {
 interface AssistantRoutesOptions {
   fetchImpl?: HermesFetch;
   uploadRoot?: string;
+  assistantSessionDir?: string;
 }
 
 const RUNNING_STATUSES = new Set(['running', 'cancelling']);
@@ -182,6 +195,26 @@ function readMessages(db: FastifyInstance['db'], sessionId: string): AssistantMe
     .all(sessionId) as AssistantMessage[];
 }
 
+async function seedPiFromLegacy(db: FastifyInstance['db'], sessionId: string, sessionDir: string): Promise<void> {
+  const legacy = readMessages(db, sessionId);
+  if (legacy.length === 0) return;
+  const sm = await openAssistantSession(sessionId, sessionDir);
+  for (const m of legacy) {
+    if (m.role === 'user') appendUserMessage(sm, m.content);
+    else if (m.role === 'assistant') appendAssistantMessage(sm, { text: m.content });
+    // system/tool legacy rows (rare) are skipped; they were never richly rendered.
+  }
+}
+
+async function assistantMessages(db: FastifyInstance['db'], sessionId: string, sessionDir: string): Promise<unknown[]> {
+  let entries = await readAssistantEntries(sessionId, sessionDir);
+  if (entries.length === 0) {
+    await seedPiFromLegacy(db, sessionId, sessionDir);
+    entries = await readAssistantEntries(sessionId, sessionDir);
+  }
+  return flattenEntries(entries, ASSISTANT_CWD, {});
+}
+
 function getSession(db: FastifyInstance['db'], sessionId: string): AssistantSession | undefined {
   return db.prepare('SELECT * FROM assistant_sessions WHERE id = ? AND archived_at IS NULL').get(sessionId) as
     | AssistantSession
@@ -207,24 +240,6 @@ function createSession(db: FastifyInstance['db'], title?: string): AssistantSess
 
 function ensureDefaultSession(db: FastifyInstance['db']): AssistantSession {
   return newestSession(db) ?? createSession(db, 'Assistant');
-}
-
-function appendMessage(
-  db: FastifyInstance['db'],
-  sessionId: string,
-  role: AssistantMessage['role'],
-  content: string,
-  attachments: AssistantAttachment[] = [],
-): AssistantMessage {
-  const now = new Date().toISOString();
-  const id = uuid();
-  db.prepare(
-    `INSERT INTO assistant_session_messages
-      (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at)
-     VALUES (?, ?, NULL, ?, ?, ?, NULL, ?)`,
-  ).run(id, sessionId, role, content, JSON.stringify(attachments), now);
-  db.prepare('UPDATE assistant_sessions SET updated_at = ? WHERE id = ?').run(now, sessionId);
-  return { id, session_id: sessionId, role, content, attachments_json: JSON.stringify(attachments), created_at: now };
 }
 
 function createRun(
@@ -452,6 +467,8 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     const activeRemoteRuns = new Map<string, string>();
     const activeStreamControllers = new Map<string, AbortController>();
     const uploadRoot = options.uploadRoot ?? process.cwd();
+    const assistantSessionDir = options.assistantSessionDir
+      ?? (fastify.pi ? fastify.pi.sessionDirFor(ASSISTANT_CWD) : join(uploadRoot, 'assistant-sessions'));
 
     const client = () => {
       const { url, key } = configuredAssistant(load);
@@ -493,7 +510,6 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const session = getSession(db, sessionId);
       if (!session) { reply.code(404); return { error: 'Assistant session not found' }; }
 
-      appendMessage(db, session.id, 'user', trimmed, savedAttachments);
       const run = createRun(db, session.id, 'chat', promptContent);
       activeRemoteRuns.set(run.id, '');
       fastify.activity?.bus.emit({ type: 'start', operationId: run.id, kind: 'assistant_stream', title: session.title, provider: 'assistant', model: 'hermes-agent' });
@@ -508,15 +524,33 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let status: string = 'completed';
       let errorMsg: string | undefined;
       let abortSource: string | undefined;
+      let piRunEndPersisted = false;
+      let sm: Awaited<ReturnType<typeof openAssistantSession>> | undefined;
       try {
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
+          sm = await openAssistantSession(session.id, assistantSessionDir);
+          appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
+          appendUserMessage(sm, trimmed);
+
           const remoteSessionId = await ensureRemoteSession(hermes, session);
           const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey: `nexus:assistant:${session.id}`, input: hermesInlineImageInput(promptContent, savedAttachments) });
           accumulated = result.output ?? '';
           if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
           completeRun(db, run, { runId: run.id, status: 'completed', sessionId: result.sessionId, output: accumulated, usage: result.usage });
+
+          const assistantEntryId = appendAssistantMessage(sm, { text: accumulated });
+          appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, assistantEntryId, completedAt: new Date().toISOString(), status: 'completed' });
+          piRunEndPersisted = true;
         } else {
+          sm = await openAssistantSession(session.id, assistantSessionDir);
+          appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
+          appendUserMessage(sm, trimmed);
+
+          let thinking = '';
+          const toolCalls: ToolCall[] = [];
+          const toolOutputs: Array<{ toolCallId: string; toolName: string; output: string; isError: boolean }> = [];
+
           const ac = new AbortController();
           activeStreamControllers.set(run.id, ac);
           let responseId: string | undefined;
@@ -526,9 +560,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
             for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}`, previousResponseId: session.last_response_id ?? undefined, signal: ac.signal })) {
               if (ev.kind === 'created' || ev.kind === 'completed') { if (ev.responseId) responseId = ev.responseId; }
               else if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
-              else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
-              else if (ev.kind === 'function_call') { write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
-              else if (ev.kind === 'function_call_output') { write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
+              else if (ev.kind === 'reasoning_delta') { thinking += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
+              else if (ev.kind === 'function_call') { toolCalls.push({ type: 'toolCall', id: ev.id, name: ev.name, arguments: ev.args }); write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
+              else if (ev.kind === 'function_call_output') { toolOutputs.push({ toolCallId: ev.callId, toolName: '', output: ev.output, isError: ev.isError }); write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
               else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; write({ type: 'error', error: ev.error }); }
             }
           } catch (streamErr: any) {
@@ -558,11 +592,19 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           } else {
             completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
           }
+
+          const assistantEntryId = appendAssistantMessage(sm, { text: accumulated, thinking: thinking || undefined, toolCalls });
+          for (const out of toolOutputs) {
+            const name = toolCalls.find((c) => c.id === out.toolCallId)?.name ?? out.toolName;
+            appendToolResult(sm, { toolCallId: out.toolCallId, toolName: name, output: out.output, isError: out.isError });
+          }
+          const piStatus = status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'failed';
+          appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, assistantEntryId, completedAt: new Date().toISOString(), status: piStatus, ...(abortSource ? { abortSource: abortSource as any } : {}), ...(errorMsg ? { error: errorMsg } : {}) });
+          piRunEndPersisted = true;
           if (responseId) {
             db.prepare('UPDATE assistant_sessions SET last_response_id = ? WHERE id = ?').run(responseId, session.id);
           }
         }
-        if (accumulated) appendMessage(db, session.id, 'assistant', accumulated);
       } catch (err: any) {
         status = 'failed';
         errorMsg = err?.message || 'Assistant request failed.';
@@ -570,6 +612,20 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?').run('failed', errorMsg, now, now, run.id);
         db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
         write({ type: 'error', error: errorMsg });
+        if (!piRunEndPersisted && sm) {
+          // Reuse the SAME instance that already buffered run-start + the user message.
+          // Appending an assistant message triggers Pi's flush of the whole buffered turn
+          // (SessionManager only writes once an assistant message exists). On a non-empty
+          // store the earlier entries were already written, so only the assistant + run-end
+          // are new — no duplication.
+          try {
+            appendAssistantMessage(sm, { text: accumulated });
+            appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, completedAt: now, status: 'failed', error: errorMsg });
+            piRunEndPersisted = true;
+          } catch {
+            // Best-effort: don't let Pi-persistence failures mask the original error response.
+          }
+        }
       } finally {
         const completedAtIso = new Date().toISOString();
         write({ kind: 'run_end', run: { runId: run.id, threadId: session.id, completedAt: completedAtIso, status, ...(abortSource ? { abortSource } : {}), ...(errorMsg ? { error: errorMsg } : {}) } });
@@ -674,28 +730,35 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       } catch {
         // Tolerate message-history fetch failures; the local session is still adopted.
       }
-      const insertMessage = db.prepare(
-        `INSERT OR IGNORE INTO assistant_session_messages
-          (id, session_id, remote_message_id, role, content, attachments_json, event_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+
+      const sm = await openAssistantSession(session.id, assistantSessionDir);
+      const existing = (await readAssistantEntries(session.id, assistantSessionDir)) as any[];
+      const seen = new Set(
+        existing
+          .filter((e) => e.type === 'message')
+          .map((e: any) => {
+            const content = e.message.content;
+            const text =
+              typeof content === 'string'
+                ? content
+                : Array.isArray(content)
+                  ? content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
+                  : '';
+            return `${e.message.role}:${text}`;
+          }),
       );
       for (const message of remoteMessages) {
         if (!message?.content && message?.content !== '') continue;
-        const localId = message.id ? `remote:${remoteSessionId}:${message.id}` : uuid();
-        insertMessage.run(
-          localId,
-          session.id,
-          message.id ?? null,
-          message.role,
-          message.content,
-          JSON.stringify([]),
-          message.created_at ?? now,
-        );
+        const key = `${message.role}:${message.content}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (message.role === 'user') appendUserMessage(sm, message.content);
+        else appendAssistantMessage(sm, { text: message.content });
       }
 
       return {
         session,
-        messages: readMessages(db, session.id).map(publicMessage),
+        messages: await assistantMessages(db, session.id, assistantSessionDir),
         latestRun: publicRun(latestRun(db, session.id)),
       };
     });
@@ -709,7 +772,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       return {
         session,
-        messages: readMessages(db, id).map(publicMessage),
+        messages: await assistantMessages(db, id, assistantSessionDir),
         latestRun: publicRun(latestRun(db, id)),
       };
     });
@@ -793,7 +856,14 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
-      appendMessage(db, session.id, 'user', content, savedAttachments);
+      // Note: the background prompt is NOT written to the Pi store here. Pi's SessionManager
+      // only flushes a session file to disk once it contains an assistant message (see
+      // node_modules/@earendil-works/pi-coding-agent SessionManager#_persist/#resetToPath) — a
+      // lone appendUserMessage() on a SessionManager instance that is discarded at the end of
+      // this request would silently never reach disk. Instead /sync appends both the user
+      // prompt (from the run's stored input) and the assistant output on the same
+      // SessionManager instance once the run completes, so the pair flushes together. Plain
+      // messages only — no run-start/run-end markers (see /sync for rationale).
       const run = createRun(db, session.id, 'overnight', promptContent);
       const remote = await hermes.startRun({
         input: promptContent,
@@ -846,10 +916,25 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           const completed = completeRun(db, run, remote);
           if (completed.status !== run.status) updated += 1;
           if (completed.status === 'succeeded' && completed.output) {
-            const existing = db
-              .prepare('SELECT id FROM assistant_session_messages WHERE session_id = ? AND role = ? AND content = ?')
-              .get(run.session_id, 'assistant', completed.output);
-            if (!existing) appendMessage(db, run.session_id, 'assistant', completed.output);
+            // Persist the background turn to the Pi store (the canonical transcript store) as
+            // plain messages — no run-start/run-end markers. A background run's lifetime spans
+            // two requests (handoff, then this sync); an open run-start/run-end pair here could
+            // wrongly swallow a foreground turn appended in between when flattenEntries merges
+            // the span.
+            //
+            // Both the user prompt and the assistant output are appended here, on the same
+            // SessionManager instance, rather than writing the user message back at handoff
+            // time: Pi's SessionManager only flushes a session file to disk once it contains an
+            // assistant message, so a lone appendUserMessage() on a SessionManager instance that
+            // is discarded at the end of the handoff request would silently never reach disk.
+            // Appending both messages here, before either is flushed, means they land together.
+            const syncSm = await openAssistantSession(run.session_id, assistantSessionDir);
+            const existing = (await readAssistantEntries(run.session_id, assistantSessionDir)) as any[];
+            const hasUserPrompt = existing.some((e: any) =>
+              e.type === 'message' && e.message.role === 'user' && e.message.content === run.input,
+            );
+            if (!hasUserPrompt) appendUserMessage(syncSm, run.input);
+            appendAssistantMessage(syncSm, { text: completed.output });
           }
         } catch (err) {
           markRunUnknown(db, run, errorMessage(err));
