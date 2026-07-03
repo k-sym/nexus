@@ -528,7 +528,6 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const session = getSession(db, sessionId);
       if (!session) { reply.code(404); return { error: 'Assistant session not found' }; }
 
-      appendMessage(db, session.id, 'user', trimmed, savedAttachments);
       const run = createRun(db, session.id, 'chat', promptContent);
       activeRemoteRuns.set(run.id, '');
       fastify.activity?.bus.emit({ type: 'start', operationId: run.id, kind: 'assistant_stream', title: session.title, provider: 'assistant', model: 'hermes-agent' });
@@ -615,7 +614,6 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
             db.prepare('UPDATE assistant_sessions SET last_response_id = ? WHERE id = ?').run(responseId, session.id);
           }
         }
-        if (accumulated) appendMessage(db, session.id, 'assistant', accumulated);
       } catch (err: any) {
         status = 'failed';
         errorMsg = err?.message || 'Assistant request failed.';
