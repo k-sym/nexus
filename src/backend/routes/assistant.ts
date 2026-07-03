@@ -1,8 +1,9 @@
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import path from 'node:path';
+import path, { join } from 'node:path';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
+import { ASSISTANT_CWD } from '../pi/assistant-session.js';
 import type { NexusConfig } from '@nexus/shared';
 import {
   createHermesClient,
@@ -83,6 +84,7 @@ interface AssistantRun {
 interface AssistantRoutesOptions {
   fetchImpl?: HermesFetch;
   uploadRoot?: string;
+  assistantSessionDir?: string;
 }
 
 const RUNNING_STATUSES = new Set(['running', 'cancelling']);
@@ -452,6 +454,8 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     const activeRemoteRuns = new Map<string, string>();
     const activeStreamControllers = new Map<string, AbortController>();
     const uploadRoot = options.uploadRoot ?? process.cwd();
+    const assistantSessionDir = options.assistantSessionDir
+      ?? (fastify.pi ? fastify.pi.sessionDirFor(ASSISTANT_CWD) : join(uploadRoot, 'assistant-sessions'));
 
     const client = () => {
       const { url, key } = configuredAssistant(load);

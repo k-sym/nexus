@@ -27,6 +27,7 @@ function ndjsonEvents(payload: string): any[] {
 
 function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: HermesFetch; activity?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-assistant-test-'));
+  const assistantSessionDir = join(dir, 'assistant-sessions');
   const db = getDb(join(dir, 'test.db'));
   const app = Fastify({ logger: false });
   app.decorate('db', db);
@@ -39,8 +40,8 @@ function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: 
   app.register(createAssistantRoutes(() => options.config ?? {
     ...loadConfig(),
     assistant: { url: 'http://127.0.0.1:8642', api_key: 'secret' },
-  }, { fetchImpl: options.fetchImpl, uploadRoot: dir }));
-  return { app, db, dir, stopActivity };
+  }, { fetchImpl: options.fetchImpl, uploadRoot: dir, assistantSessionDir }));
+  return { app, db, dir, assistantSessionDir, stopActivity };
 }
 
 async function cleanup(app: ReturnType<typeof Fastify>, db: ReturnType<typeof getDb>, dir: string, stopActivity?: () => void) {
