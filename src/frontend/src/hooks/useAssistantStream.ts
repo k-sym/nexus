@@ -59,11 +59,22 @@ export interface AssistantMessage {
   id: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
-  thinking?: string;
+  thinking?: string | null;
   run?: AgentRunView;
+  toolCalls?: AgentRunView['tools'];
   attachments?: AssistantAttachment[];
   created_at: string;
   isStreaming?: boolean;
+}
+
+// Mirrors ChatPanel.fetchThreadMessages: the reconstructed (`flattenEntries`)
+// message shape carries tool calls at the top level as `tool_calls`, with a
+// `toolCalls` alias kept for parity with live-streamed messages.
+function toAssistantMessage(raw: any): AssistantMessage {
+  return {
+    ...raw,
+    toolCalls: raw.tool_calls ?? raw.toolCalls ?? undefined,
+  } as AssistantMessage;
 }
 
 function localMessage(role: AssistantMessage['role'], content: string, attachments?: AssistantAttachment[]): AssistantMessage {
@@ -147,7 +158,7 @@ export function useAssistantStream() {
     };
     const run = data.latestRun ?? null;
     setSelectedSessionId(data.session.id);
-    setMessages(data.messages ?? []);
+    setMessages((data.messages ?? []).map(toAssistantMessage));
     setLatestRun(run);
     setIsRunning(isActiveRunStatus(run?.status));
     setSessions((current) => [
@@ -175,7 +186,7 @@ export function useAssistantStream() {
     };
     const run = data.latestRun ?? null;
     setSelectedSessionId(data.session.id);
-    setMessages(data.messages ?? []);
+    setMessages((data.messages ?? []).map(toAssistantMessage));
     setLatestRun(run);
     setIsRunning(run?.status === 'running' || run?.status === 'cancelling');
     applySessionStatus(data.session, run);
