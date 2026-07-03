@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createAssistantRoutes } from '../routes/assistant';
@@ -147,7 +147,7 @@ test('Assistant foreground stream stores user assistant messages and completed r
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Checks' } });
     const sessionId = created.json().id;
@@ -165,13 +165,18 @@ test('Assistant foreground stream stores user assistant messages and completed r
     const runEnd = events.find((e) => e.kind === 'run_end');
     assert.equal(runEnd.run.status, 'completed');
 
-    const messages = db
-      .prepare('SELECT role, content FROM assistant_session_messages WHERE session_id = ? ORDER BY created_at ASC')
-      .all(sessionId) as Array<{ role: string; content: string }>;
-    assert.deepEqual(messages, [
-      { role: 'user', content: 'Run checks tonight' },
-      { role: 'assistant', content: 'Finished overnight checks.' },
-    ]);
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => e.message.role), ['user', 'assistant']);
+    const userEntry = messageEntries[0] as any;
+    assert.equal(userEntry.message.content, 'Run checks tonight');
+    const assistantEntry = messageEntries[1] as any;
+    assert.equal(assistantEntry.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''), 'Finished overnight checks.');
+
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'live turns no longer write legacy messages');
+
     const run = db.prepare('SELECT status, output FROM assistant_runs WHERE session_id = ?').get(sessionId) as any;
     assert.deepEqual(run, {
       status: 'succeeded',
@@ -365,7 +370,7 @@ test('Assistant runs persist attachments and send Hermes saved file references',
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
-  const { app, db, dir } = makeApp({ fetchImpl });
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Files' } });
     const sessionId = created.json().id;
@@ -387,13 +392,17 @@ test('Assistant runs persist attachments and send Hermes saved file references',
     assert.equal(streamed.statusCode, 200);
     assert.match(hermesInput, /^Summarise this\n\nAttached files:\n- brief\.txt: /);
     assert.match(hermesInput, /project_docs\/uploads\/brief\.txt/);
-    const row = db
-      .prepare('SELECT content, attachments_json FROM assistant_session_messages WHERE session_id = ? AND role = ?')
-      .get(sessionId, 'user') as { content: string; attachments_json: string };
-    assert.equal(row.content, 'Summarise this');
-    const stored = JSON.parse(row.attachments_json);
-    assert.equal(stored[0].name, 'brief.txt');
-    assert.match(stored[0].path, /project_docs\/uploads\/brief\.txt$/);
+
+    // The attachment is saved to disk at the referenced path regardless of message persistence.
+    const savedPath = join(dir, 'project_docs', 'uploads', 'brief.txt');
+    assert.equal(existsSync(savedPath), true, 'attachment file saved to disk');
+    assert.equal(readFileSync(savedPath, 'utf8'), 'hello from file');
+
+    // The turn's user text is persisted in the Pi store (the canonical transcript store).
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const userEntry = entries.find((e) => e.type === 'message' && e.message.role === 'user') as any;
+    assert.equal(userEntry.message.content, 'Summarise this');
   } finally {
     await cleanup(app, db, dir);
   }
@@ -462,12 +471,11 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
     assert.equal(textDelta.assistantMessageEvent.delta, 'I can see the screenshot.');
     const runEnd = events.find((e) => e.kind === 'run_end');
     assert.equal(runEnd.run.status, 'completed');
-    const row = db
-      .prepare('SELECT attachments_json FROM assistant_session_messages WHERE session_id = ? AND role = ?')
-      .get(sessionId, 'user') as { attachments_json: string };
-    const stored = JSON.parse(row.attachments_json);
-    assert.equal(stored[0].type, 'image');
-    assert.match(stored[0].path, /project_docs\/uploads\/screen\.png$/);
+
+    // The image attachment is saved to disk at the expected path regardless of message persistence.
+    const savedPath = join(dir, 'project_docs', 'uploads', 'screen.png');
+    assert.equal(existsSync(savedPath), true, 'image attachment file saved to disk');
+    assert.equal(readFileSync(savedPath).toString('base64'), imageData);
   } finally {
     await cleanup(app, db, dir);
   }
