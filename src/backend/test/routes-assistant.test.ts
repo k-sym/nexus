@@ -481,6 +481,70 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
   }
 });
 
+test('Assistant foreground vision turn persists to Pi SessionManager instead of vanishing', async () => {
+  let createdRemoteSession = '';
+  const imageData = Buffer.from('fake-png').toString('base64');
+  const fetchImpl: HermesFetch = async (url, init) => {
+    const requestUrl = String(url);
+    if (requestUrl.endsWith('/api/sessions') && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      createdRemoteSession = body.id;
+      return new Response(JSON.stringify({ object: 'hermes.session', session: { id: body.id } }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (requestUrl.endsWith(`/api/sessions/${createdRemoteSession}/chat`) && init?.method === 'POST') {
+      return new Response(JSON.stringify({
+        object: 'hermes.session.chat.completion',
+        session_id: createdRemoteSession,
+        message: { role: 'assistant', content: 'I can see the screenshot.' },
+        usage: { total_tokens: 25 },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error(`unexpected Hermes request ${requestUrl}`);
+  };
+  const { app, db, dir, assistantSessionDir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Vision persistence' } });
+    const sessionId = created.json().id;
+
+    const streamed = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: {
+        content: 'What do you see?',
+        attachments: [{
+          type: 'image',
+          name: 'screen.png',
+          mimeType: 'image/png',
+          data: imageData,
+          size: 8,
+        }],
+      },
+    });
+
+    assert.equal(streamed.statusCode, 200);
+
+    const { readAssistantEntries } = await import('../pi/assistant-session');
+    const entries = (await readAssistantEntries(sessionId, assistantSessionDir)) as any[];
+    const messageEntries = entries.filter((e) => e.type === 'message');
+    assert.deepEqual(messageEntries.map((e: any) => e.message.role), ['user', 'assistant']);
+    const userEntry = messageEntries[0] as any;
+    assert.equal(userEntry.message.content, 'What do you see?');
+    const assistantEntry = messageEntries[1] as any;
+    assert.equal(
+      assistantEntry.message.content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join(''),
+      'I can see the screenshot.',
+    );
+
+    const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
+    assert.equal(legacyCount.c, 0, 'vision turns do not write legacy messages either');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant background handoff rejects image attachments instead of dropping them', async () => {
   const { app, db, dir } = makeApp();
   try {
