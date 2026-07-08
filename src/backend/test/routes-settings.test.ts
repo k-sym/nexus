@@ -240,3 +240,51 @@ test('PUT /api/settings enables configured local chat model in an existing curat
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('PUT /api/settings marks configured local chat model as image-capable when enabled', async () => {
+  const original = loadConfig();
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-settings-models-'));
+  const localModelId = 'qwen2.5-vl-7b-instruct';
+  const localModelKey = `local/${localModelId}`;
+  const app = Fastify({ logger: false });
+  const pi = new PiRuntime({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+    modelsFile: join(dir, 'models.json'),
+  });
+  const modelCuration = new ModelCurationStore(join(dir, 'model-curation.json'));
+  modelCuration.save([]);
+  app.decorate('pi', pi);
+  app.decorate('modelCuration', modelCuration);
+  app.register(registerSettingsRoutes);
+  app.register(registerPiRoutes);
+  try {
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: {
+        ...original,
+        models: {
+          ...original.models,
+          local: {
+            ...original.models.local,
+            base_url: 'http://127.0.0.1:8081/v1',
+            api_key: 'local',
+            display_name: 'Local Vision Model',
+            chat_model: localModelId,
+            supports_images: true,
+          },
+        },
+      },
+    });
+    assert.equal(put.statusCode, 200);
+
+    const models = await app.inject({ method: 'GET', url: '/api/models' });
+    assert.deepEqual(models.json().enabledModelKeys, [localModelKey]);
+    assert.deepEqual(models.json().models[0].input, ['text', 'image']);
+  } finally {
+    saveConfig(original);
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

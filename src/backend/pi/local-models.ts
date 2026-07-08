@@ -26,6 +26,7 @@ export function writeLocalModelsFile(config: NexusConfig, filePath = defaultLoca
   const baseUrl = local.base_url.trim();
   const chatModel = local.chat_model.trim();
   const displayName = local.display_name?.trim() || 'Local Model';
+  const input: Array<'text' | 'image'> = local.supports_images ? ['text', 'image'] : ['text'];
   const providers = baseUrl && chatModel
     ? {
         local: {
@@ -41,7 +42,7 @@ export function writeLocalModelsFile(config: NexusConfig, filePath = defaultLoca
             {
               id: chatModel,
               name: displayName,
-              input: ['text'],
+              input,
               reasoning: false,
               contextWindow: 128000,
               maxTokens: 4096,

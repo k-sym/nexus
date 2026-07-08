@@ -19,6 +19,7 @@ function config(root: string): NexusConfig {
         api_key: 'literal-local-secret',
         display_name: 'Local Model',
         chat_model: '',
+        supports_images: false,
         embedding_model: '',
         rerank_model: '',
       },

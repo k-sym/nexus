@@ -23,6 +23,7 @@ const DEFAULT_CONFIG: NexusConfig = {
       api_key: '${OMLX_API_KEY}',
       display_name: 'Local Model',
       chat_model: '',
+      supports_images: false,
       embedding_model: '',
       rerank_model: '',
     },
