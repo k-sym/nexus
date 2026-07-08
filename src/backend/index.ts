@@ -6,12 +6,15 @@
  * (the old headless orchestrator dispatch loop has been removed).
  */
 import Fastify from 'fastify';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { existsSync } from 'node:fs';
 import cors from '@fastify/cors';
 import sensible from '@fastify/sensible';
 import websocket from '@fastify/websocket';
 import { getDb } from './db.js';
-import { loadConfig, getDbPath, getNexusDir, resolveOpenRouterKey } from './config.js';
+import { loadConfig, getDbPath, getNexusDir, resolveOpenRouterKey, resolveEnvVars, expandHome } from './config.js';
+import { startGateway } from './gateway/server.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerAssistantRoutes } from './routes/assistant.js';
@@ -115,6 +118,40 @@ async function main() {
   } catch (err) {
     app.log.error(err);
     process.exit(1);
+  }
+
+  // Glasses cockpit gateway — a LAN listener sharing this process's pi + db so
+  // the Even Realities G2 can drive Nexus sessions. A failure here must not take
+  // down the main backend.
+  // src/backend/index.ts → ../glasses/dist = src/glasses/dist (the in-repo UI build).
+  const inRepoGlassesDist = join(dirname(fileURLToPath(import.meta.url)), '..', 'glasses', 'dist');
+  try {
+    await startGateway({
+      pi,
+      db,
+      mainPort: config.server.port,
+      config: {
+        enabled: config.gateway.enabled,
+        port: config.gateway.port,
+        token: resolveEnvVars(config.gateway.token || ''),
+        recentMs: config.gateway.recent_minutes * 60 * 1000,
+        // Default to the in-repo glasses build (src/glasses/dist) when neither
+        // env nor config sets it, so a built checkout serves the cockpit UI with
+        // no extra config. Guarded so it's simply omitted when not built.
+        glassesDist: expandHome(
+          process.env.NEXUS_GLASSES_DIST
+          || config.gateway.glasses_dist
+          || (existsSync(inRepoGlassesDist) ? inRepoGlassesDist : ''),
+        ),
+        stt: {
+          provider: config.gateway.stt?.provider || 'deepgram',
+          apiKey: resolveEnvVars(config.gateway.stt?.api_key || ''),
+          language: config.gateway.stt?.language || 'en',
+        },
+      },
+    });
+  } catch (err) {
+    console.error('[gateway] failed to start glasses gateway:', err);
   }
 }
 

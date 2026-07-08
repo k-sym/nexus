@@ -215,6 +215,18 @@ interface PendingQuestion {
   resolve: (result: QuestionToolResult) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
+  requestedAt: number;
+}
+
+/** Read-only view of a pending question, for enumerating across threads
+ *  (e.g. the glasses cockpit gateway). Carries the full request so a consumer
+ *  can map question text → id and option label → value when submitting an
+ *  answer on the user's behalf. */
+export interface PendingQuestionView {
+  threadId: string;
+  toolCallId: string;
+  request: QuestionRequest;
+  requestedAt: number;
 }
 
 export class QuestionBroker {
@@ -230,7 +242,7 @@ export class QuestionBroker {
     if (this.pending.has(key)) return Promise.reject(new Error(`Question already pending: ${toolCallId}`));
 
     return new Promise<QuestionToolResult>((resolve) => {
-      const entry: PendingQuestion = { threadId, toolCallId, request, resolve, signal };
+      const entry: PendingQuestion = { threadId, toolCallId, request, resolve, signal, requestedAt: Date.now() };
       entry.onAbort = () => this.cancelEntry(key, this.abortReason(signal));
       this.pending.set(key, entry);
       if (signal?.aborted) entry.onAbort();
@@ -256,6 +268,15 @@ export class QuestionBroker {
     }
   }
 
+  /** Cancel a single pending question (e.g. the glasses "dismiss" gesture).
+   *  Returns false if no such question is pending. */
+  cancel(threadId: string, toolCallId: string, reason: string): boolean {
+    const key = this.key(threadId, toolCallId);
+    if (!this.pending.has(key)) return false;
+    this.cancelEntry(key, reason);
+    return true;
+  }
+
   pendingCount(threadId: string): number {
     let count = 0;
     for (const entry of this.pending.values()) {
@@ -266,6 +287,21 @@ export class QuestionBroker {
 
   hasPending(threadId: string): boolean {
     return this.pendingCount(threadId) > 0;
+  }
+
+  /** Enumerate every pending question across all threads. Used by the glasses
+   *  cockpit gateway to surface pending questions as approval cards. */
+  listPending(): PendingQuestionView[] {
+    const out: PendingQuestionView[] = [];
+    for (const entry of this.pending.values()) {
+      out.push({
+        threadId: entry.threadId,
+        toolCallId: entry.toolCallId,
+        request: entry.request,
+        requestedAt: entry.requestedAt,
+      });
+    }
+    return out;
   }
 
   private cancelEntry(key: string, reason: string): void {

@@ -16,6 +16,18 @@ const CONFIG_PATH = path.join(NEXUS_DIR, 'config.yaml');
 
 const DEFAULT_CONFIG: NexusConfig = {
   server: { port: 4173 },
+  gateway: {
+    enabled: true,
+    port: 8899,
+    token: '${NEXUS_GATEWAY_TOKEN}',
+    recent_minutes: 720,
+    glasses_dist: '',
+    stt: {
+      provider: 'deepgram',
+      api_key: '${DEEPGRAM_API_KEY}',
+      language: 'en',
+    },
+  },
   models: {
     openrouter: { api_key: '${OPENROUTER_API_KEY}' },
     local: {
