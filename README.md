@@ -385,6 +385,7 @@ models:
   local:                               # OpenAI-compatible server for chat
     base_url: "http://127.0.0.1:4001/v1"
     api_key: "${OMLX_API_KEY}"         # if your server requires auth; env interpolation supported
+    supports_images: false             # true when the chat endpoint has vision support (e.g. mmproj loaded)
     embedding_model: ""                # optional overrides for the memory stack
     rerank_model: ""
 

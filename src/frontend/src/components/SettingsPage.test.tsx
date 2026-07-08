@@ -9,7 +9,7 @@ vi.mock('../api', () => ({
     settings: {
       get: vi.fn(async () => ({
         assistant: { url: 'https://assistant.example.test/v1', api_key: '${ASSISTANT_API_KEY}' },
-        models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '' } },
+        models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '', supports_images: false } },
         memory: { auto_inject: { enabled: true, max_memories: 5, token_budget: 1000 } },
         jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
       })),
@@ -105,6 +105,24 @@ describe('SettingsPage', () => {
           local: expect.objectContaining({
             display_name: 'Local Model',
             chat_model: '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf',
+          }),
+        }),
+      }));
+    });
+  });
+
+  it('saves the local model image input capability toggle', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Image input Disabled' }));
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(api.settings.update).toHaveBeenCalledWith(expect.objectContaining({
+        models: expect.objectContaining({
+          local: expect.objectContaining({
+            supports_images: true,
           }),
         }),
       }));

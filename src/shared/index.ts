@@ -297,6 +297,7 @@ export interface NexusConfig {
       api_key: string;
       display_name: string;
       chat_model: string;
+      supports_images: boolean;
       embedding_model: string;
       rerank_model: string;
     };

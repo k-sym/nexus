@@ -74,6 +74,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
           api_key: incoming.models?.local?.api_key ?? current.models.local.api_key,
           display_name: incoming.models?.local?.display_name ?? current.models.local.display_name,
           chat_model: incoming.models?.local?.chat_model ?? current.models.local.chat_model,
+          supports_images: incoming.models?.local?.supports_images ?? current.models.local.supports_images,
           embedding_model: incoming.models?.local?.embedding_model ?? current.models.local.embedding_model,
           rerank_model: incoming.models?.local?.rerank_model ?? current.models.local.rerank_model,
         },

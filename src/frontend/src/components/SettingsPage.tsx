@@ -223,6 +223,19 @@ export default function SettingsPage() {
                 Saved as <span className="font-mono">local/&lt;model id&gt;</span> in the curated model list.
               </p>
             </Field>
+            <Field label="Image input">
+              <button
+                type="button"
+                aria-label={`Image input ${config.models.local?.supports_images ? 'Enabled' : 'Disabled'}`}
+                onClick={() => update(['models', 'local', 'supports_images'], !(config.models.local?.supports_images ?? false))}
+                className={`px-3 py-1 text-xs rounded transition-colors ${config.models.local?.supports_images ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+              >
+                {config.models.local?.supports_images ? 'Enabled' : 'Disabled'}
+              </button>
+              <p className="text-[10px] text-faint mt-1">
+                Enable when the local OpenAI-compatible server is running a vision-capable model or multimodal projector.
+              </p>
+            </Field>
             <div className="flex items-center gap-3">
               <button
                 type="button"
