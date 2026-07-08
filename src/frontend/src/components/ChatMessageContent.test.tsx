@@ -3,6 +3,107 @@ import { describe, it, expect, vi } from 'vitest';
 import ChatMessageContent from './ChatMessageContent';
 
 describe('ChatMessageContent', () => {
+  it('renders assistant markdown structure instead of literal markdown punctuation', () => {
+    const { container } = render(
+      <ChatMessageContent
+        text={[
+          '## Test Coverage',
+          '',
+          'Two regression tests were added:',
+          '',
+          '- verify succeeds via admin cookie',
+          '- stats accessible via admin cookie',
+          '',
+          '```php',
+          '$middleware->append(InjectBearerFromAdminCookie::class);',
+          '```',
+        ].join('\n')}
+        onOpenPath={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole('heading', { level: 2, name: 'Test Coverage' })).toBeInTheDocument();
+    expect(screen.getByRole('list')).toBeInTheDocument();
+    expect(container.querySelector('pre code')).toHaveTextContent(
+      '$middleware->append(InjectBearerFromAdminCookie::class);',
+    );
+    expect(screen.queryByText(/## Test Coverage/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/```php/)).not.toBeInTheDocument();
+  });
+
+  it('renders GFM task list checkboxes without enabling interaction', () => {
+    render(
+      <ChatMessageContent
+        text={'- [x] customer token cannot hit admin verify\n- [ ] document follow-up'}
+        onOpenPath={vi.fn()}
+      />,
+    );
+
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0]).toBeChecked();
+    expect(checkboxes[0]).toBeDisabled();
+    expect(checkboxes[1]).not.toBeChecked();
+    expect(checkboxes[1]).toBeDisabled();
+  });
+
+  it('keeps user messages verbatim when markdown rendering is disabled', () => {
+    render(
+      <ChatMessageContent
+        text={'## Not a heading\n\n```text\nliteral fence\n```'}
+        onOpenPath={vi.fn()}
+        linkifyPaths={false}
+      />,
+    );
+
+    expect(screen.queryByRole('heading', { name: 'Not a heading' })).not.toBeInTheDocument();
+    expect(screen.getByText(/## Not a heading/)).toBeInTheDocument();
+    expect(screen.getByText(/```text/)).toBeInTheDocument();
+  });
+
+  it('linkifies file paths inside markdown prose', () => {
+    const onOpenPath = vi.fn();
+    render(
+      <ChatMessageContent
+        text={'Open /Users/k-sym/notes.md after reviewing the list.'}
+        onOpenPath={onOpenPath}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: /Preview notes\.md/ });
+    expect(button).toBeInTheDocument();
+    button.click();
+    expect(onOpenPath).toHaveBeenCalledWith('/Users/k-sym/notes.md');
+  });
+
+  it('linkifies artifact paths wrapped in inline code', () => {
+    const onOpenPath = vi.fn();
+    render(
+      <ChatMessageContent
+        text={'Created it here: `/Users/k-sym/Projects/nexus/output/stick-man-640x480.png`'}
+        onOpenPath={onOpenPath}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: /Preview stick-man-640x480\.png/ });
+    expect(button).toBeInTheDocument();
+    button.click();
+    expect(onOpenPath).toHaveBeenCalledWith('/Users/k-sym/Projects/nexus/output/stick-man-640x480.png');
+  });
+
+  it('does not trust raw HTML in markdown output', () => {
+    const { container } = render(
+      <ChatMessageContent
+        text={'Hello <script>alert(1)</script><span>raw</span>'}
+        onOpenPath={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector('script')).not.toBeInTheDocument();
+    expect(container.textContent).toContain('<script>alert(1)</script>');
+    expect(container.textContent).toContain('<span>raw</span>');
+  });
+
   it('renders a raw GitHub <img> tag as an image element', () => {
     const text =
       'Login is OK, but anything after that fails.\n\n' +

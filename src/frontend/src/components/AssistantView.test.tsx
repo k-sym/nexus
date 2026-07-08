@@ -475,9 +475,13 @@ describe('AssistantView', () => {
 
     // The assistant content renders inside the shared run card (tool activity
     // summary + terminal status visible), not a bare AssistantBubble.
-    const contentNode = await screen.findByText('read the file');
-    expect(contentNode.closest('.agent-run-card')).not.toBeNull();
-    expect(contentNode.closest('[data-chat-role="assistant"]')).toBeNull();
+    const runCard = await waitFor(() => {
+      const card = document.querySelector('.agent-run-card');
+      expect(card).not.toBeNull();
+      expect(card).toHaveTextContent('read the file');
+      return card as HTMLElement;
+    });
+    expect(runCard.closest('[data-chat-role="assistant"]')).toBeNull();
     expect(await screen.findByText('1 tool call')).toBeInTheDocument();
     expect(await screen.findByText(/Completed/i)).toBeInTheDocument();
   });

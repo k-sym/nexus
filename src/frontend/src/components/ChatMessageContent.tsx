@@ -1,4 +1,7 @@
-import ChatArtifactLinks from './ChatArtifactLinks';
+import React from 'react';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import ChatArtifactLinks, { containsArtifactPath } from './ChatArtifactLinks';
 
 interface ChatMessageContentProps {
   text: string;
@@ -9,17 +12,9 @@ interface ChatMessageContentProps {
 }
 
 /**
- * Renders chat message text with two enhancements over plain text:
- *  1. Images written as a raw HTML `<img src="https://…">` tag (how GitHub
- *     issue bodies embed user-attachment screenshots) or as a markdown
- *     `![alt](https://…)` are rendered as real <img> elements.
- *  2. Everything else is passed through {@link ChatArtifactLinks}, which
- *     linkifies file paths and otherwise renders escaped text.
- *
- * Only images hosted on GitHub's attachment hosts are turned into images (see
- * {@link isAllowedImageUrl}); every other URL/scheme is left as escaped text,
- * so this is not an arbitrary-HTML sink and does not auto-load arbitrary remote
- * URLs. We only ever emit an <img> whose `src` we control.
+ * Renders assistant/tool output as constrained Markdown. Raw HTML is not
+ * enabled; links and images are emitted only through explicit component
+ * overrides, and local file paths still go through {@link ChatArtifactLinks}.
  */
 
 type Token =
@@ -59,6 +54,29 @@ function isAllowedImageUrl(url: string | undefined): url is string {
     host === 'githubusercontent.com' ||
     host.endsWith('.githubusercontent.com')
   );
+}
+
+function isAllowedLinkUrl(url: string | undefined): url is string {
+  if (typeof url !== 'string') return false;
+  try {
+    const parsed = new URL(url);
+    return ['https:', 'http:', 'mailto:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+function escapeMarkdownImageAlt(alt: string): string {
+  return alt.replace(/\r?\n/g, ' ').replace(/]/g, '\\]');
+}
+
+function normalizeAllowedRawImages(text: string): string {
+  return text.replace(HTML_IMG, (tag) => {
+    const src = attr(tag, 'src');
+    if (!isAllowedImageUrl(src)) return tag;
+    const alt = escapeMarkdownImageAlt(attr(tag, 'alt') ?? '');
+    return `![${alt}](${src})`;
+  });
 }
 
 /** Split message text into image tokens and the text between them. */
@@ -109,6 +127,119 @@ export default function ChatMessageContent({ text, onOpenPath, linkifyPaths = tr
     ) : (
       <span key={key}>{runText}</span>
     );
+
+  if (linkifyPaths) {
+    const renderLinkedChildren = (children: React.ReactNode) => (
+      <>
+        {React.Children.map(children, (child, index) =>
+          typeof child === 'string' ? (
+            <ChatArtifactLinks key={`artifact-text-${index}`} text={child} onOpenPath={onOpenPath} />
+          ) : (
+            child
+          ),
+        )}
+      </>
+    );
+
+    const components: Components = {
+      a({ href, children }) {
+        if (!isAllowedLinkUrl(href)) {
+          return <span>{children}</span>;
+        }
+        return (
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="accent-text underline decoration-[var(--border-strong)] underline-offset-2 transition-colors hover:text-[var(--accent)]"
+          >
+            {children}
+          </a>
+        );
+      },
+      blockquote({ children }) {
+        return <blockquote className="border-l-2 border-subtle pl-3 text-muted">{children}</blockquote>;
+      },
+      code({ className, children }) {
+        const hasLanguage = typeof className === 'string' && className.startsWith('language-');
+        const codeText = String(children);
+        const hasNewline = codeText.includes('\n');
+        if (!hasLanguage && !hasNewline && containsArtifactPath(codeText)) {
+          return <ChatArtifactLinks text={codeText} onOpenPath={onOpenPath} />;
+        }
+        return (
+          <code className={hasLanguage || hasNewline ? className : 'rounded border border-subtle bg-zinc-950/45 px-1 py-0.5 text-[0.92em] accent-text'}>
+            {children}
+          </code>
+        );
+      },
+      h1({ children }) {
+        return <h1>{renderLinkedChildren(children)}</h1>;
+      },
+      h2({ children }) {
+        return <h2>{renderLinkedChildren(children)}</h2>;
+      },
+      h3({ children }) {
+        return <h3>{renderLinkedChildren(children)}</h3>;
+      },
+      h4({ children }) {
+        return <h4>{renderLinkedChildren(children)}</h4>;
+      },
+      img({ src, alt }) {
+        if (!isAllowedImageUrl(src)) {
+          return <span>{src ? `![${alt ?? ''}](${src})` : alt}</span>;
+        }
+        return (
+          <a
+            href={src}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="mt-1 block"
+          >
+            <img
+              src={src}
+              alt={alt || 'Attached image'}
+              loading="lazy"
+              className="max-h-80 max-w-full rounded-lg border border-subtle object-contain"
+            />
+          </a>
+        );
+      },
+      input(props) {
+        return <input {...props} disabled className="mr-2 align-middle accent-[var(--accent)]" />;
+      },
+      li({ children }) {
+        return <li>{renderLinkedChildren(children)}</li>;
+      },
+      p({ children }) {
+        return <p>{renderLinkedChildren(children)}</p>;
+      },
+      pre({ children }) {
+        return (
+          <pre className="max-w-full overflow-x-auto rounded-lg border border-subtle bg-zinc-950/55 p-3 text-xs leading-relaxed text-zinc-100">
+            {children}
+          </pre>
+        );
+      },
+      strong({ children }) {
+        return <strong>{renderLinkedChildren(children)}</strong>;
+      },
+      td({ children }) {
+        return <td>{renderLinkedChildren(children)}</td>;
+      },
+      th({ children }) {
+        return <th>{renderLinkedChildren(children)}</th>;
+      },
+    };
+
+    return (
+      <div className="chat-markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          {normalizeAllowedRawImages(text)}
+        </ReactMarkdown>
+      </div>
+    );
+  }
 
   // Cheap short-circuit: the vast majority of messages contain no image
   // markup, so skip the regex scans + allocations entirely for them.

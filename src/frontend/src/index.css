@@ -210,6 +210,120 @@ body {
     -webkit-backdrop-filter: blur(14px) saturate(145%);
   }
 
+  .chat-markdown {
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+
+  .chat-markdown > :first-child {
+    margin-top: 0;
+  }
+
+  .chat-markdown > :last-child {
+    margin-bottom: 0;
+  }
+
+  .chat-markdown p,
+  .chat-markdown ul,
+  .chat-markdown ol,
+  .chat-markdown pre,
+  .chat-markdown blockquote,
+  .chat-markdown table {
+    margin: 0.65rem 0;
+  }
+
+  .chat-markdown h1,
+  .chat-markdown h2,
+  .chat-markdown h3,
+  .chat-markdown h4 {
+    margin: 0.9rem 0 0.45rem;
+    color: var(--text-primary);
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .chat-markdown h1 {
+    font-size: 1.15rem;
+  }
+
+  .chat-markdown h2 {
+    font-size: 1.05rem;
+  }
+
+  .chat-markdown h3,
+  .chat-markdown h4 {
+    font-size: 0.95rem;
+  }
+
+  .chat-markdown ul,
+  .chat-markdown ol {
+    padding-left: 1.2rem;
+  }
+
+  .chat-markdown ul {
+    list-style: disc;
+  }
+
+  .chat-markdown ol {
+    list-style: decimal;
+  }
+
+  .chat-markdown li {
+    margin: 0.25rem 0;
+    padding-left: 0.15rem;
+  }
+
+  .chat-markdown li > p {
+    margin: 0.25rem 0;
+  }
+
+  .chat-markdown .contains-task-list {
+    list-style: none;
+    padding-left: 0.2rem;
+  }
+
+  .chat-markdown .task-list-item {
+    margin-left: 0;
+  }
+
+  .chat-markdown pre {
+    white-space: pre;
+  }
+
+  .chat-markdown pre code {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    padding: 0;
+  }
+
+  .chat-markdown table {
+    display: block;
+    max-width: 100%;
+    overflow-x: auto;
+    border-collapse: collapse;
+  }
+
+  .chat-markdown th,
+  .chat-markdown td {
+    border: 1px solid var(--border-subtle);
+    padding: 0.35rem 0.5rem;
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .chat-markdown th {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+    font-weight: 650;
+  }
+
+  .chat-markdown hr {
+    margin: 0.9rem 0;
+    border: 0;
+    border-top: 1px solid var(--border-subtle);
+  }
+
   .compact-project-rail {
     background: rgba(8, 13, 16, 0.96);
     border-right: 1px solid var(--border-subtle);

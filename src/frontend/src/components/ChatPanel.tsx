@@ -974,7 +974,7 @@ function MessageBubble({
           </div>
         ) : (
           <>
-            <div className="whitespace-pre-wrap">
+            <div className={isUser ? 'whitespace-pre-wrap' : undefined}>
               <ChatMessageContent text={msg.content} onOpenPath={onOpenArtifact} linkifyPaths={!isUser} />
             </div>
             {/* Native question tools render after the prelude text, at the
