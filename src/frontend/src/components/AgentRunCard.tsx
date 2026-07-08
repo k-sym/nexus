@@ -44,7 +44,7 @@ export function AgentRunCard({
   ) : null;
 
   const contentBlock = content ? (
-    <div className="whitespace-pre-wrap text-sm">
+    <div className="text-sm">
       {onOpenArtifact ? <ChatMessageContent text={content} onOpenPath={onOpenArtifact} /> : content}
     </div>
   ) : null;

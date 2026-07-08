@@ -15,6 +15,11 @@ const FILE_PATH_PATTERN = new RegExp(
   'gi',
 );
 
+export function containsArtifactPath(text: string): boolean {
+  FILE_PATH_PATTERN.lastIndex = 0;
+  return FILE_PATH_PATTERN.test(text);
+}
+
 function displayName(path: string): string {
   const withoutQuery = path.split(/[?#]/)[0];
   const normalized = withoutQuery.startsWith('file://') ? decodeURIComponent(withoutQuery.replace(/^file:\/\//, '')) : withoutQuery;
@@ -25,6 +30,7 @@ function displayName(path: string): string {
 export default function ChatArtifactLinks({ text, onOpenPath }: ChatArtifactLinksProps) {
   const parts: Array<{ type: 'text'; text: string } | { type: 'path'; path: string }> = [];
   let lastIndex = 0;
+  FILE_PATH_PATTERN.lastIndex = 0;
 
   for (const match of text.matchAll(FILE_PATH_PATTERN)) {
     const prefix = match[1] ?? '';
