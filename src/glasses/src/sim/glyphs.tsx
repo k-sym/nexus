@@ -46,13 +46,27 @@ const CIRCLES = [
   '◍ dashed', '⊚ circled-ring', '⊛ circled-star', '๏ thai-o',
 ]
 
+// Tap-control indicator candidates (1 tap / 2 taps), lighter than ● / ●●.
+const TAPS = [
+  '(fill)  ● steer     ●● back',
+  '(bull)  • steer     •• back',
+  '(dot)   · steer     ·· back',
+  '(chev)  › steer     » back',
+  '(mix)   • steer     » back',
+  '(word)  tap steer   2x back',
+]
+
 export function Glyphs() {
   useEffect(() => {
     const set = new URLSearchParams(window.location.search).get('set')
     const sdk = new GlassesSdk()
     ;(async () => {
       const page = sdk.createPage('glyphs')
-      if (set === 'circles') {
+      if (set === 'taps') {
+        const card = page.addTextElement(TAPS.join('\n\n'))
+        card.setPosition((p) => { p.setX(16).setY(12) })
+        card.setSize((z) => { z.setWidth(544).setHeight(264) })
+      } else if (set === 'circles') {
         const list = page.addListElement(CIRCLES)
         list.setItemWidth(540)
         list.setIsItemSelectBorderEn(true)

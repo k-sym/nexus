@@ -71,7 +71,7 @@ export function Phase3FW() {
         const pages = paginateText(s?.reply ?? '', REPLY_COLS, REPLY_ROWS).map((ls) => ls.join('\n'))
         const total = Math.max(1, pages.length)
         const pg = Math.min(Math.max(0, n.page), total - 1)
-        const hint = '● steer   ●● back'
+        const hint = '• steer   •• back'
         const hx = 8, hy = 8, hw = 560, hh = 36
         // The one deliberate border: a header bar. Session name (+ page k/N) left…
         const header = page.addTextElement(`‹ ${s?.title ?? 'session'}${total > 1 ? `   ${pg + 1}/${total}` : ''}`)
