@@ -3,7 +3,7 @@
 // drill-down: projects → sessions (rail + list) → detail. Reuses the canvas
 // primitives from Lab.tsx. This is the precursor to the real renderer; once the
 // interaction is signed off it gets wired to live gateway data in place of DATA.
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import {
   roundRect, badge, bell, statusMark, chevron, text, pushFullScreen,
@@ -130,13 +130,19 @@ export function Phase3App() {
   const nav = useRef<Nav>({ screen: 'projects', proj: 0, sess: 0, page: 0 })
   const detailPages = useRef(1)
   const sigRef = useRef('')
+  // On-glasses diagnostics: the DOM is otherwise blank (all UI is on the lens),
+  // so mirror the bridge/push state here to read on the phone.
+  const [status, setStatus] = useState('starting…')
 
   useEffect(() => {
     const sdk = new GlassesSdk()
     // mic bridge shape (not used here, but keep the toolkit happy)
-    GlassesSdk.getRawBridge().then((raw) => {
-      ;(window as unknown as Record<string, unknown>).__evenBridge = { rawBridge: raw, onEvent: (h: (e: unknown) => void) => sdk.addEventListener(h) }
-    }).catch(() => {})
+    GlassesSdk.getRawBridge()
+      .then((raw) => {
+        ;(window as unknown as Record<string, unknown>).__evenBridge = { rawBridge: raw, onEvent: (h: (e: unknown) => void) => sdk.addEventListener(h) }
+        setStatus('bridge ready — pushing first screen…')
+      })
+      .catch((e) => setStatus(`bridge FAILED: ${e?.message ?? e}`))
 
     const render = () => {
       const n = nav.current
@@ -147,7 +153,10 @@ export function Phase3App() {
       const sig = `${n.screen}|${n.proj}|${n.sess}|${n.page}`
       if (sig === sigRef.current) return
       sigRef.current = sig
-      pushFullScreen(draw).catch((e) => console.error('[p3] render failed', e))
+      setStatus(`${n.screen}: pushing…`)
+      pushFullScreen(draw)
+        .then((d) => setStatus(`${n.screen} ✓ ${d}`))
+        .catch((e) => setStatus(`${n.screen} ✗ push error: ${e?.message ?? e}`))
     }
 
     const move = (delta: number) => {
@@ -186,7 +195,13 @@ export function Phase3App() {
     render()
     return () => { if (tapTimer) clearTimeout(tapTimer); sdk.removeEventListener(onEvent) }
   }, [])
-  return null
+  // Diagnostic readout for on-phone testing (the lens is the real UI).
+  return (
+    <div style={{ position: 'fixed', inset: 0, padding: '14px', margin: 0, background: '#000', color: '#39ff14', font: '14px/1.6 ui-monospace, Menlo, monospace', whiteSpace: 'pre-wrap', zIndex: 99999 }}>
+      Nexus cockpit — p3 prototype{'\n'}(the UI is on the glasses; this is a status readout){'\n\n'}
+      {status}
+    </div>
+  )
 }
 
 function clamp(v: number, lo: number, hi: number) { return Math.max(lo, Math.min(hi, v)) }

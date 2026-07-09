@@ -240,18 +240,25 @@ const MOCKS: Record<string, Draw> = {
   'lab-icons': drawIconBoard,
 }
 
-// ── push a full-screen canvas to the lens as a 3×2 grid of image tiles ──────
-async function pushFullScreen(draw: Draw) {
+// Tile grid: COLS×ROWS covering the 576×288 screen. Fewer/larger tiles is a
+// safer bet on real firmware (image-container count/size limits), so this is
+// tunable while we validate on hardware. 2×2 = four 288×144 tiles.
+const TILE_COLS = 2, TILE_ROWS = 2
+
+// ── push a full-screen canvas to the lens as a grid of image tiles ──────────
+// Returns a short diagnostic string (page-create result + tiles pushed) so the
+// caller can surface it — the raw image path is the part the sim can't validate.
+async function pushFullScreen(draw: Draw): Promise<string> {
   const canvas = document.createElement('canvas')
   canvas.width = W; canvas.height = H
   const ctx = canvas.getContext('2d')!
   ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H)
   draw(ctx)
 
-  const COLS = 3, ROWS = 2, TW = W / COLS, TH = H / ROWS // 192 × 144 (≤ image limit)
+  const TW = W / TILE_COLS, TH = H / TILE_ROWS
   const tiles: { id: number; name: string; x: number; y: number; w: number; h: number; bytes: Uint8Array }[] = []
   let id = 2
-  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+  for (let r = 0; r < TILE_ROWS; r++) for (let c = 0; c < TILE_COLS; c++) {
     const name = `lab_${r}_${c}`
     const enc = encodeTilesBatch(canvas, [{ crop: { sx: c * TW, sy: r * TH, sw: TW, sh: TH }, name }], TW, TH)[0]!
     tiles.push({ id: id++, name, x: c * TW, y: r * TH, w: TW, h: TH, bytes: enc.bytes })
@@ -267,10 +274,14 @@ async function pushFullScreen(draw: Draw) {
   }))
   const fields = { containerTotalNum: 1 + tiles.length, textObject: [overlay], imageObject }
   const shared = (globalThis as Record<string, any>).__glassesToolkitSharedState
-  if (!shared || shared.currentPageId == null) await raw.createStartUpPageContainer(new CreateStartUpPageContainer(fields))
-  else await raw.rebuildPageContainer(new RebuildPageContainer(fields))
+  const first = !shared || shared.currentPageId == null
+  const pageRes = first
+    ? await raw.createStartUpPageContainer(new CreateStartUpPageContainer(fields))
+    : await raw.rebuildPageContainer(new RebuildPageContainer(fields))
   if (shared) shared.currentPageId = 'lab'
-  for (const t of tiles) await raw.updateImageRawData(new ImageRawDataUpdate({ containerID: t.id, containerName: t.name, imageData: t.bytes }))
+  let pushed = 0
+  for (const t of tiles) { await raw.updateImageRawData(new ImageRawDataUpdate({ containerID: t.id, containerName: t.name, imageData: t.bytes })); pushed += 1 }
+  return `${first ? 'create' : 'rebuild'}=${JSON.stringify(pageRes)} tiles=${pushed}/${tiles.length} (${TW}×${TH})`
 }
 
 /** Renders nothing to the DOM; on mount it pushes the named mockup to the lens. */
