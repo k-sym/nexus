@@ -15,6 +15,7 @@ import {
 } from '@evenrealities/even_hub_sdk'
 import { STTEngine } from 'even-toolkit/stt'
 import { paginateText } from 'even-toolkit/paginate-text'
+import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
 import { answer, decide, getSession, sendSteer, setSteerFocus } from '../api'
 import { attentionSessions, isInterruptActive, reason } from './screens/interrupt'
@@ -23,11 +24,55 @@ import { matchAnswer, sttConfig } from './stt'
 import type { GlassSnapshot } from './shared'
 import type { Approval, AskUserQuestionInput, SessionSummary, TranscriptEvent } from '../types'
 
-type Screen = 'approval' | 'question' | 'interrupt' | 'detail' | 'list'
+// Phase 3 nav: the flat session list is replaced by a projects → sessions drill-down
+// (the locked firmware-text design). approval / question / interrupt still hard-take
+// over the HUD from wherever you are; detail is a session opened from the sessions list.
+type Screen = 'approval' | 'question' | 'interrupt' | 'detail' | 'projects' | 'sessions'
+
+// Where the "home" nav sits when nothing is taking over the HUD. `detail` is not
+// stored here — it's implied by store.activeSessionId (so it survives store updates
+// and reuses the existing steer/paging machinery).
+interface Nav { home: 'projects' | 'sessions'; projIdx: number }
 
 const BORDER = 0xffffff as never // maps to green on the monochrome lens
 // Sentinel row id for the "speak your answer" option on the question screen.
 const SPEAK = '__speak__'
+
+// Locked status glyphs (verified to render in a firmware LIST): ◆ needs you,
+// ⊙ live (running), ○ idle. ★ is the Assistant PROJECT badge (see projBadge).
+const GLYPH = { needs: '◆', live: '⊙', idle: '○' } as const
+function sessionGlyph(s: SessionSummary): string {
+  return s.needsAttention ? GLYPH.needs : s.live ? GLYPH.live : GLYPH.idle
+}
+
+// A project grouping of the flat session list. Keyed by projectId (falling back to
+// the project name), so chat threads of one project collapse into a single row.
+interface ProjGroup { key: string; name: string; badge: string; asst: boolean; sessions: SessionSummary[] }
+
+function projBadge(name: string, asst: boolean): string {
+  if (asst) return '★' // the Assistant project reads as "special"
+  const m = name.match(/[a-z0-9]/i)
+  return (m ? m[0] : name[0] ?? '·').toUpperCase()
+}
+
+/** Group the live session list by project, preserving recency order (sessions arrive
+ *  sorted newest-first, so a project's first-seen session fixes its rail position). */
+function groupProjects(sessions: SessionSummary[]): ProjGroup[] {
+  const byKey = new Map<string, ProjGroup>()
+  const order: string[] = []
+  for (const s of sessions) {
+    const asst = s.kind === 'assistant'
+    const key = s.projectId ?? s.project ?? (asst ? 'Assistant' : 'other')
+    let g = byKey.get(key)
+    if (!g) {
+      const name = s.project || (asst ? 'Assistant' : 'project')
+      g = { key, name, badge: projBadge(name, asst), asst, sessions: [] }
+      byKey.set(key, g); order.push(key)
+    }
+    g.sessions.push(s)
+  }
+  return order.map((k) => byKey.get(k) as ProjGroup)
+}
 
 // An AskUserQuestion registers through the same channel as a tool approval; split by
 // kind so the two get their own screens (gates → allow/deny, questions → pick answer).
@@ -41,12 +86,12 @@ function firstQuestion(a: Approval): { text: string; options: string[] } | null 
   return { text: q.question, options: (q.options ?? []).map(o => o.label) }
 }
 
-function pickScreen(s: GlassSnapshot): Screen {
+function pickScreen(s: GlassSnapshot, nav: Nav): Screen {
   if (gates(s).length > 0) return 'approval'
   if (questions(s).length > 0) return 'question'
   if (isInterruptActive(s)) return 'interrupt'
   if (s.activeSessionId) return 'detail'
-  return 'list'
+  return nav.home // 'projects' (home) | 'sessions' (drilled into a project)
 }
 
 // Resolve a spoken transcript into an answer and post it. Module-level so both the STT
@@ -98,23 +143,21 @@ function ageShort(ms: number): string {
   return `${Math.floor(s / 86400)}d`
 }
 
-function sessionRows(sessions: SessionSummary[]): { id: string; label: string }[] {
-  return sessions.slice(0, 8).map((s) => {
-    // ● needs you, ◐ live (running process), ○ idle. The hub's 'active' scope means
-    // the list is already live-or-attention, so ○ is rare here.
-    const dot = s.needsAttention ? '●' : s.live ? '◐' : '○'
-    const name = (s.title || s.project || s.id.slice(0, 8)).slice(0, 22)
-    const meta = s.needsAttention ? 'needs you' : ageShort(s.lastActivityAt)
-    return { id: s.id, label: `${dot} ${name} · ${meta}` }
-  })
+// Session-row label for the sessions list: status glyph · name · needs-you|age.
+function sessionRow(s: SessionSummary): { id: string; label: string } {
+  const name = (s.title || s.project || s.id.slice(0, 8)).slice(0, 24)
+  const meta = s.needsAttention ? 'needs you' : ageShort(s.lastActivityAt)
+  return { id: s.id, label: `${sessionGlyph(s)}  ${name}   ·   ${meta}` }
 }
 
 // A compact signature of what's on screen — skip re-rendering (and resetting native
 // selection) when a store update doesn't actually change the display.
-function signature(s: GlassSnapshot): string {
-  const scr = pickScreen(s)
-  if (scr === 'list') return `list|${s.connection}|${sessionRows(s.sessions).map((r) => r.label).join('~')}`
-  if (scr === 'detail') return `detail|${s.activeSessionId}|${s.activeEvents.length}|${latestReplyText(s.activeEvents).length}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${sttConfig().enabled ? 'v' : ''}`
+function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[]): string {
+  if (scr === 'projects')
+    return `proj|${s.connection}|${groups.map((g) => `${g.badge}${g.name}${g.sessions.length}${g.sessions.some((x) => x.needsAttention) ? '!' : ''}`).join('~')}`
+  if (scr === 'sessions')
+    return `sess|${nav.projIdx}|${groups.map((g) => g.badge).join('')}|${(groups[nav.projIdx]?.sessions ?? []).map((x) => sessionRow(x).label).join('~')}`
+  if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
   if (scr === 'question') { const a = questions(s)[0]; const q = a && firstQuestion(a); return `q|${a?.id}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}` }
   return `intr|${attentionSessions(s).map((a) => a.id).join(',')}`
@@ -122,10 +165,13 @@ function signature(s: GlassSnapshot): string {
 
 export function AppGlasses3c() {
   const sdkRef = useRef<GlassesSdk | null>(null)
-  // index→session map for the current list, so a tap event resolves to a session.
+  // index→row map for the current list, so a tap event resolves to a project/session.
   const rowsRef = useRef<{ id: string; label: string }[]>([])
-  const screenRef = useRef<Screen>('list')
+  const screenRef = useRef<Screen>('projects')
   const sigRef = useRef<string>('')
+  // Home nav position (projects list, or drilled into one project's sessions). Detail
+  // is implied by store.activeSessionId, so it isn't tracked here.
+  const navRef = useRef<Nav>({ home: 'projects', projIdx: 0 })
 
   useEffect(() => {
     const sdk = new GlassesSdk()
@@ -143,6 +189,10 @@ export function AppGlasses3c() {
 
     // --- actions (mirror the old GlassActions, against store + hub) ---
     const openSession = async (id: string) => {
+      // Point the home nav at this session's project, so 2-tap back from detail lands
+      // on the owning project's sessions list (matters when opened from the interrupt).
+      const gi = groupProjects(store.getState().sessions).findIndex((g) => g.sessions.some((y) => y.id === id))
+      if (gi >= 0) navRef.current = { home: 'sessions', projIdx: gi }
       try {
         store.openDetail(id, (await getSession(id)).events)
         // Opening a session on the glasses = arm THIS session to park for steering.
@@ -220,7 +270,13 @@ export function AppGlasses3c() {
       lastTapAt = nowMs
       const s = glass(store.getState())
       switch (screenRef.current) {
-        case 'list': { const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined; if (r) openSession(r.id); break }
+        case 'projects': {
+          // Drill into the tapped project's sessions (skip empty groups).
+          const groups = groupProjects(s.sessions)
+          if (typeof idx === 'number' && groups[idx]?.sessions.length) { navRef.current = { home: 'sessions', projIdx: idx }; render() }
+          break
+        }
+        case 'sessions': { const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined; if (r?.id) openSession(r.id); break }
         case 'approval': { const a = gates(s)[0]; if (a) allow(a.id); break }
         case 'question': {
           if (s.listening) { submitListen(); break }   // tap while listening = submit now
@@ -240,7 +296,8 @@ export function AppGlasses3c() {
     const onBack = () => {
       const s = glass(store.getState())
       switch (screenRef.current) {
-        case 'list': break // arm/standby removed — Pi steering needs no safety gate
+        case 'projects': break // home — nowhere further back
+        case 'sessions': { navRef.current = { home: 'projects', projIdx: navRef.current.projIdx }; render(); break } // back to projects home
         case 'detail': { if (s.steering) { cancelSteer(); break } closeSession(); break } // 2tap: stop steering, else leave
         case 'approval': { const a = gates(s)[0]; if (a) deny(a.id); break }
         case 'question': {
@@ -282,13 +339,17 @@ export function AppGlasses3c() {
     // --- render loop: rebuild the page when the display signature changes ---
     const render = () => {
       const s = glass(store.getState())
-      const sig = signature(s)
+      const nav = navRef.current
+      const groups = groupProjects(s.sessions)
+      // A drilled-into project can vanish (session ended, list refreshed) — fall home.
+      if (nav.home === 'sessions' && !groups[nav.projIdx]) { nav.home = 'projects'; nav.projIdx = 0 }
+      const scr = pickScreen(s, nav)
+      const sig = signature(s, scr, nav, groups)
       if (sig === sigRef.current) return
       sigRef.current = sig
       selIdx = 0 // new screen/content → firmware selection resets to the top; mirror it
-      const scr = pickScreen(s)
       screenRef.current = scr
-      buildAndRender(sdk, scr, s, rowsRef).catch((err) => store.setGlassError(`render failed: ${err}`))
+      buildAndRender(sdk, scr, s, nav, groups, rowsRef).catch((err) => store.setGlassError(`render failed: ${err}`))
     }
 
     render()
@@ -318,7 +379,7 @@ function intrKey(st: ReturnType<typeof store.getState>): string {
 
 // Compose the page for the active screen and push it to the glasses.
 async function buildAndRender(
-  sdk: GlassesSdk, scr: Screen, s: GlassSnapshot,
+  sdk: GlassesSdk, scr: Screen, s: GlassSnapshot, nav: Nav, groups: ProjGroup[],
   rowsRef: { current: { id: string; label: string }[] },
 ) {
   // The interrupt is a bitmap hero — GlassesPage composes text+list only, so it's
@@ -327,22 +388,41 @@ async function buildAndRender(
 
   const page = sdk.createPage(`cockpit-${scr}`)
 
-  if (scr === 'list') {
-    const attn = s.sessions.filter((x) => x.needsAttention).length
-    const cdot = s.connection === 'ok' ? '●' : s.connection === 'error' ? '×' : '◐'
-    const rail = page.addTextElement(`${cdot} COCKPIT\n\n${s.sessions.length}\nsessions\n\n${attn ? `${attn} need you` : 'ready'}`)
-    rail.setPosition((p) => { p.setX(10).setY(24) })
-    rail.setSize((z) => { z.setWidth(172).setHeight(240) })
-
-    const rows = sessionRows(s.sessions)
+  if (scr === 'projects') {
+    // Home: the projects list. Minimal-border design — the ONLY border is the native
+    // select-highlight the firmware moves on-device. Each row: badge · name · meta.
+    const rows = groups.length
+      ? groups.map((g) => {
+          const needs = g.sessions.some((x) => x.needsAttention)
+          const meta = needs ? 'needs you' : g.asst ? `${g.sessions.length} chats` : `${g.sessions.length}`
+          return { id: g.key, label: `${g.badge}   ${g.name}   ·   ${meta}` }
+        })
+      : [{ id: '', label: s.connection === 'ok' ? '(no active sessions)' : s.connection === 'error' ? '(disconnected)' : '(connecting…)' }]
     rowsRef.current = rows
-    const list = page.addListElement(rows.length ? rows.map((r) => r.label) : ['○ no sessions'])
-    list.setItemWidth(360)
+    const list = page.addListElement(rows.map((r) => r.label))
+    list.setItemWidth(536)
     list.setIsItemSelectBorderEn(true)
-    list.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(16))
     list.markAsEventCaptureElement()
-    list.setPosition((p) => { p.setX(196).setY(12) })
-    list.setSize((z) => { z.setWidth(372).setHeight(264) })
+    list.setPosition((p) => { p.setX(18).setY(12) })
+    list.setSize((z) => { z.setWidth(540).setHeight(264) })
+  } else if (scr === 'sessions') {
+    // A project's sessions. Left = a bare letter rail (› marks the current project);
+    // right = the session list. Still no frames but the native select-highlight.
+    const railX = 10, railW = 48, railY = 12
+    const rail = page.addTextElement(groups.map((g, i) => `${i === nav.projIdx ? '›' : ' '} ${g.badge}`).join('\n\n'))
+    rail.setPosition((p) => { p.setX(railX).setY(railY) })
+    rail.setSize((z) => { z.setWidth(railW).setHeight(264) })
+
+    const sessions = groups[nav.projIdx]?.sessions ?? []
+    const rows = sessions.length ? sessions.map(sessionRow) : [{ id: '', label: '(no active sessions)' }]
+    rowsRef.current = rows
+    const listX = railX + railW + 12
+    const list = page.addListElement(rows.map((r) => r.label))
+    list.setItemWidth(576 - listX - 22)
+    list.setIsItemSelectBorderEn(true)
+    list.markAsEventCaptureElement()
+    list.setPosition((p) => { p.setX(listX).setY(10) })
+    list.setSize((z) => { z.setWidth(576 - listX - 14).setHeight(268) })
   } else if (scr === 'approval') {
     // The hero actionable screen: what · where · then decide. Nothing auto-fires —
     // ● = tap (Allow), ●● = double-tap (Deny), opposite gestures for opposite outcomes.
@@ -389,17 +469,47 @@ async function buildAndRender(
       list.setSize((z) => { z.setWidth(330).setHeight(248) })
     }
   } else {
-    // detail = the focused session. Two sub-views:
-    //  • steering — mic open, live interim, tap=send / 2tap=cancel (Phase 4c).
-    //  • idle — transcript card; tap speaks a steer (when voice is set up), 2tap leaves.
+    // detail = the focused session, in the locked header-bar layout:
+    //   • header bar (the ONE deliberate border): session name left, page k/N inline.
+    //   • controls right-aligned in their own element (firmware text is left-aligned,
+    //     so measure with pretext/LVGL metrics and place flush to the right edge).
+    //   • frameless reply body below — the event-capture element, so scroll pages the
+    //     REPLY, not the header. Two sub-views: steering (mic) vs the paged reply.
     rowsRef.current = []
-    const card = page.addTextElement(s.steering ? steeringContent(s) : detailContent(s))
-    card.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(14))
-    card.markAsEventCaptureElement()
-    // Near-full-screen: the detail card is a reading surface, so give the reply
-    // the whole HUD (title + a DETAIL_ROWS page + hint ≈ 9 lines).
-    card.setPosition((p) => { p.setX(16).setY(8) })
-    card.setSize((z) => { z.setWidth(544).setHeight(272) })
+    const sess = s.sessions.find((x) => x.id === s.activeSessionId)
+    const title = sess?.title || sess?.project || 'session'
+    const hx = 8, hy = 8, hw = 560, hh = 36
+    let headerText: string, hint: string, bodyText: string
+    if (s.steering) {
+      headerText = `‹ ${String(title).slice(0, 30)}`
+      hint = '• send   •• cancel'
+      bodyText = s.error ? `! ${s.error}` : s.interim ? `“${s.interim}”` : '(speak your steer…)'
+    } else {
+      const pages = replyPages(s.activeEvents)
+      const total = Math.max(1, pages.length)
+      const pg = Math.min(Math.max(0, s.detailPage), total - 1)
+      headerText = `‹ ${String(title).slice(0, 26)}${pages.length > 1 ? `   ${pg + 1}/${total}` : ''}`
+      hint = '• steer   •• back'
+      if (pages.length === 0) {
+        const status = sess?.live ? '(working — no reply yet)' : '(no reply yet)'
+        bodyText = s.error ? `${status}\n! ${s.error}` : status
+      } else {
+        bodyText = s.error ? `${pages[pg]}\n! ${s.error}` : pages[pg]
+      }
+    }
+    const header = page.addTextElement(headerText)
+    header.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(10))
+    header.setPosition((p) => { p.setX(hx).setY(hy) })
+    header.setSize((z) => { z.setWidth(hw).setHeight(hh) })
+    const hintW = Math.ceil(getTextWidth(hint))
+    const right = page.addTextElement(hint)
+    right.setPosition((p) => { p.setX(hx + hw - hintW - 22).setY(hy + 6) })
+    right.setSize((z) => { z.setWidth(hintW + 18).setHeight(hh - 10) })
+    const bodyY = hy + hh + 10
+    const body = page.addTextElement(bodyText)
+    body.markAsEventCaptureElement()
+    body.setPosition((p) => { p.setX(hx + 4).setY(bodyY) })
+    body.setSize((z) => { z.setWidth(hw - 8).setHeight(288 - bodyY - 8) })
   }
 
   await page.render()
@@ -477,31 +587,4 @@ function replyPages(events: TranscriptEvent[]): string[] {
   const text = latestReplyText(events)
   if (!text) return []
   return paginateText(text, DETAIL_COLS, DETAIL_ROWS).map((lines) => lines.join('\n'))
-}
-
-function detailContent(s: GlassSnapshot): string {
-  const sess = s.sessions.find((x) => x.id === s.activeSessionId)
-  const title = sess?.title || sess?.project || 'session'
-  const err = s.error ? `\n! ${s.error}` : ''
-  const pages = replyPages(s.activeEvents)
-  if (pages.length === 0) {
-    // No assistant text yet — fresh session, or the agent is mid tool-call.
-    const status = sess?.live ? '(working — no reply yet)' : '(no reply yet)'
-    return `‹ ${String(title).slice(0, 26)}\n\n${status}${err}\n\ntap ● steer   ●● back`
-  }
-  const page = Math.min(Math.max(0, s.detailPage), pages.length - 1)
-  const ind = pages.length > 1 ? ` · ${page + 1}/${pages.length}` : ''
-  // Scroll pages through a long reply; tap still steers, 2tap still backs out.
-  const hint = pages.length > 1 ? '▲▼ page   ● steer   ●● back' : 'tap ● steer   ●● back'
-  // title + up to DETAIL_ROWS body lines + hint = 9 lines, which fills the card
-  // without a blank separator (dropped to spend the row on readable text).
-  return `‹ ${String(title).slice(0, 22)}${ind}\n${pages[page]}${err}\n${hint}`
-}
-
-// The steer listening sub-view: mic open, live interim transcript, tap=send / 2tap=cancel.
-function steeringContent(s: GlassSnapshot): string {
-  const sess = s.sessions.find((x) => x.id === s.activeSessionId)
-  const title = sess?.title || sess?.project || 'session'
-  const heard = s.error ? `! ${s.error}` : s.interim ? `“${s.interim}”` : '(speak your steer…)'
-  return `● STEER › ${String(title).slice(0, 24)}\n\n${heard}\n\ntap ● send   ●● cancel`
 }
