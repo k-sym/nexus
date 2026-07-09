@@ -50,6 +50,7 @@ function seedFromHub() {
 // <App> then skips HubFeed so nothing overwrites the seed.
 async function boot() {
   const simName = new URLSearchParams(window.location.search).get('sim')
+    ?? (import.meta.env as unknown as Record<string, string | undefined>).VITE_FORCE_SIM
   if (simName) {
     const { applyFixture } = await import('./sim/fixtures')
     if (!applyFixture(simName)) seedFromHub() // unknown fixture → fall back to live

@@ -220,13 +220,17 @@ export function App() {
   const baseUrl = useStore(s => s.baseUrl)
   // Phase 3 design lab (?sim=lab-*): static bitmap mockups. ?sim=p3: the navigable
   // projects→sessions→detail prototype driven by fixture data.
+  // VITE_FORCE_SIM lets a build default to a scenario with no query param — needed
+  // on-glasses, where the Even loader drops the query string (?sim never arrives).
   const simName = new URLSearchParams(window.location.search).get('sim')
+    ?? (import.meta.env as unknown as Record<string, string | undefined>).VITE_FORCE_SIM
+    ?? null
   if (simName?.startsWith('lab-')) return <Lab name={simName} />
   if (simName === 'p3') return <Phase3App />
   if (!baseUrl) return <Connect />
   // Simulator fixture mode (?sim=): the store is pre-seeded, so skip the live feed
   // that would otherwise overwrite it (see main.tsx / sim/fixtures.ts).
-  const sim = new URLSearchParams(window.location.search).has('sim')
+  const sim = simName != null
   return (
     <>
       {!sim && <HubFeed />}
