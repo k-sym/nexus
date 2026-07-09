@@ -6,7 +6,10 @@
 import { useEffect, useRef } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import { getTextWidth } from 'even-toolkit/pretext'
+import { paginateText } from 'even-toolkit/paginate-text'
 import { DATA } from './phase3'
+
+const REPLY_COLS = 42, REPLY_ROWS = 7 // reply pagination for the detail body
 
 const LINE = 0xffffff as never // the one deliberate border (detail header bar)
 
@@ -19,7 +22,7 @@ type Screen = 'projects' | 'sessions' | 'detail'
 export function Phase3FW() {
   // ?screen= lets the sim jump straight to a screen for screenshots.
   const initial = (new URLSearchParams(window.location.search).get('screen') as Screen) || 'projects'
-  const nav = useRef<{ screen: Screen; proj: number; sel: number }>({ screen: initial, proj: 0, sel: 0 })
+  const nav = useRef<{ screen: Screen; proj: number; sel: number; page: number }>({ screen: initial, proj: 0, sel: 0, page: 0 })
 
   useEffect(() => {
     const sdk = new GlassesSdk()
@@ -65,12 +68,14 @@ export function Phase3FW() {
         list.setSize((z) => { z.setWidth(576 - listX - 14).setHeight(268) })
       } else {
         const s = DATA[n.proj].sessions[n.sel]
+        const pages = paginateText(s?.reply ?? '', REPLY_COLS, REPLY_ROWS).map((ls) => ls.join('\n'))
+        const total = Math.max(1, pages.length)
+        const pg = Math.min(Math.max(0, n.page), total - 1)
         const hint = '● steer   ●● back'
         const hx = 8, hy = 8, hw = 560, hh = 36
-        // The one deliberate border: a header bar. Session name on the left…
-        const header = page.addTextElement(`‹ ${s?.title ?? 'session'}`)
+        // The one deliberate border: a header bar. Session name (+ page k/N) left…
+        const header = page.addTextElement(`‹ ${s?.title ?? 'session'}${total > 1 ? `   ${pg + 1}/${total}` : ''}`)
         header.setBorder((b) => b.setWidth(2).setColor(LINE).setRadius(10))
-        header.markAsEventCaptureElement()
         header.setPosition((p) => { p.setX(hx).setY(hy) })
         header.setSize((z) => { z.setWidth(hw).setHeight(hh) })
         // …controls on the right. Firmware text is left-aligned, so measure the
@@ -79,9 +84,10 @@ export function Phase3FW() {
         const right = page.addTextElement(hint)
         right.setPosition((p) => { p.setX(hx + hw - hintW - 22).setY(hy + 6) })
         right.setSize((z) => { z.setWidth(hintW + 18).setHeight(hh - 10) })
-        // reply body, frameless, below the header bar
+        // reply body — frameless, event-capture (so scroll pages IT, not the header)
         const bodyY = hy + hh + 10
-        const body = page.addTextElement(s?.reply ?? '')
+        const body = page.addTextElement(pages[pg] ?? '')
+        body.markAsEventCaptureElement()
         body.setPosition((p) => { p.setX(hx + 4).setY(bodyY) })
         body.setSize((z) => { z.setWidth(hw - 8).setHeight(288 - bodyY - 8) })
       }
@@ -99,12 +105,19 @@ export function Phase3FW() {
     const enter = (idx: number) => {
       const n = nav.current
       if (n.screen === 'projects') { if (DATA[idx]?.sessions.length) { n.screen = 'sessions'; n.proj = idx; selIdx = 0; void render() } }
-      else if (n.screen === 'sessions') { if (DATA[n.proj].sessions.length) { n.screen = 'detail'; n.sel = idx; void render() } }
+      else if (n.screen === 'sessions') { if (DATA[n.proj].sessions.length) { n.screen = 'detail'; n.sel = idx; n.page = 0; void render() } }
     }
     const back = () => {
       const n = nav.current
       if (n.screen === 'detail') { n.screen = 'sessions'; selIdx = 0; void render() }
       else if (n.screen === 'sessions') { n.screen = 'projects'; selIdx = 0; void render() }
+    }
+    // Detail screen: firmware text can't scroll, so scroll pages the reply.
+    const pageDetail = (delta: number) => {
+      const n = nav.current
+      const total = Math.max(1, paginateText(DATA[n.proj].sessions[n.sel]?.reply ?? '', REPLY_COLS, REPLY_ROWS).length)
+      const next = Math.max(0, Math.min(total - 1, n.page + delta))
+      if (next !== n.page) { n.page = next; void render() }
     }
     const onEvent = (event: unknown) => {
       const e = event as Record<string, any>
@@ -112,8 +125,8 @@ export function Phase3FW() {
       const le = e?.listEvent
       const et = le?.eventType ?? e?.textEvent?.eventType ?? e?.sysEvent?.eventType
       if (et === 3) { if (tapTimer) { clearTimeout(tapTimer); tapTimer = null } return back() }
-      if (et === 1) { selIdx = Math.max(0, selIdx - 1); return }
-      if (et === 2) { selIdx = Math.min(rowCount() - 1, selIdx + 1); return }
+      if (et === 1) { if (nav.current.screen === 'detail') { pageDetail(-1); return } selIdx = Math.max(0, selIdx - 1); return }
+      if (et === 2) { if (nav.current.screen === 'detail') { pageDetail(1); return } selIdx = Math.min(rowCount() - 1, selIdx + 1); return }
       const idx = le && typeof le.currentSelectItemIndex === 'number' ? le.currentSelectItemIndex : selIdx
       if (tapTimer) clearTimeout(tapTimer)
       tapTimer = setTimeout(() => { tapTimer = null; enter(idx) }, 260)
