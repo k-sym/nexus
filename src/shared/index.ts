@@ -286,6 +286,32 @@ export interface SignalFilterConfig {
 
 export interface NexusConfig {
   server: { port: number };
+  /** LAN gateway that serves the Even Realities G2 glasses cockpit
+   *  (session-cockpit) the Nexus session feed + control API. */
+  gateway: {
+    /** When false the glasses gateway listener is not started. */
+    enabled: boolean;
+    /** LAN port the glasses connect to. Matches session-cockpit's default (8899). */
+    port: number;
+    /** Bearer token the glasses must present. Empty ⇒ dev-open (no auth). */
+    token: string;
+    /** Window (minutes) within which an idle session still counts as "recent"
+     *  and is listed so it can be opened/steered from the glasses. */
+    recent_minutes: number;
+    /** Absolute path to the built glasses UI (session-cockpit/glasses/dist).
+     *  When set, the gateway serves that SPA at `/` so the whole cockpit —
+     *  UI + API — is one Nexus origin. Empty ⇒ API only. Env override:
+     *  NEXUS_GLASSES_DIST. */
+    glasses_dist: string;
+    /** Speech-to-text for glasses voice steer/answer. Delivered to the glasses
+     *  via GET /api/cockpit-config so the key lives here, not in the client.
+     *  api_key supports ${ENV} interpolation; empty ⇒ voice disabled. */
+    stt: {
+      provider: string; // 'deepgram' | 'whisper-api' | 'soniox'
+      api_key: string;
+      language: string;
+    };
+  };
   models: {
     openrouter: { api_key: string };
     // Local OpenAI-compatible server. base_url should include the /v1 suffix,

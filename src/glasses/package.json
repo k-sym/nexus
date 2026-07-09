@@ -1,0 +1,30 @@
+{
+  "name": "@nexus/glasses",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Cockpit client for the session-cockpit hub — web dashboard now, Even G2 HUD (even-toolkit) next.",
+  "scripts": {
+    "dev": "vite --port 5273 --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 5273 --host",
+    "qr": "./scripts/qr.sh",
+    "pack": "npm run build && evenhub pack app.json ./dist -o session-cockpit.ehpk"
+  },
+  "dependencies": {
+    "@evenrealities/even_hub_sdk": "^0.0.11",
+    "even-toolkit": "^1.7.7",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-router": "^7.0.0",
+    "upng-js": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.0",
+    "typescript": "~5.4.0",
+    "vite": "^5.4.0"
+  },
+  "comment": "Phase 3b adds even-toolkit + @evenrealities/even_hub_sdk for the HUD; kept out of the first install so the dashboard installs clean."
+}
