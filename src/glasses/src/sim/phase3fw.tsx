@@ -9,8 +9,8 @@ import { DATA } from './phase3'
 
 const BORDER = 0xffffff as never // maps to green on the monochrome lens
 const GLYPH = { needs: '◆', live: '●', idle: '○' } as const
-// ✳ is TOFU on the firmware font; use a plain char for the Assistant badge.
-const badgeChar = (g: string) => (g === '✳' ? '*' : g)
+// ✳ is TOFU on the firmware font; ★ renders and reads as "special".
+const badgeChar = (g: string) => (g === '✳' ? '★' : g)
 
 type Screen = 'projects' | 'sessions' | 'detail'
 
@@ -43,21 +43,24 @@ export function Phase3FW() {
         list.setPosition((p) => { p.setX(18).setY(12) })
         list.setSize((z) => { z.setWidth(540).setHeight(264) })
       } else if (n.screen === 'sessions') {
-        // rail of bordered letter-badges; the current project gets a heavy border
-        const bs = 40, railX = 12
-        let by = 16
-        DATA.forEach((p, i) => {
-          const badge = page.addTextElement(` ${badgeChar(p.g)}`)
-          badge.setPosition((pp) => { pp.setX(railX).setY(by) })
-          badge.setSize((z) => { z.setWidth(bs).setHeight(bs) })
-          badge.setBorder((b) => b.setWidth(i === n.proj ? 3 : 1).setColor(BORDER).setRadius(12))
-          by += bs + 7
-        })
+        // ONE frame around the project-letter column (your idea), plus an inner
+        // border box marking the current project — since ► is TOFU and we can't
+        // fill, a nested border is the "selected" cue.
+        const railX = 8, railW = 56, railY = 8, railH = 272, lineH = 27
+        const rail = page.addTextElement(DATA.map((p) => `  ${badgeChar(p.g)}`).join('\n\n'))
+        rail.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(14))
+        rail.setPosition((p) => { p.setX(railX).setY(railY) })
+        rail.setSize((z) => { z.setWidth(railW).setHeight(railH) })
+        const hi = page.addTextElement('')
+        hi.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(9))
+        hi.setPosition((p) => { p.setX(railX + 6).setY(railY + 4 + n.proj * 2 * lineH) })
+        hi.setSize((z) => { z.setWidth(railW - 12).setHeight(lineH + 6) })
+
         const sessions = DATA[n.proj].sessions
         const rows = sessions.length
           ? sessions.map((s) => `${GLYPH[s.icon]}  ${s.title}   ·   ${s.meta}`)
           : ['(no active sessions)']
-        const listX = railX + bs + 16
+        const listX = railX + railW + 14
         const list = page.addListElement(rows)
         list.setItemWidth(576 - listX - 22)
         list.setIsItemSelectBorderEn(true)

@@ -4,6 +4,7 @@ import { Connect } from './screens/Connect'
 import { Lab } from './sim/Lab'
 import { Phase3App } from './sim/phase3'
 import { Phase3FW } from './sim/phase3fw'
+import { Glyphs } from './sim/glyphs'
 import { AppGlasses3c } from './glass/AppGlasses3c'
 import { store, useStore } from './store'
 import { answer, connectEvents, decide, getPending, getSession, getSessions, sendSteer, setArmed } from './api'
@@ -229,6 +230,7 @@ export function App() {
   if (simName?.startsWith('lab-')) return <Lab name={simName} />
   if (simName === 'p3') return <Phase3App />
   if (simName === 'fw') return <Phase3FW />
+  if (simName === 'glyphs') return <Glyphs />
   if (!baseUrl) return <Connect />
   // Simulator fixture mode (?sim=): the store is pre-seeded, so skip the live feed
   // that would otherwise overwrite it (see main.tsx / sim/fixtures.ts).
