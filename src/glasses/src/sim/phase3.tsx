@@ -22,7 +22,7 @@ const R1 =
 const R2 = 'Grouping sessions under their project now, with the badge rail for navigation. Home is a clean projects list.'
 const R3 = 'Rebuilt the embedder ubatch chunk limit and re-ran the backfill; all green.'
 
-const DATA: Project[] = [
+export const DATA: Project[] = [
   { g: 'N', name: 'nexus', sessions: [
     { icon: 'needs', title: 'glasses gateway', meta: 'needs you', reply: R1 },
     { icon: 'live', title: 'phase-3 grouping', meta: '2m', reply: R2 },

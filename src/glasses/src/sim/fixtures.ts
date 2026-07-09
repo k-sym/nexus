@@ -46,7 +46,7 @@ export function applyFixture(name: string): boolean {
   // Design-lab mockups (?sim=lab-*) and the navigable prototype (?sim=p3) render
   // their own bitmaps in <Lab>/<Phase3App>; no store seeding — just claim the name
   // so boot() skips the live seed.
-  if (name.startsWith('lab-') || name === 'p3') return true
+  if (name.startsWith('lab-') || name === 'p3' || name === 'fw') return true
 
   switch (name) {
     case 'detail-long': {
