@@ -14,7 +14,6 @@ import {
   TextContainerProperty, ImageContainerProperty, ImageRawDataUpdate,
 } from '@evenrealities/even_hub_sdk'
 import { STTEngine } from 'even-toolkit/stt'
-import { paginateText } from 'even-toolkit/paginate-text'
 import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
 import { answer, decide, getSession, sendSteer, setSteerFocus } from '../api'
@@ -494,7 +493,7 @@ async function buildAndRender(
       // the moment a newer assistant message lands (latestReply diverges from baseReply).
       headerText = `‹ ${String(title).slice(0, 30)}`
       hint = '• steer   •• back'
-      const wrapped = paginateText(`you › ${s.pendingSteer.text}`, DETAIL_COLS, DETAIL_ROWS)[0].join('\n')
+      const wrapped = wrapToWidth(`you › ${s.pendingSteer.text}`, DETAIL_BODY_WRAP).slice(0, DETAIL_ROWS).join('\n')
       bodyText = s.error ? `${wrapped}\n! ${s.error}` : `${wrapped}\n\n(sent — working…)`
     } else {
       const pages = replyPages(s.activeEvents)
@@ -520,8 +519,8 @@ async function buildAndRender(
     const bodyY = hy + hh + 10
     const body = page.addTextElement(bodyText)
     body.markAsEventCaptureElement()
-    body.setPosition((p) => { p.setX(hx + 4).setY(bodyY) })
-    body.setSize((z) => { z.setWidth(hw - 8).setHeight(288 - bodyY - 8) })
+    body.setPosition((p) => { p.setX(DETAIL_BODY_X).setY(bodyY) })
+    body.setSize((z) => { z.setWidth(DETAIL_BODY_EL_W).setHeight(288 - bodyY - 8) })
   }
 
   await page.render()
@@ -578,11 +577,41 @@ function approvalContent(s: GlassSnapshot): string {
 // Detail card = the latest assistant reply, paginated so the WHOLE reply is
 // readable on the ~10-line HUD (the old single-render budget hard-capped it at
 // ~420 chars with no scroll); DETAIL_ROWS fits a page with room for the header.
-// 50 cols fills ~92% of the full-width body element (measured via pretext/LVGL
-// metrics: 42 cols only reached ~75%, hence the reply looked two-thirds wide),
-// with headroom so a wide line doesn't overflow into a firmware re-wrap.
-const DETAIL_COLS = 50
 const DETAIL_ROWS = 7
+// Reply body geometry: the element spans nearly the full lens; we wrap to a pixel
+// width just inside it so lines reach the right edge WITHOUT the firmware re-wrapping
+// them (char-count wrapping left a ragged ~two-thirds edge — prose lines break on a
+// word boundary well short of a fixed column cap; pixel-greedy wrapping fills each
+// line as far as the real LVGL font allows).
+const DETAIL_BODY_X = 8
+const DETAIL_BODY_EL_W = 560   // the text element's width
+const DETAIL_BODY_WRAP = 546   // wrap target in px, a hair inside the element (re-wrap headroom)
+
+/** Greedy word-wrap to a PIXEL width using the real G2/LVGL font metrics (pretext
+ *  getTextWidth), so each line fills to the true edge. Over-long single words are
+ *  hard-split by measured chars. Mirrors paginateText's contract (>=1 line). */
+function wrapToWidth(text: string, innerPx: number): string[] {
+  const lines: string[] = []
+  for (const para of text.split('\n')) {
+    const words = para.split(/\s+/).filter(Boolean)
+    let cur = ''
+    for (const w of words) {
+      const next = cur ? `${cur} ${w}` : w
+      if (getTextWidth(next) <= innerPx) { cur = next; continue }
+      if (cur) { lines.push(cur); cur = '' }
+      if (getTextWidth(w) <= innerPx) { cur = w; continue }
+      // a single word wider than the line — hard-split by measured chars
+      let chunk = ''
+      for (const ch of w) {
+        if (getTextWidth(chunk + ch) <= innerPx) chunk += ch
+        else { if (chunk) lines.push(chunk); chunk = ch }
+      }
+      cur = chunk
+    }
+    lines.push(cur) // preserve blank lines between paragraphs
+  }
+  return lines.length ? lines : ['']
+}
 
 /** Text of the most recent non-empty assistant message (the "latest reply"). */
 function latestReplyText(events: TranscriptEvent[]): string {
@@ -595,9 +624,14 @@ function latestReplyText(events: TranscriptEvent[]): string {
   return ''
 }
 
-/** The latest reply split into card-sized pages (each a ready-to-render block). */
+/** The latest reply, pixel-wrapped to the body width then split into DETAIL_ROWS-line
+ *  pages (each a ready-to-render block). Pixel wrapping fills each line to the element
+ *  edge; the firmware, seeing lines that already fit, renders them without re-wrapping. */
 function replyPages(events: TranscriptEvent[]): string[] {
   const text = latestReplyText(events)
   if (!text) return []
-  return paginateText(text, DETAIL_COLS, DETAIL_ROWS).map((lines) => lines.join('\n'))
+  const lines = wrapToWidth(text, DETAIL_BODY_WRAP)
+  const pages: string[] = []
+  for (let i = 0; i < lines.length; i += DETAIL_ROWS) pages.push(lines.slice(i, i + DETAIL_ROWS).join('\n'))
+  return pages
 }
