@@ -13,7 +13,7 @@ const REPLY_COLS = 42, REPLY_ROWS = 7 // reply pagination for the detail body
 
 const LINE = 0xffffff as never // the one deliberate border (detail header bar)
 
-const GLYPH = { needs: '◆', live: '●', idle: '○' } as const
+const GLYPH = { needs: '◆', live: '⊙', idle: '○' } as const
 // ✳ is TOFU on the firmware font; ★ renders and reads as "special".
 const badgeChar = (g: string) => (g === '✳' ? '★' : g)
 

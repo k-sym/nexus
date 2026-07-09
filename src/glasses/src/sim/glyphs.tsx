@@ -38,17 +38,34 @@ function symSheet(): string {
   return lines.join('\n')
 }
 
+// Circle-with-dot candidates, tested in a LIST element (the same context as the
+// session status glyph — glyphs can render there differently than in text).
+const CIRCLES = [
+  '● filled', '◐ half', '◑ half-right', '○ hollow',
+  '◉ fisheye', '⊙ dot-in-circle', '◎ bullseye', '⦿ circled-bullet',
+  '◍ dashed', '⊚ circled-ring', '⊛ circled-star', '๏ thai-o',
+]
+
 export function Glyphs() {
   useEffect(() => {
     const set = new URLSearchParams(window.location.search).get('set')
-    const content = set === 'syms' ? symSheet() : GEOMETRIC.join('\n')
     const sdk = new GlassesSdk()
     ;(async () => {
       const page = sdk.createPage('glyphs')
-      const card = page.addTextElement(content)
-      card.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(12))
-      card.setPosition((p) => { p.setX(12).setY(8) })
-      card.setSize((z) => { z.setWidth(552).setHeight(272) })
+      if (set === 'circles') {
+        const list = page.addListElement(CIRCLES)
+        list.setItemWidth(540)
+        list.setIsItemSelectBorderEn(true)
+        list.markAsEventCaptureElement()
+        list.setPosition((p) => { p.setX(16).setY(10) })
+        list.setSize((z) => { z.setWidth(544).setHeight(268) })
+      } else {
+        const content = set === 'syms' ? symSheet() : GEOMETRIC.join('\n')
+        const card = page.addTextElement(content)
+        card.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(12))
+        card.setPosition((p) => { p.setX(12).setY(8) })
+        card.setSize((z) => { z.setWidth(552).setHeight(272) })
+      }
       await page.render()
     })().catch(() => {})
   }, [])
