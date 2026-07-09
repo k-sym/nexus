@@ -6,6 +6,12 @@ import { store, useStore } from './store'
 import { answer, connectEvents, decide, getPending, getSession, getSessions, sendSteer, setArmed } from './api'
 import type { Approval, AskUserQuestionInput, SseEvent } from './types'
 
+/** Pull the session list so the ● needs-you / ◐ live dots reflect the latest
+ *  attention state. Fire-and-forget; a stale fetch just loses to the next one. */
+function refreshSessions() {
+  getSessions('active').then(sessions => store.set({ sessions })).catch(() => {})
+}
+
 function applyEvent(e: SseEvent) {
   switch (e.type) {
     case 'hello':
@@ -15,14 +21,18 @@ function applyEvent(e: SseEvent) {
       store.set({ armed: e.armed })
       break
     case 'pending':
+      // A question just registered (broker-pushed) — surface the card AND light
+      // up its session's dot in the list without waiting for the 10s poll.
       store.upsertApproval(e.approval)
+      refreshSessions()
       break
     case 'resolved':
       store.removeApproval(e.id)
+      refreshSessions()
       break
     case 'notify':
       // a session's attention changed — refresh the list
-      getSessions('active').then(sessions => store.set({ sessions })).catch(() => {})
+      refreshSessions()
       break
   }
 }
@@ -207,9 +217,12 @@ function Cockpit() {
 export function App() {
   const baseUrl = useStore(s => s.baseUrl)
   if (!baseUrl) return <Connect />
+  // Simulator fixture mode (?sim=): the store is pre-seeded, so skip the live feed
+  // that would otherwise overwrite it (see main.tsx / sim/fixtures.ts).
+  const sim = new URLSearchParams(window.location.search).has('sim')
   return (
     <>
-      <HubFeed />
+      {!sim && <HubFeed />}
       <Cockpit />
       {/* Phase 3c: GlassesSdk element renderer (replaces AppGlasses text-page mode) */}
       <AppGlasses3c />

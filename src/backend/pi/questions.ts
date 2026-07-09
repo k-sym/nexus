@@ -229,8 +229,28 @@ export interface PendingQuestionView {
   requestedAt: number;
 }
 
+/** Broker lifecycle events for push-based consumers (e.g. the glasses cockpit
+ *  gateway). `pending` fires the instant a question registers; `resolved` fires
+ *  when it leaves the pending set for any reason (answered, denied, cancelled,
+ *  thread dropped, or aborted). Every registered question emits exactly one
+ *  `pending` followed later by exactly one `resolved`. */
+export type QuestionBrokerEvent =
+  | { type: 'pending'; view: PendingQuestionView }
+  | { type: 'resolved'; threadId: string; toolCallId: string };
+
+export type QuestionBrokerListener = (event: QuestionBrokerEvent) => void;
+
 export class QuestionBroker {
   private readonly pending = new Map<string, PendingQuestion>();
+  private readonly listeners = new Set<QuestionBrokerListener>();
+
+  /** Subscribe to pending/resolved events. Returns an unsubscribe fn. Used by
+   *  the gateway to push SSE the moment a question needs input, rather than
+   *  poll-diffing the pending set. */
+  subscribe(listener: QuestionBrokerListener): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
 
   register(
     threadId: string,
@@ -245,6 +265,10 @@ export class QuestionBroker {
       const entry: PendingQuestion = { threadId, toolCallId, request, resolve, signal, requestedAt: Date.now() };
       entry.onAbort = () => this.cancelEntry(key, this.abortReason(signal));
       this.pending.set(key, entry);
+      // Announce the pending question before wiring the abort listener, so it is
+      // emitted even when `signal` is already aborted (that path removes it right
+      // after, yielding a symmetric pending→resolved pair).
+      this.emit({ type: 'pending', view: this.toView(entry) });
       if (signal?.aborted) entry.onAbort();
       else signal?.addEventListener('abort', entry.onAbort, { once: true });
     });
@@ -292,16 +316,23 @@ export class QuestionBroker {
   /** Enumerate every pending question across all threads. Used by the glasses
    *  cockpit gateway to surface pending questions as approval cards. */
   listPending(): PendingQuestionView[] {
-    const out: PendingQuestionView[] = [];
-    for (const entry of this.pending.values()) {
-      out.push({
-        threadId: entry.threadId,
-        toolCallId: entry.toolCallId,
-        request: entry.request,
-        requestedAt: entry.requestedAt,
-      });
+    return Array.from(this.pending.values(), (entry) => this.toView(entry));
+  }
+
+  private toView(entry: PendingQuestion): PendingQuestionView {
+    return {
+      threadId: entry.threadId,
+      toolCallId: entry.toolCallId,
+      request: entry.request,
+      requestedAt: entry.requestedAt,
+    };
+  }
+
+  private emit(event: QuestionBrokerEvent): void {
+    for (const listener of this.listeners) {
+      // A misbehaving subscriber must never break question resolution.
+      try { listener(event); } catch { /* ignore */ }
     }
-    return out;
   }
 
   private cancelEntry(key: string, reason: string): void {
@@ -314,6 +345,9 @@ export class QuestionBroker {
   private remove(key: string, entry: PendingQuestion): void {
     this.pending.delete(key);
     if (entry.onAbort) entry.signal?.removeEventListener('abort', entry.onAbort);
+    // Single choke point for every removal (answer / deny / cancel / abort), so
+    // one resolved event fires per pending question regardless of the path.
+    this.emit({ type: 'resolved', threadId: entry.threadId, toolCallId: entry.toolCallId });
   }
 
   private abortReason(signal?: AbortSignal): string {

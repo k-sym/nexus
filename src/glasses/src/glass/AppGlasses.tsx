@@ -22,6 +22,7 @@ export function AppGlasses() {
     approvals: st.approvals,
     activeSessionId: st.activeSessionId,
     activeEvents: st.activeEvents,
+    detailPage: st.detailPage,
     error: st.glassError,
     dismissedAttentionKey: st.dismissedAttentionKey,
     listening: st.glassListening,
