@@ -10,7 +10,7 @@ import './app.css'
 // Only seeds when nothing is stored yet, so it never overrides a saved hub.
 // ?stt=<provider>&sttKey=<key> likewise configures the voice-answer backend (Phase 4b)
 // on-device via the QR link; persisted to localStorage, read by sttConfig().
-{
+function seedFromHub() {
   const params = new URLSearchParams(window.location.search)
   const hub = params.get('hub')
   // Seed the hub once, when nothing is stored yet. Prefer an explicit ?hub=,
@@ -45,12 +45,27 @@ import './app.css'
   }
 }
 
-// even-toolkit's useGlasses hook calls useLocation() internally, so the app must
-// live under a Router even though the cockpit does its own state-driven routing.
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <BrowserRouter>
-      <App />
-    </BrowserRouter>
-  </StrictMode>,
-)
+// `?sim=<scenario>` seeds a canned HUD screen for the evenhub-simulator (no live
+// gateway). Lazy-imported so the fixtures stay out of the production bundle;
+// <App> then skips HubFeed so nothing overwrites the seed.
+async function boot() {
+  const simName = new URLSearchParams(window.location.search).get('sim')
+  if (simName) {
+    const { applyFixture } = await import('./sim/fixtures')
+    if (!applyFixture(simName)) seedFromHub() // unknown fixture → fall back to live
+  } else {
+    seedFromHub()
+  }
+
+  // even-toolkit's useGlasses hook calls useLocation() internally, so the app must
+  // live under a Router even though the cockpit does its own state-driven routing.
+  createRoot(document.getElementById('root')!).render(
+    <StrictMode>
+      <BrowserRouter>
+        <App />
+      </BrowserRouter>
+    </StrictMode>,
+  )
+}
+
+void boot()
