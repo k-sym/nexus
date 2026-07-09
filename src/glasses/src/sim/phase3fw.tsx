@@ -5,7 +5,10 @@
 // renderer's element approach. ?sim=fw.
 import { useEffect, useRef } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
+import { getTextWidth } from 'even-toolkit/pretext'
 import { DATA } from './phase3'
+
+const LINE = 0xffffff as never // the one deliberate border (detail header bar)
 
 const GLYPH = { needs: '◆', live: '●', idle: '○' } as const
 // ✳ is TOFU on the firmware font; ★ renders and reads as "special".
@@ -62,10 +65,25 @@ export function Phase3FW() {
         list.setSize((z) => { z.setWidth(576 - listX - 14).setHeight(268) })
       } else {
         const s = DATA[n.proj].sessions[n.sel]
-        const card = page.addTextElement(`‹ ${s?.title ?? 'session'}\n\n${s?.reply ?? ''}\n\n● steer      ●● back`)
-        card.markAsEventCaptureElement()
-        card.setPosition((p) => { p.setX(16).setY(10) })
-        card.setSize((z) => { z.setWidth(544).setHeight(268) })
+        const hint = '● steer   ●● back'
+        const hx = 8, hy = 8, hw = 560, hh = 36
+        // The one deliberate border: a header bar. Session name on the left…
+        const header = page.addTextElement(`‹ ${s?.title ?? 'session'}`)
+        header.setBorder((b) => b.setWidth(2).setColor(LINE).setRadius(10))
+        header.markAsEventCaptureElement()
+        header.setPosition((p) => { p.setX(hx).setY(hy) })
+        header.setSize((z) => { z.setWidth(hw).setHeight(hh) })
+        // …controls on the right. Firmware text is left-aligned, so measure the
+        // string (pretext / LVGL metrics) and place its own element flush-right.
+        const hintW = Math.ceil(getTextWidth(hint))
+        const right = page.addTextElement(hint)
+        right.setPosition((p) => { p.setX(hx + hw - hintW - 22).setY(hy + 6) })
+        right.setSize((z) => { z.setWidth(hintW + 18).setHeight(hh - 10) })
+        // reply body, frameless, below the header bar
+        const bodyY = hy + hh + 10
+        const body = page.addTextElement(s?.reply ?? '')
+        body.setPosition((p) => { p.setX(hx + 4).setY(bodyY) })
+        body.setSize((z) => { z.setWidth(hw - 8).setHeight(288 - bodyY - 8) })
       }
       await page.render()
     }
