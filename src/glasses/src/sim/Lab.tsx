@@ -8,7 +8,7 @@
 import { useEffect } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import {
-  CreateStartUpPageContainer, RebuildPageContainer,
+  CreateStartUpPageContainer,
   TextContainerProperty, ImageContainerProperty, ImageRawDataUpdate,
 } from '@evenrealities/even_hub_sdk'
 import { encodeTilesBatch } from 'even-toolkit/png-utils'
@@ -245,9 +245,18 @@ const MOCKS: Record<string, Draw> = {
 // tunable while we validate on hardware. 2×2 = four 288×144 tiles.
 const TILE_COLS = 2, TILE_ROWS = 2
 
+// The page structure (fixed 4-tile layout) is declared ONCE; after that we never
+// rebuild — we only re-send the raw image data of tiles whose pixels changed.
+// That's the redraw-speed fix: the ~20 KB/tile 4-bit data is the BLE bottleneck,
+// so a selection move (1–2 tiles changed) transfers a fraction of a full screen.
+let pageCreated = false
+let tileHashes: number[] = []
+
+/** Force a full page re-create on the next push (e.g. after the glasses reset). */
+export function resetLabPage() { pageCreated = false; tileHashes = [] }
+
 // ── push a full-screen canvas to the lens as a grid of image tiles ──────────
-// Returns a short diagnostic string (page-create result + tiles pushed) so the
-// caller can surface it — the raw image path is the part the sim can't validate.
+// Returns a short diagnostic (tiles actually pushed) so the caller can surface it.
 async function pushFullScreen(draw: Draw): Promise<string> {
   const canvas = document.createElement('canvas')
   canvas.width = W; canvas.height = H
@@ -256,32 +265,43 @@ async function pushFullScreen(draw: Draw): Promise<string> {
   draw(ctx)
 
   const TW = W / TILE_COLS, TH = H / TILE_ROWS
-  const tiles: { id: number; name: string; x: number; y: number; w: number; h: number; bytes: Uint8Array }[] = []
+  const tiles: { id: number; name: string; x: number; y: number; w: number; h: number; bytes: Uint8Array; hash: number }[] = []
   let id = 2
   for (let r = 0; r < TILE_ROWS; r++) for (let c = 0; c < TILE_COLS; c++) {
     const name = `lab_${r}_${c}`
     const enc = encodeTilesBatch(canvas, [{ crop: { sx: c * TW, sy: r * TH, sw: TW, sh: TH }, name }], TW, TH)[0]!
-    tiles.push({ id: id++, name, x: c * TW, y: r * TH, w: TW, h: TH, bytes: enc.bytes })
+    tiles.push({ id: id++, name, x: c * TW, y: r * TH, w: TW, h: TH, bytes: enc.bytes, hash: enc.hash })
   }
 
   const raw = await GlassesSdk.getRawBridge()
-  const overlay = new TextContainerProperty({
-    containerID: 1, containerName: 'overlay', xPosition: 0, yPosition: 0, width: W, height: H,
-    borderWidth: 0, borderColor: 0, paddingLength: 0, content: '', isEventCapture: 1,
-  })
-  const imageObject = tiles.map((t) => new ImageContainerProperty({
-    containerID: t.id, containerName: t.name, xPosition: t.x, yPosition: t.y, width: t.w, height: t.h,
-  }))
-  const fields = { containerTotalNum: 1 + tiles.length, textObject: [overlay], imageObject }
-  const shared = (globalThis as Record<string, any>).__glassesToolkitSharedState
-  const first = !shared || shared.currentPageId == null
-  const pageRes = first
-    ? await raw.createStartUpPageContainer(new CreateStartUpPageContainer(fields))
-    : await raw.rebuildPageContainer(new RebuildPageContainer(fields))
-  if (shared) shared.currentPageId = 'lab'
+
+  if (!pageCreated) {
+    // Declare the fixed page once, then fill every tile.
+    const overlay = new TextContainerProperty({
+      containerID: 1, containerName: 'overlay', xPosition: 0, yPosition: 0, width: W, height: H,
+      borderWidth: 0, borderColor: 0, paddingLength: 0, content: '', isEventCapture: 1,
+    })
+    const imageObject = tiles.map((t) => new ImageContainerProperty({
+      containerID: t.id, containerName: t.name, xPosition: t.x, yPosition: t.y, width: t.w, height: t.h,
+    }))
+    const res = await raw.createStartUpPageContainer(new CreateStartUpPageContainer({ containerTotalNum: 1 + tiles.length, textObject: [overlay], imageObject }))
+    const shared = (globalThis as Record<string, any>).__glassesToolkitSharedState
+    if (shared) shared.currentPageId = 'lab'
+    for (const t of tiles) await raw.updateImageRawData(new ImageRawDataUpdate({ containerID: t.id, containerName: t.name, imageData: t.bytes }))
+    tileHashes = tiles.map((t) => t.hash)
+    pageCreated = true
+    return `create=${JSON.stringify(res)} tiles=${tiles.length}/${tiles.length} (${TW}×${TH})`
+  }
+
+  // Only re-send tiles whose pixels changed since the last push.
   let pushed = 0
-  for (const t of tiles) { await raw.updateImageRawData(new ImageRawDataUpdate({ containerID: t.id, containerName: t.name, imageData: t.bytes })); pushed += 1 }
-  return `${first ? 'create' : 'rebuild'}=${JSON.stringify(pageRes)} tiles=${pushed}/${tiles.length} (${TW}×${TH})`
+  for (let i = 0; i < tiles.length; i++) {
+    if (tiles[i].hash === tileHashes[i]) continue
+    await raw.updateImageRawData(new ImageRawDataUpdate({ containerID: tiles[i].id, containerName: tiles[i].name, imageData: tiles[i].bytes }))
+    pushed += 1
+  }
+  tileHashes = tiles.map((t) => t.hash)
+  return `update tiles=${pushed}/${tiles.length} changed`
 }
 
 /** Renders nothing to the DOM; on mount it pushes the named mockup to the lens. */
