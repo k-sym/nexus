@@ -10,6 +10,7 @@ export interface GlassSnapshot {
   approvals: Approval[]          // pending only; a non-empty queue takes over the HUD
   activeSessionId: string | null // set => detail screen
   activeEvents: TranscriptEvent[]
+  detailPage: number             // Phase 2: page of the latest reply shown on the detail card
   error: string | null
   dismissedAttentionKey: string | null // attention set the user already acknowledged
   listening: boolean                   // Phase 4b: mic open for a voice answer

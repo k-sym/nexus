@@ -78,7 +78,6 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
   let steerFocus: string | null = null;
   let disarmTimer: ReturnType<typeof setTimeout> | undefined;
   const sseClients = new Set<ServerResponse>();
-  let lastApprovalIds = new Set<string>();
 
   const gatewayDeps = { db, pi, mainPort, recentMs: config.recentMs };
 
@@ -113,21 +112,20 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
     broadcast({ type: 'armed', armed, ...(reason ? { reason } : {}) });
   };
 
-  // Poll-diff the pending-question set (~1s) and push pending/resolved SSE
-  // events. Cheap: listPending() is an in-memory map walk. P2 can replace this
-  // with direct QuestionBroker emitters for instant push.
-  const diffTimer = setInterval(() => {
+  // Push pending/resolved SSE the instant a question registers or resolves,
+  // driven directly by the QuestionBroker rather than a poll-diff — so a session
+  // lights up the moment it needs input. listPending() is the only source of
+  // pending questions and every entry emits exactly one pending then one
+  // resolved, so this fully covers the approval lifecycle. Skip the work (a per
+  // question DB read for cwd) when no one is listening.
+  const unsubscribeQuestions = pi.questions.subscribe((event) => {
     if (sseClients.size === 0) return;
-    const approvals = currentApprovals();
-    const ids = new Set(approvals.map((a) => a.id));
-    for (const approval of approvals) {
-      if (!lastApprovalIds.has(approval.id)) broadcast({ type: 'pending', approval });
+    if (event.type === 'pending') {
+      broadcast({ type: 'pending', approval: questionToApproval(event.view, cwdForThread(event.view.threadId)) });
+    } else {
+      broadcast({ type: 'resolved', id: event.toolCallId, action: '', reason: '' });
     }
-    for (const id of lastApprovalIds) {
-      if (!ids.has(id)) broadcast({ type: 'resolved', id, action: '', reason: '' });
-    }
-    lastApprovalIds = ids;
-  }, 1000);
+  });
 
   const heartbeatTimer = setInterval(() => {
     for (const res of sseClients) {
@@ -203,8 +201,9 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
     const { threadId, request: questionRequest } = pending;
 
     if (body.action === 'deny') {
+      // The cancel drives QuestionBroker.remove → a resolved event is pushed to
+      // SSE clients automatically (see the broker subscription above).
       pi.questions.cancel(threadId, toolCallId, body.reason?.trim() || 'Dismissed from glasses');
-      broadcast({ type: 'resolved', id: toolCallId, action: 'deny', reason: body.reason ?? '' });
       return { ok: true };
     }
 
@@ -220,7 +219,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
       reply.code(result.status);
       return { error: result.error };
     }
-    broadcast({ type: 'resolved', id: toolCallId, action: 'answer', reason: '' });
+    // answer drives QuestionBroker.remove → resolved is pushed to SSE clients.
     return { ok: true };
   });
 
@@ -274,7 +273,6 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
     reply.raw.write('retry: 3000\n\n');
     reply.raw.write(`data: ${JSON.stringify({ type: 'hello', armed, steerFocus, pending: currentApprovals() } satisfies SseEvent)}\n\n`);
     sseClients.add(reply.raw);
-    lastApprovalIds = new Set(currentApprovals().map((a) => a.id));
     request.raw.on('close', () => {
       sseClients.delete(reply.raw);
     });
@@ -297,7 +295,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
   }
 
   const close = async (): Promise<void> => {
-    clearInterval(diffTimer);
+    unsubscribeQuestions();
     clearInterval(heartbeatTimer);
     if (disarmTimer) clearTimeout(disarmTimer);
     for (const res of sseClients) {

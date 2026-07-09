@@ -14,13 +14,14 @@ import {
   TextContainerProperty, ImageContainerProperty, ImageRawDataUpdate,
 } from '@evenrealities/even_hub_sdk'
 import { STTEngine } from 'even-toolkit/stt'
+import { paginateText } from 'even-toolkit/paginate-text'
 import { store } from '../store'
 import { answer, decide, getSession, sendSteer, setSteerFocus } from '../api'
 import { attentionSessions, isInterruptActive, reason } from './screens/interrupt'
 import { renderInterruptHero, iconReady } from './hero'
 import { matchAnswer, sttConfig } from './stt'
 import type { GlassSnapshot } from './shared'
-import type { Approval, AskUserQuestionInput, SessionSummary } from '../types'
+import type { Approval, AskUserQuestionInput, SessionSummary, TranscriptEvent } from '../types'
 
 type Screen = 'approval' | 'question' | 'interrupt' | 'detail' | 'list'
 
@@ -77,6 +78,18 @@ function finalizeSteer(text: string) {
     .catch((e) => store.setGlassError(`steer failed: ${e}`))
 }
 
+// Scroll paging for the detail screen's latest-reply card. Clamps to the reply's
+// page count; a no-op while steering (the mic sub-view owns the card) or when the
+// whole reply fits on one page. Module-level so the gesture handler can call it.
+function pageDetail(delta: number) {
+  const st = store.getState()
+  if (st.glassSteering) return
+  const total = replyPages(st.activeEvents).length
+  if (total <= 1) return
+  const next = Math.max(0, Math.min(total - 1, st.detailPage + delta))
+  if (next !== st.detailPage) store.set({ detailPage: next })
+}
+
 function ageShort(ms: number): string {
   const s = Math.max(0, Date.now() - ms) / 1000
   if (s < 60) return 'now'
@@ -101,7 +114,7 @@ function sessionRows(sessions: SessionSummary[]): { id: string; label: string }[
 function signature(s: GlassSnapshot): string {
   const scr = pickScreen(s)
   if (scr === 'list') return `list|${s.connection}|${sessionRows(s.sessions).map((r) => r.label).join('~')}`
-  if (scr === 'detail') return `detail|${s.activeSessionId}|${s.activeEvents.length}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${sttConfig().enabled ? 'v' : ''}`
+  if (scr === 'detail') return `detail|${s.activeSessionId}|${s.activeEvents.length}|${latestReplyText(s.activeEvents).length}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${sttConfig().enabled ? 'v' : ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
   if (scr === 'question') { const a = questions(s)[0]; const q = a && firstQuestion(a); return `q|${a?.id}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}` }
   return `intr|${attentionSessions(s).map((a) => a.id).join(',')}`
@@ -255,8 +268,10 @@ export function AppGlasses3c() {
       const et = le?.eventType ?? te?.eventType ?? se?.eventType
       if (et === 3) { if (tapTimer) { clearTimeout(tapTimer); tapTimer = null } return onBack() }
       const nRows = rowsRef.current.length || 1
-      if (et === 1) { selIdx = Math.max(0, selIdx - 1); return }                 // scroll up
-      if (et === 2) { selIdx = Math.min(nRows - 1, selIdx + 1); return }         // scroll down
+      // On the detail screen a scroll pages through the latest reply; elsewhere it
+      // moves the native list selection.
+      if (et === 1) { if (screenRef.current === 'detail') { pageDetail(-1); return } selIdx = Math.max(0, selIdx - 1); return } // scroll up
+      if (et === 2) { if (screenRef.current === 'detail') { pageDetail(1); return } selIdx = Math.min(nRows - 1, selIdx + 1); return } // scroll down
       // Single click: prefer the firmware's row index; fall back to our tracked one.
       pendingIdx = le && typeof le.currentSelectItemIndex === 'number' ? le.currentSelectItemIndex : selIdx
       if (tapTimer) clearTimeout(tapTimer)
@@ -292,7 +307,7 @@ function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
   return {
     connection: st.connection, armed: st.armed, sessions: st.sessions,
     approvals: st.approvals, activeSessionId: st.activeSessionId,
-    activeEvents: st.activeEvents, error: st.glassError,
+    activeEvents: st.activeEvents, detailPage: st.detailPage, error: st.glassError,
     dismissedAttentionKey: st.dismissedAttentionKey,
     listening: st.glassListening, steering: st.glassSteering, interim: st.glassInterim,
   }
@@ -381,8 +396,10 @@ async function buildAndRender(
     const card = page.addTextElement(s.steering ? steeringContent(s) : detailContent(s))
     card.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(14))
     card.markAsEventCaptureElement()
-    card.setPosition((p) => { p.setX(24).setY(20) })
-    card.setSize((z) => { z.setWidth(528).setHeight(248) })
+    // Near-full-screen: the detail card is a reading surface, so give the reply
+    // the whole HUD (title + a DETAIL_ROWS page + hint ≈ 9 lines).
+    card.setPosition((p) => { p.setX(16).setY(8) })
+    card.setSize((z) => { z.setWidth(544).setHeight(272) })
   }
 
   await page.render()
@@ -436,32 +453,49 @@ function approvalContent(s: GlassSnapshot): string {
   return `● APPROVE${counter}\n\n${tool} · ${proj}\n› ${String(cmd).slice(0, 120)}\n\n● Allow      ●● Deny`
 }
 
+// Detail card = the latest assistant reply, paginated so the WHOLE reply is
+// readable on the ~10-line HUD (the old single-render budget hard-capped it at
+// ~420 chars with no scroll). Wrap conservatively under the G2 usable width
+// (~44 chars incl. the 2-space line prefix) so the device doesn't re-wrap our
+// lines; DETAIL_ROWS then fits a page with room for the title + hint.
+const DETAIL_COLS = 42
+const DETAIL_ROWS = 7
+
+/** Text of the most recent non-empty assistant message (the "latest reply"). */
+function latestReplyText(events: TranscriptEvent[]): string {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    if (events[i].kind === 'assistant_text') {
+      const t = (events[i].text ?? '').trim()
+      if (t) return t
+    }
+  }
+  return ''
+}
+
+/** The latest reply split into card-sized pages (each a ready-to-render block). */
+function replyPages(events: TranscriptEvent[]): string[] {
+  const text = latestReplyText(events)
+  if (!text) return []
+  return paginateText(text, DETAIL_COLS, DETAIL_ROWS).map((lines) => lines.join('\n'))
+}
+
 function detailContent(s: GlassSnapshot): string {
   const sess = s.sessions.find((x) => x.id === s.activeSessionId)
   const title = sess?.title || sess?.project || 'session'
-  // Action hint goes near the TOP so it's always visible — the transcript below can
-  // grow past the card and scroll, which would otherwise bury a footer hint.
-  const act = '● Steer      ●● Back'
   const err = s.error ? `\n! ${s.error}` : ''
-  // Fill the card with the most recent turns, wrapped. The G2 text box wraps and
-  // clips overflow (no scroll), so budget the TOTAL characters — and spend the
-  // budget newest-first so the latest reply is shown as fully as possible — then
-  // render the kept lines chronologically (oldest → newest, top → bottom).
-  const BUDGET = 420
-  const lines: string[] = []
-  let used = 0
-  for (const ev of s.activeEvents.slice(-6).reverse()) {
-    const prefix = ev.kind === 'user' ? '› ' : ev.kind === 'assistant_text' ? '│ ' : '» '
-    const raw = (ev.kind === 'tool_use' ? (ev.name ?? 'tool') : (ev.text ?? '')).replace(/\s+/g, ' ').trim()
-    if (!raw) continue
-    const room = BUDGET - used
-    if (room <= 8) break
-    const text = raw.length > room ? `${raw.slice(0, room - 1)}…` : raw
-    lines.unshift(prefix + text)
-    used += text.length + 2
+  const pages = replyPages(s.activeEvents)
+  if (pages.length === 0) {
+    // No assistant text yet — fresh session, or the agent is mid tool-call.
+    const status = sess?.live ? '(working — no reply yet)' : '(no reply yet)'
+    return `‹ ${String(title).slice(0, 26)}\n\n${status}${err}\n\ntap ● steer   ●● back`
   }
-  const body = lines.length ? lines.join('\n') : '(no messages yet)'
-  return `‹ ${String(title).slice(0, 26)}\n${act}${err}\n\n${body}`
+  const page = Math.min(Math.max(0, s.detailPage), pages.length - 1)
+  const ind = pages.length > 1 ? ` · ${page + 1}/${pages.length}` : ''
+  // Scroll pages through a long reply; tap still steers, 2tap still backs out.
+  const hint = pages.length > 1 ? '▲▼ page   ● steer   ●● back' : 'tap ● steer   ●● back'
+  // title + up to DETAIL_ROWS body lines + hint = 9 lines, which fills the card
+  // without a blank separator (dropped to spend the row on readable text).
+  return `‹ ${String(title).slice(0, 22)}${ind}\n${pages[page]}${err}\n${hint}`
 }
 
 // The steer listening sub-view: mic open, live interim transcript, tap=send / 2tap=cancel.

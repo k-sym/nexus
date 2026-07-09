@@ -147,6 +147,63 @@ test('question broker remains pending until a valid answer resolves it', async (
   assert.equal(broker.answer('thread-1', 'call-1', { answers: [{ questionId: 'scope', selected: ['full'] }] }).status, 404);
 });
 
+test('question broker pushes pending then resolved to subscribers', async () => {
+  const broker = new QuestionBroker();
+  const request = validRequest();
+  const events: any[] = [];
+  const unsub = broker.subscribe((e) => events.push(e));
+
+  const pending = broker.register('thread-1', 'call-1', request);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'pending');
+  assert.equal(events[0].view.threadId, 'thread-1');
+  assert.equal(events[0].view.toolCallId, 'call-1');
+  assert.deepEqual(events[0].view.request, request);
+
+  assert.deepEqual(broker.answer('thread-1', 'call-1', { answers: [{ questionId: 'scope', selected: ['small'] }] }), { ok: true });
+  assert.equal(events.length, 2);
+  assert.deepEqual(events[1], { type: 'resolved', threadId: 'thread-1', toolCallId: 'call-1' });
+  await pending;
+
+  unsub();
+  const other = broker.register('thread-1', 'call-2', request);
+  assert.equal(events.length, 2, 'no events after unsubscribe');
+  broker.cancelThread('thread-1', 'cleanup');
+  await other;
+});
+
+test('question broker emits resolved on deny, cancelThread and abort', async () => {
+  const broker = new QuestionBroker();
+  const request = validRequest();
+  const resolved: string[] = [];
+  broker.subscribe((e) => { if (e.type === 'resolved') resolved.push(e.toolCallId); });
+
+  const p1 = broker.register('t', 'a', request);
+  assert.equal(broker.cancel('t', 'a', 'denied'), true);
+  await p1;
+
+  const p2 = broker.register('t', 'b', request);
+  broker.cancelThread('t', 'dropped');
+  await p2;
+
+  const controller = new AbortController();
+  const p3 = broker.register('t', 'c', request, controller.signal);
+  controller.abort('client gone');
+  await p3;
+
+  assert.deepEqual([...resolved].sort(), ['a', 'b', 'c']);
+});
+
+test('question broker isolates a throwing subscriber from resolution', async () => {
+  const broker = new QuestionBroker();
+  const request = validRequest();
+  broker.subscribe(() => { throw new Error('boom'); });
+  const pending = broker.register('t', 'call-1', request);
+  // A subscriber that throws must not prevent the question from resolving.
+  assert.deepEqual(broker.answer('t', 'call-1', { answers: [{ questionId: 'scope', selected: ['small'] }] }), { ok: true });
+  assert.equal((await pending).status, 'answered');
+});
+
 test('question broker rejects duplicate registration', async () => {
   const broker = new QuestionBroker();
   const request = validRequest();

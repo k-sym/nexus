@@ -14,6 +14,7 @@ export interface State {
   // --- glass HUD state (Phase 3b) — the web dashboard ignores these ---
   activeSessionId: string | null   // set => detail screen is open on the glasses
   activeEvents: TranscriptEvent[]  // transcript for the open session
+  detailPage: number               // Phase 2: which page of the latest reply the detail card shows (0 = top)
   glassError: string | null        // transient toast for the glasses HUD
   glassListening: boolean          // Phase 4b: mic is open, transcribing a voice answer
   glassSteering: boolean           // Phase 4c: mic is open, transcribing a free-text steer
@@ -38,6 +39,7 @@ let state: State = {
   error: null,
   activeSessionId: null,
   activeEvents: [],
+  detailPage: 0,
   glassError: null,
   glassListening: false,
   glassSteering: false,
@@ -69,7 +71,8 @@ export const store = {
     emit()
   },
   openDetail(id: string, events: TranscriptEvent[]) {
-    state = { ...state, activeSessionId: id, activeEvents: events }
+    // Reset to the top of the latest reply whenever a session opens.
+    state = { ...state, activeSessionId: id, activeEvents: events, detailPage: 0 }
     emit()
   },
   dismissInterrupt(key: string) {
@@ -77,7 +80,7 @@ export const store = {
     emit()
   },
   closeDetail() {
-    state = { ...state, activeSessionId: null, activeEvents: [], glassSteering: false, glassInterim: '' }
+    state = { ...state, activeSessionId: null, activeEvents: [], detailPage: 0, glassSteering: false, glassInterim: '' }
     emit()
   },
   setGlassError(msg: string | null) {
