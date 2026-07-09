@@ -7,7 +7,7 @@ import { useEffect, useRef } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import { DATA } from './phase3'
 
-const BORDER = 0xffffff as never // maps to green on the monochrome lens
+const DIM = 6 as never // dimmed green for structural borders (borderColor is a 0–15 grey; 15 = bright)
 const GLYPH = { needs: '◆', live: '●', idle: '○' } as const
 // ✳ is TOFU on the firmware font; ★ renders and reads as "special".
 const badgeChar = (g: string) => (g === '✳' ? '★' : g)
@@ -38,40 +38,39 @@ export function Phase3FW() {
         const list = page.addListElement(rows)
         list.setItemWidth(536)
         list.setIsItemSelectBorderEn(true)
-        list.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(16))
+        list.setBorder((b) => b.setWidth(2).setColor(DIM).setRadius(16))
         list.markAsEventCaptureElement()
         list.setPosition((p) => { p.setX(18).setY(12) })
         list.setSize((z) => { z.setWidth(540).setHeight(264) })
       } else if (n.screen === 'sessions') {
-        // ONE frame around the project-letter column (your idea), plus an inner
-        // border box marking the current project — since ► is TOFU and we can't
-        // fill, a nested border is the "selected" cue.
-        const railX = 8, railW = 56, railY = 8, railH = 272, lineH = 27
+        // Minimal: the rail is just the project letters (no frame); a thin dim box
+        // marks the current project; the list card is dimmed so the bright native
+        // select-highlight is the only thing that pops.
+        const railX = 10, railW = 48, railY = 12, lineH = 27
         const rail = page.addTextElement(DATA.map((p) => `  ${badgeChar(p.g)}`).join('\n\n'))
-        rail.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(14))
         rail.setPosition((p) => { p.setX(railX).setY(railY) })
-        rail.setSize((z) => { z.setWidth(railW).setHeight(railH) })
+        rail.setSize((z) => { z.setWidth(railW).setHeight(264) })
         const hi = page.addTextElement('')
-        hi.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(9))
-        hi.setPosition((p) => { p.setX(railX + 6).setY(railY + 4 + n.proj * 2 * lineH) })
-        hi.setSize((z) => { z.setWidth(railW - 12).setHeight(lineH + 6) })
+        hi.setBorder((b) => b.setWidth(1).setColor(DIM).setRadius(9))
+        hi.setPosition((p) => { p.setX(railX - 2).setY(railY - 4 + n.proj * 2 * lineH) })
+        hi.setSize((z) => { z.setWidth(railW).setHeight(lineH + 6) })
 
         const sessions = DATA[n.proj].sessions
         const rows = sessions.length
           ? sessions.map((s) => `${GLYPH[s.icon]}  ${s.title}   ·   ${s.meta}`)
           : ['(no active sessions)']
-        const listX = railX + railW + 14
+        const listX = railX + railW + 12
         const list = page.addListElement(rows)
         list.setItemWidth(576 - listX - 22)
         list.setIsItemSelectBorderEn(true)
-        list.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(16))
+        list.setBorder((b) => b.setWidth(2).setColor(DIM).setRadius(16))
         list.markAsEventCaptureElement()
         list.setPosition((p) => { p.setX(listX).setY(10) })
         list.setSize((z) => { z.setWidth(576 - listX - 14).setHeight(268) })
       } else {
         const s = DATA[n.proj].sessions[n.sel]
         const card = page.addTextElement(`‹ ${s?.title ?? 'session'}\n\n${s?.reply ?? ''}\n\n● steer      ●● back`)
-        card.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(14))
+        card.setBorder((b) => b.setWidth(2).setColor(DIM).setRadius(14))
         card.markAsEventCaptureElement()
         card.setPosition((p) => { p.setX(16).setY(10) })
         card.setSize((z) => { z.setWidth(544).setHeight(268) })
