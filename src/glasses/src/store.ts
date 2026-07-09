@@ -19,6 +19,10 @@ export interface State {
   glassListening: boolean          // Phase 4b: mic is open, transcribing a voice answer
   glassSteering: boolean           // Phase 4c: mic is open, transcribing a free-text steer
   glassInterim: string             // live (interim) transcript shown while listening/steering
+  // A just-sent steer, echoed in the detail view as "you › …" until the agent's next
+  // reply lands. `baseReply` = the latest reply at send-time; once the live reply
+  // differs from it, the response has arrived and the echo gives way to it.
+  glassPendingSteer: { text: string; baseReply: string } | null
   // Attention-interrupt bookkeeping: the set of attention session-ids the user has
   // already acknowledged, keyed as a sorted join. While it matches the live set the
   // interrupt stays dismissed; a new/changed attention set re-raises it.
@@ -44,6 +48,7 @@ let state: State = {
   glassListening: false,
   glassSteering: false,
   glassInterim: '',
+  glassPendingSteer: null,
   dismissedAttentionKey: null,
 }
 
@@ -80,7 +85,7 @@ export const store = {
     emit()
   },
   closeDetail() {
-    state = { ...state, activeSessionId: null, activeEvents: [], detailPage: 0, glassSteering: false, glassInterim: '' }
+    state = { ...state, activeSessionId: null, activeEvents: [], detailPage: 0, glassSteering: false, glassInterim: '', glassPendingSteer: null }
     emit()
   },
   setGlassError(msg: string | null) {

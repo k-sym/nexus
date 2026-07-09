@@ -118,9 +118,12 @@ function finalizeSteer(text: string) {
   store.set({ glassSteering: false, glassInterim: '' })
   const msg = text.trim()
   if (!id || !msg) return // nothing heard — stay on the detail screen, no steer sent
+  // Echo the sent steer in the detail view (you › …) until the agent's next reply
+  // lands — so you see what you said before the response comes back.
+  store.set({ glassPendingSteer: { text: msg, baseReply: latestReplyText(st.activeEvents) } })
   sendSteer(id, msg)
-    .then((r) => { if (!r.accepted) store.setGlassError('steer not sent') })
-    .catch((e) => store.setGlassError(`steer failed: ${e}`))
+    .then((r) => { if (!r.accepted) { store.setGlassError('steer not sent'); store.set({ glassPendingSteer: null }) } })
+    .catch((e) => { store.setGlassError(`steer failed: ${e}`); store.set({ glassPendingSteer: null }) })
 }
 
 // Scroll paging for the detail screen's latest-reply card. Clamps to the reply's
@@ -157,7 +160,7 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
     return `proj|${s.connection}|${groups.map((g) => `${g.badge}${g.name}${g.sessions.length}${g.sessions.some((x) => x.needsAttention) ? '!' : ''}`).join('~')}`
   if (scr === 'sessions')
     return `sess|${nav.projIdx}|${groups.map((g) => g.badge).join('')}|${(groups[nav.projIdx]?.sessions ?? []).map((x) => sessionRow(x).label).join('~')}`
-  if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}`
+  if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${s.pendingSteer ? `P${s.pendingSteer.text.length}:${s.pendingSteer.baseReply.length}` : ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
   if (scr === 'question') { const a = questions(s)[0]; const q = a && firstQuestion(a); return `q|${a?.id}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}` }
   return `intr|${attentionSessions(s).map((a) => a.id).join(',')}`
@@ -371,6 +374,7 @@ function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
     activeEvents: st.activeEvents, detailPage: st.detailPage, error: st.glassError,
     dismissedAttentionKey: st.dismissedAttentionKey,
     listening: st.glassListening, steering: st.glassSteering, interim: st.glassInterim,
+    pendingSteer: st.glassPendingSteer,
   }
 }
 function intrKey(st: ReturnType<typeof store.getState>): string {
@@ -484,6 +488,14 @@ async function buildAndRender(
       headerText = `‹ ${String(title).slice(0, 30)}`
       hint = '• send   •• cancel'
       bodyText = s.error ? `! ${s.error}` : s.interim ? `“${s.interim}”` : '(speak your steer…)'
+    } else if (s.pendingSteer && latestReplyText(s.activeEvents) === s.pendingSteer.baseReply) {
+      // A steer was just sent and the agent hasn't replied yet — echo what you said,
+      // so it shows in the session view before the response. Gives way to the reply
+      // the moment a newer assistant message lands (latestReply diverges from baseReply).
+      headerText = `‹ ${String(title).slice(0, 30)}`
+      hint = '• steer   •• back'
+      const wrapped = paginateText(`you › ${s.pendingSteer.text}`, DETAIL_COLS, DETAIL_ROWS)[0].join('\n')
+      bodyText = s.error ? `${wrapped}\n! ${s.error}` : `${wrapped}\n\n(sent — working…)`
     } else {
       const pages = replyPages(s.activeEvents)
       const total = Math.max(1, pages.length)
@@ -565,10 +577,11 @@ function approvalContent(s: GlassSnapshot): string {
 
 // Detail card = the latest assistant reply, paginated so the WHOLE reply is
 // readable on the ~10-line HUD (the old single-render budget hard-capped it at
-// ~420 chars with no scroll). Wrap conservatively under the G2 usable width
-// (~44 chars incl. the 2-space line prefix) so the device doesn't re-wrap our
-// lines; DETAIL_ROWS then fits a page with room for the title + hint.
-const DETAIL_COLS = 42
+// ~420 chars with no scroll); DETAIL_ROWS fits a page with room for the header.
+// 50 cols fills ~92% of the full-width body element (measured via pretext/LVGL
+// metrics: 42 cols only reached ~75%, hence the reply looked two-thirds wide),
+// with headroom so a wide line doesn't overflow into a firmware re-wrap.
+const DETAIL_COLS = 50
 const DETAIL_ROWS = 7
 
 /** Text of the most recent non-empty assistant message (the "latest reply"). */
