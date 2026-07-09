@@ -936,7 +936,9 @@ test('Assistant session list includes filtered remote Hermes API sessions only',
       return new Response(JSON.stringify({
         sessions: [
           { id: 'remote-api-1', title: 'Remote API session', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' },
+          { id: 'remote-tui-1', title: 'Remote TUI session', source: 'tui', updated_at: '2026-07-02T10:30:00.000Z' },
           { id: 'remote-cron-1', title: 'Cron work', source: 'cron', updated_at: '2026-07-02T09:00:00.000Z' },
+          { id: 'remote-unknown-1', title: 'Cron work without source metadata', updated_at: '2026-07-02T11:00:00.000Z' },
         ],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
@@ -952,6 +954,12 @@ test('Assistant session list includes filtered remote Hermes API sessions only',
       remoteOnly: session.remoteOnly,
       remote_session_id: session.remote_session_id,
     })), [
+      {
+        id: 'remote:remote-tui-1',
+        title: 'Remote TUI session',
+        remoteOnly: true,
+        remote_session_id: 'remote-tui-1',
+      },
       {
         id: 'remote:remote-api-1',
         title: 'Remote API session',
