@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { useEffect } from 'react'
 import { Connect } from './screens/Connect'
+import { Lab } from './sim/Lab'
+import { Phase3App } from './sim/phase3'
 import { AppGlasses3c } from './glass/AppGlasses3c'
 import { store, useStore } from './store'
 import { answer, connectEvents, decide, getPending, getSession, getSessions, sendSteer, setArmed } from './api'
@@ -216,6 +218,11 @@ function Cockpit() {
 
 export function App() {
   const baseUrl = useStore(s => s.baseUrl)
+  // Phase 3 design lab (?sim=lab-*): static bitmap mockups. ?sim=p3: the navigable
+  // projects→sessions→detail prototype driven by fixture data.
+  const simName = new URLSearchParams(window.location.search).get('sim')
+  if (simName?.startsWith('lab-')) return <Lab name={simName} />
+  if (simName === 'p3') return <Phase3App />
   if (!baseUrl) return <Connect />
   // Simulator fixture mode (?sim=): the store is pre-seeded, so skip the live feed
   // that would otherwise overwrite it (see main.tsx / sim/fixtures.ts).
