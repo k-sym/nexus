@@ -55,27 +55,12 @@ async function seedFromHub() {
     }
     // else (.ehpk): stored empty → Connect prompts; or a real remote hub → keep it.
   }
+  // ?stt=/?sttKey= configure the voice backend on-device via the QR link (dev-load).
   const stt = params.get('stt'); if (stt) localStorage.setItem('cockpit.sttProvider', stt)
   const sttKey = params.get('sttKey'); if (sttKey) localStorage.setItem('cockpit.sttKey', sttKey)
-
-  // Pull STT from Nexus (GET /api/cockpit-config) so the key lives in
-  // ~/.nexus/config.yaml, not the client. A ?stt= param this load overrides it;
-  // otherwise Nexus config wins over any stale localStorage. Best-effort + async,
-  // but resolves long before the user opens a session and taps Steer.
-  if (!stt && !sttKey) {
-    const base = store.getState().baseUrl
-    const token = store.getState().token
-    fetch(`${base}/api/cockpit-config${token ? `?token=${encodeURIComponent(token)}` : ''}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((cfg) => {
-        const s = cfg?.stt
-        if (s?.apiKey) {
-          localStorage.setItem('cockpit.sttProvider', s.provider || 'deepgram')
-          localStorage.setItem('cockpit.sttKey', s.apiKey)
-        }
-      })
-      .catch(() => { /* voice stays off until configured */ })
-  }
+  // The STT key from Nexus config (GET /api/cockpit-config) is seeded in HubFeed once
+  // the hub URL is known — NOT here — because the installed .ehpk has an empty baseUrl
+  // at boot (the Connect screen sets it), so a boot-time fetch would miss it.
 }
 
 // `?sim=<scenario>` seeds a canned HUD screen for the evenhub-simulator (no live
