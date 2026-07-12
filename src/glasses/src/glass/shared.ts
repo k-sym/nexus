@@ -16,6 +16,7 @@ export interface GlassSnapshot {
   listening: boolean                   // Phase 4b: mic open for a voice answer
   steering: boolean                    // Phase 4c: mic open for a free-text steer (detail screen)
   interim: string                      // live transcript while listening/steering
+  pendingSteer: { text: string; baseReply: string } | null // sent steer, echoed until the reply lands
 }
 
 // Side effects a screen can trigger in response to a gesture. Implemented in

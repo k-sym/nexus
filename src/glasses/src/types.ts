@@ -18,6 +18,10 @@ export interface SessionSummary {
   recent: boolean  // active within the hub's RECENT_MS window
   needsAttention: boolean
   attention: Attention | null
+  // Nexus extensions (the gateway sends these; the flat web dashboard ignores them,
+  // the Phase-3 glasses nav groups on them).
+  kind?: 'chat' | 'assistant'      // which store the session came from
+  projectId?: string | null        // stable project key for grouping (null for Assistant)
 }
 
 export interface TranscriptEvent {

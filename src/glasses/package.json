@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --port 5273 --host",
     "qr": "./scripts/qr.sh",
-    "pack": "npm run build && evenhub pack app.json ./dist -o session-cockpit.ehpk",
+    "build:pack": "tsc --noEmit && VITE_BASE=./ vite build --outDir dist-pack --emptyOutDir",
+    "pack": "npm run build:pack && evenhub pack app.json ./dist-pack -o session-cockpit.ehpk",
     "sim": "./scripts/sim.sh"
   },
   "dependencies": {
@@ -21,6 +22,7 @@
     "upng-js": "^2.1.0"
   },
   "devDependencies": {
+    "@evenrealities/evenhub-cli": "^0.1.13",
     "@evenrealities/evenhub-simulator": "^0.8.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
