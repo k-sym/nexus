@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { storageSetRaw } from 'even-toolkit/storage'
 import type { Approval, ConnectionStatus, SessionSummary, TranscriptEvent } from './types'
 
 export interface State {
@@ -61,8 +62,13 @@ export const store = {
   set(patch: Partial<State>) { state = { ...state, ...patch }; emit() },
   setCredentials(baseUrl: string, token: string) {
     const clean = baseUrl.replace(/\/$/, '')
+    // window.localStorage is a fast cache but is WIPED on app close in the Even
+    // WebView, so also mirror creds to the Even app's NATIVE store (via the bridge),
+    // which survives restarts. Fire-and-forget; a no-op outside the Even app.
     localStorage.setItem(LS_URL, clean)
     localStorage.setItem(LS_TOKEN, token)
+    void storageSetRaw(LS_URL, clean)
+    void storageSetRaw(LS_TOKEN, token)
     state = { ...state, baseUrl: clean, token, connection: 'unknown', connectionError: null }
     emit()
   },
