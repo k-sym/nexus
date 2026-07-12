@@ -1,9 +1,15 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router'
+import { storageGetRaw } from 'even-toolkit/storage'
 import { App } from './App'
 import { store } from './store'
 import './app.css'
+
+/** Race a promise against a timeout so a hung bridge call can't block boot. */
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((res) => setTimeout(() => res(fallback), ms))])
+}
 
 // Auto-connect from the URL: ?hub=<url>&token=<t>. Handy for the Even app /
 // evenhub-simulator, which loads a target URL but can't fill the Connect form.
@@ -14,6 +20,18 @@ async function seedFromHub() {
   const params = new URLSearchParams(window.location.search)
   const hub = params.get('hub')
   const origin = window.location.origin
+  // window.localStorage is WIPED on app close in the Even WebView, so on an installed
+  // .ehpk restart the saved hub is gone from it and the Connect screen would reappear.
+  // Recover it from the Even app's NATIVE store (survives restarts) before deciding.
+  // Only when the fast cache is empty, and raced with a timeout so a missing bridge
+  // (browser / sim) can't block boot.
+  if (!store.getState().baseUrl) {
+    const savedUrl = await withTimeout(storageGetRaw('cockpit.baseUrl'), 2000, '')
+    if (savedUrl) {
+      const savedToken = await withTimeout(storageGetRaw('cockpit.token'), 1500, '')
+      store.setCredentials(savedUrl, savedToken)
+    }
+  }
   const stored = store.getState().baseUrl
   // Decide the hub URL:
   //  • explicit ?hub= always wins (QR / simulator).

@@ -47,6 +47,12 @@ button:disabled { opacity: .5; cursor: default; }
 .dot.connecting { background: var(--amber); }
 button.armed { background: rgba(63,185,80,.15); border-color: var(--green); color: var(--green); }
 button.disarmed { color: var(--muted); }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+/* "Change hub" escape hatch: subdued by default, highlighted red when disconnected. */
+button.change-hub { color: var(--muted); font-size: 13px; }
+button.change-hub.attn { background: rgba(248,81,73,.12); border-color: var(--red); color: var(--red); }
+.connect-actions { display: flex; gap: 8px; align-items: center; }
+.connect-actions button.cancel { color: var(--muted); }
 
 /* Approvals */
 .approvals { background: rgba(210,153,34,.08); border: 1px solid var(--amber); border-radius: 12px; padding: 14px; margin-bottom: 20px; }

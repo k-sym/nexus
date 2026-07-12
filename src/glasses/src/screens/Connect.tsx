@@ -26,7 +26,12 @@ export function Connect() {
       <label>Token <span className="muted">(blank for dev / no-auth)</span>
         <input value={token} onChange={e => setToken(e.target.value)} type="password" placeholder="HUB_TOKEN" />
       </label>
-      <button onClick={connect} disabled={busy}>{busy ? 'Checking…' : 'Connect'}</button>
+      <div className="connect-actions">
+        <button onClick={connect} disabled={busy}>{busy ? 'Checking…' : 'Connect'}</button>
+        {/* Only offer Cancel when there's already a saved hub to fall back to
+            (i.e. arrived here via "Change hub", not the first-run empty state). */}
+        {savedUrl && <button className="cancel" onClick={() => store.closeConnect()} disabled={busy}>Cancel</button>}
+      </div>
       {msg && <p className="err">{msg}</p>}
     </div>
   )
