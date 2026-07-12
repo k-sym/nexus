@@ -7,7 +7,7 @@ import { Phase3FW } from './sim/phase3fw'
 import { Glyphs } from './sim/glyphs'
 import { AppGlasses3c } from './glass/AppGlasses3c'
 import { store, useStore } from './store'
-import { answer, connectEvents, decide, getPending, getSession, getSessions, sendSteer, setArmed } from './api'
+import { answer, connectEvents, decide, getCockpitConfig, getPending, getSession, getSessions, sendSteer, setArmed } from './api'
 import type { Approval, AskUserQuestionInput, SseEvent } from './types'
 
 /** Pull the session list so the ● needs-you / ◐ live dots reflect the latest
@@ -66,6 +66,20 @@ function HubFeed() {
         store.set({ sessions, approvals: pending, connection: 'ok' })
       } catch (err) {
         store.set({ connection: 'error', connectionError: String(err) })
+      }
+      // Seed the STT (voice steer/answer) key from Nexus config — the single source of
+      // truth. Done HERE, not just at boot, because the installed .ehpk only knows the
+      // hub URL after the Connect screen sets it (its boot-time baseUrl is empty). A
+      // ?stt=/?sttKey= URL param this load still wins (seeded in main.tsx), so skip then.
+      const qs = new URLSearchParams(window.location.search)
+      if (!qs.get('stt') && !qs.get('sttKey')) {
+        getCockpitConfig().then(cfg => {
+          const s = cfg?.stt
+          if (s?.apiKey) {
+            localStorage.setItem('cockpit.sttProvider', s.provider || 'deepgram')
+            localStorage.setItem('cockpit.sttKey', s.apiKey)
+          }
+        }).catch(() => { /* voice stays off until configured */ })
       }
       stop = connectEvents(applyEvent, ok => store.set({ connection: ok ? 'ok' : 'error' }))
       // light poll to keep session recency/attention fresh

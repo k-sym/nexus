@@ -54,6 +54,14 @@ export async function getPending(): Promise<Approval[]> {
   return (await res.json() as { approvals: Approval[] }).approvals
 }
 
+/** STT (voice) config Nexus serves from ~/.nexus/config.yaml gateway.stt. */
+export interface CockpitConfig { stt?: { provider?: string; apiKey?: string; language?: string } }
+export async function getCockpitConfig(): Promise<CockpitConfig | null> {
+  const res = await api('/api/cockpit-config')
+  if (!res.ok) return null
+  return res.json() as Promise<CockpitConfig>
+}
+
 export async function setArmed(armed: boolean, ttlSec?: number): Promise<void> {
   const res = await api('/api/arm', { method: 'POST', body: JSON.stringify({ armed, ttlSec }) })
   if (!res.ok) throw new Error(`arm: ${res.status}`)
