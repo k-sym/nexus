@@ -128,10 +128,10 @@ function configuredAssistant(load: () => NexusConfig) {
 }
 
 const HERMES_ASSISTANT_SOURCE = 'api_server';
-const HERMES_ASSISTANT_SOURCES = new Set([HERMES_ASSISTANT_SOURCE, 'tui']);
+const HERMES_ASSISTANT_SOURCES = new Set([HERMES_ASSISTANT_SOURCE]);
 
-// Accept only explicit interactive sessions; this rejects cron, job, scheduled,
-// cli, dashboard, and source-less rows that must not appear in the Assistant rail.
+// Accept only api_server sessions; this rejects tui, cron, job, scheduled, cli,
+// dashboard, and source-less rows that must not appear in the Assistant rail.
 function isAdoptableRemoteSource(source: string | undefined): boolean {
   return source !== undefined && HERMES_ASSISTANT_SOURCES.has(source);
 }

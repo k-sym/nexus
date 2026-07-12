@@ -955,12 +955,6 @@ test('Assistant session list includes filtered remote Hermes API sessions only',
       remote_session_id: session.remote_session_id,
     })), [
       {
-        id: 'remote:remote-tui-1',
-        title: 'Remote TUI session',
-        remoteOnly: true,
-        remote_session_id: 'remote-tui-1',
-      },
-      {
         id: 'remote:remote-api-1',
         title: 'Remote API session',
         remoteOnly: true,
