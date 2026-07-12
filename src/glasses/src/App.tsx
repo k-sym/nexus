@@ -180,9 +180,16 @@ function Cockpit() {
           <span className={`dot ${connection}`} />
           Session Cockpit
         </div>
-        <button className={armed ? 'armed' : 'disarmed'} onClick={() => setArmed(!armed).catch(() => {})}>
-          {armed ? '● ARMED — routing to me' : '○ Disarmed — normal prompts'}
-        </button>
+        <div className="header-actions">
+          {/* Escape hatch: re-open Connect to point at a different hub (or fix a bad
+              saved URL). Prominent when disconnected, subdued otherwise. */}
+          <button className={`change-hub ${connection === 'error' ? 'attn' : ''}`} onClick={() => store.openConnect()}>
+            Change hub
+          </button>
+          <button className={armed ? 'armed' : 'disarmed'} onClick={() => setArmed(!armed).catch(() => {})}>
+            {armed ? '● ARMED — routing to me' : '○ Disarmed — normal prompts'}
+          </button>
+        </div>
       </header>
 
       {questions.length > 0 && (
@@ -234,6 +241,7 @@ function Cockpit() {
 
 export function App() {
   const baseUrl = useStore(s => s.baseUrl)
+  const forceConnect = useStore(s => s.forceConnect)
   // Phase 3 design lab (?sim=lab-*): static bitmap mockups. ?sim=p3: the navigable
   // projects→sessions→detail prototype driven by fixture data.
   // VITE_FORCE_SIM lets a build default to a scenario with no query param — needed
@@ -245,7 +253,8 @@ export function App() {
   if (simName === 'p3') return <Phase3App />
   if (simName === 'fw') return <Phase3FW />
   if (simName === 'glyphs') return <Glyphs />
-  if (!baseUrl) return <Connect />
+  // Show Connect when there's no saved hub, or when the user asked to change it.
+  if (!baseUrl || forceConnect) return <Connect />
   // Simulator fixture mode (?sim=): the store is pre-seeded, so skip the live feed
   // that would otherwise overwrite it (see main.tsx / sim/fixtures.ts).
   const sim = simName != null

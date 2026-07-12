@@ -11,6 +11,7 @@ export interface State {
   sessions: SessionSummary[]
   approvals: Approval[] // pending only
   error: string | null
+  forceConnect: boolean // user asked to re-open the Connect screen (change hub), even though a baseUrl is saved
 
   // --- glass HUD state (Phase 3b) — the web dashboard ignores these ---
   activeSessionId: string | null   // set => detail screen is open on the glasses
@@ -42,6 +43,7 @@ let state: State = {
   sessions: [],
   approvals: [],
   error: null,
+  forceConnect: false,
   activeSessionId: null,
   activeEvents: [],
   detailPage: 0,
@@ -69,9 +71,13 @@ export const store = {
     localStorage.setItem(LS_TOKEN, token)
     void storageSetRaw(LS_URL, clean)
     void storageSetRaw(LS_TOKEN, token)
-    state = { ...state, baseUrl: clean, token, connection: 'unknown', connectionError: null }
+    state = { ...state, baseUrl: clean, token, connection: 'unknown', connectionError: null, forceConnect: false }
     emit()
   },
+  /** Re-open the Connect screen to change the hub, keeping the saved URL for pre-fill. */
+  openConnect() { state = { ...state, forceConnect: true }; emit() },
+  /** Dismiss the Connect screen (Cancel) without changing the saved hub. */
+  closeConnect() { state = { ...state, forceConnect: false }; emit() },
   upsertApproval(a: Approval) {
     const rest = state.approvals.filter(x => x.id !== a.id)
     state = { ...state, approvals: a.decision ? rest : [...rest, a] }
