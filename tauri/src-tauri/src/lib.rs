@@ -163,13 +163,31 @@ pub fn run() {
                         // so disable it to let in-page HTML5 DnD work.
                         .disable_drag_drop_handler();
 
-                    if !is_dev {
-                        // Prod only: inject the API base-URL so the bundled
-                        // frontend knows which port the backend is on.
-                        // In dev, Vite's proxy handles this; do NOT inject.
-                        builder = builder.initialization_script(
-                            "window.__NEXUS_API__='http://127.0.0.1:4173/api';",
-                        );
+                    // Point the frontend at the backend and hand it the auth
+                    // token. Inject __NEXUS_API__ when the backend is remote
+                    // (thin-client, dev *and* prod) or in full-stack prod; in
+                    // full-stack dev, Vite's proxy handles the base — do NOT
+                    // inject it. __NEXUS_TOKEN__ is injected whenever a token is
+                    // set (both modes) so this machine's own UI authenticates.
+                    // serde_json::to_string yields a safe JS string literal.
+                    {
+                        let mut init = String::new();
+                        if result.backend_remote || !is_dev {
+                            let api = format!("{}/api", result.backend_url.trim_end_matches('/'));
+                            init.push_str(&format!(
+                                "window.__NEXUS_API__={};",
+                                serde_json::to_string(&api).unwrap()
+                            ));
+                        }
+                        if !result.token.is_empty() {
+                            init.push_str(&format!(
+                                "window.__NEXUS_TOKEN__={};",
+                                serde_json::to_string(&result.token).unwrap()
+                            ));
+                        }
+                        if !init.is_empty() {
+                            builder = builder.initialization_script(&init);
+                        }
                     }
 
                     // Navigation guard: external http(s) links open in the

@@ -26,6 +26,8 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     // Mask the API key so we never ship the raw secret to the browser.
     return {
       ...config,
+      // server.token is the backend bearer — mask it like any other secret.
+      server: { ...config.server, token: maskSecret(config.server.token || '') },
       models: {
         ...config.models,
         openrouter: { api_key: maskSecret(config.models.openrouter.api_key) },
@@ -57,10 +59,23 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const assistantKey = !incomingAssistantKey || incomingAssistantKey === MASK
       ? current.assistant.api_key
       : incomingAssistantKey;
+    // server.token is masked on read; keep the stored value unless a new one was typed.
+    const incomingServerToken = incoming.server?.token;
+    const serverToken = !incomingServerToken || incomingServerToken === MASK
+      ? current.server.token
+      : incomingServerToken;
 
     const merged: NexusConfig = {
       ...current,
       ...incoming,
+      // Merge server explicitly so the masked token isn't persisted over the real one.
+      server: {
+        ...current.server,
+        ...incoming.server,
+        port: incoming.server?.port ?? current.server.port,
+        url: incoming.server?.url ?? current.server.url,
+        token: serverToken,
+      },
       jira: incoming.jira ?? current.jira,
       github: incoming.github ?? current.github,
       assistant: {
@@ -91,6 +106,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
 
     return {
       ...merged,
+      server: { ...merged.server, token: maskSecret(merged.server.token || '') },
       models: {
         ...merged.models,
         openrouter: { api_key: maskSecret(merged.models.openrouter.api_key) },

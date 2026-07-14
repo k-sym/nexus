@@ -8,6 +8,7 @@ vi.mock('../api', () => ({
   api: {
     settings: {
       get: vi.fn(async () => ({
+        server: { port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
         assistant: { url: 'https://assistant.example.test/v1', api_key: '${ASSISTANT_API_KEY}' },
         models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '', supports_images: false } },
         memory: { auto_inject: { enabled: true, max_memories: 5, token_budget: 1000 } },
@@ -63,6 +64,28 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('heading', { name: 'Assistant' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://assistant.example.test/v1')).toBeInTheDocument();
     expect(screen.getByDisplayValue('${ASSISTANT_API_KEY}')).toBeInTheDocument();
+  });
+
+  it('shows editable Connection fields when the backend is local', async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole('heading', { name: 'Connection (this device)' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Server URL')).toBeInTheDocument();
+    // Masked token env-ref is shown as-is (not a real secret).
+    expect(screen.getByDisplayValue('${NEXUS_BACKEND_TOKEN}')).toBeInTheDocument();
+  });
+
+  it('shows read-only connection info when this device is a thin client', async () => {
+    (window as { __NEXUS_API__?: string }).__NEXUS_API__ = 'https://baker-pro.taileea629.ts.net:8444/api';
+    try {
+      render(<SettingsPage />);
+      expect(await screen.findByRole('heading', { name: 'Connection (this device)' })).toBeInTheDocument();
+      // The real connection target (sans /api) is shown, and editing is disabled.
+      expect(screen.getByText('https://baker-pro.taileea629.ts.net:8444')).toBeInTheDocument();
+      expect(screen.queryByLabelText('Server URL')).not.toBeInTheDocument();
+    } finally {
+      delete (window as { __NEXUS_API__?: string }).__NEXUS_API__;
+    }
   });
 
   it('mounts trust and privacy separately from editable settings', async () => {

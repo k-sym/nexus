@@ -133,6 +133,44 @@ test('settings masks and preserves assistant api key', async () => {
   }
 });
 
+test('settings masks and preserves the backend token, round-trips server.url', async () => {
+  const original = loadConfig();
+  const app = makeApp();
+  try {
+    delete process.env.GITHUB_TOKEN;
+    __primeTokenCache(null);
+    const configWithToken = {
+      ...original,
+      server: { ...original.server, url: 'https://baker-pro.example.ts.net:8444', token: 'backend-secret' },
+    };
+    saveConfig(configWithToken);
+
+    const get = await app.inject({ method: 'GET', url: '/api/settings' });
+    assert.equal(get.statusCode, 200);
+    assert.equal(get.json().server.url, 'https://baker-pro.example.ts.net:8444');
+    assert.equal(get.json().server.token, '••••••••');
+    assert.equal(JSON.stringify(get.json()).includes('backend-secret'), false);
+
+    // Echo the masked token back (as the UI would) while changing the URL — the
+    // stored secret must survive rather than being overwritten by the mask.
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { ...get.json(), server: { ...get.json().server, url: 'https://baker-pro.example.ts.net:9000' } },
+    });
+    assert.equal(put.statusCode, 200);
+    assert.equal(put.json().server.url, 'https://baker-pro.example.ts.net:9000');
+    assert.equal(put.json().server.token, '••••••••');
+
+    const persisted = loadConfig();
+    assert.equal(persisted.server.url, 'https://baker-pro.example.ts.net:9000');
+    assert.equal(persisted.server.token, 'backend-secret');
+  } finally {
+    saveConfig(original);
+    await app.close();
+  }
+});
+
 test('POST /api/settings/local-model/test verifies the configured chat model responds', async () => {
   const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {

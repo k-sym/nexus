@@ -36,7 +36,14 @@ export interface GatewayDeps {
   db: Db;
   pi: PiRuntime;
   mainPort: number;
+  /** Resolved main-backend bearer token, attached to loopback reads when set. */
+  mainToken?: string;
   recentMs: number;
+}
+
+/** Authorization header for loopback calls into the token-gated main backend. */
+function authHeaders(token: string | undefined): Record<string, string> | undefined {
+  return token ? { authorization: `Bearer ${token}` } : undefined;
 }
 
 export type Scope = 'active' | 'recent' | 'all';
@@ -51,9 +58,11 @@ interface ActiveRun {
 }
 
 /** Read the main app's in-process active/waiting chat runs over loopback. */
-async function fetchActiveRuns(mainPort: number): Promise<Map<string, ActiveRun>> {
+async function fetchActiveRuns(mainPort: number, mainToken?: string): Promise<Map<string, ActiveRun>> {
   try {
-    const res = await fetch(`http://127.0.0.1:${mainPort}/api/chat/active-runs`);
+    const res = await fetch(`http://127.0.0.1:${mainPort}/api/chat/active-runs`, {
+      headers: authHeaders(mainToken),
+    });
     if (!res.ok) return new Map();
     const data = (await res.json()) as { runs?: ActiveRun[] };
     return new Map((data.runs ?? []).map((run) => [run.threadId, run]));
@@ -80,7 +89,7 @@ interface AssistantSessionRow {
 
 export async function buildSessions(deps: GatewayDeps, scope: Scope = 'active'): Promise<SessionSummary[]> {
   const now = Date.now();
-  const runByThread = await fetchActiveRuns(deps.mainPort);
+  const runByThread = await fetchActiveRuns(deps.mainPort, deps.mainToken);
 
   const threadRows = deps.db
     .prepare(`
@@ -177,7 +186,10 @@ async function readEvents(deps: GatewayDeps, resolved: ResolvedSession) {
   // Assistant transcript lives behind the main app's assistant route (its
   // reader + legacy-seed logic is module-private), so read it over loopback.
   try {
-    const res = await fetch(`http://127.0.0.1:${deps.mainPort}/api/assistant/sessions/${encodeURIComponent(resolved.sessionId)}`);
+    const res = await fetch(
+      `http://127.0.0.1:${deps.mainPort}/api/assistant/sessions/${encodeURIComponent(resolved.sessionId)}`,
+      { headers: authHeaders(deps.mainToken) },
+    );
     if (!res.ok) return [];
     const data = (await res.json()) as { messages?: unknown[] };
     return messagesToTranscriptEvents(data.messages ?? []);

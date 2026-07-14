@@ -15,7 +15,9 @@ const NEXUS_DIR = path.join(os.homedir(), '.nexus');
 const CONFIG_PATH = path.join(NEXUS_DIR, 'config.yaml');
 
 const DEFAULT_CONFIG: NexusConfig = {
-  server: { port: 4173 },
+  // url: '' ⇒ full-stack (spawn a local backend). token: env-expanded, '' ⇒
+  // dev-open (no auth) — same convention as gateway.token below.
+  server: { port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
   gateway: {
     enabled: true,
     port: 8899,
