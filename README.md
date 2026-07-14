@@ -12,6 +12,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 - [Architecture](#architecture)
 - [Trust and Privacy](#trust-and-privacy)
 - [Quick Start](#quick-start)
+- [Server + thin clients (Tailscale)](#server--thin-clients-tailscale)
 - [The Local Model Stack](#the-local-model-stack)
 - [Configuration](#configuration)
 - [Concepts](#concepts)
@@ -297,6 +298,78 @@ discovered at runtime from your auth; see [Models & Curation](#models--curation)
 
 ---
 
+## Server + thin clients (Tailscale)
+
+Run the full stack on **one machine** (the *server* — the single source of truth for sessions,
+threads, and memory) and connect from other machines or the glasses as **thin clients** over a
+[Tailscale](https://tailscale.com/) tailnet, so a session started on one device can be picked up on
+another. Client mode is chosen **at boot**: when `server.url` resolves to a remote (non-loopback)
+host, the desktop shell **spawns nothing locally** and points its UI at the remote backend; a
+loopback/empty `server.url` runs the full stack as usual.
+
+### On the server
+
+The server needs the **backend** (`:4173`) and the **memory daemon** (`:4100`). It does **not** need
+the main frontend (`src/frontend`) built or served — each client bundles its own UI and only calls
+the backend's `/api`. (The *glasses* cockpit is a separate build, `src/glasses/dist`, served by the
+gateway; build it only if you use the glasses.)
+
+```bash
+npm run build                     # builds @nexus/shared + backend (frontend is built too but unused here)
+node src/backend/dist/index.js    # run the backend headless — or `npm run dev:backend` (tsx watch) for dev
+# the memory daemon typically runs under LaunchD (see The Local Model Stack); start it if it isn't up
+```
+
+Expose the backend to the tailnet with `tailscale serve`. The backend **stays bound to loopback** —
+Tailscale terminates TLS and proxies in, so there's no bind change and access is tailnet-only
+(ACL-gated):
+
+```bash
+tailscale serve --bg --https=8444 127.0.0.1:4173   # backend -> https://<host>.ts.net:8444
+tailscale serve --bg --https=8900 127.0.0.1:8899   # (optional) glasses gateway -> https://<host>.ts.net:8900
+tailscale serve status                             # confirm the mappings
+```
+
+### Authentication (one shared token)
+
+Set `server.token` to gate `/api/*` (everything except `/api/health`) with a bearer — generate one
+with `openssl rand -hex 16`. On the server, provide it via the `NEXUS_BACKEND_TOKEN` env var (the
+default `token: "${NEXUS_BACKEND_TOKEN}"` expands it) or as a literal in `config.yaml`. The **glasses
+gateway inherits this token** when `gateway.token` is unset, so a single secret guards both.
+
+> **Set the token _before_ exposing the port.** With no token the backend is open to your whole
+> tailnet — acceptable only if you trust every device on it.
+
+### On a client (another Mac / the glasses)
+
+Build and run the desktop app, then point it at the server in `~/.nexus/config.yaml` (or in-app via
+**Settings → Connection (this device)**):
+
+```yaml
+server:
+  url: "https://<host>.ts.net:8444"              # the server's tailscale-serve URL (MagicDNS name)
+  token: "<the-same-token>"                        # literal — the launcher does not expand ${ENV}
+```
+
+Restart the app; it boots as a thin client (no local backend/daemon/models, UI pointed at the
+server). The **glasses** point at the gateway URL with the token as a query param
+(`https://<host>.ts.net:8900/?token=<token>`), since their event stream can't send an
+`Authorization` header.
+
+### Verify
+
+```bash
+curl https://<host>.ts.net:8444/api/health                                       # 200 (public)
+curl https://<host>.ts.net:8444/api/projects                                     # 401 (no token)
+curl -H "Authorization: Bearer <token>" https://<host>.ts.net:8444/api/projects  # 200
+```
+
+**Limitations.** A thin client needs the tailnet reachable — there's no offline mode (use the glasses
+when out). Two clients can't watch the *same in-flight* turn's token stream (the run continues
+server-side but isn't re-broadcast); resume-after and next-turn work fine.
+
+---
+
 ## The Local Model Stack
 
 Memory retrieval (and local chat) rely on **three independent OpenAI-compatible servers** on
@@ -377,7 +450,16 @@ to Obsidian's vault picker. The daemon's rebuildable memory index lives **inside
 
 ```yaml
 server:
-  port: 4173
+  port: 4173                           # local port the backend binds (loopback only)
+  url: ""                              # thin-client: point THIS device at a remote Nexus backend
+                                       #   (e.g. a Tailscale host, incl. its TLS port). Empty or a
+                                       #   loopback URL => run the full stack locally. See
+                                       #   "Server + thin clients (Tailscale)".
+  token: "${NEXUS_BACKEND_TOKEN}"      # bearer guarding /api/* (except /api/health) once the backend
+                                       #   is exposed beyond loopback; empty => open (loopback dev).
+                                       #   The glasses gateway inherits this when gateway.token is
+                                       #   unset, so one token guards both. Literal on clients (the
+                                       #   desktop launcher does not expand ${ENV}).
 
 models:
   openrouter:
