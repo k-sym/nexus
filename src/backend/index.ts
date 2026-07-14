@@ -145,7 +145,11 @@ async function main() {
       config: {
         enabled: config.gateway.enabled,
         port: config.gateway.port,
-        token: resolveEnvVars(config.gateway.token || ''),
+        // One shared secret by default: the gateway inherits the main backend
+        // token (server.token) when gateway.token isn't explicitly set, so a
+        // single Nexus token guards both the backend and the glasses gateway.
+        // Set gateway.token only to override / rotate the two independently.
+        token: resolveEnvVars(config.gateway.token || '') || backendToken,
         recentMs: config.gateway.recent_minutes * 60 * 1000,
         // Default to the in-repo glasses build (src/glasses/dist) when neither
         // env nor config sets it, so a built checkout serves the cockpit UI with
