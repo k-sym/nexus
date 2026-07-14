@@ -263,38 +263,57 @@ export function useAssistantStream() {
     sendingRef.current = true;
     setError(null);
 
-    const res = await apiFetch(`/api/assistant/sessions/${selectedSessionId}/messages/stream`, {
-      method: 'POST',
-      body: JSON.stringify({ content: trimmed, ...(attachments.length > 0 ? { attachments } : {}) }),
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!res.ok) {
-      setError(await responseError(res));
-      sendingRef.current = false;
-      return false;
-    }
-    if (!res.body) {
-      setError('Assistant response did not include a stream.');
-      sendingRef.current = false;
-      return false;
-    }
-
+    // Render the user's message + a streaming draft and the running state BEFORE
+    // the request, so a transport failure can never leave the UI blank (mirrors
+    // usePiStream). Everything below runs inside a single try/finally so that a
+    // throw from apiFetch (the packaged WebKit webview surfaces a dropped stream
+    // as `TypeError: Load failed`) can't leave `sendingRef` stuck true — which
+    // would silently wedge every future send in every session until restart.
+    const assistantDraft = localMessage('assistant', '');
+    assistantDraft.isStreaming = true;
+    setMessages((current) => [...current, localMessage('user', trimmed, attachments), assistantDraft]);
     setIsRunning(true);
     setLatestRun((run) => run ? { ...run, status: 'running' } : run);
     setSessions((current) => current.map((session) =>
       session.id === selectedSessionId ? { ...session, status: 'running' } : session,
     ));
-    const assistantDraft = localMessage('assistant', '');
-    assistantDraft.isStreaming = true;
-    setMessages((current) => [...current, localMessage('user', trimmed, attachments), assistantDraft]);
 
-    const reader = res.body.getReader();
-    readerRef.current = reader;
-    const decoder = new TextDecoder();
-    let pending = '';
+    // Drop the empty placeholder on a pre-stream failure (keeps the user's
+    // message visible); keep it and just stop the spinner once text has arrived.
+    const dropOrFinalizeDraft = () => setMessages((current) => {
+      const draft = current.find((message) => message.id === assistantDraft.id);
+      if (draft && !draft.content && !draft.thinking && !draft.run) {
+        return current.filter((message) => message.id !== assistantDraft.id);
+      }
+      return current.map((message) =>
+        message.id === assistantDraft.id ? { ...message, isStreaming: false } : message,
+      );
+    });
+
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     let remoteStillRunning = false;
     let runView: AgentRunView | null = null;
     try {
+      const res = await apiFetch(`/api/assistant/sessions/${selectedSessionId}/messages/stream`, {
+        method: 'POST',
+        body: JSON.stringify({ content: trimmed, ...(attachments.length > 0 ? { attachments } : {}) }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        setError(await responseError(res));
+        dropOrFinalizeDraft();
+        return false;
+      }
+      if (!res.body) {
+        setError('Assistant response did not include a stream.');
+        dropOrFinalizeDraft();
+        return false;
+      }
+
+      reader = res.body.getReader();
+      readerRef.current = reader;
+      const decoder = new TextDecoder();
+      let pending = '';
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -378,12 +397,17 @@ export function useAssistantStream() {
       ));
       return true;
     } catch (err) {
-      // Reader cancelled by abort or session switch; leave messages as-is.
-      if (readerRef.current !== reader) return false;
+      // Reader cancelled by abort or session switch: leave messages as-is.
+      if (reader && readerRef.current !== reader) return false;
+      // Transport drop (the packaged WebKit webview surfaces a dropped stream as
+      // `TypeError: Load failed`) or a genuine error: surface it and stop the
+      // spinner. The finally below always clears `sendingRef`, so a failed turn
+      // can never wedge future sends.
       setError(err instanceof Error ? err.message : String(err));
+      dropOrFinalizeDraft();
       return false;
     } finally {
-      if (readerRef.current === reader) readerRef.current = null;
+      if (reader && readerRef.current === reader) readerRef.current = null;
       sendingRef.current = false;
       setIsRunning(remoteStillRunning);
     }

@@ -156,6 +156,43 @@ describe('AssistantView', () => {
     expect(await screen.findByText('done')).toBeInTheDocument();
   });
 
+  it('keeps the UI alive and un-wedges the composer when the stream request throws (WebKit "Load failed")', async () => {
+    let streamCalls = 0;
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/assistant/sessions') return { ok: true, json: async () => ({ sessions }) } as Response;
+      if (url === '/api/assistant/sessions/s1') {
+        return { ok: true, json: async () => ({ session: sessions[0], messages: [], latestRun: null }) } as Response;
+      }
+      if (url === '/api/assistant/sessions/s1/messages/stream') {
+        streamCalls += 1;
+        // First attempt: the packaged webview drops the stream connection.
+        if (streamCalls === 1) throw new TypeError('Load failed');
+        return ndjsonStreamResponse([
+          { kind: 'run_start', run: { runId: 'r9', threadId: 's1', startedAt: 'x', provider: 'assistant', model: 'hermes-agent' } },
+          { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'recovered' } },
+          { kind: 'run_end', run: { runId: 'r9', threadId: 's1', completedAt: 'y', status: 'completed' } },
+        ]);
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<AssistantView />);
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+
+    // First send throws mid-request: the user's message must still be visible and
+    // the failure surfaced — not a silent blank screen.
+    fireEvent.change(input, { target: { value: 'first try' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect((await screen.findAllByText('first try')).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/Load failed/)).toBeInTheDocument();
+
+    // The stuck-sendingRef regression: a second send must not be silently blocked.
+    fireEvent.change(input, { target: { value: 'second try' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    expect(await screen.findByText('recovered')).toBeInTheDocument();
+    expect(streamCalls).toBe(2);
+  });
+
   it('starts a detached background run for the selected session', async () => {
     render(<AssistantView />);
 
