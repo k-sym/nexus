@@ -7,7 +7,7 @@
   "app": {
     "withGlobalTauri": true,
     "windows": [],
-    "security": { "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; script-src 'self' 'unsafe-inline'" }
+    "security": { "csp": "default-src 'self'; connect-src 'self' https://*.ts.net:* http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* wss://*.ts.net:* ws://localhost:*; script-src 'self' 'unsafe-inline'" }
   },
   "bundle": {
     "active": true,
