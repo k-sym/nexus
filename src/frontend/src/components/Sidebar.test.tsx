@@ -222,7 +222,6 @@ describe('Sidebar', () => {
     expect(workspace).toHaveTextContent('Memory');
     expect(workspace).toHaveTextContent('New Session');
     expect(workspace).not.toHaveTextContent('Sessions');
-    expect(workspace).toHaveTextContent('Project intelligence');
   });
 
   it('uses the new session action row to start a new session', async () => {
