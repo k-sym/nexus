@@ -40,6 +40,7 @@ import { ModelCurationStore } from './pi/model-curation.js';
 import { OAuthFlowManager } from './pi/oauth-flows.js';
 import { backfillOAuthCuratedModels } from './pi/oauth-curation-backfill.js';
 import { loadLocalEnvFile } from './env.js';
+import { registerBackendAuth } from './auth-gate.js';
 import { writeLocalModelsFile } from './pi/local-models.js';
 import { backfillLocalCuratedModels } from './pi/local-model-curation-backfill.js';
 
@@ -75,6 +76,13 @@ async function main() {
   await app.register(cors, { origin: true });
   await app.register(sensible);
   await app.register(websocket);
+
+  // Bearer-token gate for remote (thin-client) exposure. When server.token is
+  // set, every /api/* call except /api/health must present a matching bearer.
+  // Empty ⇒ dev-open, preserving the loopback-only default. The resolved token
+  // is also handed to the gateway so its loopback calls into this backend pass.
+  const backendToken = resolveEnvVars(config.server.token || '');
+  registerBackendAuth(app, backendToken);
 
   app.decorate('db', db);
   app.decorate('pi', pi);
@@ -130,6 +138,10 @@ async function main() {
       pi,
       db,
       mainPort: config.server.port,
+      // The gateway steers turns / reads detail via loopback POSTs into this
+      // backend; when the backend token is set those internal calls must carry
+      // it too, else the glasses silently 401.
+      mainToken: backendToken,
       config: {
         enabled: config.gateway.enabled,
         port: config.gateway.port,

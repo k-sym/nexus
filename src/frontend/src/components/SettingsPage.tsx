@@ -86,6 +86,13 @@ export default function SettingsPage() {
     return <div className="p-6 text-faint text-sm">Loading settings…</div>;
   }
 
+  // Where this device's frontend is actually talking to. When it's a remote
+  // (non-loopback) host, this app is a thin client — server.url/token here would
+  // edit the *remote's* config, so the Connection section is shown read-only.
+  const apiBase = window.__NEXUS_API__;
+  const remoteBackend = !!apiBase && !/(127\.0\.0\.1|localhost|\[::1?\]|::1)/.test(apiBase);
+  const connectedUrl = apiBase ? apiBase.replace(/\/api\/?$/, '') : '';
+
   return (
     <div className="h-full overflow-y-auto">
       <div className="p-6 max-w-2xl mx-auto">
@@ -107,6 +114,55 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-6">
+          <Section title="Connection (this device)">
+            {remoteBackend ? (
+              <Field label="Connected to">
+                <div className="text-sm font-mono text-primary break-all">{connectedUrl}</div>
+                <p className="text-[10px] text-faint mt-1">
+                  This device is a thin client of a remote Nexus server. That target is set in{' '}
+                  <span className="font-mono text-muted">~/.nexus/config.yaml</span> on <em>this</em>{' '}
+                  device (<span className="font-mono text-muted">server.url</span>). Settings you save
+                  here change the <em>remote server's</em> config, not this device's connection — so this
+                  is read-only. To change where this device connects (or reset to local), edit its local
+                  config.yaml and restart the app.
+                </p>
+              </Field>
+            ) : (
+              <>
+                <Field label="Server URL">
+                  <input
+                    aria-label="Server URL"
+                    type="text"
+                    value={config.server?.url ?? ''}
+                    onChange={(e) => update(['server', 'url'], e.target.value)}
+                    placeholder="https://baker-pro.taileea629.ts.net:8444"
+                    className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                  />
+                  <p className="text-[10px] text-faint mt-1">
+                    Point <em>this device</em> at a remote Nexus server (e.g. your Tailscale host,
+                    including the https port). Leave blank to run the full local stack. Applies after you{' '}
+                    <span className="text-muted">restart the app</span>.
+                  </p>
+                </Field>
+                <Field label="Access token">
+                  <input
+                    aria-label="Access token"
+                    type="text"
+                    value={config.server?.token ?? ''}
+                    onChange={(e) => update(['server', 'token'], e.target.value)}
+                    placeholder="${NEXUS_BACKEND_TOKEN} or paste the server's token"
+                    className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                  />
+                  <p className="text-[10px] text-faint mt-1">
+                    Must match the server's <span className="font-mono">NEXUS_BACKEND_TOKEN</span>.
+                    Supports <span className="font-mono">{'${ENV_VAR}'}</span>. Existing saved tokens are
+                    masked on load.
+                  </p>
+                </Field>
+              </>
+            )}
+          </Section>
+
           <Section title="Appearance">
             <Field label="Animated background">
               <div className="inline-flex rounded overflow-hidden border border-subtle">

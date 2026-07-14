@@ -1,6 +1,9 @@
 declare global {
   interface Window {
     __NEXUS_API__?: string;
+    /** Bearer token for a token-gated backend, injected by the desktop shell.
+     *  Undefined ⇒ backend is dev-open; no Authorization header is sent. */
+    __NEXUS_TOKEN__?: string;
   }
 }
 
@@ -17,5 +20,12 @@ export function apiUrl(url: string): string {
 }
 
 export function apiFetch(input: string, init?: RequestInit): Promise<Response> {
-  return fetch(apiUrl(input), init);
+  const token = window.__NEXUS_TOKEN__;
+  if (!token) return fetch(apiUrl(input), init);
+  // Attach the bearer for the token-gated backend, without clobbering an
+  // Authorization header a caller set explicitly. `new Headers` normalizes the
+  // Headers | record | array forms RequestInit.headers can take.
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(apiUrl(input), { ...init, headers });
 }

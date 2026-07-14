@@ -43,6 +43,10 @@ export interface GatewayDependencies {
   db: Db;
   /** Main backend port for loopback steer/detail. */
   mainPort: number;
+  /** Resolved main-backend bearer token. When set, the gateway attaches it to
+   *  its loopback calls into the main backend (steer/detail/active-runs) so
+   *  those pass the backend's auth gate. Empty ⇒ backend is dev-open. */
+  mainToken?: string;
   config: GatewayConfig;
 }
 
@@ -68,7 +72,7 @@ function scopeFromQuery(query: Record<string, unknown> | undefined): Scope {
 }
 
 export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
-  const { pi, db, mainPort, config } = deps;
+  const { pi, db, mainPort, mainToken, config } = deps;
   const app = Fastify({ logger: false });
 
   // ── in-memory gateway state ────────────────────────────────────────────────
@@ -79,7 +83,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
   let disarmTimer: ReturnType<typeof setTimeout> | undefined;
   const sseClients = new Set<ServerResponse>();
 
-  const gatewayDeps = { db, pi, mainPort, recentMs: config.recentMs };
+  const gatewayDeps = { db, pi, mainPort, mainToken, recentMs: config.recentMs };
 
   const cwdForThread = (threadId: string): string => resolveSession(db, threadId)?.cwd ?? '';
 
@@ -295,7 +299,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
       reply.code(404);
       return { error: 'unknown session' };
     }
-    const outcome = await driveSteer(mainPort, db, resolved, message);
+    const outcome = await driveSteer(mainPort, mainToken, db, resolved, message);
     if (!outcome.ok) {
       return { ok: false, armed: true, ...(outcome.busy ? { busy: true } : {}), ...(outcome.error ? { error: outcome.error } : {}) };
     }
@@ -377,6 +381,7 @@ interface SteerOutcome {
  *  (headers) then drain the NDJSON in the background to avoid backpressure. */
 async function driveSteer(
   mainPort: number,
+  mainToken: string | undefined,
   db: Db,
   resolved: { kind: 'chat'; threadId: string } | { kind: 'assistant'; sessionId: string },
   message: string,
@@ -393,9 +398,12 @@ async function driveSteer(
     url = `http://127.0.0.1:${mainPort}/api/assistant/sessions/${encodeURIComponent(resolved.sessionId)}/messages/stream`;
   }
 
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (mainToken) headers.authorization = `Bearer ${mainToken}`;
+
   let res: Response;
   try {
-    res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+    res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

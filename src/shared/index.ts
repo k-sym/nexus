@@ -285,7 +285,19 @@ export interface SignalFilterConfig {
 }
 
 export interface NexusConfig {
-  server: { port: number };
+  server: {
+    /** Local port the backend binds (loopback). */
+    port: number;
+    /** Remote backend base URL for thin-client mode (e.g. the Tailscale host,
+     *  including any TLS port — `/api` is appended by the frontend). Empty or a
+     *  loopback URL ⇒ full-stack: the desktop shell spawns a local backend.
+     *  A remote (non-loopback) URL ⇒ the shell probes it, spawns nothing, and
+     *  points the frontend's window.__NEXUS_API__ here. Mirrors memory.daemon_url. */
+    url?: string;
+    /** Bearer token gating the backend's /api/* (except /api/health). Supports
+     *  ${ENV} interpolation; empty ⇒ dev-open (no auth). Mirrors gateway.token. */
+    token?: string;
+  };
   /** LAN gateway that serves the Even Realities G2 glasses cockpit
    *  (session-cockpit) the Nexus session feed + control API. */
   gateway: {

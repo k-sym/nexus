@@ -91,6 +91,7 @@ pub fn spawn_npm(cwd: &Path, args: &[&str]) -> std::io::Result<Child> {
 }
 
 const DEFAULT_DAEMON_URL: &str = "http://127.0.0.1:4100";
+const DEFAULT_BACKEND_URL: &str = "http://127.0.0.1:4173";
 const BACKEND_HEALTH: &str = "http://127.0.0.1:4173/api/health";
 const FRONTEND_URL: &str = "http://localhost:5173/";
 
@@ -128,11 +129,93 @@ fn is_remote(url: &str) -> bool {
 /// Read `MEMORY_DAEMON_URL` / `~/.nexus/config.yaml` to find where the daemon
 /// lives. Untested glue over the tested `resolve_daemon_url`.
 fn daemon_url() -> String {
-    let env_override = std::env::var("MEMORY_DAEMON_URL").ok();
-    let config_text = std::env::var("HOME").ok().and_then(|h| {
+    resolve_daemon_url(std::env::var("MEMORY_DAEMON_URL").ok().as_deref(), read_config_text().as_deref())
+}
+
+/// Load `~/.nexus/config.yaml` text, if present.
+fn read_config_text() -> Option<String> {
+    std::env::var("HOME").ok().and_then(|h| {
         std::fs::read_to_string(std::path::Path::new(&h).join(".nexus/config.yaml")).ok()
-    });
-    resolve_daemon_url(env_override.as_deref(), config_text.as_deref())
+    })
+}
+
+/// Read a nested `section:` → `key: value` from YAML-ish config text via a light
+/// indentation scan — deliberately avoids pulling a YAML crate into the launcher
+/// for two strings (`server.url`, `server.token`). A flat scan won't do here:
+/// `url:`/`token:` are not unique keys (cf. `gateway.token`), so we must find the
+/// `server:` block first. Returns the first whitespace-delimited value token
+/// (trailing comments ignored).
+fn parse_nested_value(config_text: &str, section: &str, key: &str) -> Option<String> {
+    let section_header = format!("{section}:");
+    let key_prefix = format!("{key}:");
+    let mut in_section = false;
+    let mut section_indent = 0usize;
+    for line in config_text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+        if in_section && indent <= section_indent {
+            in_section = false; // dedented out of the section
+        }
+        if !in_section {
+            if indent == 0 && trimmed.starts_with(&section_header) {
+                in_section = true;
+                section_indent = indent;
+            }
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix(&key_prefix) {
+            return rest.split_whitespace().next().map(|t| t.to_string());
+        }
+    }
+    None
+}
+
+/// Resolve the backend base URL: `NEXUS_BACKEND_URL` env → config `server.url` →
+/// loopback default. A non-loopback result puts the shell in thin-client mode.
+fn resolve_backend_url(env_override: Option<&str>, config_text: Option<&str>) -> String {
+    if let Some(e) = env_override {
+        if !e.trim().is_empty() {
+            return e.trim().to_string();
+        }
+    }
+    if let Some(c) = config_text {
+        if let Some(u) = parse_nested_value(c, "server", "url") {
+            if !u.is_empty() {
+                return u;
+            }
+        }
+    }
+    DEFAULT_BACKEND_URL.to_string()
+}
+
+/// Resolve the backend bearer token: `NEXUS_BACKEND_TOKEN` env → config
+/// `server.token` literal. An unexpanded `${...}` placeholder (a copied default)
+/// is treated as unset — the launcher does not do env interpolation.
+fn resolve_backend_token(env_override: Option<&str>, config_text: Option<&str>) -> String {
+    if let Some(e) = env_override {
+        if !e.trim().is_empty() {
+            return e.trim().to_string();
+        }
+    }
+    if let Some(c) = config_text {
+        if let Some(t) = parse_nested_value(c, "server", "token") {
+            if !t.is_empty() && !t.starts_with("${") {
+                return t;
+            }
+        }
+    }
+    String::new()
+}
+
+fn backend_url() -> String {
+    resolve_backend_url(std::env::var("NEXUS_BACKEND_URL").ok().as_deref(), read_config_text().as_deref())
+}
+
+fn backend_token() -> String {
+    resolve_backend_token(std::env::var("NEXUS_BACKEND_TOKEN").ok().as_deref(), read_config_text().as_deref())
 }
 
 pub enum ServiceState { Reused, Up, Failed(String) }
@@ -166,6 +249,13 @@ pub struct BootResult {
     pub degraded: Vec<String>,
     pub node_missing: bool,
     pub children: Vec<Child>,
+    /// Resolved backend base URL (loopback in full-stack mode, the remote host in
+    /// thin-client mode). `lib.rs` injects `{backend_url}/api` as window.__NEXUS_API__.
+    pub backend_url: String,
+    /// True when the backend is remote — the shell spawned no local services.
+    pub backend_remote: bool,
+    /// Resolved backend bearer token; injected as window.__NEXUS_TOKEN__ when set.
+    pub token: String,
 }
 
 /// Full boot: daemon (optional) -> models -> backend -> (dev) vite. Calls
@@ -195,7 +285,15 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
     };
 
     if node_missing {
-        return BootResult { ready: false, degraded: vec![], node_missing: true, children };
+        return BootResult {
+            ready: false,
+            degraded: vec![],
+            node_missing: true,
+            children,
+            backend_url: DEFAULT_BACKEND_URL.to_string(),
+            backend_remote: false,
+            token: String::new(),
+        };
     }
 
     // In prod: services/{backend,daemon} under resource dir.
@@ -205,6 +303,50 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
     } else {
         (root.join("services/daemon"), root.join("services/backend"))
     };
+
+    // Thin-client mode: a remote backend (server.url / NEXUS_BACKEND_URL) owns the
+    // daemon, models, sessions and DB — the single source of truth. Spawn NOTHING
+    // local except the dev-only Vite that serves the UI; just probe the remote
+    // backend and gate readiness on it. Mirrors the remote-daemon path below.
+    let backend = backend_url();
+    let token = backend_token();
+    if is_remote(&backend) {
+        emit("memory", "skipped", Some("remote backend"));
+        emit("models", "skipped", Some("remote backend"));
+        emit("backend", "starting", Some("probing remote…"));
+        let health = format!("{}/api/health", backend.trim_end_matches('/'));
+        let backend_ok = probe(&health, std::time::Duration::from_millis(2500));
+        emit(
+            "backend",
+            if backend_ok { "up" } else { "warn" },
+            Some(if backend_ok { "remote" } else { "remote unreachable" }),
+        );
+        // The UI is the client and stays local: prod loads the bundled bundle,
+        // dev still needs Vite to serve it.
+        let frontend_ok = if is_dev {
+            emit("frontend", "starting", Some("checking…"));
+            let fe = root.join("src/frontend");
+            let (fstate, fchild) = ensure_service("frontend", FRONTEND_URL, &|| spawn_npm(&fe, &["run", "dev"]));
+            let ok = !matches!(fstate, ServiceState::Failed(_));
+            emit("frontend", state_label(&fstate), state_detail(&fstate));
+            if let Some(c) = fchild {
+                children.push(c);
+            }
+            ok
+        } else {
+            emit("frontend", "skipped", Some("bundled"));
+            true
+        };
+        return BootResult {
+            ready: backend_ok && frontend_ok,
+            degraded: vec![],
+            node_missing: false,
+            children,
+            backend_url: backend,
+            backend_remote: true,
+            token,
+        };
+    }
 
     // Daemon (optional, non-gating). A remote daemon (e.g. a central brain over
     // Tailscale, via memory.daemon_url) is a thin-client target — probe it, never
@@ -262,7 +404,17 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
         ok
     } else { emit("frontend", "skipped", Some("bundled")); true };
 
-    BootResult { ready: backend_ok && frontend_ok, degraded, node_missing: false, children }
+    BootResult {
+        ready: backend_ok && frontend_ok,
+        degraded,
+        node_missing: false,
+        children,
+        // Full-stack: backend is local. `token` (from env/config) is still
+        // injected so this machine's own UI authenticates when a token is set.
+        backend_url: backend,
+        backend_remote: false,
+        token,
+    }
 }
 
 fn state_label(s: &ServiceState) -> &'static str {
@@ -338,5 +490,44 @@ mod tests {
     #[test]
     fn is_remote_tailscale_host_is_true() {
         assert!(is_remote("https://baker-pro.taileea629.ts.net:8443"));
+    }
+
+    // A config with BOTH server.token and gateway.token — the nested scan must
+    // return the server one, not the first `token:` it happens to see.
+    const CFG: &str = "server:\n  port: 4173\n  url: https://baker-pro.taileea629.ts.net:8444\n  token: server-secret\ngateway:\n  enabled: true\n  token: gateway-secret\n";
+
+    #[test]
+    fn parse_nested_value_reads_server_url_and_token() {
+        assert_eq!(
+            parse_nested_value(CFG, "server", "url").as_deref(),
+            Some("https://baker-pro.taileea629.ts.net:8444")
+        );
+        assert_eq!(parse_nested_value(CFG, "server", "token").as_deref(), Some("server-secret"));
+        // Not confused by gateway.token appearing later.
+        assert_eq!(parse_nested_value(CFG, "gateway", "token").as_deref(), Some("gateway-secret"));
+    }
+
+    #[test]
+    fn parse_nested_value_absent_key_is_none() {
+        // server block has no `token` here, so it must NOT fall through to gateway.token.
+        let cfg = "server:\n  port: 4173\ngateway:\n  token: gateway-secret\n";
+        assert_eq!(parse_nested_value(cfg, "server", "token"), None);
+    }
+
+    #[test]
+    fn resolve_backend_url_precedence() {
+        assert_eq!(resolve_backend_url(Some("https://env:8444"), Some(CFG)), "https://env:8444");
+        assert_eq!(resolve_backend_url(None, Some(CFG)), "https://baker-pro.taileea629.ts.net:8444");
+        assert_eq!(resolve_backend_url(None, None), "http://127.0.0.1:4173");
+    }
+
+    #[test]
+    fn resolve_backend_token_precedence_and_placeholder() {
+        assert_eq!(resolve_backend_token(Some("envtok"), Some(CFG)), "envtok");
+        assert_eq!(resolve_backend_token(None, Some(CFG)), "server-secret");
+        // An unexpanded ${...} default (copied from DEFAULT_CONFIG) is treated as unset.
+        let cfg = "server:\n  token: ${NEXUS_BACKEND_TOKEN}\n";
+        assert_eq!(resolve_backend_token(None, Some(cfg)), "");
+        assert_eq!(resolve_backend_token(None, None), "");
     }
 }
