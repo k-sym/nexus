@@ -347,9 +347,12 @@ Build and run the desktop app, then point it at the server in `~/.nexus/config.y
 
 ```yaml
 server:
-  url: "https://<host>.ts.net:8444"              # the server's tailscale-serve URL (MagicDNS name)
-  token: "<the-same-token>"                        # literal — the launcher does not expand ${ENV}
+  url: https://<host>.ts.net:8444    # the server's tailscale-serve URL (MagicDNS name)
+  token: <the-same-token>            # literal — the launcher does not expand ${ENV}
 ```
+
+> Prefer **unquoted** values here — these two are read by the desktop launcher (a light
+> line-scanner, not a full YAML parser). Surrounding quotes are tolerated, but plain is cleanest.
 
 Restart the app; it boots as a thin client (no local backend/daemon/models, UI pointed at the
 server). The **glasses** point at the gateway URL with the token as a query param

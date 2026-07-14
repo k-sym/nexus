@@ -95,6 +95,19 @@ const DEFAULT_BACKEND_URL: &str = "http://127.0.0.1:4173";
 const BACKEND_HEALTH: &str = "http://127.0.0.1:4173/api/health";
 const FRONTEND_URL: &str = "http://localhost:5173/";
 
+/// Strip one layer of matching surrounding quotes. Users commonly quote
+/// `server.url` / `server.token` (and `daemon_url`) in YAML; this launcher's
+/// light scanner would otherwise keep the quotes and inject a broken value
+/// (malformed API base / a token that never matches).
+fn unquote(s: &str) -> &str {
+    let b = s.as_bytes();
+    if b.len() >= 2 && (b[0] == b'"' || b[0] == b'\'') && b[b.len() - 1] == b[0] {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
+}
+
 /// Extract `daemon_url:` from the (YAML) config text via a light line-scan —
 /// deliberately avoids pulling a YAML crate into the launcher for one string.
 /// Takes the first whitespace-delimited token so a trailing comment is ignored.
@@ -102,7 +115,7 @@ fn parse_daemon_url(config_text: &str) -> Option<String> {
     for line in config_text.lines() {
         if let Some(rest) = line.trim_start().strip_prefix("daemon_url:") {
             if let Some(tok) = rest.split_whitespace().next() {
-                return Some(tok.to_string());
+                return Some(unquote(tok).to_string());
             }
         }
     }
@@ -167,7 +180,7 @@ fn parse_nested_value(config_text: &str, section: &str, key: &str) -> Option<Str
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix(&key_prefix) {
-            return rest.split_whitespace().next().map(|t| t.to_string());
+            return rest.split_whitespace().next().map(|t| unquote(t).to_string());
         }
     }
     None
@@ -505,6 +518,23 @@ mod tests {
         assert_eq!(parse_nested_value(CFG, "server", "token").as_deref(), Some("server-secret"));
         // Not confused by gateway.token appearing later.
         assert_eq!(parse_nested_value(CFG, "gateway", "token").as_deref(), Some("gateway-secret"));
+    }
+
+    #[test]
+    fn parse_strips_surrounding_quotes() {
+        // Users often quote these in YAML (and the README once showed them quoted);
+        // the launcher must not keep the quotes, else the injected value breaks.
+        let dq = "server:\n  url: \"https://baker-pro.example.ts.net:8444\"\n  token: \"deadbeef00\"\n";
+        assert_eq!(
+            parse_nested_value(dq, "server", "url").as_deref(),
+            Some("https://baker-pro.example.ts.net:8444"),
+        );
+        assert_eq!(parse_nested_value(dq, "server", "token").as_deref(), Some("deadbeef00"));
+        // Single quotes and daemon_url too.
+        let sq = "memory:\n  daemon_url: 'https://baker-pro.example.ts.net:8443'\n";
+        assert_eq!(parse_daemon_url(sq).as_deref(), Some("https://baker-pro.example.ts.net:8443"));
+        // Unquoted still works (no accidental stripping).
+        assert_eq!(parse_daemon_url("memory:\n  daemon_url: http://127.0.0.1:4100\n").as_deref(), Some("http://127.0.0.1:4100"));
     }
 
     #[test]
