@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime, buildResourceLoaderOptions, buildSessionExtensionFactories, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
 import { QuestionBroker } from '../pi/questions';
+import { ApprovalBroker } from '../pi/approvals';
 import { buildModelCatalog } from '../routes/pi';
 
 test('cwdSlug encodes repo paths safely', () => {
@@ -244,10 +245,13 @@ test('buildResourceLoaderOptions includes the Anthropic Messages bridge factory'
   assert.deepEqual(inputFactories, [customFactory], 'input extension array remains unchanged');
 });
 
-test('question extension factory is installed after the Anthropic bridge and before signal filtering', async () => {
-  const broker = new QuestionBroker();
+test('question and approval extensions install after the Anthropic bridge and before signal filtering', async () => {
+  const questions = new QuestionBroker();
+  const approvals = new ApprovalBroker();
   const signalFactory = () => {};
-  const sessionFactories = buildSessionExtensionFactories('thread-1', '/tmp/project', broker, () => signalFactory);
+  const sessionFactories = buildSessionExtensionFactories(
+    'thread-1', '/tmp/project', questions, approvals, () => false, () => signalFactory,
+  );
   const options = buildResourceLoaderOptions({
     cwd: '/tmp/project',
     agentDir: '/tmp/nexus-agent',
@@ -255,13 +259,19 @@ test('question extension factory is installed after the Anthropic bridge and bef
     extensionFactories: sessionFactories,
   });
 
-  assert.equal(options.extensionFactories?.length, 3);
+  // [0] Anthropic bridge (prepended), [1] question, [2] approval, [3] signal filter.
+  assert.equal(options.extensionFactories?.length, 4);
   let tool: any;
   await options.extensionFactories?.[1]?.({
     registerTool(value: unknown) { tool = value; },
   } as any);
   assert.equal(tool?.name, 'question');
-  assert.strictEqual(options.extensionFactories?.[2], signalFactory);
+  let approvalHandlerRegistered = false;
+  await options.extensionFactories?.[2]?.({
+    on(event: string) { if (event === 'tool_call') approvalHandlerRegistered = true; },
+  } as any);
+  assert.equal(approvalHandlerRegistered, true, 'approval extension registers a tool_call handler');
+  assert.strictEqual(options.extensionFactories?.[3], signalFactory);
 });
 
 test('PiRuntime.findModel exposes model input capabilities', () => {

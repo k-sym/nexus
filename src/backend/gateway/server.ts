@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs';
 import type { ServerResponse } from 'node:http';
 import type { PiRuntime } from '../pi/runtime.js';
 import { buildDetail, buildSessions, resolveSession, type Scope } from './sessions.js';
-import { questionToApproval, translateGlassesAnswer } from './mappers.js';
+import { questionToApproval, toolCallToApproval, translateGlassesAnswer } from './mappers.js';
 import type { Approval, SseEvent } from './types.js';
 
 interface Db {
@@ -83,8 +83,13 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
 
   const cwdForThread = (threadId: string): string => resolveSession(db, threadId)?.cwd ?? '';
 
-  const currentApprovals = (): Approval[] =>
-    pi.questions.listPending().map((view) => questionToApproval(view, cwdForThread(view.threadId)));
+  // Both brokers feed the glasses' one approval queue: structured questions as
+  // `kind:'question'`, supervised tool-gates as `kind:'approval'`. Their ids
+  // (tool call ids) don't collide, so a decision routes by which broker owns it.
+  const currentApprovals = (): Approval[] => [
+    ...pi.questions.listPending().map((view) => questionToApproval(view, cwdForThread(view.threadId))),
+    ...pi.approvals.listPending().map((view) => toolCallToApproval(view)),
+  ];
 
   const broadcast = (event: SseEvent): void => {
     const frame = `data: ${JSON.stringify(event)}\n\n`;
@@ -127,6 +132,17 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
     }
   });
 
+  // Same push wiring for supervised tool-gates: a gate lights the session up the
+  // instant it parks and clears it the instant it resolves (allow/deny/timeout).
+  const unsubscribeApprovals = pi.approvals.subscribe((event) => {
+    if (sseClients.size === 0) return;
+    if (event.type === 'pending') {
+      broadcast({ type: 'pending', approval: toolCallToApproval(event.view) });
+    } else {
+      broadcast({ type: 'resolved', id: event.toolCallId, action: '', reason: '' });
+    }
+  });
+
   const heartbeatTimer = setInterval(() => {
     for (const res of sseClients) {
       try {
@@ -155,11 +171,32 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
   app.get('/api/health', async () => ({
     ok: true,
     armed,
-    pending: pi.questions.listPending().length,
+    pending: pi.questions.listPending().length + pi.approvals.listPending().length,
     dev: !config.token,
   }));
 
-  app.get('/api/state', async () => ({ armed, steerFocus, pending: currentApprovals() }));
+  app.get('/api/state', async () => ({ armed, steerFocus, pending: currentApprovals(), supervised: pi.listSupervised() }));
+
+  // Toggle the tool-permission "Supervise" gate for a chat session. Per-session,
+  // off by default; when on, that session's tool calls park as `kind:'approval'`
+  // gates until allowed/denied. Resolving a chat session id → thread id via the
+  // DB (assistant sessions have no interactive pause, so they can't be gated).
+  app.post('/api/supervise', async (request, reply) => {
+    const body = (request.body ?? {}) as { session_id?: string; supervised?: boolean };
+    const sessionId = typeof body.session_id === 'string' ? body.session_id.trim() : '';
+    if (!sessionId) {
+      reply.code(400);
+      return { error: 'session_id required' };
+    }
+    const resolved = resolveSession(db, sessionId);
+    if (!resolved || resolved.kind !== 'chat') {
+      reply.code(404);
+      return { error: 'unknown chat session' };
+    }
+    const on = body.supervised !== false;
+    pi.setSupervised(resolved.threadId, on);
+    return { ok: true, session_id: sessionId, supervised: on };
+  });
 
   app.get('/api/sessions', async (request) => {
     const scope = scopeFromQuery(request.query as Record<string, unknown>);
@@ -193,6 +230,22 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
   app.post('/api/approvals/:id/decision', async (request, reply) => {
     const { id: toolCallId } = request.params as { id: string };
     const body = (request.body ?? {}) as { action?: string; answers?: Record<string, string>; reason?: string };
+
+    // A supervised tool-gate? Route allow/deny straight to the ApprovalBroker.
+    // (Its ids are tool call ids, disjoint from the question tool's, so this
+    // only matches real tool-gates.) `answer` is treated as `allow` defensively.
+    const gate = pi.approvals.listPending().find((v) => v.toolCallId === toolCallId);
+    if (gate) {
+      const action = body.action === 'deny' ? 'deny' : 'allow';
+      const result = pi.approvals.decide(gate.threadId, toolCallId, action, body.reason);
+      if (!result.ok) {
+        reply.code(result.status);
+        return { error: result.error };
+      }
+      // decide() drives ApprovalBroker.remove → resolved is pushed to SSE clients.
+      return { ok: true };
+    }
+
     const pending = pi.questions.listPending().find((v) => v.toolCallId === toolCallId);
     if (!pending) {
       reply.code(404);
@@ -296,6 +349,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
 
   const close = async (): Promise<void> => {
     unsubscribeQuestions();
+    unsubscribeApprovals();
     clearInterval(heartbeatTimer);
     if (disarmTimer) clearTimeout(disarmTimer);
     for (const res of sseClients) {

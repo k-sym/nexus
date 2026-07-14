@@ -4,6 +4,7 @@
  * Kept side-effect-free so they can be unit-tested without a running backend.
  */
 import type { QuestionRequest, QuestionAnswer, PendingQuestionView } from '../pi/questions.js';
+import type { PendingApprovalView } from '../pi/approvals.js';
 import type { Approval, TranscriptEvent, Attention } from './types.js';
 
 /** Coerce a pi timestamp (ISO string or epoch ms) to epoch ms. */
@@ -90,6 +91,43 @@ export function questionToApproval(view: PendingQuestionView, cwd: string): Appr
     },
     cwd,
     title: questionTitle(view.request),
+    createdAt: view.requestedAt,
+    decision: null,
+  };
+}
+
+/** Build a short, human "what" line for a tool-gate approval from the tool name
+ *  and a best-effort summary of its most telling argument (command, path, …). */
+function approvalTitle(toolName: string, input: unknown): string {
+  const args = input && typeof input === 'object' && !Array.isArray(input)
+    ? input as Record<string, unknown>
+    : undefined;
+  const detailKeys = ['command', 'cmd', 'file_path', 'path', 'filePath', 'pattern', 'query', 'url'];
+  let detail = '';
+  if (args) {
+    for (const key of detailKeys) {
+      const value = args[key];
+      if (typeof value === 'string' && value.trim()) { detail = value.trim(); break; }
+    }
+  }
+  return detail ? `${toolName}: ${truncate(detail, 60)}` : toolName;
+}
+
+/**
+ * A pending Nexus tool-gate → a glasses `Approval{kind:'approval'}`. The glasses
+ * render the what·where·then and answer by posting `{ action:'allow'|'deny' }`
+ * back to `/api/approvals/:id/decision`. The view already carries the cwd, so —
+ * unlike a question approval — no thread→cwd lookup is needed.
+ */
+export function toolCallToApproval(view: PendingApprovalView): Approval {
+  return {
+    id: view.toolCallId,
+    kind: 'approval',
+    session_id: view.threadId,
+    tool_name: view.toolName,
+    tool_input: view.input,
+    cwd: view.cwd,
+    title: approvalTitle(view.toolName, view.input),
     createdAt: view.requestedAt,
     decision: null,
   };

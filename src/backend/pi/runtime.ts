@@ -19,6 +19,7 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import anthropicMessagesBridge from '@blackbelt-technology/pi-anthropic-messages';
 import { QuestionBroker, createQuestionExtension } from './questions.js';
+import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { defaultLocalModelsFile } from './local-models.js';
 
@@ -90,9 +91,15 @@ export function buildSessionExtensionFactories(
   threadId: string,
   cwd: string,
   questions: QuestionBroker,
+  approvals: ApprovalBroker,
+  isSupervised: () => boolean,
   signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
 ): ExtensionFactory[] {
-  return [createQuestionExtension(threadId, questions), signalFactoryBuilder(cwd)];
+  return [
+    createQuestionExtension(threadId, questions),
+    createApprovalExtension(threadId, cwd, approvals, isSupervised),
+    signalFactoryBuilder(cwd),
+  ];
 }
 
 function mostRecentlyModifiedSessionForThread<T extends SessionInfoLike>(
@@ -110,9 +117,16 @@ export class PiRuntime {
   /** Internal path config. Exposed read-only for the orchestrator's headless sessions. */
   readonly paths: Required<PiRuntimePaths>;
   readonly questions = new QuestionBroker();
+  /** Tool-permission "Supervise" gate. Pending tool calls for supervised chat
+   *  sessions park here until the user allows/denies from the glasses. */
+  readonly approvals = new ApprovalBroker();
   private readonly sessions = new Map<string, AgentSession>();
   private readonly sessionPromises = new Map<string, Promise<AgentSession>>();
   private readonly sessionModels = new Map<string, string>();
+  /** Thread ids with Supervise enabled. Per-session, in-memory, off by default
+   *  (so a restart never leaves a session silently gating). Toggled by the
+   *  gateway `POST /api/supervise`; read live at each tool call. */
+  private readonly supervised = new Set<string>();
 
   constructor(paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths()) {
     const defaults = defaultPiRuntimePaths();
@@ -140,6 +154,28 @@ export class PiRuntime {
    */
   hasSession(threadId: string, cwd: string): boolean {
     return this.sessions.has(`${threadId}::${cwd}`);
+  }
+
+  /** Enable or disable Supervise (the tool-permission gate) for a chat thread. */
+  setSupervised(threadId: string, on: boolean): void {
+    if (on) this.supervised.add(threadId);
+    else {
+      this.supervised.delete(threadId);
+      // Release any gates already parked for this thread so a mid-run "stop
+      // supervising" doesn't strand a tool call. Denied (default-safe) — the
+      // tool won't run, but the session is no longer wedged.
+      this.approvals.cancelThread(threadId, 'Supervise disabled');
+    }
+  }
+
+  /** Whether Supervise is enabled for a chat thread. */
+  isSupervised(threadId: string): boolean {
+    return this.supervised.has(threadId);
+  }
+
+  /** Thread ids currently supervised (for gateway state reporting). */
+  listSupervised(): string[] {
+    return Array.from(this.supervised);
   }
 
   /**
@@ -213,7 +249,9 @@ export class PiRuntime {
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
-      extensionFactories: buildSessionExtensionFactories(threadId, cwd, this.questions),
+      extensionFactories: buildSessionExtensionFactories(
+        threadId, cwd, this.questions, this.approvals, () => this.isSupervised(threadId),
+      ),
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({
@@ -239,7 +277,9 @@ export class PiRuntime {
     this.sessions.delete(key);
     this.sessionPromises.delete(key);
     this.sessionModels.delete(key);
+    this.supervised.delete(threadId);
     this.questions.cancelThread(threadId, 'Session dropped');
+    this.approvals.cancelThread(threadId, 'Session dropped');
     const sessionDir = this.sessionDirFor(cwd);
     try {
       for (const name of readdirSync(sessionDir)) {
