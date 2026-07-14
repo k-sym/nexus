@@ -24,6 +24,7 @@ import MemoryRail from './components/MemoryRail';
 import ActivityConsole from './components/ActivityConsole';
 import DiffReviewPanel from './components/DiffReviewPanel';
 import type { ActivityResponse, OperationKind, OperationStatus, ReviewActionResult } from './api';
+import { loadViewState, saveViewState } from './viewState';
 
 type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'settings';
 
@@ -72,9 +73,9 @@ export default function App() {
 
   // --- navigation state -----------------------------------------------------
   const [globalView, setGlobalView] = useState<GlobalView | null>('dashboard');
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
-  const [subView, setSubView] = useState<SubView>('kanban');
-  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(() => loadViewState().activeProjectId ?? null);
+  const [subView, setSubView] = useState<SubView>(() => loadViewState().subView ?? 'kanban');
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(() => loadViewState().activeThreadId ?? null);
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(() => new Set());
   const [waitingSessionIds, setWaitingSessionIds] = useState<Set<string>>(() => new Set());
@@ -167,6 +168,28 @@ export default function App() {
   useEffect(() => {
     refreshProjects();
   }, [refreshProjects]);
+
+  // Remember the last-open project / view / thread so a relaunch reopens where
+  // you left off (the fix for "renamed session shows New Session on restart" —
+  // the rename persists server-side; this restores the client's selection).
+  useEffect(() => {
+    saveViewState({ activeProjectId, subView, activeThreadId });
+  }, [activeProjectId, subView, activeThreadId]);
+
+  // Drop a restored selection whose project/thread no longer exists (e.g. deleted
+  // on another device) once the real lists load, so we don't wedge on a ghost id.
+  useEffect(() => {
+    if (projects.length && activeProjectId && !projects.some((p) => p.id === activeProjectId)) {
+      setActiveProjectId(null);
+      setActiveThreadId(null);
+    }
+  }, [projects, activeProjectId]);
+
+  useEffect(() => {
+    if (activeThreadId && threads.length && !threads.some((t) => t.id === activeThreadId)) {
+      setActiveThreadId(null);
+    }
+  }, [threads, activeThreadId]);
 
   useEffect(() => {
     if (activeProjectId) {
