@@ -359,6 +359,26 @@ server). The **glasses** point at the gateway URL with the token as a query para
 (`https://<host>.ts.net:8900/?token=<token>`), since their event stream can't send an
 `Authorization` header.
 
+### Where the work runs
+
+**Everything runs on the server.** Agent sessions execute inside the backend process, so when a model
+edits a file, runs a command, or makes a git commit, it happens on **the server's filesystem** — in
+the project's `repo_path`, a directory *on the server*. Clients (a laptop, the glasses) are thin
+remote controls: they send prompts and stream back diffs/output, but never touch files themselves.
+
+Consequences worth internalizing:
+
+- **Projects are the server's repos.** A project's `repo_path` must exist on the server — clone the
+  repo there. You *steer* from a client, but the *work* lands on the server.
+- **Git happens on the server.** Commits/branches are made in the server's checkout; sync them to a
+  client the normal way (push from the server → `git pull` on the client).
+- **The agent uses the server's environment** — its installed CLIs (`gh`, `claude`, `codex`, `git`),
+  its `PATH`, and its credentials. A session that needs a particular tool or login needs it on the
+  *server*, not the client.
+- You **can't** point a session at a repo that exists only on a client — the agent only sees the
+  server's disk. Put the repo on the server, or run a full-stack Nexus locally (empty `server.url`)
+  for that project.
+
 ### Verify
 
 ```bash
