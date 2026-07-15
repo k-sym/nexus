@@ -127,29 +127,52 @@ function configuredAssistant(load: () => NexusConfig) {
   return { url, key };
 }
 
-const HERMES_ASSISTANT_SOURCE = 'api_server';
-const HERMES_ASSISTANT_SOURCES = new Set([HERMES_ASSISTANT_SOURCE]);
+// Hermes tags every session with a `source`. The Assistant rail surfaces
+// human-driven sessions — those started from the API server (Nexus's own path),
+// the TUI, or the CLI — and hides machine sources (cron, job, scheduled) and
+// platform bridges (telegram, dashboard) that must not appear as adoptable chats.
+//
+// The api_server /api/sessions endpoint filters by a single `source` per request
+// (it has no multi-source/exclude support and would otherwise let ~hundreds of
+// cron rows crowd the human sources out of any capped window), so the list
+// handler fetches one query per source below and merges the results.
+const HERMES_ASSISTANT_SOURCES = ['api_server', 'tui', 'cli'] as const;
+const HERMES_ASSISTANT_SOURCE_SET = new Set<string>(HERMES_ASSISTANT_SOURCES);
 
-// Accept only api_server sessions; this rejects tui, cron, job, scheduled, cli,
-// dashboard, and source-less rows that must not appear in the Assistant rail.
+// Reject source-less rows and any source outside the allow-list above.
 function isAdoptableRemoteSource(source: string | undefined): boolean {
-  return source !== undefined && HERMES_ASSISTANT_SOURCES.has(source);
+  return source !== undefined && HERMES_ASSISTANT_SOURCE_SET.has(source);
 }
 
 function remoteSyntheticId(remoteSessionId: string): string {
   return `remote:${remoteSessionId}`;
 }
 
+// Hermes api_server rows use epoch-second timestamps; the rail sorts and renders
+// on ISO strings. Tolerate ISO input too (other Hermes surfaces) and bad values.
+function epochToIso(value: number | string | undefined | null): string | undefined {
+  if (typeof value === 'string') return value.trim() || undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  const ms = value < 1e12 ? value * 1000 : value; // seconds vs. already-ms
+  const iso = new Date(ms).toISOString();
+  return Number.isNaN(Date.parse(iso)) ? undefined : iso;
+}
+
 function publicRemoteSession(remote: HermesListedSession) {
+  // api_server rows carry started_at/last_active (epoch) and often a null title,
+  // so fall back through preview → generic label, and derive timestamps from the
+  // epoch fields when the ISO created_at/updated_at aren't present.
+  const updatedAt = epochToIso(remote.updated_at ?? remote.last_active ?? remote.started_at);
+  const createdAt = epochToIso(remote.created_at ?? remote.started_at);
   return {
     id: remoteSyntheticId(remote.id),
-    title: remote.title?.trim() || 'Remote Hermes Session',
+    title: remote.title?.trim() || remote.preview?.trim() || 'Remote Hermes Session',
     remote_session_id: remote.id,
     status: 'remote',
     remoteOnly: true,
     source: remote.source ?? null,
-    created_at: remote.created_at,
-    updated_at: remote.updated_at,
+    created_at: createdAt ?? null,
+    updated_at: updatedAt ?? null,
     archived_at: null,
     latestRun: null,
   };
@@ -652,27 +675,28 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const remoteRows: ReturnType<typeof publicRemoteSession>[] = [];
       const hermes = client();
       if (hermes) {
-        try {
-          const claimed = new Set<string>();
-          for (const session of localSessions) {
-            claimed.add(session.id);
-            if (session.remote_session_id) claimed.add(session.remote_session_id);
-          }
-          const { sessions: remoteSessions } = await hermes.listSessions({
-            limit: 100,
-            offset: 0,
-            source: HERMES_ASSISTANT_SOURCE,
-            includeChildren: false,
-          });
-          for (const remote of remoteSessions) {
-            if (!remote?.id) continue;
-            if (!isAdoptableRemoteSource(remote.source)) continue;
-            if (claimed.has(remote.id) || claimed.has(remoteSyntheticId(remote.id))) continue;
-            claimed.add(remote.id);
-            remoteRows.push(publicRemoteSession(remote));
-          }
-        } catch {
-          // Hermes listing unavailable — keep rendering local sessions only.
+        const claimed = new Set<string>();
+        for (const session of localSessions) {
+          claimed.add(session.id);
+          if (session.remote_session_id) claimed.add(session.remote_session_id);
+        }
+        // One request per adoptable source (the endpoint filters a single source
+        // at a time). Each fetch is isolated so one failing/unavailable source
+        // still lets the others render; total failure just leaves locals.
+        const perSource = await Promise.all(
+          HERMES_ASSISTANT_SOURCES.map((source) =>
+            hermes
+              .listSessions({ limit: 50, offset: 0, source, includeChildren: false })
+              .then((result) => result.sessions)
+              .catch(() => [] as HermesListedSession[]),
+          ),
+        );
+        for (const remote of perSource.flat()) {
+          if (!remote?.id) continue;
+          if (!isAdoptableRemoteSource(remote.source)) continue;
+          if (claimed.has(remote.id) || claimed.has(remoteSyntheticId(remote.id))) continue;
+          claimed.add(remote.id);
+          remoteRows.push(publicRemoteSession(remote));
         }
       }
 

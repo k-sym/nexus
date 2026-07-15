@@ -69,6 +69,12 @@ export interface HermesSessionChatResult {
 export interface HermesListSessionsInput {
   limit?: number;
   offset?: number;
+  /**
+   * Restrict to a single source class (e.g. 'tui'). The api_server
+   * /api/sessions endpoint matches one source per request and has no
+   * multi-source or exclude filter, so callers wanting several sources fetch
+   * one per source and merge.
+   */
   source?: string;
   includeChildren?: boolean;
 }
@@ -81,6 +87,14 @@ export interface HermesListedSession {
   updated_at?: string;
   archived_at?: string | null;
   end_reason?: string | null;
+  // The api_server /api/sessions projection carries epoch-second timestamps
+  // (not ISO created_at/updated_at), a first-user-message preview, and often a
+  // null title. publicRemoteSession() maps these onto the rail's shape.
+  started_at?: number;
+  last_active?: number;
+  ended_at?: number | null;
+  preview?: string;
+  message_count?: number;
 }
 
 export interface HermesListSessionsResult {

@@ -929,18 +929,34 @@ test('POST /api/assistant/messages/stream returns a clear error when assistant c
   }
 });
 
-test('Assistant session list includes filtered remote Hermes API sessions only', async () => {
-  const fetchImpl: HermesFetch = async (url, init) => {
-    if (String(url).includes('/api/sessions?')) {
-      assert.match(String(url), /source=api_server/);
-      return new Response(JSON.stringify({
-        sessions: [
-          { id: 'remote-api-1', title: 'Remote API session', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' },
-          { id: 'remote-tui-1', title: 'Remote TUI session', source: 'tui', updated_at: '2026-07-02T10:30:00.000Z' },
-          { id: 'remote-cron-1', title: 'Cron work', source: 'cron', updated_at: '2026-07-02T09:00:00.000Z' },
-          { id: 'remote-unknown-1', title: 'Cron work without source metadata', updated_at: '2026-07-02T11:00:00.000Z' },
-        ],
-      }), { status: 200, headers: { 'content-type': 'application/json' } });
+test('Assistant session list fetches remote api_server, tui, and cli sources and merges them', async () => {
+  // The api_server /api/sessions endpoint filters one source per request and
+  // returns epoch timestamps with occasionally-null titles; the route issues one
+  // query per adoptable source and maps the rows onto the rail.
+  const requestedSources: string[] = [];
+  const rowsBySource: Record<string, any[]> = {
+    api_server: [
+      { id: 'remote-api-1', title: 'Remote API session', source: 'api_server', started_at: 1784120000, last_active: 1784120000 },
+    ],
+    tui: [
+      // null title exercises the preview fallback; newest last_active sorts first
+      { id: 'remote-tui-1', title: null, source: 'tui', preview: 'How do I clear sessions??', started_at: 1784125000, last_active: 1784126000 },
+    ],
+    cli: [
+      { id: 'remote-cli-1', title: 'Remote CLI session', source: 'cli', started_at: 1784123000, last_active: 1784123500 },
+    ],
+  };
+  const fetchImpl: HermesFetch = async (url) => {
+    const parsed = new URL(String(url), 'http://hermes.local');
+    if (parsed.pathname === '/api/sessions') {
+      const source = parsed.searchParams.get('source') ?? '';
+      // The widened filter must never fall back to a cron-flooding bare query.
+      assert.notEqual(source, '');
+      requestedSources.push(source);
+      return new Response(JSON.stringify({ object: 'list', data: rowsBySource[source] ?? [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
     }
     throw new Error(`unexpected Hermes request ${String(url)}`);
   };
@@ -948,19 +964,44 @@ test('Assistant session list includes filtered remote Hermes API sessions only',
   try {
     const list = await app.inject({ method: 'GET', url: '/api/assistant/sessions' });
     assert.equal(list.statusCode, 200);
+
+    // Exactly one query per adoptable source, and none for cron.
+    assert.deepEqual([...requestedSources].sort(), ['api_server', 'cli', 'tui']);
+
+    // Merged newest-first by last_active; null title falls back to preview.
     assert.deepEqual(list.json().sessions.map((session: any) => ({
       id: session.id,
       title: session.title,
       remoteOnly: session.remoteOnly,
       remote_session_id: session.remote_session_id,
+      source: session.source,
     })), [
+      {
+        id: 'remote:remote-tui-1',
+        title: 'How do I clear sessions??',
+        remoteOnly: true,
+        remote_session_id: 'remote-tui-1',
+        source: 'tui',
+      },
+      {
+        id: 'remote:remote-cli-1',
+        title: 'Remote CLI session',
+        remoteOnly: true,
+        remote_session_id: 'remote-cli-1',
+        source: 'cli',
+      },
       {
         id: 'remote:remote-api-1',
         title: 'Remote API session',
         remoteOnly: true,
         remote_session_id: 'remote-api-1',
+        source: 'api_server',
       },
     ]);
+
+    // Epoch timestamps become ISO strings the rail can sort/render.
+    const tui = list.json().sessions.find((s: any) => s.source === 'tui');
+    assert.equal(tui.updated_at, new Date(1784126000 * 1000).toISOString());
   } finally {
     await cleanup(app, db, dir);
   }
