@@ -426,6 +426,90 @@ If you'd rather run a single OpenAI-compatible server (omlx, LM Studio, …) for
 not just `/v1/chat/completions`. Without a working embeddings + rerank endpoint, recall falls back to
 FTS-only and `deep_index` jobs dead-letter.
 
+### Example: consolidated single-box setup (32 GB Apple Silicon)
+
+On a memory-constrained host (e.g. a 32 GB M1 Pro) you can't keep a big model resident **and** the
+embed+rerank pair **and** leave room for a large context — the weights alone crowd the Metal
+`iogpu.wired_limit` (~21–22 GB by default on 32 GB). The move is to run **one small, non-vision
+instruct model** that serves both the Nexus local chat *and* the daemon's HyDE/KG gen calls, and to
+let vision live on a *client* (a laptop with an mmproj model) rather than on the server. Small is the
+right call anyway: the gen role only ever uses short contexts; agentic/cron jobs that gather info need
+the internet (route those to a cloud model when online); and the leftover RAM lets the coding context
+go large. Embeddings and reranking stay separate (they need `--embedding` / `--reranking` mode — a
+chat server can't also serve those).
+
+This is the setup on `baker-pro` (the Tailscale server host). The whole model stack stays in the 4000s
+(`:4001` gen/chat, `:4002` embed, `:4003` rerank):
+
+| Port | Serves | Model | Resident |
+|---|---|---|---|
+| 4001 | Nexus local chat (`models.local`) **+** daemon gen (`memory.models.gen_url`) — HyDE, KG extraction, archive summaries, offline coding | `Qwen3.5-9B` Q4_K_M | ~5.3 GB + KV |
+| 4002 | embeddings | `nomic-embed-text-v1.5` f16 | ~0.3 GB |
+| 4003 | reranking | `qwen3-reranker-0.6b` q8_0 | ~0.6 GB |
+
+Qwen3.5-9B is a hybrid-thinking model, so the gen role **must** run `--reasoning off` (alias
+`-rea off`) — otherwise it spends its budget thinking and KG extraction returns empty. `--parallel 1`
+gives one slot the full context (instead of the default 4-way split, which would quarter it). Size the
+context to the gen role's real need — `--ctx-size 32768` comfortably covers HyDE/KG and archive
+summaries. The weights are small enough that you *could* go much larger (even 128 K ≈ ~18 GB total,
+under a 24 GB wired limit) if you also drove local coding through it, but reserving that KV is wasteful
+for a memory-focused model.
+
+```bash
+# 4001 — daily runner: local chat + memory gen (no vision)
+llama-server --model ~/models/Qwen3.5-9B-Q4_K_M.gguf --alias Qwen3.5-9B-Q4_K_M \
+  --port 4001 --n-gpu-layers 99 --parallel 1 --ctx-size 32768 \
+  --flash-attn on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning off \
+  --temp 0.3 --top-p 0.8 --top-k 20 --min-p 0.0 --jinja
+
+# 4002 — embeddings   (--embedding --pooling mean, ubatch 1024 so long chunks don't 501)
+# 4003 — reranking    (--reranking)
+#   ...as in the reference commands above.
+```
+
+Wire both consumers to `:4001` in `~/.nexus/config.yaml`:
+
+```yaml
+models:
+  local:
+    base_url: "http://127.0.0.1:4001/v1"
+    chat_model: "Qwen3.5-9B-Q4_K_M"
+    supports_images: false               # no mmproj here — vision lives on a client
+memory:
+  models:
+    gen_url: "http://127.0.0.1:4001/v1"  # daily runner sits on the daemon's default gen port; whole stack stays in the 4000s
+    embed_url: "http://127.0.0.1:4002/v1"
+    rerank_url: "http://127.0.0.1:4003/v1"
+```
+
+**Keep the stack alive across reboots/crashes.** A bare `nohup` gets reaped when its launching session
+ends — supervise each `llama-server` with a user LaunchAgent instead, so it auto-restarts (same pattern
+as the Nexus backend/daemon). One plist per service, each `ProgramArguments` = `/opt/homebrew/bin/llama-server`
++ that service's flags (include `--alias <name>` so the model id matches `models.local.chat_model`),
+with `RunAtLoad` and `KeepAlive` both true. **Check for agents that already exist first**
+(`launchctl list | grep -i llama`) — a host may already supervise these under its own labels, and a
+second set racing for the same ports on boot is a nasty, non-deterministic failure:
+
+| Service | Label (this host) | Port |
+|---|---|---|
+| gen/chat model | `com.k-sym.llama-qwen9b` | 4001 |
+| embedder | `com.k-sym.llama-embed` | 4002 |
+| reranker | `com.k-sym.llama-reranker` | 4003 |
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.k-sym.llama-qwen9b.plist   # load + start
+launchctl kickstart -k gui/$(id -u)/com.k-sym.llama-qwen9b                              # restart in place
+launchctl bootout   gui/$(id -u)/com.k-sym.llama-qwen9b                                 # stop + unload
+# to apply a plist *edit*: bootout, then bootstrap again — but not back-to-back
+# (a too-fast bootout→bootstrap races and fails with "5: Input/output error"; retry once).
+```
+
+Once these own `:400x`, don't also start the models in Barn (port clash) — Barn's `models.json` is then
+just a fallback reference. Raise the Metal wired limit for headroom and persist it with a boot-time
+`LaunchDaemon` running `sysctl iogpu.wired_limit_mb=24576`. After changing `config.yaml`, restart the
+memory daemon and
+backend so they re-read it.
+
 ---
 
 ## Configuration
