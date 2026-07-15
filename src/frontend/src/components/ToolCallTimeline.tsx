@@ -54,34 +54,40 @@ interface QuestionCardsProps {
   toolCalls: ToolCallInfo[];
   questionState?: Record<string, { submitting?: boolean; error?: string; result?: QuestionToolResult }>;
   onAnswerQuestion?: (toolCallId: string, answers: QuestionAnswer[]) => Promise<void>;
+  /** Which question tools to render, by resolution state. A question is
+   *  "pending" while it still awaits an answer (renders the interactive form);
+   *  once answered — or no longer answerable — it is "resolved". Splitting the
+   *  two lets a caller keep a pending ask pinned to the bottom of the bubble
+   *  (next to the reply box) while an answered one renders inline where it was
+   *  asked, rather than stranded below the work that followed (issue #109). */
+  only?: 'all' | 'resolved' | 'pending';
 }
 
-/** Render only the question tool calls as QuestionCards. Intended to be placed
- *  at the bottom of a chat bubble, after the assistant's prelude text. */
-export function QuestionCards({ toolCalls, questionState, onAnswerQuestion }: QuestionCardsProps) {
-  const questionTools = toolCalls.filter(isQuestionTool);
-  if (questionTools.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-2 mt-2">
-      {questionTools.map((tc) => {
-        const request = normalizeQuestionRequest(tc.args);
-        if (!request) return null;
-        const state = questionState?.[tc.id];
-        const result = state?.result ?? parseQuestionResult(tc.details) ?? parseQuestionResult(tc.result);
-        return (
-          <QuestionCard
-            key={tc.id}
-            request={request}
-            answeredResult={result ?? undefined}
-            unavailable={tc.status === 'interrupted' || tc.status === 'cancelled' || tc.status === 'failed' || tc.status === 'error' || ((tc.status === 'completed' || tc.status === 'succeeded') && !result)}
-            submitting={state?.submitting}
-            error={state?.error}
-            onSubmit={(answers) => onAnswerQuestion?.(tc.id, answers) ?? Promise.resolve()}
-          />
-        );
-      })}
-    </div>
-  );
+/** Render the question tool calls as QuestionCards. */
+export function QuestionCards({ toolCalls, questionState, onAnswerQuestion, only = 'all' }: QuestionCardsProps) {
+  const cards = toolCalls.filter(isQuestionTool).map((tc) => {
+    const request = normalizeQuestionRequest(tc.args);
+    if (!request) return null;
+    const state = questionState?.[tc.id];
+    const result = state?.result ?? parseQuestionResult(tc.details) ?? parseQuestionResult(tc.result);
+    const unavailable = tc.status === 'interrupted' || tc.status === 'cancelled' || tc.status === 'failed' || tc.status === 'error' || ((tc.status === 'completed' || tc.status === 'succeeded') && !result);
+    const pending = !result && !unavailable;
+    if (only === 'pending' && !pending) return null;
+    if (only === 'resolved' && pending) return null;
+    return (
+      <QuestionCard
+        key={tc.id}
+        request={request}
+        answeredResult={result ?? undefined}
+        unavailable={unavailable}
+        submitting={state?.submitting}
+        error={state?.error}
+        onSubmit={(answers) => onAnswerQuestion?.(tc.id, answers) ?? Promise.resolve()}
+      />
+    );
+  }).filter(Boolean);
+  if (cards.length === 0) return null;
+  return <div className="flex flex-col gap-2 mt-2">{cards}</div>;
 }
 
 function ToolCallBlock({

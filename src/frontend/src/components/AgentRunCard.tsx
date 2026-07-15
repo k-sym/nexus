@@ -51,6 +51,16 @@ export function AgentRunCard({
 
   return (
     <section className="agent-run-card w-full max-w-[88%] space-y-2 overflow-hidden rounded-xl border border-subtle surface-glass px-3 py-2 text-primary">
+      {/* Answered questions render inline at the top — where they were asked,
+          before the work that followed — rather than stranded below it. The
+          run's text/tools accumulate into single blobs so we can't interleave
+          precisely, but the ask always precedes that output (issue #109). */}
+      <QuestionCards
+        toolCalls={run.tools}
+        questionState={questionState}
+        onAnswerQuestion={onAnswerQuestion}
+        only="resolved"
+      />
       {/* Running: show live tool activity first, then the emerging text. Finished:
           lead with the model's text and tuck tool detail into the summary below
           (issue: keep model output on screen; header removed). */}
@@ -70,12 +80,13 @@ export function AgentRunCard({
       {run.error && run.status !== 'completed' && (
         <p className="text-xs text-red-300" role="alert">{run.error}</p>
       )}
-      {/* Question cards render last so the ask sits at the bottom of the bubble
-          next to where the user replies (issue #109). */}
+      {/* A still-pending ask stays at the bottom of the bubble, next to where
+          the user replies (issue #109). */}
       <QuestionCards
         toolCalls={run.tools}
         questionState={questionState}
         onAnswerQuestion={onAnswerQuestion}
+        only="pending"
       />
     </section>
   );
