@@ -62,7 +62,7 @@ describe('AgentRunCard', () => {
     expect(screen.getByRole('button', { name: /tool call/ })).toHaveTextContent('Interrupted');
   });
 
-  it('places the question card after the assistant prelude text, at the bottom (issue #109)', () => {
+  it('keeps a still-pending question after the assistant prelude text, at the bottom (issue #109)', () => {
     render(<AgentRunCard
       run={run({
         status: 'completed', phase: 'finalizing', completedAt: Date.now(),
@@ -79,6 +79,27 @@ describe('AgentRunCard', () => {
     const prelude = screen.getByText('Before I continue, which option do you prefer?');
     const questionPrompt = screen.getByText('Which option do you prefer?');
     expect(prelude.compareDocumentPosition(questionPrompt)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it('moves an answered question inline above the work that followed it (issue #109 follow-up)', () => {
+    render(<AgentRunCard
+      run={run({
+        status: 'completed', phase: 'finalizing', completedAt: Date.now(),
+        tools: [
+          { id: 'q1', name: 'question', args: {
+            questions: [{ id: 'q', header: 'Choose', question: 'Which option do you prefer?',
+              multiple: false, allowOther: false, options: [{ value: 'a', label: 'A' }, { value: 'b', label: 'B' }] }],
+          }, status: 'succeeded', queuedAt: 1, completedAt: 2, partialOutput: '' },
+        ],
+      })}
+      content="Here is what I did after you answered."
+      thinking="" detailsExpanded={false}
+      questionState={{ q1: { result: { status: 'answered', toolCallId: 'q1', answers: [{ questionId: 'q', selected: ['a'] }] } } }}
+    />);
+    const answered = screen.getByText('Answered');
+    const content = screen.getByText('Here is what I did after you answered.');
+    // Answered card sits BEFORE the content the model produced afterward.
+    expect(answered.compareDocumentPosition(content)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
   it('renders generated file paths in run content as preview controls', () => {

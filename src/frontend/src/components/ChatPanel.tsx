@@ -909,6 +909,16 @@ function MessageBubble({
             expanded={detailsExpanded}
           />
         )}
+        {/* Answered questions render inline where they were asked (before the
+            tool work and prelude text), not pinned to the bottom (issue #109). */}
+        {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
+          <QuestionCards
+            toolCalls={msg.toolCalls as any}
+            questionState={questionState}
+            onAnswerQuestion={onAnswerQuestion}
+            only="resolved"
+          />
+        )}
         {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
           <div className="mb-2">
             <ToolCallTimeline
@@ -977,13 +987,14 @@ function MessageBubble({
             <div className={isUser ? 'whitespace-pre-wrap' : undefined}>
               <ChatMessageContent text={msg.content} onOpenPath={onOpenArtifact} linkifyPaths={!isUser} />
             </div>
-            {/* Native question tools render after the prelude text, at the
-                bottom of the bubble (issue #109). */}
+            {/* A still-pending native question stays after the prelude text, at
+                the bottom of the bubble next to the reply box (issue #109). */}
             {!isUser && msg.toolCalls && msg.toolCalls.length > 0 && (
               <QuestionCards
                 toolCalls={msg.toolCalls as any}
                 questionState={questionState}
                 onAnswerQuestion={onAnswerQuestion}
+                only="pending"
               />
             )}
           </>
