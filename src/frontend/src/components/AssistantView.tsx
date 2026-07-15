@@ -446,6 +446,15 @@ export default function AssistantView() {
   );
 }
 
+// Remote rows are adopted from Hermes. api_server sessions keep the plain
+// "Remote" tag; TUI/CLI sessions get a distinguishing label so it's clear they
+// originated outside Nexus.
+function remoteSourceLabel(source?: string | null): string {
+  if (source === 'tui') return 'TUI';
+  if (source === 'cli') return 'CLI';
+  return 'Remote';
+}
+
 function SessionRow({ session, selected, onSelect }: { session: AssistantSession; selected: boolean; onSelect: () => void }) {
   const active = session.status === 'running' || session.latestRun?.status === 'running';
   return (
@@ -463,7 +472,7 @@ function SessionRow({ session, selected, onSelect }: { session: AssistantSession
         <span className="text-sm font-medium truncate">{session.title}</span>
         {session.remoteOnly && (
           <span className="ml-auto rounded border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-faint shrink-0">
-            Remote
+            {remoteSourceLabel(session.source)}
           </span>
         )}
       </div>
