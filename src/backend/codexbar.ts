@@ -36,6 +36,7 @@ const USAGE_POLL_MS = 300_000;
 const OPENROUTER_TIMEOUT_MS = 4_000;
 const CODEX_TIMEOUT_MS = 4_000;
 const CLAUDE_TIMEOUT_MS = 4_000;
+const CODEXBAR_TIMEOUT_MS = 20_000;
 const execFileAsync = promisify(execFile);
 
 let cached: { expiresAt: number; stats: CodexBarStats } | null = null;
@@ -162,8 +163,11 @@ export function parseCodexBarUsage(provider: CodexBarProvider, stdout: string): 
   const row = firstObject(provider, payload);
   if (!row) return unavailable(provider, 'No provider stats returned');
 
-  const source = typeof row.source === 'string' ? row.source : undefined;
-  const sampledAt = typeof row.sampledAt === 'string' ? row.sampledAt : undefined;
+  const source = typeof row.source === 'string' ? `codexbar-${row.source}` : 'codexbar';
+  const usage = row.usage && typeof row.usage === 'object' ? row.usage as Record<string, any> : row;
+  const sampledAt = typeof row.sampledAt === 'string'
+    ? row.sampledAt
+    : typeof usage.updatedAt === 'string' ? usage.updatedAt : undefined;
   if (row.error) {
     const message = typeof row.error === 'string' ? row.error : row.error.message;
     return { ...unavailable(provider, message || 'CodexBar provider error'), source, sampledAt };
@@ -176,6 +180,27 @@ export function parseCodexBarUsage(provider: CodexBarProvider, stdout: string): 
       const prefix = currency.toUpperCase() === 'USD' ? '$' : `${currency.toUpperCase()} `;
       return { ok: true, provider, value: `${prefix}${balance.toFixed(2)}`, caption: 'credit balance', source, sampledAt };
     }
+  }
+
+  const primary = usage.primary && typeof usage.primary === 'object' ? usage.primary as Record<string, any> : null;
+  const secondary = usage.secondary && typeof usage.secondary === 'object' ? usage.secondary as Record<string, any> : null;
+  const session = primary
+    ? usageWindow(primary.usedPercent, primary.resetsAt, Number(primary.windowMinutes) * 60)
+    : null;
+  const weekly = secondary
+    ? usageWindow(secondary.usedPercent, secondary.resetsAt, Number(secondary.windowMinutes) * 60)
+    : null;
+  if (session || weekly) {
+    const first = session ?? weekly!;
+    return {
+      ok: true,
+      provider,
+      value: `${first.remainingPercent}%`,
+      caption: captionForWindow(session ? 'session' : 'weekly', first),
+      windows: { session: session ?? undefined, weekly: weekly ?? undefined },
+      source,
+      sampledAt,
+    };
   }
 
   const remaining =
@@ -319,6 +344,7 @@ export interface UsageStatsOptions {
   codexUsage?: () => Promise<unknown>;
   openRouterKey?: string;
   openRouterBalance?: () => Promise<OpenRouterBalance | null>;
+  codexBarUsage?: (provider: CodexBarProvider) => Promise<string>;
 }
 
 function defaultReadHistory(): Promise<string> {
@@ -336,6 +362,25 @@ async function defaultReadClaudeCredentials(): Promise<string> {
 
 function defaultReadCodexAuth(): Promise<string> {
   return readFile(DEFAULT_CODEX_AUTH_PATH, 'utf8');
+}
+
+async function defaultCodexBarUsage(provider: CodexBarProvider): Promise<string> {
+  const candidates = ['/opt/homebrew/bin/codexbar', '/usr/local/bin/codexbar', 'codexbar'];
+  let missing: unknown;
+  for (const executable of candidates) {
+    try {
+      const { stdout } = await execFileAsync(
+        executable,
+        ['--provider', provider, '--format', 'json', '--json-only'],
+        { timeout: CODEXBAR_TIMEOUT_MS, maxBuffer: 2 * 1024 * 1024 },
+      );
+      return stdout;
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error;
+      missing = error;
+    }
+  }
+  throw missing ?? new Error('CodexBar CLI not found');
 }
 
 function formatOpenRouterBalance(balance: OpenRouterBalance): CodexBarProviderStats {
@@ -433,8 +478,18 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
   const codexUsage = options.codexUsage ?? (() => fetchCodexUsage(readCodexAuth));
   const openRouterKey = options.openRouterKey ?? resolveOpenRouterKey(loadConfig());
   const openRouterBalance = options.openRouterBalance ?? (() => fetchOpenRouterBalance(openRouterKey));
+  const codexBarUsage = options.codexBarUsage ?? (Object.keys(options).length === 0 ? defaultCodexBarUsage : undefined);
 
   const entries = await Promise.all(PROVIDERS.map(async (provider) => {
+    if (codexBarUsage) {
+      try {
+        const codexBar = sampled(parseCodexBarUsage(provider, await codexBarUsage(provider)), sampledAt);
+        if (codexBar.ok) return [provider, codexBar] as const;
+      } catch {
+        // Fall back to direct provider APIs and legacy cache sources below.
+      }
+    }
+
     if (provider === 'openrouter') {
       try {
         const balance = await openRouterBalance();
@@ -468,7 +523,10 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
       try {
         return [provider, sampled(parseClaudeStatuslineCache(await readClaudeStatuslineCache()), sampledAt)] as const;
       } catch (err: any) {
-        return [provider, unavailable(provider, err?.message || 'No Claude statusline cache')] as const;
+        const message = err?.code === 'ENOENT'
+          ? 'No Claude usage data found'
+          : err?.message || 'No Claude statusline cache';
+        return [provider, unavailable(provider, message)] as const;
       }
     }
     return [provider, unavailable(provider, 'No cached usage history')] as const;

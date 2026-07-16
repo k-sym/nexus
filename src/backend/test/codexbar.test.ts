@@ -21,7 +21,7 @@ test('parseCodexBarUsage maps session remaining from used percent', () => {
     provider: 'codex',
     value: '17%',
     caption: 'remaining · resets 11 Jun, 06:40',
-    source: 'live',
+    source: 'codexbar-live',
     sampledAt: undefined,
   });
 });
@@ -35,6 +35,58 @@ test('parseCodexBarUsage maps OpenRouter credit balance', () => {
   assert.equal(stats.ok, true);
   assert.equal(stats.value, '$12.35');
   assert.equal(stats.caption, 'credit balance');
+});
+
+test('parseCodexBarUsage maps current CodexBar session and weekly windows', () => {
+  const stats = parseCodexBarUsage('claude', JSON.stringify([{
+    provider: 'claude',
+    source: 'web',
+    usage: {
+      updatedAt: '2026-07-16T10:04:11Z',
+      primary: { usedPercent: 11, windowMinutes: 300, resetsAt: '2026-07-16T11:09:59Z' },
+      secondary: { usedPercent: 2, windowMinutes: 10080, resetsAt: '2026-07-19T21:59:59Z' },
+    },
+  }]));
+
+  assert.equal(stats.ok, true);
+  assert.equal(stats.value, '89%');
+  assert.equal(stats.source, 'codexbar-web');
+  assert.equal(stats.sampledAt, '2026-07-16T10:04:11Z');
+  assert.equal(stats.windows?.session?.usedPercent, 11);
+  assert.equal(stats.windows?.session?.windowMinutes, 300);
+  assert.equal(stats.windows?.weekly?.usedPercent, 2);
+  assert.equal(stats.windows?.weekly?.windowMinutes, 10080);
+});
+
+test('parseCodexBarUsage maps the current nested OpenRouter balance', () => {
+  const stats = parseCodexBarUsage('openrouter', JSON.stringify([{
+    provider: 'openrouter',
+    source: 'api',
+    usage: { updatedAt: '2026-07-16T10:04:37Z', openRouterUsage: { balance: 259.006181064 } },
+  }]));
+
+  assert.equal(stats.ok, true);
+  assert.equal(stats.value, '$259.01');
+  assert.equal(stats.source, 'codexbar-api');
+  assert.equal(stats.sampledAt, '2026-07-16T10:04:37Z');
+});
+
+test('getUsageStats prefers current CodexBar CLI data for every dashboard provider', async () => {
+  const payloads: Record<string, string> = {
+    claude: JSON.stringify([{ provider: 'claude', source: 'web', usage: { primary: { usedPercent: 11, windowMinutes: 300 } } }]),
+    codex: JSON.stringify([{ provider: 'codex', source: 'oauth', usage: { secondary: { usedPercent: 9, windowMinutes: 10080 } } }]),
+    openrouter: JSON.stringify([{ provider: 'openrouter', source: 'api', usage: { openRouterUsage: { balance: 259.006 } } }]),
+  };
+  const stats = await getUsageStats({
+    codexBarUsage: async (provider) => payloads[provider],
+    claudeUsage: async () => { throw new Error('should not use Claude fallback'); },
+    codexUsage: async () => { throw new Error('should not use Codex fallback'); },
+    openRouterBalance: async () => { throw new Error('should not use OpenRouter fallback'); },
+  });
+
+  assert.equal(stats.claude.value, '89%');
+  assert.equal(stats.codex.value, '91%');
+  assert.equal(stats.openrouter.value, '$259.01');
 });
 
 test('parseCodexBarUsage preserves provider errors without throwing', () => {
@@ -183,6 +235,25 @@ test('getUsageStats prefers live Claude OAuth usage over stale statusline cache'
   assert.equal(stats.claude.source, 'anthropic-oauth-usage');
   assert.equal(stats.claude.windows?.session?.usedPercent, 5);
   assert.equal(stats.claude.windows?.weekly?.usedPercent, 12);
+});
+
+test('getUsageStats hides the local cache path when Claude usage data does not exist', async () => {
+  const missingCache = Object.assign(
+    new Error("ENOENT: no such file or directory, open '/Users/example/.claude/.statusline-usage-cache'"),
+    { code: 'ENOENT' },
+  );
+  const stats = await getUsageStats({
+    readHistory: async () => '',
+    readClaudeStatuslineCache: async () => { throw missingCache; },
+    claudeUsage: async () => { throw new Error('Claude credentials unavailable'); },
+    codexUsage: async () => { throw new Error('Codex credentials unavailable'); },
+    openRouterBalance: async () => null,
+  });
+
+  assert.equal(stats.claude.ok, false);
+  assert.equal(stats.claude.caption, 'session unavailable');
+  assert.equal(stats.claude.error, 'No Claude usage data found');
+  assert.doesNotMatch(stats.claude.error || '', /Users|\.claude|ENOENT/);
 });
 
 test('getUsageStats reuses cached provider stats for 300 seconds', async () => {
