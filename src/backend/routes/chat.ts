@@ -964,11 +964,20 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
     } else if (m.role === 'assistant') {
       let text = '';
       let thinking = '';
+      let toolSinceLastText = false;
       const toolCalls: unknown[] = [];
       for (const block of m.content ?? []) {
-        if (block.type === 'text') text += block.text;
+        if (block.type === 'text') {
+          const nextText = block.text ?? '';
+          if (toolSinceLastText && text.trim() && nextText && !text.endsWith('\n') && !nextText.startsWith('\n')) {
+            text += '\n\n';
+          }
+          text += nextText;
+          toolSinceLastText = false;
+        }
         else if (block.type === 'thinking') thinking += block.thinking;
         else if (block.type === 'toolCall') {
+          toolSinceLastText = true;
           const result = toolResults.get(String(block.id));
           const resultText = result ? extractText(result.content) : undefined;
           const call: Record<string, unknown> = {

@@ -158,6 +158,23 @@ test('tool history derives success from matching results and interrupts missing 
   assert.equal(assistant.run.abortSource, 'frontend');
 });
 
+test('assistant history preserves paragraph boundaries around tool calls', () => {
+  const messages = flattenEntries([{
+    type: 'message',
+    id: 'assistant-1',
+    message: {
+      role: 'assistant',
+      content: [
+        { type: 'text', text: 'I will inspect it.' },
+        { type: 'toolCall', id: 'call-1', name: 'Read', arguments: { path: '/a' } },
+        { type: 'text', text: 'Now I will fix it.' },
+      ],
+    },
+  }]) as any[];
+
+  assert.equal(messages[0].content, 'I will inspect it.\n\nNow I will fix it.');
+});
+
 test('run history reloads multiple assistant/tool messages as one logical run card', () => {
   const messages = flattenEntries([
     { type: 'custom', id: 'start', customType: 'nexus.agent_run', data: { event: 'start', runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' } },

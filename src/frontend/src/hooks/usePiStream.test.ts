@@ -56,6 +56,30 @@ describe('streamReducer', () => {
     expect(next.status).toBe('tool_call');
   });
 
+  it('separates prose resumed after a tool call into a new paragraph', () => {
+    const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
+    const beforeTool = streamReducer(start, { type: 'TEXT_DELTA', delta: 'I will inspect it.' });
+    const tool = streamReducer(beforeTool, {
+      type: 'TOOL_CALL_START',
+      toolCall: { id: 't1', name: 'read', args: { path: '/x' } },
+    });
+    const afterTool = streamReducer(tool, { type: 'TEXT_DELTA', delta: 'Now I will fix it.' });
+
+    expect(afterTool.streamingMessage?.content).toBe('I will inspect it.\n\nNow I will fix it.');
+  });
+
+  it('does not duplicate a model-provided newline after a tool call', () => {
+    const start = streamReducer(INITIAL_STATE, { type: 'START_STREAM', prompt: 'x' });
+    const beforeTool = streamReducer(start, { type: 'TEXT_DELTA', delta: 'Inspecting.' });
+    const tool = streamReducer(beforeTool, {
+      type: 'TOOL_CALL_START',
+      toolCall: { id: 't1', name: 'read', args: {} },
+    });
+    const afterTool = streamReducer(tool, { type: 'TEXT_DELTA', delta: '\n\nFixed.' });
+
+    expect(afterTool.streamingMessage?.content).toBe('Inspecting.\n\nFixed.');
+  });
+
   it('preserves question arguments and completed result details', () => {
     const args = { questions: [{ id: 'scope', question: 'Which scope?' }] };
     const details = {
