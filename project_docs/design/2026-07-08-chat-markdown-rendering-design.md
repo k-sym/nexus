@@ -60,3 +60,16 @@ Verification performed:
 - `npm --workspace=src/frontend test -- ChatMessageContent.test.tsx AgentRunCard.test.tsx ChatPanel.test.tsx AssistantView.test.tsx` passed with 64 tests.
 - `npm --workspace=src/frontend run typecheck` passed.
 - `npm --workspace=src/frontend test` still fails because `src/components/Sidebar.test.tsx` expects `Project intelligence`; that same Sidebar test fails in isolation and is unrelated to Markdown rendering.
+
+## Tool-boundary paragraph fix (issue #177, 2026-07-16)
+
+Assistant prose emitted before and after tool calls is stored as separate text blocks, but the live stream reducer and history projection previously joined those blocks with an empty string. This produced sentences such as `resources.Now` during a long tool-heavy run.
+
+Built behavior:
+
+- Live chat inserts a Markdown paragraph break when prose resumes after one or more tool calls.
+- Existing model-provided newlines are respected and are not duplicated.
+- Reloaded session history applies the same block-boundary rule, so the corrected spacing survives navigation and restart.
+- Consecutive text chunks without intervening tool activity remain byte-for-byte contiguous.
+
+Testing should verify a response containing `text → tool call → text`, both while streaming and after reloading the thread. It should also verify that a model-provided newline after a tool call is not doubled.

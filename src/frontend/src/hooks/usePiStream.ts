@@ -78,6 +78,8 @@ export interface StreamMessage {
   isStreaming?: boolean;
   signal_filter?: SignalFilterTelemetry;
   run?: AgentRunView;
+  /** Live-only marker: the next prose delta starts after tool activity. */
+  pendingTextBreak?: boolean;
 }
 
 export interface StreamState {
@@ -127,11 +129,20 @@ function extractMessageSnapshot(message: any): Partial<StreamMessage> | undefine
   if (!message || message.role !== 'assistant') return undefined;
   let content = '';
   let thinking = '';
+  let toolSinceLastText = false;
   const toolCalls: StreamMessage['toolCalls'] = [];
   for (const block of message.content ?? []) {
-    if (block?.type === 'text') content += block.text ?? '';
+    if (block?.type === 'text') {
+      const text = block.text ?? '';
+      if (toolSinceLastText && content.trim() && text && !content.endsWith('\n') && !text.startsWith('\n')) {
+        content += '\n\n';
+      }
+      content += text;
+      toolSinceLastText = false;
+    }
     else if (block?.type === 'thinking') thinking += block.thinking ?? '';
     else if (block?.type === 'toolCall') {
+      toolSinceLastText = true;
       toolCalls.push({
         id: block.id,
         name: block.name,
@@ -240,9 +251,15 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
     case 'TEXT_DELTA': {
       const m = state.streamingMessage;
       if (!m) return state;
+      const separator = m.pendingTextBreak && m.content.trim() && action.delta &&
+        !m.content.endsWith('\n') && !action.delta.startsWith('\n') ? '\n\n' : '';
       return {
         ...state,
-        streamingMessage: { ...m, content: m.content + action.delta },
+        streamingMessage: {
+          ...m,
+          content: m.content + separator + action.delta,
+          pendingTextBreak: false,
+        },
         status: 'responding',
       };
     }
@@ -267,6 +284,7 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
         streamingMessage: {
           ...m,
           toolCalls: [...existing, { ...action.toolCall, status: 'running' }],
+          pendingTextBreak: m.pendingTextBreak || !!m.content.trim(),
         },
         status: 'tool_call',
       };
@@ -324,6 +342,7 @@ export function streamReducer(state: StreamState, action: StreamAction): StreamS
               ]
             : current.toolCalls,
           timestamp: action.message.timestamp ?? current.timestamp,
+          pendingTextBreak: false,
         },
       };
     }
