@@ -135,7 +135,7 @@ fn resolve_daemon_url(env_override: Option<&str>, config_text: Option<&str>) -> 
 }
 
 /// A daemon URL is "remote" unless it points at this machine's loopback.
-fn is_remote(url: &str) -> bool {
+pub(crate) fn is_remote_url(url: &str) -> bool {
     !(url.contains("127.0.0.1") || url.contains("localhost") || url.contains("::1"))
 }
 
@@ -223,11 +223,11 @@ fn resolve_backend_token(env_override: Option<&str>, config_text: Option<&str>) 
     String::new()
 }
 
-fn backend_url() -> String {
+pub(crate) fn configured_backend_url() -> String {
     resolve_backend_url(std::env::var("NEXUS_BACKEND_URL").ok().as_deref(), read_config_text().as_deref())
 }
 
-fn backend_token() -> String {
+pub(crate) fn configured_backend_token() -> String {
     resolve_backend_token(std::env::var("NEXUS_BACKEND_TOKEN").ok().as_deref(), read_config_text().as_deref())
 }
 
@@ -321,9 +321,9 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
     // daemon, models, sessions and DB — the single source of truth. Spawn NOTHING
     // local except the dev-only Vite that serves the UI; just probe the remote
     // backend and gate readiness on it. Mirrors the remote-daemon path below.
-    let backend = backend_url();
-    let token = backend_token();
-    if is_remote(&backend) {
+    let backend = configured_backend_url();
+    let token = configured_backend_token();
+    if is_remote_url(&backend) {
         emit("memory", "skipped", Some("remote backend"));
         emit("models", "skipped", Some("remote backend"));
         emit("backend", "starting", Some("probing remote…"));
@@ -366,7 +366,7 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
     // spawn a local one. A loopback URL keeps the spawn-if-down behaviour.
     let daemon = daemon_url();
     let daemon_health = format!("{}/health", daemon.trim_end_matches('/'));
-    let remote = is_remote(&daemon);
+    let remote = is_remote_url(&daemon);
     emit("memory", "starting", Some(if remote { "probing remote…" } else { "checking…" }));
     let mem_ok = if remote {
         if probe(&daemon_health, std::time::Duration::from_millis(2500)) {
@@ -495,14 +495,14 @@ mod tests {
 
     #[test]
     fn is_remote_localhost_variants_are_false() {
-        assert!(!is_remote("http://127.0.0.1:4100"));
-        assert!(!is_remote("http://localhost:4100/health"));
-        assert!(!is_remote("http://[::1]:4100"));
+        assert!(!is_remote_url("http://127.0.0.1:4100"));
+        assert!(!is_remote_url("http://localhost:4100/health"));
+        assert!(!is_remote_url("http://[::1]:4100"));
     }
 
     #[test]
     fn is_remote_tailscale_host_is_true() {
-        assert!(is_remote("https://baker-pro.taileea629.ts.net:8443"));
+        assert!(is_remote_url("https://baker-pro.taileea629.ts.net:8443"));
     }
 
     // A config with BOTH server.token and gateway.token — the nested scan must
