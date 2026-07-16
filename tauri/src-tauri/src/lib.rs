@@ -1,6 +1,9 @@
 pub mod node;
 pub mod health;
 pub mod supervisor;
+mod app_mode;
+mod server_control;
+mod server_tray;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -38,6 +41,17 @@ pub fn run() {
         .manage(Spawned(Mutex::new(Vec::new())))
         .setup(move |app| {
             let handle = app.handle().clone();
+
+            let backend_url = supervisor::configured_backend_url();
+            let mode = app_mode::resolve(
+                &backend_url,
+                std::env::var("NEXUS_APP_MODE").ok().as_deref(),
+            );
+            if mode == app_mode::AppMode::Server {
+                eprintln!("[mode] server tray mode");
+                server_tray::setup(app, is_dev)?;
+                return Ok(());
+            }
 
             // ── Termination-signal handler + watcher thread ─────────────
             // The signal handler only sets an atomic flag (async-signal-safe).
