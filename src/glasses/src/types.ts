@@ -61,6 +61,7 @@ export interface AskUserQuestionInput {
     question: string
     header?: string
     multiSelect?: boolean
+    allowOther?: boolean // free-text ("Other") answer permitted → show the custom path
     options?: { label: string; description?: string }[]
   }[]
 }

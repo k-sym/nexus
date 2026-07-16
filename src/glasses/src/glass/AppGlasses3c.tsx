@@ -78,11 +78,44 @@ function groupProjects(sessions: SessionSummary[]): ProjGroup[] {
 function gates(s: GlassSnapshot): Approval[] { return s.approvals.filter(a => a.kind !== 'question') }
 function questions(s: GlassSnapshot): Approval[] { return s.approvals.filter(a => a.kind === 'question') }
 
-// First question + its option labels (MVP: q[0] only; multi-question is a follow-up).
-function firstQuestion(a: Approval): { text: string; options: string[] } | null {
-  const q = (a.tool_input as AskUserQuestionInput)?.questions?.[0]
-  if (!q) return null
-  return { text: q.question, options: (q.options ?? []).map(o => o.label) }
+// Every question in an AskUserQuestion approval, with the fields we render/answer.
+function allQuestions(a: Approval): { text: string; options: string[]; allowOther: boolean }[] {
+  return ((a.tool_input as AskUserQuestionInput)?.questions ?? []).map(q => ({
+    text: q.question,
+    options: (q.options ?? []).map(o => o.label),
+    allowOther: q.allowOther ?? false,
+  }))
+}
+
+// The question currently being answered. Multi-question prompts are answered one at a
+// time (the lens has no room to stack them), tracked by a store cursor keyed to the
+// approval id — a mismatched/absent id means a fresh prompt, so we start at question 0.
+function currentQuestion(a: Approval, s: GlassSnapshot):
+  { text: string; options: string[]; allowOther: boolean; idx: number; total: number } | null {
+  const qs = allQuestions(a)
+  if (!qs.length) return null
+  const idx = s.questionId === a.id ? Math.min(Math.max(0, s.questionIdx), qs.length - 1) : 0
+  return { ...qs[idx], idx, total: qs.length }
+}
+
+// Record `value` for the current question, then advance to the next — or, on the last
+// question, submit every accumulated answer at once. Nexus validates the whole set
+// (one answer per question), so a multi-question prompt must be answered in full or it
+// 400s; answers are keyed by exact question text to match translateGlassesAnswer.
+// Module-level so both the tap and voice paths reach it.
+function submitOrAdvance(a: Approval, value: string) {
+  const st = store.getState()
+  const qs = allQuestions(a)
+  if (!qs.length) return
+  const fresh = st.glassQuestionId === a.id
+  const idx = fresh ? Math.min(Math.max(0, st.glassQuestionIdx), qs.length - 1) : 0
+  const answers = { ...(fresh ? st.glassAnswers : {}), [qs[idx].text]: value }
+  if (idx + 1 < qs.length) {
+    store.set({ glassQuestionId: a.id, glassQuestionIdx: idx + 1, glassAnswers: answers })
+    return
+  }
+  store.removeApproval(a.id) // also clears the cursor (see store.removeApproval)
+  answer(a.id, answers, Object.values(answers).join(' · ')).catch((e) => store.setGlassError(`answer failed: ${e}`))
 }
 
 function pickScreen(s: GlassSnapshot, nav: Nav): Screen {
@@ -98,14 +131,20 @@ function pickScreen(s: GlassSnapshot, nav: Nav): Screen {
 function finalizeVoiceAnswer(text: string) {
   const st = store.getState()
   if (!st.glassListening) return
-  const a = questions(glass(st))[0]
-  const fq = a && firstQuestion(a)
+  const snap = glass(st)
+  const a = questions(snap)[0]
+  const cur = a ? currentQuestion(a, snap) : null
   store.set({ glassListening: false, glassInterim: '' })
-  if (!a || !fq) return
-  const chosen = matchAnswer(text, fq.options)
-  if (!chosen) return // nothing heard — drop back to the question, no answer sent
-  store.removeApproval(a.id)
-  answer(a.id, { [fq.text]: chosen }, chosen).catch((e) => store.setGlassError(`answer failed: ${e}`))
+  if (!a || !cur) return
+  // matchAnswer returns a listed option label when the speech maps to one, else the raw
+  // transcript (its built-in "Other" fallback). A listed option is always answerable;
+  // raw free-text only when the question permits "Other" — otherwise it would 400 on the
+  // backend, so keep the question open with a hint instead. Voice is the lens's only
+  // custom-answer path.
+  const heard = matchAnswer(text, cur.options)
+  if (cur.options.includes(heard)) { submitOrAdvance(a, heard); return }
+  if (cur.allowOther && heard.trim()) { submitOrAdvance(a, heard.trim()); return }
+  if (heard.trim()) store.setGlassError('didn’t catch a listed option')
 }
 
 // Post a spoken steer to the open (focused) session. Module-level so the STT callback
@@ -161,7 +200,7 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
     return `sess|${nav.projIdx}|${groups.map((g) => g.badge).join('')}|${(groups[nav.projIdx]?.sessions ?? []).map((x) => sessionRow(x).label).join('~')}`
   if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${s.pendingSteer ? `P${s.pendingSteer.text.length}:${s.pendingSteer.baseReply.length}` : ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
-  if (scr === 'question') { const a = questions(s)[0]; const q = a && firstQuestion(a); return `q|${a?.id}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}` }
+  if (scr === 'question') { const a = questions(s)[0]; const q = a ? currentQuestion(a, s) : null; return `q|${a?.id}|${q ? `${q.idx}/${q.total}` : ''}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}|${q?.allowOther ? 'O' : ''}` }
   return `intr|${attentionSessions(s).map((a) => a.id).join(',')}`
 }
 
@@ -204,14 +243,9 @@ export function AppGlasses3c() {
     const closeSession = () => { store.closeDetail(); setSteerFocus(null).catch(() => { /* best-effort unfocus */ }) }
     const allow = (id: string) => { store.removeApproval(id); decide(id, 'allow').catch((e) => store.setGlassError(`allow failed: ${e}`)) }
     const deny = (id: string) => { store.removeApproval(id); decide(id, 'deny').catch((e) => store.setGlassError(`deny failed: ${e}`)) }
-    // Answer a question by choosing a listed option. The answers map is keyed by the
-    // EXACT question text so CC's schema validation passes (see the hook).
-    const answerOption = (a: Approval, label: string) => {
-      const q = firstQuestion(a)
-      if (!q) return
-      store.removeApproval(a.id)
-      answer(a.id, { [q.text]: label }, label).catch((e) => store.setGlassError(`answer failed: ${e}`))
-    }
+    // Answer the current question by choosing a listed option — advances to the next
+    // question, or submits the whole set on the last one (see submitOrAdvance).
+    const answerOption = (a: Approval, label: string) => submitOrAdvance(a, label)
 
     // --- voice answer (Phase 4b): even-toolkit STTEngine over the glasses mic ---
     // Created on demand when the user starts speaking, disposed when done/cancelled.
@@ -374,6 +408,7 @@ function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
     dismissedAttentionKey: st.dismissedAttentionKey,
     listening: st.glassListening, steering: st.glassSteering, interim: st.glassInterim,
     pendingSteer: st.glassPendingSteer,
+    questionId: st.glassQuestionId, questionIdx: st.glassQuestionIdx,
   }
 }
 function intrKey(st: ReturnType<typeof store.getState>): string {
@@ -439,10 +474,11 @@ async function buildAndRender(
     // AskUserQuestion. Two sub-views:
     //  • listening — mic open, live interim transcript, tap=submit / 2tap=cancel.
     //  • idle — prompt on a left rail; options (plus a leading "Speak answer" row when
-    //    voice is configured) as a native selectable list; scroll moves the selection,
-    //    tap answers with that option, 2tap cancels the question.
+    //    voice is configured or free-text is allowed) as a native selectable list; scroll
+    //    moves the selection, tap answers with that option, 2tap cancels the question.
+    // A multi-question prompt is answered one question at a time (idx k/N on the rail).
     const a = questions(s)[0]
-    const q = a && firstQuestion(a)
+    const q = a ? currentQuestion(a, s) : null
     if (s.listening) {
       rowsRef.current = []
       const heard = s.error ? `! ${s.error}` : s.interim ? `“${s.interim}”` : '(listening…)'
@@ -454,14 +490,21 @@ async function buildAndRender(
     } else {
       // Surface a transient error (e.g. a mic failure) on the rail so it's visible on-lens.
       const err = s.error ? `\n\n! ${s.error}` : ''
-      const rail = page.addTextElement(`● QUESTION\n\n${q ? q.text : '(no question)'}${err}`)
+      const prog = q && q.total > 1 ? ` ${q.idx + 1}/${q.total}` : ''
+      const rail = page.addTextElement(`● QUESTION${prog}\n\n${q ? q.text : '(no question)'}${err}`)
       rail.setPosition((p) => { p.setX(10).setY(20) })
       rail.setSize((z) => { z.setWidth(214).setHeight(248) })
 
       const opts = q && q.options.length ? q.options : ['(no options)']
       const rows = opts.map((label) => ({ id: label, label: `› ${label}` }))
-      // Voice affordance as the first row (tap it to start speaking) when STT is set up.
-      if (sttConfig().enabled) rows.unshift({ id: SPEAK, label: '● Speak answer' })
+      // Voice is the lens's ONLY free-text path (no keyboard), so offer it as the first row
+      // when the question allows an "Other" answer or STT is set up for hands-free option-
+      // picking. Label it plainly for the latter, but spell out "custom answer" when free-
+      // text is allowed so the spoken-Other path is obvious. Tapping it without an STT key
+      // surfaces a "set an STT key" hint (the companion dashboard can type Other instead).
+      if ((q?.allowOther ?? false) || sttConfig().enabled) {
+        rows.unshift({ id: SPEAK, label: q?.allowOther ? '● Speak a custom answer' : '● Speak answer' })
+      }
       rowsRef.current = rows
       const list = page.addListElement(rows.map((r) => r.label))
       list.setItemWidth(320)

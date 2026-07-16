@@ -17,6 +17,8 @@ export interface GlassSnapshot {
   steering: boolean                    // Phase 4c: mic open for a free-text steer (detail screen)
   interim: string                      // live transcript while listening/steering
   pendingSteer: { text: string; baseReply: string } | null // sent steer, echoed until the reply lands
+  questionId: string | null            // approval id the multi-question cursor belongs to
+  questionIdx: number                  // which question of a multi-question prompt is showing
 }
 
 // Side effects a screen can trigger in response to a gesture. Implemented in

@@ -6,6 +6,7 @@ import {
   questionToApproval,
   translateGlassesAnswer,
 } from '../gateway/mappers';
+import { validateQuestionAnswers } from '../pi/questions';
 import type { QuestionRequest, PendingQuestionView } from '../pi/questions';
 
 test('toMs coerces ISO strings and epoch ms, rejects junk', () => {
@@ -76,9 +77,11 @@ test('questionToApproval maps to the glasses AskUserQuestion shape', () => {
   assert.equal(approval.tool_name, 'AskUserQuestion');
   assert.equal(approval.cwd, '/repo');
   assert.equal(approval.createdAt, 42);
-  const input = approval.tool_input as { questions: Array<{ question: string; multiSelect: boolean; options: Array<{ label: string }> }> };
+  const input = approval.tool_input as { questions: Array<{ question: string; multiSelect: boolean; allowOther?: boolean; options: Array<{ label: string }> }> };
   assert.equal(input.questions[0].question, 'Ship to prod now?');
   assert.equal(input.questions[0].multiSelect, false);
+  // allowOther rides the wire so the glasses know a free-text ("Other") answer is allowed (#178).
+  assert.equal(input.questions[0].allowOther, true);
   assert.deepEqual(input.questions[0].options.map((o) => o.label), ['Yes', 'No']);
 });
 
@@ -100,4 +103,52 @@ test('translateGlassesAnswer falls back to header key and lone value', () => {
 test('translateGlassesAnswer routes unknown labels to custom when allowOther', () => {
   const out = translateGlassesAnswer(request, { 'Ship to prod now?': 'maybe later' });
   assert.deepEqual(out.answers, [{ questionId: 'q1', selected: [], custom: 'maybe later' }]);
+});
+
+// A two-question prompt: q2 permits a free-text "Other" answer, q1 does not.
+const multiRequest: QuestionRequest = {
+  questions: [
+    {
+      id: 'q1',
+      header: 'Deploy?',
+      question: 'Ship to prod now?',
+      options: [
+        { value: 'yes', label: 'Yes' },
+        { value: 'no', label: 'No' },
+      ],
+      multiple: false,
+      allowOther: false,
+    },
+    {
+      id: 'q2',
+      header: 'When?',
+      question: 'When should it go out?',
+      options: [
+        { value: 'now', label: 'Now' },
+        { value: 'later', label: 'Later' },
+      ],
+      multiple: false,
+      allowOther: true,
+    },
+  ],
+};
+
+test('translateGlassesAnswer answers every question in a multi-question prompt (#179)', () => {
+  const out = translateGlassesAnswer(multiRequest, {
+    'Ship to prod now?': 'No',
+    'When should it go out?': 'tomorrow morning', // no matching option → custom (allowOther)
+  });
+  assert.deepEqual(out.answers, [
+    { questionId: 'q1', selected: ['no'] },
+    { questionId: 'q2', selected: [], custom: 'tomorrow morning' },
+  ]);
+  // The full set clears Nexus's per-question validation — this is what stops the 400.
+  assert.equal(validateQuestionAnswers(multiRequest, out).ok, true);
+});
+
+test('answering only the first of several questions is rejected — the #179 bug', () => {
+  // Before the fix the glasses only answered questions[0], so the untouched sibling came
+  // back unanswered and Nexus returned 400. This guards against that regressing.
+  const partial = translateGlassesAnswer(multiRequest, { 'Ship to prod now?': 'No' });
+  assert.equal(validateQuestionAnswers(multiRequest, partial).ok, false);
 });

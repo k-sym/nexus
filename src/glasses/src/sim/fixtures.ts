@@ -94,6 +94,24 @@ export function applyFixture(name: string): boolean {
       store.set({ sessions: [s], approvals: [approval], activeSessionId: null, activeEvents: [] })
       return true
     }
+    case 'question-multi': {
+      // Two questions — the second allows a free-text ("Other") answer. Exercises the
+      // multi-question answer flow (every question must be answered before submit, #179)
+      // and the allowOther custom path (#178). STT key on so the HUD's "Speak answer" shows.
+      localStorage.setItem('cockpit.sttProvider', 'deepgram')
+      localStorage.setItem('cockpit.sttKey', 'sim-demo-key')
+      const s = session({ id: 's1', title: 'nexus · gateway', project: 'nexus', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' } })
+      const approval: Approval = {
+        id: 'call-2', kind: 'question', session_id: 's1', tool_name: 'AskUserQuestion',
+        tool_input: { questions: [
+          { question: 'Ship the gateway fix to prod now?', header: 'Deploy', options: [{ label: 'Yes' }, { label: 'No' }] },
+          { question: 'When should it go out?', header: 'Timing', allowOther: true, options: [{ label: 'Now' }, { label: 'Tonight' }] },
+        ] },
+        cwd: '/Users/dev/nexus', title: 'Deploy', createdAt: now, decision: null,
+      }
+      store.set({ sessions: [s], approvals: [approval], activeSessionId: null, activeEvents: [] })
+      return true
+    }
     default:
       return false
   }
