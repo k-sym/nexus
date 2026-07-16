@@ -251,20 +251,30 @@ export function AppGlasses3c() {
     // Created on demand when the user starts speaking, disposed when done/cancelled.
     let engine: STTEngine | null = null
     const disposeEngine = () => { try { engine?.dispose() } catch { /* ignore */ } engine = null }
+    // Like the voice STEER path, a spoken answer (especially a free-text "Other") often has
+    // thinking pauses, so we must NOT auto-submit on the STT's per-pause `final` — that fired
+    // on every pause and sent a half-finished answer. VAD off + ACCUMULATE the finals; the
+    // user submits with an explicit tap (the "tap ● submit" hint), handled in submitListen.
+    let answerAccum = ''
     const startListen = async () => {
       const cfg = sttConfig()
       if (!cfg.enabled) { store.setGlassError('voice off — set an STT key'); return }
       if (store.getState().glassListening) return
+      answerAccum = ''
       store.set({ glassListening: true, glassInterim: '' })
       try {
-        engine = new STTEngine({ provider: cfg.provider, source: 'glass-bridge', apiKey: cfg.apiKey, language: cfg.language, mode: 'streaming', vad: true })
-        engine.onTranscript((t) => { store.set({ glassInterim: t.text }); if (t.isFinal) { finalizeVoiceAnswer(t.text); disposeEngine() } })
+        engine = new STTEngine({ provider: cfg.provider, source: 'glass-bridge', apiKey: cfg.apiKey, language: cfg.language, mode: 'streaming', vad: false })
+        engine.onTranscript((t) => {
+          // final segments append to the running answer; interim shows as a live tail.
+          const shown = t.isFinal ? (answerAccum = `${answerAccum} ${t.text}`.trim()) : `${answerAccum} ${t.text}`.trim()
+          store.set({ glassInterim: shown })
+        })
         engine.onError((e) => { store.setGlassError(`stt: ${e.message}`); store.set({ glassListening: false, glassInterim: '' }); disposeEngine() })
         await engine.start()
       } catch (e) { store.set({ glassListening: false, glassInterim: '' }); store.setGlassError(`mic failed: ${e}`); disposeEngine() }
     }
-    const submitListen = () => { const t = store.getState().glassInterim; try { engine?.stop() } catch { /* ignore */ } finalizeVoiceAnswer(t); disposeEngine() }
-    const cancelListen = () => { try { engine?.abort() } catch { /* ignore */ } store.set({ glassListening: false, glassInterim: '' }); disposeEngine() }
+    const submitListen = () => { try { engine?.stop() } catch { /* ignore */ } finalizeVoiceAnswer(answerAccum || store.getState().glassInterim); disposeEngine() }
+    const cancelListen = () => { try { engine?.abort() } catch { /* ignore */ } answerAccum = ''; store.set({ glassListening: false, glassInterim: '' }); disposeEngine() }
 
     // --- voice steer (Phase 4c): same STT engine, but the final transcript is POSTed
     // to the focused session as a free-text steer rather than matched to an option. ---
