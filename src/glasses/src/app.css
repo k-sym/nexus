@@ -76,6 +76,10 @@ button.deny { background: rgba(248,81,73,.12); border-color: var(--red); color: 
 .attn-msg { margin-top: 6px; color: var(--amber); font-size: 12px; }
 
 /* AskUserQuestion cards */
+.question-block { margin-top: 10px; }
+.question-block + .question-block { border-top: 1px dashed var(--border); padding-top: 8px; }
 .question-options { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.question-options button.chosen { outline: 2px solid var(--green); }
 .question-free { display: flex; gap: 8px; margin-top: 8px; }
 .question-free input { flex: 1; min-width: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; color: var(--fg); padding: 6px 10px; font: inherit; }
+.question-free button:disabled { opacity: .5; cursor: not-allowed; }

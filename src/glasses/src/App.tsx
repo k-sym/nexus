@@ -102,40 +102,60 @@ function HubFeed() {
 }
 
 /** First question of an AskUserQuestion approval, plus its option labels (MVP: q[0]). */
-function firstQuestion(a: Approval): { text: string; options: string[] } | null {
-  const q = (a.tool_input as AskUserQuestionInput)?.questions?.[0]
-  if (!q) return null
-  return { text: q.question, options: (q.options ?? []).map(o => o.label) }
+/** Every question in a pending AskUserQuestion, with the fields we render/answer. */
+function allQuestions(a: Approval): { text: string; options: string[]; allowOther: boolean }[] {
+  return ((a.tool_input as AskUserQuestionInput)?.questions ?? []).map(q => ({
+    text: q.question,
+    options: (q.options ?? []).map(o => o.label),
+    allowOther: q.allowOther ?? false,
+  }))
 }
 
-/** A pending AskUserQuestion: pick a listed option or type a free-text ("Other") reply. */
+/** A pending AskUserQuestion: answer EVERY question (pick a listed option, or — when the
+ *  question allows it — type a free-text "Other" reply), then send them together. Nexus
+ *  requires one answer per question, so a multi-question prompt must be answered in full
+ *  or it's rejected; that's why we accumulate and submit once rather than per-option. */
 function QuestionCard({ a }: { a: Approval }) {
-  const [free, setFree] = useState('')
-  const q = firstQuestion(a)
-  if (!q) return null
-  const send = (text: string) => {
-    if (!text.trim()) return
-    answer(a.id, { [q.text]: text }, text).catch(() => {})
+  const questions = allQuestions(a)
+  // Chosen answer per question, keyed by the EXACT question text (the key Nexus matches on).
+  const [picked, setPicked] = useState<Record<string, string>>({})
+  if (!questions.length) return null
+  const choose = (text: string, value: string) => setPicked(p => ({ ...p, [text]: value }))
+  const answered = questions.every(q => (picked[q.text] ?? '').trim())
+  const send = () => {
+    if (!answered) return
+    answer(a.id, picked, questions.map(q => picked[q.text]).join(' · ')).catch(() => {})
   }
   return (
     <div className="approval">
       <div className="approval-body">
         <div className="tool">AskUserQuestion · {a.title.replace(/^Ask:\s*/, '')}</div>
-        <code>{q.text}</code>
         <div className="muted small">{a.cwd}</div>
-        <div className="question-options">
-          {q.options.map(label => (
-            <button key={label} className="allow" onClick={() => send(label)}>{label}</button>
-          ))}
-        </div>
+        {questions.map((q, i) => (
+          <div key={q.text} className="question-block">
+            <code>{questions.length > 1 ? `${i + 1}. ${q.text}` : q.text}</code>
+            <div className="question-options">
+              {q.options.map(label => (
+                <button
+                  key={label}
+                  className={picked[q.text] === label ? 'allow chosen' : 'allow'}
+                  onClick={() => choose(q.text, label)}
+                >{label}</button>
+              ))}
+            </div>
+            {q.allowOther && (
+              <div className="question-free">
+                <input
+                  placeholder="or type another answer…"
+                  value={q.options.includes(picked[q.text] ?? '') ? '' : (picked[q.text] ?? '')}
+                  onChange={e => choose(q.text, e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+        ))}
         <div className="question-free">
-          <input
-            placeholder="or type another answer…"
-            value={free}
-            onChange={e => setFree(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter') send(free) }}
-          />
-          <button onClick={() => send(free)}>Send</button>
+          <button className="allow" disabled={!answered} onClick={send}>Send</button>
           <button className="deny" onClick={() => decide(a.id, 'deny', 'cancelled').catch(() => {})}>Cancel</button>
         </div>
       </div>

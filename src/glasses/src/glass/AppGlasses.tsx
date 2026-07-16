@@ -29,6 +29,8 @@ export function AppGlasses() {
     steering: st.glassSteering,
     interim: st.glassInterim,
     pendingSteer: st.glassPendingSteer,
+    questionId: st.glassQuestionId,
+    questionIdx: st.glassQuestionIdx,
   }
   const snapshotRef = useRef(snapshot)
   snapshotRef.current = snapshot

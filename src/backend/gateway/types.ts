@@ -71,6 +71,9 @@ export interface AskUserQuestionInput {
     question: string;
     header?: string;
     multiSelect?: boolean;
+    /** Whether a free-text ("Other") answer is permitted — the glasses gate the
+     *  custom-answer path (voice on-lens, a text box in the companion) on this. */
+    allowOther?: boolean;
     options: Array<{ label: string; description?: string }>;
   }>;
 }

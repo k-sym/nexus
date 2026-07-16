@@ -25,6 +25,13 @@ export interface State {
   // reply lands. `baseReply` = the latest reply at send-time; once the live reply
   // differs from it, the response has arrived and the echo gives way to it.
   glassPendingSteer: { text: string; baseReply: string } | null
+  // Multi-question AskUserQuestion progress (on-lens HUD). Nexus requires every question
+  // answered, so the glasses answer them one at a time and submit the set together. The
+  // cursor is keyed to the approval id, so a new/answered question resets it (see
+  // removeApproval); a mismatched id is treated as a fresh prompt at question 0.
+  glassQuestionId: string | null        // approval id the accumulated answers belong to
+  glassQuestionIdx: number              // index of the question currently being answered
+  glassAnswers: Record<string, string>  // answers so far, keyed by exact question text
   // Attention-interrupt bookkeeping: the set of attention session-ids the user has
   // already acknowledged, keyed as a sorted join. While it matches the live set the
   // interrupt stays dismissed; a new/changed attention set re-raises it.
@@ -52,6 +59,9 @@ let state: State = {
   glassSteering: false,
   glassInterim: '',
   glassPendingSteer: null,
+  glassQuestionId: null,
+  glassQuestionIdx: 0,
+  glassAnswers: {},
   dismissedAttentionKey: null,
 }
 
@@ -84,7 +94,14 @@ export const store = {
     emit()
   },
   removeApproval(id: string) {
-    state = { ...state, approvals: state.approvals.filter(a => a.id !== id) }
+    // Drop any half-finished multi-question answers if THIS is the question being answered
+    // (it was just submitted or cancelled), so the next prompt starts clean.
+    const clearQ = state.glassQuestionId === id
+    state = {
+      ...state,
+      approvals: state.approvals.filter(a => a.id !== id),
+      ...(clearQ ? { glassQuestionId: null, glassQuestionIdx: 0, glassAnswers: {} } : {}),
+    }
     emit()
   },
   openDetail(id: string, events: TranscriptEvent[]) {

@@ -86,6 +86,7 @@ export function questionToApproval(view: PendingQuestionView, cwd: string): Appr
         question: q.question,
         header: q.header,
         multiSelect: q.multiple,
+        allowOther: q.allowOther,
         options: q.options.map((o) => ({ label: o.label, description: o.description })),
       })),
     },
