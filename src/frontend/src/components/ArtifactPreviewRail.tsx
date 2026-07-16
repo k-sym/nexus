@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ArrowSquareOut } from '@phosphor-icons/react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { api, type FilePreview } from '../api';
 import RightRail from './RightRail';
 
@@ -43,6 +45,7 @@ export default function ArtifactPreviewRail({ projectId, selectedPath, open, onO
       open={open}
       onOpenChange={onOpenChange}
       ariaLabel="File preview"
+      resizable
       actions={preview?.kind === 'pdf' ? (
         <a
           href={preview.url}
@@ -70,6 +73,13 @@ export default function ArtifactPreviewRail({ projectId, selectedPath, open, onO
 
 function PreviewBody({ preview }: { preview: FilePreview }) {
   if (preview.kind === 'text' && preview.content !== undefined) {
+    if (preview.mimeType === 'text/markdown' || /\.md(?:own)?$/i.test(preview.name)) {
+      return (
+        <div className="chat-markdown surface-panel min-h-full rounded-md border border-subtle p-4 text-sm leading-relaxed text-primary">
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{preview.content}</ReactMarkdown>
+        </div>
+      );
+    }
     return (
       <pre className="surface-panel min-h-full whitespace-pre-wrap break-words rounded-md border border-subtle p-3 text-xs leading-relaxed text-primary">
         {preview.content}

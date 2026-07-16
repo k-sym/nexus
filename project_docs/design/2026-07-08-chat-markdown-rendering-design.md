@@ -46,6 +46,13 @@ Implemented in the shared chat renderer:
 - User messages keep the non-Markdown path by passing `linkifyPaths={false}`.
 - Markdown spacing and table/code/list styles are scoped to `.chat-markdown`.
 
+## File preview follow-up (2026-07-16)
+
+- Markdown files in the right-hand file preview now render through the same GitHub-flavoured Markdown stack and `.chat-markdown` styles instead of displaying raw source.
+- The open file-preview rail can be resized from its left edge between 240px and 720px, while preserving space for the main content. The divider also supports Left/Right Arrow keyboard resizing.
+- Resizing is opt-in on the shared rail, so the memory rail retains its existing fixed width.
+- Verification should cover pointer and keyboard resizing, structured Markdown headings/lists, and unchanged plain-text preview behavior.
+
 Deviation from the initial wording: user messages still preserve the existing GitHub image rendering behavior when sent through `ChatMessageContent` with `linkifyPaths={false}`. They do not get Markdown headings/lists/code parsing.
 
 Verification performed:
