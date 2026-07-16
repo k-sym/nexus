@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { CaretLeft, CaretRight } from '@phosphor-icons/react';
 
 interface RightRailProps {
@@ -10,9 +10,33 @@ interface RightRailProps {
   footer?: ReactNode;
   children: ReactNode;
   ariaLabel?: string;
+  resizable?: boolean;
 }
 
-export default function RightRail({ label, title, open, onOpenChange, actions, footer, children, ariaLabel }: RightRailProps) {
+const MIN_RAIL_WIDTH = 240;
+const MAX_RAIL_WIDTH = 720;
+
+export default function RightRail({ label, title, open, onOpenChange, actions, footer, children, ariaLabel, resizable = false }: RightRailProps) {
+  const [width, setWidth] = useState(288);
+  const [resizing, setResizing] = useState(false);
+
+  const resizeTo = useCallback((clientX: number) => {
+    if (!Number.isFinite(clientX)) return;
+    const availableWidth = Math.max(MIN_RAIL_WIDTH, window.innerWidth - 320);
+    setWidth(Math.min(MAX_RAIL_WIDTH, availableWidth, Math.max(MIN_RAIL_WIDTH, window.innerWidth - clientX)));
+  }, []);
+
+  useEffect(() => {
+    if (!resizing) return;
+    const handleMove = (event: PointerEvent) => resizeTo(event.clientX);
+    const handleUp = () => setResizing(false);
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    return () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+  }, [resizeTo, resizing]);
   if (!open) {
     return (
       <button
@@ -29,9 +53,33 @@ export default function RightRail({ label, title, open, onOpenChange, actions, f
 
   return (
     <aside
-      className="shrink-0 w-72 border-l border-subtle surface-glass flex flex-col min-h-0"
+      className="relative shrink-0 border-l border-subtle surface-glass flex flex-col min-h-0"
+      style={{ width }}
       aria-label={ariaLabel ?? title}
     >
+      {resizable && (
+        <div
+          role="separator"
+          aria-label={`Resize ${label.toLowerCase()}`}
+          aria-orientation="vertical"
+          aria-valuemin={MIN_RAIL_WIDTH}
+          aria-valuemax={MAX_RAIL_WIDTH}
+          aria-valuenow={width}
+          tabIndex={0}
+          onPointerDown={(event) => {
+            event.preventDefault();
+            setResizing(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+            event.preventDefault();
+            setWidth((current) => Math.min(MAX_RAIL_WIDTH, Math.max(MIN_RAIL_WIDTH, current + (event.key === 'ArrowLeft' ? 24 : -24))));
+          }}
+          className="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none focus:outline-none"
+        >
+          <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-[var(--border-strong)] group-focus:bg-[var(--accent)]" />
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-subtle">
         <span className="min-w-0 truncate text-[10px] uppercase tracking-wider text-faint font-medium">{title}</span>
         <div className="flex shrink-0 items-center gap-2">
