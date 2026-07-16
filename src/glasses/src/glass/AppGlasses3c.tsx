@@ -497,10 +497,14 @@ async function buildAndRender(
 
       const opts = q && q.options.length ? q.options : ['(no options)']
       const rows = opts.map((label) => ({ id: label, label: `› ${label}` }))
-      // Voice is the lens's custom-answer path, so offer it as the first row when the
-      // question allows free-text ("Other") or STT is set up for hands-free option-picking.
-      // Tapping it without an STT key surfaces a "set an STT key" hint.
-      if ((q?.allowOther ?? false) || sttConfig().enabled) rows.unshift({ id: SPEAK, label: '● Speak answer' })
+      // Voice is the lens's ONLY free-text path (no keyboard), so offer it as the first row
+      // when the question allows an "Other" answer or STT is set up for hands-free option-
+      // picking. Label it plainly for the latter, but spell out "custom answer" when free-
+      // text is allowed so the spoken-Other path is obvious. Tapping it without an STT key
+      // surfaces a "set an STT key" hint (the companion dashboard can type Other instead).
+      if ((q?.allowOther ?? false) || sttConfig().enabled) {
+        rows.unshift({ id: SPEAK, label: q?.allowOther ? '● Speak a custom answer' : '● Speak answer' })
+      }
       rowsRef.current = rows
       const list = page.addListElement(rows.map((r) => r.label))
       list.setItemWidth(320)
