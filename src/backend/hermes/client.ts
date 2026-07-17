@@ -66,6 +66,30 @@ export interface HermesSessionChatResult {
   usage?: unknown;
 }
 
+export interface HermesSessionChatStreamInput {
+  sessionId: string;
+  sessionKey?: string;
+  input: string | HermesContentPart[];
+  /** Ephemeral system prompt for this turn (Hermes `system_message`). */
+  instructions?: string;
+  signal?: AbortSignal;
+}
+
+/**
+ * Normalized events from `POST /api/sessions/{id}/chat/stream`. The wire form is
+ * SSE `event:`/`data:` frames; the tool events carry `tool_name`/`preview`/`args`
+ * but NO tool_call_id (older `_tool_progress` callback), so callers correlate
+ * `tool_started`→`tool_completed` themselves (FIFO by name) and take authoritative
+ * ids + full output from `/api/sessions/{id}/messages` on reload.
+ */
+export type HermesChatStreamEvent =
+  | { kind: 'text_delta'; delta: string }
+  | { kind: 'reasoning_delta'; delta: string }
+  | { kind: 'tool_started'; toolName: string; args?: Record<string, unknown> }
+  | { kind: 'tool_completed'; toolName: string; preview: string; isError: boolean }
+  | { kind: 'completed' }
+  | { kind: 'failed'; error: string };
+
 export interface HermesListSessionsInput {
   limit?: number;
   offset?: number;
@@ -102,11 +126,33 @@ export interface HermesListSessionsResult {
   nextOffset: number | null;
 }
 
+/**
+ * A tool call as Hermes persists it — OpenAI `tool_calls` shape (some providers
+ * flatten `name`/`arguments` onto the object instead of nesting under
+ * `function`). `arguments` is a JSON string. Hermes JSON-parses the column into
+ * this array before returning it from `/api/sessions/{id}/messages`.
+ */
+export interface HermesRawToolCall {
+  id?: string;
+  call_id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+  name?: string;
+  arguments?: string;
+}
+
 export interface HermesSessionMessage {
   id?: string;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   created_at?: string;
+  // Present on `assistant` rows that call tools, and on `tool` result rows.
+  // Nexus used to discard these, flattening tool output into assistant text
+  // bubbles when adopting a remote session.
+  tool_calls?: HermesRawToolCall[];
+  tool_call_id?: string;
+  tool_name?: string;
+  reasoning_content?: string;
 }
 
 export interface HermesCapabilities {
@@ -130,6 +176,7 @@ export interface HermesClient {
   getSession(sessionId: string): Promise<HermesListedSession | null>;
   getSessionMessages(sessionId: string): Promise<HermesSessionMessage[]>;
   sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult>;
+  sessionChatStream(input: HermesSessionChatStreamInput): AsyncIterable<HermesChatStreamEvent>;
   streamChatCompletions(messages: Array<{ role: string; content: string }>): AsyncIterable<string>;
   streamResponses(input: HermesResponsesInput): AsyncIterable<HermesResponseEvent>;
 }
@@ -284,6 +331,51 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       };
     },
 
+    async *sessionChatStream(input: HermesSessionChatStreamInput): AsyncIterable<HermesChatStreamEvent> {
+      const body: Record<string, unknown> = { message: input.input };
+      if (input.instructions) body.system_message = input.instructions;
+      const response = await fetchImpl(`${baseUrl}/api/sessions/${encodeURIComponent(input.sessionId)}/chat/stream`, {
+        method: 'POST',
+        headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
+        body: JSON.stringify(body),
+        signal: input.signal,
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => '');
+        throw new Error(text || `Hermes request failed with ${response.status}`);
+      }
+      if (!response.body) throw new Error('Hermes response did not include a stream.');
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = '';
+      // SSE frames are separated by a blank line; a frame may span reads.
+      const drain = function* (buffer: string, flushTail: boolean): Generator<HermesChatStreamEvent> {
+        let rest = buffer;
+        let sep = rest.indexOf('\n\n');
+        while (sep !== -1) {
+          const frame = rest.slice(0, sep);
+          rest = rest.slice(sep + 2);
+          const ev = parseChatStreamFrame(frame);
+          if (ev) yield ev;
+          sep = rest.indexOf('\n\n');
+        }
+        if (flushTail && rest.trim()) {
+          const ev = parseChatStreamFrame(rest);
+          if (ev) yield ev;
+          rest = '';
+        }
+        pending = rest;
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        yield* drain(pending, false);
+      }
+      yield* drain(pending, true);
+    },
+
     async *streamChatCompletions(messages: Array<{ role: string; content: string }>): AsyncIterable<string> {
       const response = await fetchImpl(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
@@ -413,7 +505,51 @@ export function parseResponsesEvent(line: string): HermesResponseEvent | null {
   }
 }
 
-function coerceArgs(raw: unknown): Record<string, unknown> {
+/**
+ * Parse one SSE frame from `/api/sessions/{id}/chat/stream` into a normalized
+ * event. A frame is `event: <name>\ndata: <json>` (data may be absent). Keepalive
+ * comment frames (`: keepalive`) and lifecycle-only events (run.started,
+ * message.started, assistant.completed) return null.
+ */
+export function parseChatStreamFrame(frame: string): HermesChatStreamEvent | null {
+  let eventName = '';
+  const dataLines: string[] = [];
+  for (const rawLine of frame.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line || line.startsWith(':')) continue; // blank or SSE comment (keepalive)
+    if (line.startsWith('event:')) eventName = line.slice('event:'.length).trim();
+    else if (line.startsWith('data:')) dataLines.push(line.slice('data:'.length).trim());
+  }
+  if (!eventName) return null;
+  let data: any = {};
+  if (dataLines.length > 0) {
+    try { data = JSON.parse(dataLines.join('\n')); } catch { data = {}; }
+  }
+  switch (eventName) {
+    case 'assistant.delta':
+      return typeof data.delta === 'string' && data.delta ? { kind: 'text_delta', delta: data.delta } : null;
+    case 'tool.progress':
+      // Reasoning is streamed as a progress event under the synthetic "_thinking" tool.
+      return data.tool_name === '_thinking' && typeof data.delta === 'string' && data.delta
+        ? { kind: 'reasoning_delta', delta: data.delta }
+        : null;
+    case 'tool.started':
+      return { kind: 'tool_started', toolName: String(data.tool_name ?? ''), args: coerceArgs(data.args) };
+    case 'tool.completed':
+      return { kind: 'tool_completed', toolName: String(data.tool_name ?? ''), preview: String(data.preview ?? ''), isError: false };
+    case 'tool.failed':
+      return { kind: 'tool_completed', toolName: String(data.tool_name ?? ''), preview: String(data.preview ?? ''), isError: true };
+    case 'run.completed':
+    case 'done':
+      return { kind: 'completed' };
+    case 'error':
+      return { kind: 'failed', error: String(data.message ?? 'Assistant run failed.') };
+    default:
+      return null;
+  }
+}
+
+export function coerceArgs(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
   if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return {}; } }
   return {};

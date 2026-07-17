@@ -4,6 +4,7 @@ import {
   createHermesClient,
   normalizeHermesBaseUrl,
   parseResponsesEvent,
+  parseChatStreamFrame,
   type HermesFetch,
 } from '../hermes/client';
 
@@ -309,4 +310,65 @@ test('streamResponses sends previous_response_id when provided', async () => {
   const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   for await (const _ of client.streamResponses({ input: 'hi', previousResponseId: 'resp_prev' })) { /* drain */ }
   assert.equal(sentBody.previous_response_id, 'resp_prev');
+});
+
+test('parseChatStreamFrame maps chat/stream SSE frames to normalized events', () => {
+  assert.deepEqual(parseChatStreamFrame('event: assistant.delta\ndata: {"delta":"hi"}'), { kind: 'text_delta', delta: 'hi' });
+  assert.deepEqual(
+    parseChatStreamFrame('event: tool.progress\ndata: {"tool_name":"_thinking","delta":"pondering"}'),
+    { kind: 'reasoning_delta', delta: 'pondering' },
+  );
+  assert.deepEqual(
+    parseChatStreamFrame('event: tool.started\ndata: {"tool_name":"terminal","args":{"command":"uptime"}}'),
+    { kind: 'tool_started', toolName: 'terminal', args: { command: 'uptime' } },
+  );
+  assert.deepEqual(
+    parseChatStreamFrame('event: tool.completed\ndata: {"tool_name":"terminal","preview":"load 0.4"}'),
+    { kind: 'tool_completed', toolName: 'terminal', preview: 'load 0.4', isError: false },
+  );
+  assert.deepEqual(
+    parseChatStreamFrame('event: tool.failed\ndata: {"tool_name":"terminal","preview":"boom"}'),
+    { kind: 'tool_completed', toolName: 'terminal', preview: 'boom', isError: true },
+  );
+  assert.deepEqual(parseChatStreamFrame('event: error\ndata: {"message":"rate limited"}'), { kind: 'failed', error: 'rate limited' });
+  assert.deepEqual(parseChatStreamFrame('event: run.completed\ndata: {}'), { kind: 'completed' });
+  assert.deepEqual(parseChatStreamFrame('event: done\ndata: {}'), { kind: 'completed' });
+  // Keepalive comments and lifecycle-only events yield nothing.
+  assert.equal(parseChatStreamFrame(': keepalive'), null);
+  assert.equal(parseChatStreamFrame('event: run.started\ndata: {"user_message":{"role":"user","content":"x"}}'), null);
+  assert.equal(parseChatStreamFrame('event: message.started\ndata: {"message":{"id":"m1","role":"assistant"}}'), null);
+});
+
+test('sessionChatStream posts message body + session key header and parses split frames', async () => {
+  let calledUrl = '';
+  let sentBody: any = null;
+  let authKey = '';
+  const fetchImpl: HermesFetch = async (url, init) => {
+    calledUrl = String(url);
+    sentBody = JSON.parse(String(init?.body));
+    authKey = (init?.headers as Record<string, string>)['X-Hermes-Session-Key'];
+    return sseResponse([
+      'event: run.started\ndata: {"user_message":{"role":"user","content":"go"}}\n\n',
+      ': keepalive\n\n',
+      'event: assistant.delta\ndata: {"delta":"On ', // frame deliberately split across chunks
+      'it."}\n\n',
+      'event: tool.started\ndata: {"tool_name":"terminal","args":{"command":"uptime"}}\n\n',
+      'event: tool.completed\ndata: {"tool_name":"terminal","preview":"load 0.4"}\n\n',
+      'event: run.completed\ndata: {}\n\n',
+      'event: done\ndata: {}\n\n',
+    ]);
+  };
+  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const events = await collect(client.sessionChatStream({ sessionId: 's1', sessionKey: 'nexus:assistant:s1', input: 'go' }));
+
+  assert.equal(calledUrl, 'http://127.0.0.1:8642/api/sessions/s1/chat/stream');
+  assert.equal(sentBody.message, 'go');
+  assert.equal(authKey, 'nexus:assistant:s1');
+  assert.deepEqual(events, [
+    { kind: 'text_delta', delta: 'On it.' },
+    { kind: 'tool_started', toolName: 'terminal', args: { command: 'uptime' } },
+    { kind: 'tool_completed', toolName: 'terminal', preview: 'load 0.4', isError: false },
+    { kind: 'completed' },
+    { kind: 'completed' },
+  ]);
 });
