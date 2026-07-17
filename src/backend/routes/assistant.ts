@@ -9,20 +9,17 @@ import {
   readAssistantEntries,
   appendUserMessage,
   appendAssistantMessage,
-  appendToolResult,
-  appendRunStart,
-  appendRunEnd,
 } from '../pi/assistant-session.js';
-import type { ToolCall } from '@earendil-works/pi-ai';
 import type { NexusConfig } from '@nexus/shared';
 import {
   createHermesClient,
+  type HermesClient,
   type HermesContentPart,
   type HermesFetch,
   type HermesListedSession,
   type HermesRunStatus,
-  type HermesSessionMessage,
 } from '../hermes/client.js';
+import { hermesMessagesToTranscript } from '../hermes/transcript.js';
 import { flattenEntries } from './chat.js';
 
 interface AssistantMessage {
@@ -237,6 +234,29 @@ async function assistantMessages(db: FastifyInstance['db'], sessionId: string, s
     entries = await readAssistantEntries(sessionId, sessionDir);
   }
   return flattenEntries(entries, ASSISTANT_CWD, {});
+}
+
+// Render a session's transcript. Hermes-backed sessions (anything with a
+// remote_session_id — every session becomes one on first send, plus adopted
+// TUI/CLI rows) render straight from `/api/sessions/{id}/messages`: the single
+// source of truth, always fresh, tool-aware. Only legacy sessions that never
+// reached Hermes fall back to the local pi store.
+async function renderSessionMessages(
+  db: FastifyInstance['db'],
+  session: AssistantSession,
+  sessionDir: string,
+  hermes: HermesClient | undefined,
+): Promise<unknown[]> {
+  if (session.remote_session_id && hermes) {
+    try {
+      const remote = await hermes.getSessionMessages(session.remote_session_id);
+      return hermesMessagesToTranscript(remote);
+    } catch {
+      // Hermes unreachable → empty rather than a stale local mirror.
+      return [];
+    }
+  }
+  return assistantMessages(db, session.id, sessionDir);
 }
 
 function getSession(db: FastifyInstance['db'], sessionId: string): AssistantSession | undefined {
@@ -548,45 +568,44 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let status: string = 'completed';
       let errorMsg: string | undefined;
       let abortSource: string | undefined;
-      let piRunEndPersisted = false;
-      let sm: Awaited<ReturnType<typeof openAssistantSession>> | undefined;
+      const sessionKey = `nexus:assistant:${session.id}`;
       try {
+        // Both paths run against the session-scoped Hermes endpoints, which persist
+        // the full turn (user + assistant + tool rows) to SessionDB. Nexus keeps no
+        // local transcript mirror — history reloads from /messages (the single
+        // source of truth). The session must exist in Hermes first (/chat/stream
+        // 404s otherwise), so ensure it before either call.
+        const remoteSessionId = await ensureRemoteSession(hermes, session);
+
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
-          sm = await openAssistantSession(session.id, assistantSessionDir);
-          appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
-          appendUserMessage(sm, trimmed);
-
-          const remoteSessionId = await ensureRemoteSession(hermes, session);
-          const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey: `nexus:assistant:${session.id}`, input: hermesInlineImageInput(promptContent, savedAttachments) });
+          const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey, input: hermesInlineImageInput(promptContent, savedAttachments) });
           accumulated = result.output ?? '';
           if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
           completeRun(db, run, { runId: run.id, status: 'completed', sessionId: result.sessionId, output: accumulated, usage: result.usage });
-
-          const assistantEntryId = appendAssistantMessage(sm, { text: accumulated });
-          appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, assistantEntryId, completedAt: new Date().toISOString(), status: 'completed' });
-          piRunEndPersisted = true;
         } else {
-          sm = await openAssistantSession(session.id, assistantSessionDir);
-          appendRunStart(sm, { event: 'start', runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' });
-          appendUserMessage(sm, trimmed);
-
-          let thinking = '';
-          const toolCalls: ToolCall[] = [];
-          const toolOutputs: Array<{ toolCallId: string; toolName: string; output: string; isError: boolean }> = [];
-
           const ac = new AbortController();
           activeStreamControllers.set(run.id, ac);
-          let responseId: string | undefined;
+          // /chat/stream tool SSE carries tool_name but no tool_call_id, so correlate
+          // each tool_started → the next tool_completed of the same name (FIFO) with a
+          // synthetic id. This drives the LIVE fold; the authoritative fold (real ids,
+          // full output) comes from /messages on reload.
+          let toolSeq = 0;
+          const pendingTools: Array<{ name: string; id: string }> = [];
           try {
-            // Hermes /v1/responses ignores session_id; conversation continuity is threaded via
-            // previous_response_id. Send the session's last response id and capture the new one.
-            for await (const ev of hermes.streamResponses({ input: promptContent, sessionId: session.remote_session_id ?? session.id, sessionKey: `nexus:assistant:${session.id}`, previousResponseId: session.last_response_id ?? undefined, signal: ac.signal })) {
-              if (ev.kind === 'created' || ev.kind === 'completed') { if (ev.responseId) responseId = ev.responseId; }
-              else if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
-              else if (ev.kind === 'reasoning_delta') { thinking += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
-              else if (ev.kind === 'function_call') { toolCalls.push({ type: 'toolCall', id: ev.id, name: ev.name, arguments: ev.args }); write({ type: 'tool_execution_start', toolCallId: ev.id, toolName: ev.name, args: ev.args }); }
-              else if (ev.kind === 'function_call_output') { toolOutputs.push({ toolCallId: ev.callId, toolName: '', output: ev.output, isError: ev.isError }); write({ type: 'tool_execution_end', toolCallId: ev.callId, toolName: '', result: { content: [{ type: 'text', text: ev.output }] }, isError: ev.isError }); }
+            for await (const ev of hermes.sessionChatStream({ sessionId: remoteSessionId, sessionKey, input: promptContent, signal: ac.signal })) {
+              if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
+              else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
+              else if (ev.kind === 'tool_started') {
+                const id = `t${toolSeq++}`;
+                pendingTools.push({ name: ev.toolName, id });
+                write({ type: 'tool_execution_start', toolCallId: id, toolName: ev.toolName, args: ev.args ?? {} });
+              }
+              else if (ev.kind === 'tool_completed') {
+                const idx = pendingTools.findIndex((t) => t.name === ev.toolName);
+                const id = idx >= 0 ? pendingTools.splice(idx, 1)[0].id : `t${toolSeq++}`;
+                write({ type: 'tool_execution_end', toolCallId: id, toolName: ev.toolName, result: { content: [{ type: 'text', text: ev.preview }] }, isError: ev.isError });
+              }
               else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; write({ type: 'error', error: ev.error }); }
             }
           } catch (streamErr: any) {
@@ -616,18 +635,6 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           } else {
             completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
           }
-
-          const assistantEntryId = appendAssistantMessage(sm, { text: accumulated, thinking: thinking || undefined, toolCalls });
-          for (const out of toolOutputs) {
-            const name = toolCalls.find((c) => c.id === out.toolCallId)?.name ?? out.toolName;
-            appendToolResult(sm, { toolCallId: out.toolCallId, toolName: name, output: out.output, isError: out.isError });
-          }
-          const piStatus = status === 'completed' ? 'completed' : status === 'cancelled' ? 'cancelled' : 'failed';
-          appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, assistantEntryId, completedAt: new Date().toISOString(), status: piStatus, ...(abortSource ? { abortSource: abortSource as any } : {}), ...(errorMsg ? { error: errorMsg } : {}) });
-          piRunEndPersisted = true;
-          if (responseId) {
-            db.prepare('UPDATE assistant_sessions SET last_response_id = ? WHERE id = ?').run(responseId, session.id);
-          }
         }
       } catch (err: any) {
         status = 'failed';
@@ -636,20 +643,6 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?').run('failed', errorMsg, now, now, run.id);
         db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
         write({ type: 'error', error: errorMsg });
-        if (!piRunEndPersisted && sm) {
-          // Reuse the SAME instance that already buffered run-start + the user message.
-          // Appending an assistant message triggers Pi's flush of the whole buffered turn
-          // (SessionManager only writes once an assistant message exists). On a non-empty
-          // store the earlier entries were already written, so only the assistant + run-end
-          // are new — no duplication.
-          try {
-            appendAssistantMessage(sm, { text: accumulated });
-            appendRunEnd(sm, { event: 'end', runId: run.id, threadId: session.id, completedAt: now, status: 'failed', error: errorMsg });
-            piRunEndPersisted = true;
-          } catch {
-            // Best-effort: don't let Pi-persistence failures mask the original error response.
-          }
-        }
       } finally {
         const completedAtIso = new Date().toISOString();
         write({ kind: 'run_end', run: { runId: run.id, threadId: session.id, completedAt: completedAtIso, status, ...(abortSource ? { abortSource } : {}), ...(errorMsg ? { error: errorMsg } : {}) } });
@@ -749,41 +742,12 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         session = db.prepare('SELECT * FROM assistant_sessions WHERE id = ?').get(session.id) as AssistantSession;
       }
 
-      let remoteMessages: HermesSessionMessage[] = [];
-      try {
-        remoteMessages = await hermes.getSessionMessages(remoteSessionId);
-      } catch {
-        // Tolerate message-history fetch failures; the local session is still adopted.
-      }
-
-      const sm = await openAssistantSession(session.id, assistantSessionDir);
-      const existing = (await readAssistantEntries(session.id, assistantSessionDir)) as any[];
-      const seen = new Set(
-        existing
-          .filter((e) => e.type === 'message')
-          .map((e: any) => {
-            const content = e.message.content;
-            const text =
-              typeof content === 'string'
-                ? content
-                : Array.isArray(content)
-                  ? content.filter((c: any) => c.type === 'text').map((c: any) => c.text).join('')
-                  : '';
-            return `${e.message.role}:${text}`;
-          }),
-      );
-      for (const message of remoteMessages) {
-        if (!message?.content && message?.content !== '') continue;
-        const key = `${message.role}:${message.content}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        if (message.role === 'user') appendUserMessage(sm, message.content);
-        else appendAssistantMessage(sm, { text: message.content });
-      }
-
+      // Adoption is now just a local pointer at the remote session — no message
+      // copy. History renders live from `/api/sessions/{id}/messages`, so the
+      // adopted transcript is always fresh and never drifts from Hermes.
       return {
         session,
-        messages: await assistantMessages(db, session.id, assistantSessionDir),
+        messages: await renderSessionMessages(db, session, assistantSessionDir, hermes),
         latestRun: publicRun(latestRun(db, session.id)),
       };
     });
@@ -797,7 +761,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       return {
         session,
-        messages: await assistantMessages(db, id, assistantSessionDir),
+        messages: await renderSessionMessages(db, session, assistantSessionDir, client()),
         latestRun: publicRun(latestRun(db, id)),
       };
     });
@@ -881,18 +845,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
-      // Note: the background prompt is NOT written to the Pi store here. Pi's SessionManager
-      // only flushes a session file to disk once it contains an assistant message (see
-      // node_modules/@earendil-works/pi-coding-agent SessionManager#_persist/#resetToPath) — a
-      // lone appendUserMessage() on a SessionManager instance that is discarded at the end of
-      // this request would silently never reach disk. Instead /sync appends both the user
-      // prompt (from the run's stored input) and the assistant output on the same
-      // SessionManager instance once the run completes, so the pair flushes together. Plain
-      // messages only — no run-start/run-end markers (see /sync for rationale).
+      // The background run executes against its Hermes session (the run agent is
+      // created with session_id), so the whole turn persists to Hermes SessionDB
+      // and renders from /messages — no local mirror. Ensure the session exists in
+      // Hermes (and its remote_session_id is recorded) before handing off.
+      const remoteSessionId = await ensureRemoteSession(hermes, session);
       const run = createRun(db, session.id, 'overnight', promptContent);
       const remote = await hermes.startRun({
         input: promptContent,
-        sessionId: session.remote_session_id ?? session.id,
+        sessionId: remoteSessionId,
         sessionKey: `nexus:assistant:${session.id}`,
       });
       updateRunRemote(db, run.id, remote.runId);
@@ -940,27 +901,10 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           const remote = await hermes.getRun(run.remote_run_id);
           const completed = completeRun(db, run, remote);
           if (completed.status !== run.status) updated += 1;
-          if (completed.status === 'succeeded' && completed.output) {
-            // Persist the background turn to the Pi store (the canonical transcript store) as
-            // plain messages — no run-start/run-end markers. A background run's lifetime spans
-            // two requests (handoff, then this sync); an open run-start/run-end pair here could
-            // wrongly swallow a foreground turn appended in between when flattenEntries merges
-            // the span.
-            //
-            // Both the user prompt and the assistant output are appended here, on the same
-            // SessionManager instance, rather than writing the user message back at handoff
-            // time: Pi's SessionManager only flushes a session file to disk once it contains an
-            // assistant message, so a lone appendUserMessage() on a SessionManager instance that
-            // is discarded at the end of the handoff request would silently never reach disk.
-            // Appending both messages here, before either is flushed, means they land together.
-            const syncSm = await openAssistantSession(run.session_id, assistantSessionDir);
-            const existing = (await readAssistantEntries(run.session_id, assistantSessionDir)) as any[];
-            const hasUserPrompt = existing.some((e: any) =>
-              e.type === 'message' && e.message.role === 'user' && e.message.content === run.input,
-            );
-            if (!hasUserPrompt) appendUserMessage(syncSm, run.input);
-            appendAssistantMessage(syncSm, { text: completed.output });
-          }
+          // No transcript write here: a background run executes against its Hermes
+          // session (`_create_agent(session_id=…)`), so the user + assistant + tool
+          // rows already persist to Hermes SessionDB and render from /messages.
+          // /sync only reconciles run *status*.
         } catch (err) {
           markRunUnknown(db, run, errorMessage(err));
           updated += 1;

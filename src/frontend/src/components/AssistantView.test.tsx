@@ -115,6 +115,53 @@ describe('AssistantView', () => {
     expect(await screen.findByText('checks queued')).toBeInTheDocument();
   });
 
+  it('folds tool calls and never dumps raw tool output as its own bubble', async () => {
+    apiFetchMock.mockReset();
+    apiFetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/assistant/sessions') {
+        return {
+          ok: true,
+          json: async () => ({
+            sessions: [{ id: 's1', title: 'Health', status: 'idle', updated_at: '2026-07-01T08:00:00.000Z', latestRun: null }],
+          }),
+        } as Response;
+      }
+      if (url === '/api/assistant/sessions/s1') {
+        return {
+          ok: true,
+          json: async () => ({
+            session: { id: 's1', title: 'Health', status: 'idle' },
+            latestRun: null,
+            // Shape as produced by flattenEntries: the assistant row carries the
+            // tool call (with folded result), plus a standalone toolResult row.
+            messages: [
+              { id: 'm1', role: 'user', content: 'run the check' },
+              {
+                id: 'm2',
+                role: 'assistant',
+                content: 'On it.',
+                tool_calls: [
+                  { id: 'toolu_1', name: 'terminal', args: { command: 'uptime' }, status: 'succeeded', result: 'load average: 0.4' },
+                ],
+              },
+              { id: 'm3', role: 'toolResult', toolCallId: 'toolu_1', toolName: 'terminal', content: 'load average: 0.4' },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({ ok: true }) } as Response;
+    });
+
+    render(<AssistantView />);
+
+    // The assistant prelude and a folded tool-call header both render…
+    expect(await screen.findByText('On it.')).toBeInTheDocument();
+    expect(screen.getByText(/terminal/)).toBeInTheDocument();
+    // …but the raw tool output is folded away (revealed only on expand), never
+    // shown as a standalone bubble.
+    expect(screen.queryByText('load average: 0.4')).not.toBeInTheDocument();
+  });
+
   it('switches sessions from the session rail', async () => {
     render(<AssistantView />);
 

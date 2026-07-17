@@ -57,7 +57,10 @@ export interface AssistantSession {
 
 export interface AssistantMessage {
   id: string;
-  role: 'user' | 'assistant' | 'system' | 'tool';
+  // `toolResult` is what `flattenEntries` emits for standalone tool-output rows;
+  // the Assistant view hides them since the output is already folded into the
+  // owning assistant message's tool-call timeline.
+  role: 'user' | 'assistant' | 'system' | 'tool' | 'toolResult';
   content: string;
   thinking?: string | null;
   run?: AgentRunView;

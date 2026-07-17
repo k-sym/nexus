@@ -321,7 +321,13 @@ export default function AssistantView() {
           {messages.length === 0 ? (
             <p className="text-faint text-sm">Send a message to start.</p>
           ) : (
-            messages.map((message) =>
+            // Standalone tool-result rows are hidden: their output is already
+            // rendered (folded) inside the owning assistant message's tool-call
+            // timeline, so showing them again would dump raw tool output as its
+            // own bubble — the exact regression this filter prevents.
+            messages
+              .filter((message) => message.role !== 'toolResult' && message.role !== 'tool')
+              .map((message) =>
               message.role !== 'user' ? (
                 message.run ? (
                   <div key={message.id} className="flex justify-start">
