@@ -4,9 +4,10 @@ import { OAuthFlowManager } from '../pi/oauth-flows';
 
 test('OAuthFlowManager records auth URL and completes successful login', async () => {
   const manager = new OAuthFlowManager({
-    login: async (_provider, callbacks) => {
-      callbacks.onAuth({ url: 'https://example.test/auth', instructions: 'Open this URL' });
-      callbacks.onProgress?.('Waiting for login');
+    login: async (_provider, _type, interaction) => {
+      interaction.notify({ type: 'auth_url', url: 'https://example.test/auth', instructions: 'Open this URL' });
+      interaction.notify({ type: 'progress', message: 'Waiting for login' });
+      return { type: 'oauth', access: 'test', refresh: 'test', expires: Date.now() + 60_000 };
     },
   });
   const flow = manager.start('anthropic');
@@ -19,9 +20,10 @@ test('OAuthFlowManager records auth URL and completes successful login', async (
 
 test('OAuthFlowManager waits for manual prompt response', async () => {
   const manager = new OAuthFlowManager({
-    login: async (_provider, callbacks) => {
-      const code = await callbacks.onPrompt({ message: 'Paste code', placeholder: 'code' });
-      callbacks.onProgress?.(`received:${code}`);
+    login: async (_provider, _type, interaction) => {
+      const code = await interaction.prompt({ type: 'text', message: 'Paste code', placeholder: 'code' });
+      interaction.notify({ type: 'progress', message: `received:${code}` });
+      return { type: 'oauth', access: 'test', refresh: 'test', expires: Date.now() + 60_000 };
     },
   });
   const flow = manager.start('anthropic');
@@ -35,10 +37,11 @@ test('OAuthFlowManager waits for manual prompt response', async () => {
 
 test('OAuthFlowManager cancels an active flow', async () => {
   const manager = new OAuthFlowManager({
-    login: async (_provider, callbacks) => {
+    login: async (_provider, _type, interaction) => {
       await new Promise((_resolve, reject) => {
-        callbacks.signal?.addEventListener('abort', () => reject(new Error('Login cancelled')));
+        interaction.signal?.addEventListener('abort', () => reject(new Error('Login cancelled')));
       });
+      return { type: 'oauth', access: 'test', refresh: 'test', expires: Date.now() + 60_000 };
     },
   });
   const flow = manager.start('openai-codex');

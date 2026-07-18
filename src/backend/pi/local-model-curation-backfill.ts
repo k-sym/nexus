@@ -6,11 +6,11 @@ interface BackfillRuntime {
   models: Pick<PiRuntime['models'], 'refresh' | 'getAll' | 'getAvailable'>;
 }
 
-export function backfillLocalCuratedModels(
+export async function backfillLocalCuratedModels(
   pi: BackfillRuntime,
   modelCuration: Pick<ModelCurationStore, 'enableConfiguredProviderModels'>,
 ) {
-  pi.models.refresh();
+  await pi.models.refresh();
   const catalog = buildModelCatalog({ pi } as any);
   if (!catalog.some((model) => model.provider === 'local' && model.configured !== false)) return;
   modelCuration.enableConfiguredProviderModels('local', catalog);

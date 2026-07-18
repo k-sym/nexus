@@ -228,7 +228,7 @@ test('PUT /api/settings enables configured local chat model in an existing curat
   const localModelId = '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf';
   const localModelKey = `local/${localModelId}`;
   const app = Fastify({ logger: false });
-  const pi = new PiRuntime({
+  const pi = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
     modelsFile: join(dir, 'models.json'),
@@ -285,7 +285,7 @@ test('PUT /api/settings marks configured local chat model as image-capable when 
   const localModelId = 'qwen2.5-vl-7b-instruct';
   const localModelKey = `local/${localModelId}`;
   const app = Fastify({ logger: false });
-  const pi = new PiRuntime({
+  const pi = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
     modelsFile: join(dir, 'models.json'),

@@ -35,8 +35,8 @@ function config(root: string): NexusConfig {
 
 async function fixture(options: { daemon?: any; githubSource?: any; config?: NexusConfig; pi?: any } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'nexus-trust-'));
-  const pi = new PiRuntime({ authFile: join(root, 'auth.json'), sessionsDir: join(root, 'sessions') });
-  pi.auth.set('anthropic', { type: 'api_key', key: 'pi-secret' });
+  const pi = await PiRuntime.create({ authFile: join(root, 'auth.json'), sessionsDir: join(root, 'sessions') });
+  await pi.auth.login('anthropic', 'api_key', { prompt: async () => 'pi-secret', notify: () => {} });
   const app = Fastify();
   app.decorate('pi', options.pi ?? pi);
   await app.register(registerTrustRoutes, {
@@ -231,7 +231,7 @@ test('trust snapshot namespaces Pi providers and fails soft when auth metadata i
   const root = mkdtempSync(join(tmpdir(), 'nexus-trust-auth-'));
   const failingPi = {
     paths: { authFile: join(root, 'auth.json') },
-    auth: { list: () => { throw new Error('auth file contained sensitive detail'); }, get: () => undefined },
+    auth: { listCredentials: async () => { throw new Error('auth file contained sensitive detail'); } },
   };
   const { app, root: fixtureRoot } = await fixture({ pi: failingPi });
   try {
@@ -249,7 +249,7 @@ test('trust snapshot namespaces Pi providers and fails soft when auth metadata i
 
   const collidingPi = {
     paths: { authFile: join(root, 'auth.json') },
-    auth: { list: () => ['openrouter'], get: () => ({ type: 'api_key', key: 'pi-collision-secret' }) },
+    auth: { listCredentials: async () => [{ providerId: 'openrouter', type: 'api_key' }] },
   };
   const collision = await fixture({ pi: collidingPi });
   try {

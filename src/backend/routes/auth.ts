@@ -1,9 +1,9 @@
 /**
- * Auth routes — thin transport over the pi runtime's `AuthStorage`.
+ * Auth routes — thin transport over pi's unified `ModelRuntime`.
  *
  * The legacy local auth subsystem (`backend/auth/oauth.ts`,
  * `backend/auth/store.ts`) is gone. Auth is now served by pi's
- * `AuthStorage` at `~/.nexus/auth.json`. OAuth flows are wrapped in an
+ * credential store at `~/.nexus/auth.json`. OAuth flows are wrapped in an
  * in-memory flow manager so the React UI can poll progress and provide
  * manual callback input when a provider asks for it.
  */
@@ -21,16 +21,15 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
   const auth = fastify.pi.auth;
 
   fastify.get('/api/auth/has-credentials', async () => {
-    const ids = auth.list();
+    const ids = (await auth.listCredentials()).map((credential) => credential.providerId);
     return { ok: ids.length > 0, providers: ids };
   });
 
   fastify.get('/api/auth/status', async () => {
-    const ids = auth.list();
-    const providers: AuthProvider[] = ids.map((id) => {
-      const cred = auth.get(id);
-      return { id, type: cred?.type ?? 'api_key' };
-    });
+    const providers: AuthProvider[] = (await auth.listCredentials()).map((credential) => ({
+      id: credential.providerId,
+      type: credential.type,
+    }));
     return { providers, hasAny: providers.length > 0 };
   });
 
@@ -39,14 +38,17 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
     if (!body?.provider || !body?.key) {
       return { ok: false, reason: 'provider_and_key_required' };
     }
-    auth.set(body.provider, { type: 'api_key', key: body.key });
+    await auth.login(body.provider, 'api_key', {
+      prompt: async () => body.key!,
+      notify: () => {},
+    });
     return { ok: true };
   });
 
   fastify.post('/api/auth/logout', async (request) => {
     const body = request.body as { provider?: string };
     if (!body?.provider) return { ok: false, reason: 'provider_required' };
-    auth.remove(body.provider);
+    await auth.logout(body.provider);
     return { ok: true };
   });
 
@@ -68,8 +70,7 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
       return { error: 'OAuth flow not found' };
     }
     if (status.state === 'complete') {
-      fastify.pi.auth.reload();
-      fastify.pi.models.refresh();
+      await fastify.pi.models.refresh();
       fastify.modelCuration.markOAuthProviderSynced(status.provider, buildModelCatalog(fastify));
     }
     return status;

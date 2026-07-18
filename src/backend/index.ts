@@ -50,11 +50,11 @@ async function main() {
   writeLocalModelsFile(config);
 
   const db = getDb(getDbPath());
-  const pi = new PiRuntime();
+  const pi = await PiRuntime.create();
 
   const openRouterKey = resolveOpenRouterKey(config);
   if (openRouterKey) {
-    pi.auth.setRuntimeApiKey('openrouter', openRouterKey);
+    await pi.auth.setRuntimeApiKey('openrouter', openRouterKey);
   }
 
   await initMemorySystem(db);
@@ -87,8 +87,8 @@ async function main() {
   app.decorate('db', db);
   app.decorate('pi', pi);
   const modelCuration = new ModelCurationStore(join(getNexusDir(), 'model-curation.json'));
-  backfillOAuthCuratedModels(pi, modelCuration);
-  backfillLocalCuratedModels(pi, modelCuration);
+  await backfillOAuthCuratedModels(pi, modelCuration);
+  await backfillLocalCuratedModels(pi, modelCuration);
 
   app.decorate('chatConcurrency', chatConcurrency);
   app.decorate('modelCuration', modelCuration);
