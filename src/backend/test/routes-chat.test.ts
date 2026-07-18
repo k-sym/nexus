@@ -194,7 +194,7 @@ test('run history reloads multiple assistant/tool messages as one logical run ca
   assert.equal(assistant.run.runId, 'run-1');
 });
 
-function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean; detectGitBranch?: (repoPath: string) => Promise<string> } = {}) {
+async function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean; detectGitBranch?: (repoPath: string) => Promise<string> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-chat-test-'));
   const db = new Database(join(dir, 'test.db'));
   // Minimal schema: projects + chat_threads + chat_messages. (chat_messages
@@ -249,7 +249,7 @@ function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boo
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   };
-  const runtime = runtimeOverride ?? new PiRuntime(paths);
+  const runtime = runtimeOverride ?? await PiRuntime.create(paths);
   const concurrency = new ConcurrencyTracker();
   const app = Fastify({ logger: false });
   app.decorate('db', db);
@@ -294,7 +294,7 @@ const validQuestionAnswer = {
 };
 
 test('question answer route resolves a pending question', async () => {
-  const { app, db, dir, runtime } = makeApp();
+  const { app, db, dir, runtime } = await makeApp();
   try {
     const result = runtime.questions.register('thread-1', 'call-1', questionRequest);
     const res = await app.inject({
@@ -318,7 +318,7 @@ test('question answer route resolves a pending question', async () => {
 });
 
 test('question answer route rejects invalid answers without resolving the question', async () => {
-  const { app, db, dir, runtime } = makeApp();
+  const { app, db, dir, runtime } = await makeApp();
   try {
     const result = runtime.questions.register('thread-1', 'call-1', questionRequest);
     const invalid = await app.inject({
@@ -343,7 +343,7 @@ test('question answer route rejects invalid answers without resolving the questi
 });
 
 test('question answer route returns 404 for unknown, cross-thread, and duplicate submissions', async () => {
-  const { app, db, dir, runtime } = makeApp(undefined, { includeSecondThread: true });
+  const { app, db, dir, runtime } = await makeApp(undefined, { includeSecondThread: true });
   try {
     const result = runtime.questions.register('thread-1', 'call-1', questionRequest);
     const unknown = await app.inject({
@@ -382,7 +382,7 @@ test('question answer route returns 404 for unknown, cross-thread, and duplicate
 });
 
 test('question answer route returns 404 before consulting the broker when the thread does not exist', async () => {
-  const { app, db, dir, runtime } = makeApp();
+  const { app, db, dir, runtime } = await makeApp();
   try {
     const result = runtime.questions.register('missing-thread', 'call-1', questionRequest);
     const res = await app.inject({
@@ -401,7 +401,7 @@ test('question answer route returns 404 before consulting the broker when the th
 });
 
 test('POST /api/threads/:id/messages/stream returns 409 when a *different* thread in the same project is busy', async () => {
-  const { app, db, dir, concurrency } = makeApp();
+  const { app, db, dir, concurrency } = await makeApp();
   try {
     concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
@@ -423,7 +423,7 @@ test('POST /api/threads/:id/messages/stream returns 409 when a *different* threa
 });
 
 test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy thread in the same project', async () => {
-  const { app, db, dir, concurrency } = makeApp();
+  const { app, db, dir, concurrency } = await makeApp();
   try {
     concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
     const res = await app.inject({
@@ -449,7 +449,7 @@ test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy t
 // past and the two could race on the same working tree).
 
 test('POST /api/threads/:id/messages/stream returns 409 project_busy when a mission holds the project-wide slot, even on a different model', async () => {
-  const { app, db, dir, concurrency } = makeApp();
+  const { app, db, dir, concurrency } = await makeApp();
   try {
     // Simulate an assistant_turn mission claiming the project-wide slot.
     const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Overnight mission');
@@ -474,7 +474,7 @@ test('POST /api/threads/:id/messages/stream returns 409 project_busy when a miss
 });
 
 test('GET /api/projects/:id/model-status reports busy=true (projectBusy) when a mission holds the project-wide slot', async () => {
-  const { app, db, dir, concurrency } = makeApp();
+  const { app, db, dir, concurrency } = await makeApp();
   try {
     const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission');
     assert.ok(missionOwner);
@@ -509,7 +509,7 @@ test('POST /api/threads/:id/messages/stream proceeds once the mission releases t
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir, concurrency } = makeApp(runtime);
+  const { app, db, dir, concurrency } = await makeApp(runtime);
   try {
     const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission');
     assert.ok(missionOwner);
@@ -549,7 +549,7 @@ test('POST /api/threads/:id/messages/stream releases the project-wide slot on co
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir, concurrency } = makeApp(runtime);
+  const { app, db, dir, concurrency } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -599,7 +599,7 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  const { app, db, dir } = await makeApp(runtime, { includeSecondThread: true });
   try {
     const first = app.inject({
       method: 'POST',
@@ -664,7 +664,7 @@ test('two simultaneous confirm-cancel requests cannot both start the replacement
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  const { app, db, dir } = await makeApp(runtime, { includeSecondThread: true });
   db.prepare(
     'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
   ).run('thread-3', 'proj-1', 'T3', new Date().toISOString(), new Date().toISOString());
@@ -742,7 +742,7 @@ test('confirm-cancel returns 409 when the previous owner has not released the mo
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  const { app, db, dir } = await makeApp(runtime, { includeSecondThread: true });
   let first: ReturnType<typeof app.inject> | undefined;
   try {
     first = app.inject({
@@ -794,7 +794,7 @@ test('different threads atomically claim a project model before session setup', 
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  const { app, db, dir } = await makeApp(runtime, { includeSecondThread: true });
   let first: ReturnType<typeof app.inject> | undefined;
   let second: ReturnType<typeof app.inject> | undefined;
   try {
@@ -857,7 +857,7 @@ test('POST /api/threads/:id/messages/stream rejects same-thread re-entry without
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const first = app.inject({
       method: 'POST',
@@ -927,7 +927,7 @@ test('POST /api/threads/:id/messages/stream rejects same-thread re-entry with a 
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const first = app.inject({
       method: 'POST',
@@ -996,7 +996,7 @@ test('POST /api/threads/:id/messages/stream claims the thread before awaiting se
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   let first: ReturnType<typeof app.inject> | undefined;
   let second: ReturnType<typeof app.inject> | undefined;
   try {
@@ -1072,7 +1072,7 @@ test('POST /api/threads/:id/messages/stream keeps a setup-completed prompt runni
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   let clientRequest: ReturnType<typeof httpRequest> | undefined;
   try {
     await app.listen({ host: '127.0.0.1', port: 0 });
@@ -1146,7 +1146,7 @@ test('POST /api/threads/:id/messages/stream keeps a disconnected prompt running 
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const first = await app.inject({
       method: 'POST',
@@ -1221,7 +1221,7 @@ test('GET /api/chat/active-runs marks runs waiting on pending questions', async 
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   const stream = app.inject({
     method: 'POST',
     url: '/api/threads/thread-1/messages/stream',
@@ -1283,7 +1283,7 @@ test('GET /api/threads/:threadId keeps unfinished active run history running', a
     dropSession: () => {},
     models: { find: () => ({ provider: 'openrouter', id: 'glm-5.2' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   const stream = app.inject({
     method: 'POST',
     url: '/api/threads/thread-1/messages/stream',
@@ -1328,7 +1328,7 @@ test('POST /api/threads/:id/messages/stream returns model selection errors befor
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'claude-3-5-haiku-latest' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1363,7 +1363,7 @@ test('POST /api/threads/:id/messages/stream rejects too many images', async () =
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1395,7 +1395,7 @@ test('POST /api/threads/:id/messages/stream rejects unsupported image MIME types
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1429,7 +1429,7 @@ test('POST /api/threads/:id/messages/stream forwards and persists accepted image
     dropSession: () => {},
     models: { find: () => ({ provider: 'openai', id: 'vision', input: ['text', 'image'] }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1469,7 +1469,7 @@ test('POST /api/threads/:id/messages/stream stores document attachments and refe
     dropSession: () => {},
     models: { find: () => ({ provider: 'openai', id: 'text', input: ['text'] }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1518,7 +1518,7 @@ test('POST /api/threads/:id/messages/stream rejects images for text-only models'
     dropSession: () => {},
     models: { find: () => ({ provider: 'openai', id: 'text-only', input: ['text'] }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1554,7 +1554,7 @@ test('POST /api/threads/:id/messages/stream rejects images without a selected im
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1590,7 +1590,7 @@ test('POST /api/threads/:id/messages/stream accepts screenshot-sized image paylo
     dropSession: () => {},
     models: { find: () => ({ provider: 'openai', id: 'vision', input: ['text', 'image'] }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const largeImage = {
       type: 'image',
@@ -1631,7 +1631,7 @@ test('POST /api/threads/:id/messages/stream preserves text-only prompt behavior'
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1664,7 +1664,7 @@ test('POST /api/threads/:id/messages/stream emits context usage after prompting'
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1711,7 +1711,7 @@ test('POST /api/threads/:id/messages/stream emits and persists matching run boun
     dropSession: () => {},
     models: { find: () => ({ provider: 'test-provider', id: 'test-model' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1763,7 +1763,7 @@ test('POST /api/threads/:id/messages/stream keeps Anthropic OAuth on the Pi sess
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'claude-haiku-4-5-20251001' }) },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1783,7 +1783,7 @@ test('POST /api/threads/:id/messages/stream keeps Anthropic OAuth on the Pi sess
 });
 
 test('POST /api/projects/:projectId/threads creates a thread row', async () => {
-  const { app, db, dir } = makeApp();
+  const { app, db, dir } = await makeApp();
   try {
     const res = await app.inject({
       method: 'POST',
@@ -1806,7 +1806,7 @@ test('POST /api/projects/:projectId/threads creates a thread row', async () => {
 });
 
 test('GET /api/threads/:threadId returns the thread + empty messages for a fresh thread', async () => {
-  const { app, db, dir } = makeApp();
+  const { app, db, dir } = await makeApp();
   try {
     const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
     assert.equal(res.statusCode, 200);
@@ -1851,7 +1851,7 @@ test('GET /api/threads/:threadId surfaces persisted assistant provider errors', 
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
 
@@ -1888,7 +1888,7 @@ test('GET /api/threads/:threadId preserves image attachments from Pi user entrie
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
 
@@ -1917,7 +1917,7 @@ test('GET /api/threads/:threadId returns raw tool output with signal-filter savi
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
     assert.equal(res.statusCode, 200);
@@ -1946,7 +1946,7 @@ test('GET /api/threads/:threadId falls back to DB messages when no Pi session ex
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     db.prepare(
       'INSERT INTO chat_messages (id, thread_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
@@ -1986,7 +1986,7 @@ test('GET /api/threads/:threadId preserves image attachments from DB fallback ro
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     db.prepare(
       'INSERT INTO chat_messages (id, thread_id, role, content, attachments_json, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -2012,7 +2012,7 @@ test('GET /api/threads/:threadId preserves file attachments from DB fallback row
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const stored = { ...pdfAttachment, path: join(dir, 'project_docs', 'uploads', 'brief.pdf') };
     db.prepare(
@@ -2031,7 +2031,7 @@ test('GET /api/threads/:threadId preserves file attachments from DB fallback row
 });
 
 test('PATCH /api/threads/:threadId renames the thread', async () => {
-  const { app, db, dir } = makeApp();
+  const { app, db, dir } = await makeApp();
   try {
     const res = await app.inject({
       method: 'PATCH',
@@ -2048,7 +2048,7 @@ test('PATCH /api/threads/:threadId renames the thread', async () => {
 });
 
 test('PATCH /api/threads/:threadId rejects empty titles', async () => {
-  const { app, db, dir } = makeApp();
+  const { app, db, dir } = await makeApp();
   try {
     const res = await app.inject({
       method: 'PATCH',
@@ -2064,7 +2064,7 @@ test('PATCH /api/threads/:threadId rejects empty titles', async () => {
 });
 
 test('DELETE /api/threads/:threadId removes the row', async () => {
-  const { app, db, dir } = makeApp();
+  const { app, db, dir } = await makeApp();
   try {
     const res = await app.inject({ method: 'DELETE', url: '/api/threads/thread-1' });
     assert.equal(res.statusCode, 200);
@@ -2086,7 +2086,7 @@ test('DELETE /api/threads/:id removes the thread without calling archive storage
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({ method: 'DELETE', url: '/api/threads/thread-1' });
     assert.equal(res.statusCode, 200);
@@ -2108,7 +2108,7 @@ test('POST /api/threads/:id/archive returns an error and keeps empty sessions', 
     dropSession: () => assert.fail('archive must not drop empty sessions'),
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({ method: 'POST', url: '/api/threads/thread-1/archive' });
     assert.equal(res.statusCode, 400);
@@ -2123,7 +2123,7 @@ test('POST /api/threads/:id/archive returns an error and keeps empty sessions', 
 });
 
 test('GET /api/projects/:projectId/threads returns threads for the project', async () => {
-  const { app, db, dir } = makeApp();
+  const { app, db, dir } = await makeApp();
   try {
     const res = await app.inject({ method: 'GET', url: '/api/projects/proj-1/threads' });
     assert.equal(res.statusCode, 200);
@@ -2139,7 +2139,7 @@ test('GET /api/projects/:projectId/threads returns threads for the project', asy
 
 test('GET /api/projects/:projectId/threads includes the current project git branch', async () => {
   const seenPaths: string[] = [];
-  const { app, db, dir } = makeApp(undefined, {
+  const { app, db, dir } = await makeApp(undefined, {
     detectGitBranch: async (repoPath) => {
       seenPaths.push(repoPath);
       return 'feat/session-icons';
@@ -2159,7 +2159,7 @@ test('GET /api/projects/:projectId/threads includes the current project git bran
 });
 
 test('POST /api/threads/:id/abort returns no_run when nothing is in flight', async () => {
-  const { app, db, dir } = makeApp();
+  const { app, db, dir } = await makeApp();
   try {
     const res = await app.inject({ method: 'POST', url: '/api/threads/thread-1/abort' });
     assert.equal(res.json().ok, false);
@@ -2196,7 +2196,7 @@ test('POST /api/threads/:id/abort records a user-cancelled terminal run', async 
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const stream = app.inject({
       method: 'POST',
@@ -2242,7 +2242,7 @@ test('POST /api/threads/:id/abort rejects an untrusted abort source', async () =
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const stream = app.inject({
       method: 'POST',
@@ -2287,7 +2287,7 @@ test('question cleanup cancels a pending question when its active stream is abor
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const pending = questions.register('thread-1', 'call-1', questionRequest);
     const stream = app.inject({
@@ -2336,7 +2336,7 @@ test('question cleanup leaves the active session running when the response close
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir, concurrency } = makeApp(runtime);
+  const { app, db, dir, concurrency } = await makeApp(runtime);
   const pending = questions.register('thread-1', 'call-1', questionRequest);
   try {
     const response = await app.inject({
@@ -2383,7 +2383,7 @@ test('a normally completed response does not abort its session', async () => {
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const response = await app.inject({
       method: 'POST',
@@ -2428,7 +2428,7 @@ test('question cleanup cancels a pending question when confirm-cancel aborts a c
     dropSession: () => {},
     models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
-  const { app, db, dir } = makeApp(runtime, { includeSecondThread: true });
+  const { app, db, dir } = await makeApp(runtime, { includeSecondThread: true });
   try {
     const pending = questions.register('thread-1', 'call-1', questionRequest);
     const first = app.inject({
@@ -2474,7 +2474,7 @@ test('question cleanup cancels a pending question when the stream aborts interna
     dropSession: () => {},
     models: { find: () => undefined },
   };
-  const { app, db, dir } = makeApp(runtime);
+  const { app, db, dir } = await makeApp(runtime);
   try {
     const pending = questions.register('thread-1', 'call-1', questionRequest);
     const stream = await app.inject({
@@ -2494,7 +2494,7 @@ test('question cleanup cancels a pending question when the stream aborts interna
 });
 
 test('question cleanup cancels a pending question when the thread is deleted', async () => {
-  const { app, db, dir, runtime } = makeApp();
+  const { app, db, dir, runtime } = await makeApp();
   try {
     const pending = runtime.questions.register('thread-1', 'call-1', questionRequest);
     const res = await app.inject({ method: 'DELETE', url: '/api/threads/thread-1' });
@@ -2517,7 +2517,7 @@ test('archiveThreadToMemory summarizes, stores memory, deletes the thread, and d
     'Tests: 500 passed',
   ].join('\n');
   const { archiveThreadToMemory } = await import('../sessions/archive');
-  const { app, db, dir } = makeApp({
+  const { app, db, dir } = await makeApp({
     readMessages: async () => [
       { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'We need archive sessions.' }] } },
       { type: 'message', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'npm test' } }] } },
@@ -2590,7 +2590,7 @@ test('archiveThreadToMemory requests archive summaries from the memory daemon', 
 
   const stored: any[] = [];
   const { archiveThreadToMemory } = await import('../sessions/archive');
-  const { app, db, dir } = makeApp({
+  const { app, db, dir } = await makeApp({
     readMessages: async () => [
       { type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Please preserve this remote archive decision.' }] } },
       { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Decision: use the remote daemon summarizer.' }] } },
@@ -2626,7 +2626,7 @@ test('archiveThreadToMemory requests archive summaries from the memory daemon', 
 
 test('archiveThreadToMemory keeps the thread when memory storage fails', async () => {
   const { archiveThreadToMemory, ArchiveThreadError } = await import('../sessions/archive');
-  const { app, db, dir } = makeApp({
+  const { app, db, dir } = await makeApp({
     readMessages: async () => [
       { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Decision: keep source when memory fails.' }] } },
     ],
@@ -2655,7 +2655,7 @@ test('archiveThreadToMemory keeps the thread when memory storage fails', async (
 
 test('archiveThreadToMemory rejects empty sessions without deleting', async () => {
   const { archiveThreadToMemory, ArchiveThreadError } = await import('../sessions/archive');
-  const { app, db, dir } = makeApp({
+  const { app, db, dir } = await makeApp({
     readMessages: async () => [],
     dropSession: () => assert.fail('dropSession must not run for empty sessions'),
     sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),

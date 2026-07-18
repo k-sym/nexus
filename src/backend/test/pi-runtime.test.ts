@@ -14,14 +14,14 @@ test('cwdSlug encodes repo paths safely', () => {
   assert.equal(cwdSlug('/tmp'), 'tmp');
 });
 
-test('PiRuntime constructs and creates the auth/sessions dirs', () => {
+test('PiRuntime constructs and creates the auth/sessions dirs', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = {
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    new PiRuntime(paths);
+    await PiRuntime.create(paths);
     assert.ok(existsSync(paths.authFile), 'auth file created');
     assert.ok(existsSync(paths.sessionsDir), 'sessions dir created');
   } finally {
@@ -36,7 +36,7 @@ test('PiRuntime.sessionFor returns the same instance for the same thread+cwd', a
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     const cwd = '/tmp/example';
     const a = await rt.sessionFor('thread-1', cwd);
     const b = await rt.sessionFor('thread-1', cwd);
@@ -53,7 +53,7 @@ test('PiRuntime.sessionFor returns a different instance for a different cwd', as
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     const a = await rt.sessionFor('thread-1', '/tmp/a');
     const b = await rt.sessionFor('thread-1', '/tmp/b');
     assert.notStrictEqual(a, b);
@@ -69,7 +69,7 @@ test('PiRuntime.dropSession evicts the cached session', async () => {
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     const cwd = '/tmp/x';
     await rt.sessionFor('thread-1', cwd);
     rt.dropSession('thread-1', cwd);
@@ -89,7 +89,7 @@ test('PiRuntime.createSession configures a session file path under the per-cwd d
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     const session = await rt.sessionFor('thread-1', '/tmp/proj');
     const cwdDir = join(paths.sessionsDir, cwdSlug('/tmp/proj'));
     assert.ok(existsSync(cwdDir), 'per-cwd session dir created');
@@ -112,7 +112,7 @@ test('PiRuntime.sessionFor resumes the on-disk session after the in-memory cache
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     const cwd = '/tmp/proj';
 
     // First "turn": create the session and persist a user + assistant pair.
@@ -153,7 +153,7 @@ test('PiRuntime uses the most recently modified duplicate session file for a thr
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     const cwd = '/tmp/proj';
     const threadId = 'thread-duplicate';
     const cwdDir = join(paths.sessionsDir, cwdSlug(cwd));
@@ -183,7 +183,7 @@ test('PiRuntime.dropSession removes the on-disk session file matching _${threadI
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     const cwd = '/tmp/proj';
     const cwdDir = join(paths.sessionsDir, cwdSlug(cwd));
     const { writeFileSync, mkdirSync } = await import('node:fs');
@@ -220,7 +220,7 @@ test('PiRuntime.dropSession is a no-op for a thread that has no file on disk', a
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     // No sessionFor, no file — should not throw.
     rt.dropSession('never-existed', '/tmp/nowhere');
   } finally {
@@ -274,14 +274,14 @@ test('question and approval extensions install after the Anthropic bridge and be
   assert.strictEqual(options.extensionFactories?.[3], signalFactory);
 });
 
-test('PiRuntime.findModel exposes model input capabilities', () => {
+test('PiRuntime.findModel exposes model input capabilities', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = {
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   };
   try {
-    const rt = new PiRuntime(paths);
+    const rt = await PiRuntime.create(paths);
     (rt.models as any).find = () => ({
       id: 'vision-model',
       name: 'Vision Model',

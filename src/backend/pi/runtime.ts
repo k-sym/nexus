@@ -1,7 +1,7 @@
 /**
  * Pi runtime — the bridge between Fastify and @earendil-works/pi-coding-agent.
  *
- * One PiRuntime per backend process. Owns the AuthStorage and ModelRegistry;
+ * One PiRuntime per backend process. Owns the ModelRuntime and ModelRegistry;
  * per-thread AgentSession instances are created on demand and cached by
  * `threadId::cwd`. Sessions are independent — the SDK is not a "many
  * sessions" runtime; AgentSessionRuntime wraps a single session and we use
@@ -13,8 +13,8 @@ import { homedir } from 'node:os';
 import type { AgentSession, ExtensionFactory } from '@earendil-works/pi-coding-agent';
 import { AGENT_RUN_CUSTOM_TYPE } from '@nexus/shared';
 import {
-  AuthStorage,
   ModelRegistry,
+  ModelRuntime,
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
 import anthropicMessagesBridge from '@blackbelt-technology/pi-anthropic-messages';
@@ -112,7 +112,7 @@ function mostRecentlyModifiedSessionForThread<T extends SessionInfoLike>(
 }
 
 export class PiRuntime {
-  readonly auth: AuthStorage;
+  readonly auth: ModelRuntime;
   readonly models: ModelRegistry;
   /** Internal path config. Exposed read-only for the orchestrator's headless sessions. */
   readonly paths: Required<PiRuntimePaths>;
@@ -128,17 +128,27 @@ export class PiRuntime {
    *  gateway `POST /api/supervise`; read live at each tool call. */
   private readonly supervised = new Set<string>();
 
-  constructor(paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths()) {
+  private constructor(paths: Required<PiRuntimePaths>, modelRuntime: ModelRuntime) {
+    this.paths = paths;
+    this.auth = modelRuntime;
+    this.models = new ModelRegistry(modelRuntime);
+  }
+
+  static async create(paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths()): Promise<PiRuntime> {
     const defaults = defaultPiRuntimePaths();
-    this.paths = {
+    const resolvedPaths = {
       authFile: paths.authFile ?? defaults.authFile,
       sessionsDir: paths.sessionsDir ?? defaults.sessionsDir,
       modelsFile: paths.modelsFile ?? defaults.modelsFile,
     };
-    mkdirSync(join(this.paths.authFile, '..'), { recursive: true });
-    mkdirSync(this.paths.sessionsDir, { recursive: true });
-    this.auth = AuthStorage.create(this.paths.authFile);
-    this.models = ModelRegistry.create(this.auth, this.paths.modelsFile);
+    mkdirSync(join(resolvedPaths.authFile, '..'), { recursive: true });
+    mkdirSync(resolvedPaths.sessionsDir, { recursive: true });
+    const modelRuntime = await ModelRuntime.create({
+      authPath: resolvedPaths.authFile,
+      modelsPath: resolvedPaths.modelsFile,
+      allowModelNetwork: false,
+    });
+    return new PiRuntime(resolvedPaths, modelRuntime);
   }
 
   /**
@@ -256,8 +266,7 @@ export class PiRuntime {
     await resourceLoader.reload();
     const { session } = await createAgentSession({
       cwd,
-      authStorage: this.auth,
-      modelRegistry: this.models,
+      modelRuntime: this.auth,
       sessionManager,
       settingsManager,
       resourceLoader,

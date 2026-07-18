@@ -2,12 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { backfillOAuthCuratedModels } from '../pi/oauth-curation-backfill';
 
-test('backfillOAuthCuratedModels syncs stored OAuth providers once', () => {
+test('backfillOAuthCuratedModels syncs stored OAuth providers once', async () => {
   let refreshes = 0;
   const synced: string[] = [];
   const pi = {
     auth: {
-      get: (provider: string) => (provider === 'openai-codex' ? { type: 'oauth' } : undefined),
+      listCredentials: async () => [{ providerId: 'openai-codex', type: 'oauth' as const }],
     },
     models: {
       refresh: () => {
@@ -24,17 +24,17 @@ test('backfillOAuthCuratedModels syncs stored OAuth providers once', () => {
     },
   };
 
-  backfillOAuthCuratedModels(pi, curation);
+  await backfillOAuthCuratedModels(pi, curation);
 
   assert.equal(refreshes, 1);
   assert.deepEqual(synced, ['openai-codex']);
 });
 
-test('backfillOAuthCuratedModels skips providers already synced', () => {
+test('backfillOAuthCuratedModels skips providers already synced', async () => {
   let refreshes = 0;
   const pi = {
     auth: {
-      get: () => ({ type: 'oauth' }),
+      listCredentials: async () => [{ providerId: 'openai-codex', type: 'oauth' as const }],
     },
     models: {
       refresh: () => {
@@ -51,7 +51,7 @@ test('backfillOAuthCuratedModels skips providers already synced', () => {
     },
   };
 
-  backfillOAuthCuratedModels(pi, curation);
+  await backfillOAuthCuratedModels(pi, curation);
 
   assert.equal(refreshes, 0);
 });

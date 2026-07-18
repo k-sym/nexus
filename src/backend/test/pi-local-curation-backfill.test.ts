@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { backfillLocalCuratedModels } from '../pi/local-model-curation-backfill';
 import { ModelCurationStore } from '../pi/model-curation';
 
-test('backfillLocalCuratedModels adds a configured path-like local model to existing curation', () => {
+test('backfillLocalCuratedModels adds a configured path-like local model to existing curation', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-local-curation-'));
   const localModelId = '/Users/k-sym/Models/ornith-1.0-35b-Q8_0.gguf';
   const localModelKey = `local/${localModelId}`;
@@ -31,7 +31,7 @@ test('backfillLocalCuratedModels adds a configured path-like local model to exis
     const store = new ModelCurationStore(join(dir, 'model-curation.json'));
     store.save(['anthropic/claude-sonnet-4-6']);
 
-    backfillLocalCuratedModels(pi, store);
+    await backfillLocalCuratedModels(pi, store);
 
     const result = store.apply(pi.models.getAll());
     assert.equal(refreshes, 1);
@@ -41,7 +41,7 @@ test('backfillLocalCuratedModels adds a configured path-like local model to exis
   }
 });
 
-test('backfillLocalCuratedModels skips when local has no configured available model', () => {
+test('backfillLocalCuratedModels skips when local has no configured available model', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-local-curation-'));
   let refreshes = 0;
   const pi = {
@@ -60,7 +60,7 @@ test('backfillLocalCuratedModels skips when local has no configured available mo
     const store = new ModelCurationStore(join(dir, 'model-curation.json'));
     store.save([]);
 
-    backfillLocalCuratedModels(pi, store);
+    await backfillLocalCuratedModels(pi, store);
 
     assert.equal(refreshes, 1);
     assert.deepEqual(store.read()?.enabledModelKeys, []);

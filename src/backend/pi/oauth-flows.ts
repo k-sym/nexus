@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import type { AuthStorage } from '@earendil-works/pi-coding-agent';
 import {
-  OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD,
-  type OAuthLoginCallbacks,
-  type OAuthPrompt,
-  type OAuthSelectPrompt,
-} from '@earendil-works/pi-ai/oauth';
+  type AuthInteraction,
+  type AuthPrompt,
+} from '@earendil-works/pi-ai';
+import type { ModelRuntime } from '@earendil-works/pi-coding-agent';
 
-type LoginFn = AuthStorage['login'];
+type LoginFn = ModelRuntime['login'];
 
 export type OAuthFlowState = 'pending' | 'needs_input' | 'complete' | 'error' | 'cancelled';
 
@@ -23,7 +21,7 @@ export interface OAuthFlowStatus {
     intervalSeconds?: number;
     expiresInSeconds?: number;
   };
-  prompt?: OAuthPrompt;
+  prompt?: AuthPrompt;
   messages: string[];
   error?: string;
 }
@@ -42,7 +40,7 @@ interface FlowRecord extends OAuthFlowStatus {
 export class OAuthFlowManager {
   private readonly flows = new Map<string, FlowRecord>();
 
-  constructor(private readonly auth: Pick<AuthStorage, 'login'> | { login: LoginFn }) {}
+  constructor(private readonly auth: Pick<ModelRuntime, 'login'> | { login: LoginFn }) {}
 
   start(provider: string): { id: string; done: Promise<void> } {
     const id = randomUUID();
@@ -57,7 +55,7 @@ export class OAuthFlowManager {
     };
     const callbacks = this.callbacksFor(record);
     record.done = this.auth
-      .login(provider as never, callbacks)
+      .login(provider, 'oauth', callbacks)
       .then(() => {
         if (record.state !== 'cancelled') {
           record.state = 'complete';
@@ -104,8 +102,8 @@ export class OAuthFlowManager {
     return true;
   }
 
-  private callbacksFor(flow: FlowRecord): OAuthLoginCallbacks {
-    const waitForInput = (prompt: OAuthPrompt) =>
+  private callbacksFor(flow: FlowRecord): AuthInteraction {
+    const waitForInput = (prompt: AuthPrompt) =>
       new Promise<string>((resolve, reject) => {
         flow.state = 'needs_input';
         flow.prompt = prompt;
@@ -114,27 +112,23 @@ export class OAuthFlowManager {
 
     return {
       signal: flow.controller.signal,
-      onAuth: (info) => {
-        flow.authUrl = info.url;
-        flow.instructions = info.instructions;
+      prompt: async (prompt) => {
+        if (prompt.type === 'select' && flow.provider === 'openai-codex') {
+          return prompt.options.find((option) => option.id === 'device_code')?.id ?? prompt.options[0]?.id ?? '';
+        }
+        return waitForInput(prompt);
       },
-      onDeviceCode: (info) => {
-        flow.deviceCode = info;
-        flow.authUrl = info.verificationUri;
-        flow.instructions = `Enter code ${info.userCode}`;
-      },
-      onPrompt: waitForInput,
-      onManualCodeInput: () =>
-        waitForInput({
-          message: 'Paste the final OAuth redirect URL or authorization code.',
-          placeholder: 'https://.../callback?code=...',
-        }),
-      onProgress: (message) => {
-        flow.messages.push(message);
-      },
-      onSelect: async (prompt: OAuthSelectPrompt) => {
-        if (flow.provider === 'openai-codex') return OPENAI_CODEX_DEVICE_CODE_LOGIN_METHOD;
-        return prompt.options[0]?.id;
+      notify: (event) => {
+        if (event.type === 'auth_url') {
+          flow.authUrl = event.url;
+          flow.instructions = event.instructions;
+        } else if (event.type === 'device_code') {
+          flow.deviceCode = event;
+          flow.authUrl = event.verificationUri;
+          flow.instructions = `Enter code ${event.userCode}`;
+        } else if (event.type === 'info' || event.type === 'progress') {
+          flow.messages.push(event.message);
+        }
       },
     };
   }

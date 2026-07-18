@@ -14,9 +14,9 @@
   },
   "dependencies": {
     "@blackbelt-technology/pi-anthropic-messages": "^0.3.4",
-    "@earendil-works/pi-agent-core": "^0.80.7",
-    "@earendil-works/pi-ai": "^0.80.7",
-    "@earendil-works/pi-coding-agent": "^0.80.7",
+    "@earendil-works/pi-agent-core": "^0.80.10",
+    "@earendil-works/pi-ai": "^0.80.10",
+    "@earendil-works/pi-coding-agent": "^0.80.10",
     "@fastify/cors": "^10.0.2",
     "@fastify/error": "^4.1.0",
     "@fastify/sensible": "^6.0.0",

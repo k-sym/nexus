@@ -99,7 +99,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const pi = (fastify as any).pi;
     saveConfig(merged);
     writeLocalModelsFile(merged, pi?.paths?.modelsFile);
-    pi?.models?.refresh?.();
+    await pi?.models?.refresh?.();
     if (merged.models.local.base_url.trim() && merged.models.local.chat_model.trim() && pi) {
       fastify.modelCuration?.enableConfiguredProviderModels('local', buildModelCatalog(fastify));
     }

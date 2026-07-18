@@ -97,15 +97,15 @@ export async function buildTrustSnapshot(
   };
   const piProviderIds: string[] = [];
   try {
-    for (const provider of pi.auth.list()) {
+    for (const credential of await pi.auth.listCredentials()) {
+      const provider = credential.providerId;
       try {
-        const credential = pi.auth.get(provider);
-        if (credential) piProviderIds.push(provider);
+        piProviderIds.push(provider);
         secrets[`pi:${provider}`] = {
-          configured: Boolean(credential),
-          source: credential ? 'pi-auth-file' : 'unknown',
+          configured: true,
+          source: 'pi-auth-file',
           location: pi.paths.authFile,
-          ...(credential ? { credentialType: credential.type === 'oauth' ? 'oauth' as const : 'api_key' as const } : {}),
+          credentialType: credential.type === 'oauth' ? 'oauth' as const : 'api_key' as const,
         };
       } catch {
         secrets[`pi:${provider}`] = { configured: false, source: 'unknown', location: pi.paths.authFile };

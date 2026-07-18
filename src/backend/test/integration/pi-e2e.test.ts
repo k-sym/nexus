@@ -44,7 +44,7 @@ test('POST /api/threads/:id/messages/stream returns 200 NDJSON', async () => {
     't1', 'p1', 'T1', new Date().toISOString(), new Date().toISOString(),
   );
 
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
@@ -90,7 +90,7 @@ test('GET /api/threads/:threadId returns thread + empty messages for a fresh thr
   db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run(
     't1', 'p1', 'T1', new Date().toISOString(), new Date().toISOString(),
   );
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
@@ -114,7 +114,7 @@ test('GET /api/threads/:threadId returns thread + empty messages for a fresh thr
 
 test('GET /api/models returns the pi runtime model registry (configured = auth.json present + env keys)', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
@@ -136,7 +136,7 @@ test('GET /api/models returns the pi runtime model registry (configured = auth.j
 
 test('GET /api/models returns allModels plus curated models', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
@@ -160,7 +160,7 @@ test('GET /api/models returns allModels plus curated models', async () => {
 
 test('PUT /api/models/curation saves enabled model keys', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
@@ -191,7 +191,7 @@ test('PUT /api/models/curation saves enabled model keys', async () => {
 
 test('PUT /api/models/curation ignores unconfigured model keys', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
@@ -250,7 +250,7 @@ test('GET /api/models includes configured Nexus local model from custom registry
       },
     },
   }));
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
     modelsFile,
@@ -285,7 +285,7 @@ test('GET /api/models includes configured Nexus local model from custom registry
 
 test('POST /api/auth/start-oauth starts a flow', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-auth-'));
-  const runtime = new PiRuntime({
+  const runtime = await PiRuntime.create({
     authFile: join(dir, 'auth.json'),
     sessionsDir: join(dir, 'sessions'),
   });
@@ -293,7 +293,10 @@ test('POST /api/auth/start-oauth starts a flow', async () => {
   app.decorate('pi', runtime);
   app.decorate('modelCuration', new ModelCurationStore(join(dir, 'model-curation.json')));
   app.decorate('oauthFlows', new OAuthFlowManager({
-    login: async (_provider, callbacks) => callbacks.onAuth({ url: 'https://example.test/login' }),
+    login: async (_provider, _type, interaction) => {
+      interaction.notify({ type: 'auth_url', url: 'https://example.test/login' });
+      return { type: 'oauth', access: 'test', refresh: 'test', expires: Date.now() + 60_000 };
+    },
   }));
   app.register(registerAuthRoutes);
   try {
@@ -313,20 +316,57 @@ test('POST /api/auth/start-oauth starts a flow', async () => {
   }
 });
 
-test('GET /api/auth/oauth/:flowId refreshes auth and models after OAuth completes', async () => {
-  let authReloads = 0;
+test('API key save, status, and logout use ModelRuntime credential storage', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-auth-key-'));
+  const runtime = await PiRuntime.create({
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  });
+  const app = Fastify({ logger: false });
+  app.decorate('pi', runtime);
+  app.decorate('modelCuration', new ModelCurationStore(join(dir, 'model-curation.json')));
+  app.decorate('oauthFlows', new OAuthFlowManager(runtime.auth));
+  app.register(registerAuthRoutes);
+  try {
+    const saved = await app.inject({
+      method: 'POST',
+      url: '/api/auth/save-key',
+      payload: { provider: 'openrouter', key: 'test-key' },
+    });
+    assert.equal(saved.statusCode, 200);
+    assert.equal(saved.json().ok, true);
+
+    const status = await app.inject({ method: 'GET', url: '/api/auth/status' });
+    assert.deepEqual(status.json(), {
+      providers: [{ id: 'openrouter', type: 'api_key' }],
+      hasAny: true,
+    });
+
+    const logout = await app.inject({
+      method: 'POST',
+      url: '/api/auth/logout',
+      payload: { provider: 'openrouter' },
+    });
+    assert.equal(logout.json().ok, true);
+    assert.deepEqual((await app.inject({ method: 'GET', url: '/api/auth/status' })).json(), {
+      providers: [],
+      hasAny: false,
+    });
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/auth/oauth/:flowId refreshes models after OAuth completes', async () => {
   let modelRefreshes = 0;
   const syncedProviders: string[] = [];
   const app = Fastify({ logger: false });
   app.decorate('pi', {
     auth: {
-      list: () => [],
-      get: () => undefined,
-      set: () => {},
-      remove: () => {},
-      reload: () => {
-        authReloads += 1;
-      },
+      listCredentials: async () => [],
+      login: async () => ({ type: 'api_key' }),
+      logout: async () => {},
     },
     models: {
       refresh: () => {
@@ -360,7 +400,6 @@ test('GET /api/auth/oauth/:flowId refreshes auth and models after OAuth complete
   try {
     const res = await app.inject({ method: 'GET', url: '/api/auth/oauth/flow-complete' });
     assert.equal(res.statusCode, 200);
-    assert.equal(authReloads, 1);
     assert.equal(modelRefreshes, 1);
     assert.deepEqual(syncedProviders, ['openai-codex']);
   } finally {
