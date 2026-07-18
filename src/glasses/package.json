@@ -26,9 +26,9 @@
     "@evenrealities/evenhub-simulator": "^0.8.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^4.3.0",
-    "typescript": "~5.4.0",
-    "vite": "^5.4.0"
+    "@vitejs/plugin-react": "^6.0.3",
+    "typescript": "~5.9.3",
+    "vite": "^8.1.5"
   },
   "comment": "Phase 3b adds even-toolkit + @evenrealities/even_hub_sdk for the HUD; kept out of the first install so the dashboard installs clean."
 }
