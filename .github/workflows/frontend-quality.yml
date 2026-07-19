@@ -1,0 +1,91 @@
+name: Frontend quality
+
+on:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - src/shared/**
+      - src/frontend/**
+      - .github/workflows/frontend-quality.yml
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - package-lock.json
+      - src/shared/**
+      - src/frontend/**
+      - .github/workflows/frontend-quality.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Test, typecheck, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run --workspace=src/shared build
+
+      - name: Run frontend tests
+        run: npm run --workspace=src/frontend test
+
+      - name: Typecheck frontend
+        run: npm run --workspace=src/frontend typecheck
+
+      - name: Build frontend
+        run: npm run --workspace=src/frontend build
+
+  visual:
+    name: Visual regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run visual regression tests
+        working-directory: src/frontend
+        run: npm run test:visual
+
+      - name: Upload visual test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-visual-report
+          path: |
+            src/frontend/playwright-report
+            src/frontend/test-results/visual
+          retention-days: 7
