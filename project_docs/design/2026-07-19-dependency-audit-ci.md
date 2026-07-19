@@ -20,4 +20,4 @@ Local verification completed with successful audits for the root workspace, glas
 
 ## Dependabot follow-up
 
-Dependabot now checks the root npm workspace, glasses app, memory daemon, and GitHub Actions every Monday on staggered schedules. Patch and minor updates are grouped per dependency area to limit pull-request noise; major upgrades remain separate pull requests for deliberate review. The Pi runtime family retains its own update group because those packages are released and migrated together.
+Dependabot now checks the root npm workspace, glasses app, memory daemon, and GitHub Actions every Monday at 07:30 Europe/London. Patch and minor updates are grouped per dependency area to limit pull-request noise; major upgrades remain separate pull requests for deliberate review. The Pi runtime family retains its own update group because those packages are released and migrated together.

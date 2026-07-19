@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "08:00"
+      time: "07:30"
       timezone: Europe/London
     open-pull-requests-limit: 3
     commit-message:
@@ -36,7 +36,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "08:15"
+      time: "07:30"
       timezone: Europe/London
     open-pull-requests-limit: 3
     commit-message:
@@ -57,7 +57,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "08:30"
+      time: "07:30"
       timezone: Europe/London
     open-pull-requests-limit: 3
     commit-message:
@@ -78,7 +78,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-      time: "08:45"
+      time: "07:30"
       timezone: Europe/London
     open-pull-requests-limit: 3
     commit-message:
