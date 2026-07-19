@@ -53,7 +53,7 @@ function MemoryArticle({ memory, selected, onView, onCopy, onEdit, onDelete }: M
             onClick={() => onView(memory)}
             aria-label="View memory"
             title="View memory"
-            className="p-1.5 rounded text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-sm text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <Eye size={15} />
           </button>
@@ -62,7 +62,7 @@ function MemoryArticle({ memory, selected, onView, onCopy, onEdit, onDelete }: M
             onClick={() => onCopy(memory)}
             aria-label="Copy memory"
             title="Copy memory"
-            className="p-1.5 rounded text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-sm text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <Copy size={15} />
           </button>
@@ -71,7 +71,7 @@ function MemoryArticle({ memory, selected, onView, onCopy, onEdit, onDelete }: M
             onClick={() => onEdit(memory)}
             aria-label="Edit memory"
             title="Edit memory"
-            className="p-1.5 rounded text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+            className="p-1.5 rounded-sm text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
           >
             <PencilSimple size={15} />
           </button>
@@ -80,7 +80,7 @@ function MemoryArticle({ memory, selected, onView, onCopy, onEdit, onDelete }: M
             onClick={() => onDelete(memory)}
             aria-label="Delete memory"
             title="Delete memory"
-            className="p-1.5 rounded text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+            className="p-1.5 rounded-sm text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
           >
             <Trash size={15} />
           </button>
@@ -226,7 +226,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
             onChange={e => setQuery(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Search memories..."
-            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-strong"
+            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-hidden focus:border-strong"
           />
           <button
             type="button"
@@ -284,7 +284,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
                     type="button"
                     onClick={() => { setSelected(null); setEditing(false); }}
                     aria-label="Close memory detail"
-                    className="p-1.5 rounded text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
+                    className="p-1.5 rounded-sm text-zinc-500 hover:text-zinc-100 hover:bg-zinc-800 transition-colors cursor-pointer"
                   >
                     <X size={15} />
                   </button>
@@ -304,7 +304,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
                       value={editContent}
                       onChange={e => setEditContent(e.target.value)}
                       rows={8}
-                      className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 resize-y focus:outline-none focus:border-strong"
+                      className="w-full bg-zinc-900 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 resize-y focus:outline-hidden focus:border-strong"
                     />
                     <div className="flex gap-2">
                       <button
@@ -369,7 +369,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
           <select
             value={newCategory}
             onChange={e => setNewCategory(e.target.value)}
-            className="bg-zinc-950 border border-zinc-800 rounded-md px-2 py-2 text-sm text-zinc-200 focus:outline-none"
+            className="bg-zinc-950 border border-zinc-800 rounded-md px-2 py-2 text-sm text-zinc-200 focus:outline-hidden"
           >
             {CATEGORIES.map(c => (
               <option key={c} value={c}>{c}</option>
@@ -380,7 +380,7 @@ export default function MemoryView({ projectId }: MemoryViewProps) {
             onChange={e => setNewMemory(e.target.value)}
             placeholder="Add a memory..."
             rows={1}
-            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 resize-none focus:outline-none focus:border-strong"
+            className="flex-1 bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 resize-none focus:outline-hidden focus:border-strong"
           />
           <button
             type="button"

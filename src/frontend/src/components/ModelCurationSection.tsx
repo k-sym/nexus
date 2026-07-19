@@ -59,7 +59,7 @@ export function ModelCurationSection() {
             type="button"
             onClick={() => void saveAll([])}
             disabled={bulkSaving || enabledModelKeys.length === 0}
-            className="rounded border border-zinc-800 px-2 py-1.5 text-xs text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 disabled:opacity-40"
+            className="rounded-sm border border-zinc-800 px-2 py-1.5 text-xs text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 disabled:opacity-40"
           >
             Deselect all
           </button>
@@ -67,7 +67,7 @@ export function ModelCurationSection() {
             type="button"
             onClick={() => void saveAll(configuredModels.map((model) => modelKey(model.provider, model.id)))}
             disabled={bulkSaving || enabledModelKeys.length === configuredModels.length}
-            className="rounded border border-zinc-800 px-2 py-1.5 text-xs text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 disabled:opacity-40"
+            className="rounded-sm border border-zinc-800 px-2 py-1.5 text-xs text-zinc-400 hover:border-zinc-600 hover:text-zinc-200 disabled:opacity-40"
           >
             Select all
           </button>
@@ -77,12 +77,12 @@ export function ModelCurationSection() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search models…"
-              className="w-full rounded bg-zinc-950 border border-zinc-800 pl-7 pr-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-indigo-500/50"
+              className="w-full rounded-sm bg-zinc-950 border border-zinc-800 pl-7 pr-2 py-1.5 text-xs text-zinc-200 focus:outline-hidden focus:border-indigo-500/50"
             />
           </div>
         </div>
       </div>
-      <div className="max-h-96 overflow-y-auto rounded border border-zinc-800 divide-y divide-zinc-800">
+      <div className="max-h-96 overflow-y-auto rounded-sm border border-zinc-800 divide-y divide-zinc-800">
         {filtered.map((model) => {
           const key = modelKey(model.provider, model.id);
           const enabled = enabledSet.has(key);

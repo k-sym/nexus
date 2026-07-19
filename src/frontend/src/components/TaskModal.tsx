@@ -23,7 +23,7 @@ export default function TaskModal({ columnLabel, task, onClose, onSubmit }: Task
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-center justify-center z-50" onClick={onClose}>
       <div className="surface-glass border border-subtle rounded-xl w-full max-w-md p-6" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-lg font-semibold mb-1">{isEdit ? 'Edit Task' : 'New Task'}</h2>
         <p className="text-xs text-faint mb-4">
@@ -37,7 +37,7 @@ export default function TaskModal({ columnLabel, task, onClose, onSubmit }: Task
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="What needs to be done?"
-              className="w-full surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+              className="w-full surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               autoFocus
             />
           </div>
@@ -48,7 +48,7 @@ export default function TaskModal({ columnLabel, task, onClose, onSubmit }: Task
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Details, context, requirements..."
               rows={3}
-              className="w-full surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
+              className="w-full surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong"
             />
           </div>
           <div>

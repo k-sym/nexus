@@ -125,7 +125,7 @@ export function TrustPrivacySection() {
             type="button"
             onClick={() => void rebuild()}
             disabled={operation !== null}
-            className="px-3 py-1.5 surface-elevated rounded text-xs text-primary disabled:opacity-40"
+            className="px-3 py-1.5 surface-elevated rounded-sm text-xs text-primary disabled:opacity-40"
           >
             {operation === 'rebuild' ? 'Rebuilding…' : 'Rebuild memory index'}
           </button>
@@ -139,13 +139,13 @@ export function TrustPrivacySection() {
             onChange={(event) => setConfirmation(event.target.value)}
             placeholder={CLEAR_PHRASE}
             disabled={operation !== null}
-            className="w-full surface-panel border border-subtle rounded px-3 py-2 text-xs font-mono text-primary"
+            className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-xs font-mono text-primary"
           />
           <button
             type="button"
             onClick={() => void clear()}
             disabled={!canClear}
-            className="mt-2 px-3 py-1.5 rounded text-xs bg-red-500/15 text-red-400 disabled:opacity-40"
+            className="mt-2 px-3 py-1.5 rounded-sm text-xs bg-red-500/15 text-red-400 disabled:opacity-40"
           >
             {operation === 'clear' ? 'Clearing…' : 'Clear Nexus memory'}
           </button>

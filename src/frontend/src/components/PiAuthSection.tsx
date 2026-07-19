@@ -237,7 +237,7 @@ export function PiAuthSection() {
             </a>
           )}
           {flow.deviceCode && (
-            <div className="mt-2 inline-flex rounded border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-zinc-100">
+            <div className="mt-2 inline-flex rounded-sm border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-zinc-100">
               {flow.deviceCode}
             </div>
           )}
@@ -251,13 +251,13 @@ export function PiAuthSection() {
                 value={manualValue}
                 onChange={(e) => setManualValue(e.target.value)}
                 placeholder={flow.prompt}
-                className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+                className="flex-1 bg-zinc-950 border border-zinc-800 rounded-sm px-2 py-1 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-hidden focus:border-indigo-500/50"
               />
               <button
                 type="button"
                 onClick={submitManualValue}
                 disabled={saving === flow.provider || !manualValue.trim()}
-                className="px-2 py-1 text-xs bg-indigo-500 text-ink rounded hover:bg-indigo-600 disabled:opacity-40"
+                className="px-2 py-1 text-xs bg-indigo-500 text-ink rounded-sm hover:bg-indigo-600 disabled:opacity-40"
               >
                 Submit OAuth response
               </button>
@@ -279,7 +279,7 @@ export function PiAuthSection() {
                 <button
                   onClick={() => logout(p.id)}
                   disabled={saving === p.id}
-                  className="ml-auto px-2 py-1 text-xs bg-zinc-800 text-zinc-400 rounded hover:bg-zinc-700 disabled:opacity-40"
+                  className="ml-auto px-2 py-1 text-xs bg-zinc-800 text-zinc-400 rounded-sm hover:bg-zinc-700 disabled:opacity-40"
                 >
                   {saving === p.id ? '…' : 'Remove'}
                 </button>
@@ -291,12 +291,12 @@ export function PiAuthSection() {
                   value={newKey[p.id] || ''}
                   onChange={(e) => setNewKey((prev) => ({ ...prev, [p.id]: e.target.value }))}
                   placeholder="sk-…"
-                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-indigo-500/50"
+                  className="flex-1 bg-zinc-950 border border-zinc-800 rounded-sm px-2 py-1 text-xs font-mono text-zinc-200 placeholder:text-zinc-600 focus:outline-hidden focus:border-indigo-500/50"
                 />
                 <button
                   onClick={() => saveKey(p.id)}
                   disabled={saving === p.id || !newKey[p.id]}
-                  className="px-2 py-1 text-xs bg-indigo-500 text-ink rounded hover:bg-indigo-600 disabled:opacity-40"
+                  className="px-2 py-1 text-xs bg-indigo-500 text-ink rounded-sm hover:bg-indigo-600 disabled:opacity-40"
                 >
                   {saving === p.id ? '…' : 'Save'}
                 </button>
@@ -306,7 +306,7 @@ export function PiAuthSection() {
                     onClick={() => startOAuth(p.id)}
                     disabled={saving === p.id}
                     aria-label={`Subscription login ${p.label}`}
-                    className="px-2 py-1 text-xs bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700 disabled:opacity-40"
+                    className="px-2 py-1 text-xs bg-zinc-800 text-zinc-300 rounded-sm hover:bg-zinc-700 disabled:opacity-40"
                   >
                     Subscription login
                   </button>

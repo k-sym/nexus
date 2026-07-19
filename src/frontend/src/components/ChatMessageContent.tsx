@@ -168,7 +168,7 @@ export default function ChatMessageContent({ text, onOpenPath, linkifyPaths = tr
           return <ChatArtifactLinks text={codeText} onOpenPath={onOpenPath} />;
         }
         return (
-          <code className={hasLanguage || hasNewline ? className : 'rounded border border-subtle bg-zinc-950/45 px-1 py-0.5 text-[0.92em] accent-text'}>
+          <code className={hasLanguage || hasNewline ? className : 'rounded-sm border border-subtle bg-zinc-950/45 px-1 py-0.5 text-[0.92em] accent-text'}>
             {children}
           </code>
         );

@@ -77,7 +77,7 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
   };
 
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-end sm:items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-xs flex items-end sm:items-center justify-center z-50" onClick={onClose}>
       <div className="surface-glass border border-subtle rounded-t-2xl sm:rounded-2xl w-full max-w-5xl max-h-[88vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
         <header className="flex items-center justify-between gap-4 px-5 py-4 border-b border-subtle">
           <div>
@@ -108,7 +108,7 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
                         <div className="text-sm font-medium text-primary">{hunk.file}</div>
                         <div className="text-[11px] text-faint mt-0.5">{hunk.header} · {hunk.staged ? 'staged' : 'unstaged'}</div>
                       </div>
-                      <span className="text-[10px] surface-elevated text-faint px-2 py-1 rounded">{hunk.id}</span>
+                      <span className="text-[10px] surface-elevated text-faint px-2 py-1 rounded-sm">{hunk.id}</span>
                     </div>
                     <div className="p-4 space-y-4">
                       <pre className="bg-black/30 border border-subtle rounded-lg p-3 overflow-x-auto text-[11px] text-muted leading-relaxed">{hunk.diff}</pre>

@@ -24,7 +24,7 @@ export function TaskModelPicker({ open, onPick, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs"
       data-testid="task-model-picker"
       onClick={onClose}
     >
@@ -58,7 +58,7 @@ export function TaskModelPicker({ open, onPick, onClose }: Props) {
             onClick={() => picked && onPick(picked)}
             disabled={!picked}
             data-testid="task-model-picker-run"
-            className="px-3 py-1.5 text-xs accent-button rounded disabled:opacity-40"
+            className="px-3 py-1.5 text-xs accent-button rounded-sm disabled:opacity-40"
           >
             Run task
           </button>

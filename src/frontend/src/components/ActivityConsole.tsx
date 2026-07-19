@@ -163,7 +163,7 @@ export default function ActivityConsole({
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search operations…"
-            className="w-full pl-8 pr-3 py-1.5 text-sm bg-[var(--surface-hover)] border border-subtle rounded-md text-primary placeholder:text-faint focus:outline-none focus:border-[var(--border-strong)]"
+            className="w-full pl-8 pr-3 py-1.5 text-sm bg-[var(--surface-hover)] border border-subtle rounded-md text-primary placeholder:text-faint focus:outline-hidden focus:border-[var(--border-strong)]"
           />
         </div>
         <select

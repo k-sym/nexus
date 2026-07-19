@@ -26,7 +26,7 @@ export function RunStatusStrip({ run, fallbackLabel }: RunStatusStripProps) {
       data-testid="run-status"
       aria-live="polite"
     >
-      <Spinner className="h-3.5 w-3.5 animate-spin flex-shrink-0" aria-hidden="true" />
+      <Spinner className="h-3.5 w-3.5 animate-spin shrink-0" aria-hidden="true" />
       <span className="font-medium">{label}</span>
       {run && (
         <>

@@ -31,7 +31,7 @@ export default function ConfirmHost() {
     <div
       role="dialog"
       aria-modal="true"
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-xs"
       onClick={() => request.resolve(false)}
     >
       <div

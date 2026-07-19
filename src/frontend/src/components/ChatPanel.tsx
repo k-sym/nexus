@@ -688,13 +688,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           </span>
           <button
             onClick={() => setPendingConfirm(null)}
-            className="px-2 py-0.5 rounded border border-subtle text-muted hover:text-white"
+            className="px-2 py-0.5 rounded-sm border border-subtle text-muted hover:text-white"
           >
             Wait
           </button>
           <button
             onClick={confirmCancelOther}
-            className="px-2 py-0.5 rounded border border-amber-700 bg-amber-800/50 text-amber-100 hover:bg-amber-700/50"
+            className="px-2 py-0.5 rounded-sm border border-amber-700 bg-amber-800/50 text-amber-100 hover:bg-amber-700/50"
           >
             Start (cancel)
           </button>
@@ -781,7 +781,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
                   />
                 ) : (
                   <div className="flex h-full items-center gap-2 pr-6">
-                    <span className="rounded border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                    <span className="rounded-sm border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
                       {fileExtensionLabel(attachment.name)}
                     </span>
                     <span className="truncate text-xs text-primary">{attachment.name}</span>
@@ -796,7 +796,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
                   x
                 </button>
                 {attachment.type === 'image' && attachment.name && (
-                  <span className="absolute left-1 bottom-1 max-w-[4.5rem] truncate rounded bg-zinc-950/80 px-1 text-[9px] text-zinc-200">
+                  <span className="absolute left-1 bottom-1 max-w-[4.5rem] truncate rounded-sm bg-zinc-950/80 px-1 text-[9px] text-zinc-200">
                     {attachment.name}
                   </span>
                 )}
@@ -814,7 +814,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
             rows={2}
             data-testid="chat-input"
-            className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
+            className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong"
           />
           <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
             <ContextUsageLabel usage={state.contextUsage} />
@@ -942,7 +942,7 @@ function MessageBubble({
                   key={`${attachment.name}-${index}`}
                   className="min-w-0 rounded-md border border-subtle bg-zinc-950/35 px-2 py-1.5 text-xs text-primary"
                 >
-                  <span className="mr-2 rounded border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                  <span className="mr-2 rounded-sm border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
                     {fileExtensionLabel(attachment.name)}
                   </span>
                   <span className="break-all">{attachment.name}</span>
