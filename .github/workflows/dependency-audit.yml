@@ -1,0 +1,66 @@
+name: Dependency audit
+
+on:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - src/backend/package.json
+      - src/frontend/package.json
+      - src/glasses/package.json
+      - src/glasses/package-lock.json
+      - src/memory-daemon/package.json
+      - src/memory-daemon/package-lock.json
+      - .github/workflows/dependency-audit.yml
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - package-lock.json
+      - src/backend/package.json
+      - src/frontend/package.json
+      - src/glasses/package.json
+      - src/glasses/package-lock.json
+      - src/memory-daemon/package.json
+      - src/memory-daemon/package-lock.json
+      - .github/workflows/dependency-audit.yml
+  schedule:
+    - cron: "30 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: Audit ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: workspace
+            directory: .
+          - name: glasses
+            directory: src/glasses
+          - name: memory daemon
+            directory: src/memory-daemon
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Audit production and development dependencies
+        working-directory: ${{ matrix.directory }}
+        run: npm audit --audit-level=moderate
