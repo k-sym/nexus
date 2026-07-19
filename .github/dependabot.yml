@@ -13,14 +13,83 @@ updates:
       include: scope
     labels:
       - dependencies
-      - pi
-    allow:
-      - dependency-name: "@earendil-works/pi-agent-core"
-      - dependency-name: "@earendil-works/pi-ai"
-      - dependency-name: "@earendil-works/pi-coding-agent"
-      - dependency-name: "@blackbelt-technology/pi-anthropic-messages"
     groups:
       pi-runtime:
         patterns:
           - "@earendil-works/pi-*"
           - "@blackbelt-technology/pi-anthropic-messages"
+        update-types:
+          - minor
+          - patch
+      routine-updates:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "@earendil-works/pi-*"
+          - "@blackbelt-technology/pi-anthropic-messages"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /src/glasses
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:15"
+      timezone: Europe/London
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: deps
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      routine-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    directory: /src/memory-daemon
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:30"
+      timezone: Europe/London
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: deps
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      routine-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "08:45"
+      timezone: Europe/London
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: deps
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      routine-updates:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
