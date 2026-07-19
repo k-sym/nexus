@@ -97,7 +97,7 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
                   <div className="flex items-center justify-between">
                     <div className="flex gap-1">
                       {task.assigned_agent && (
-                        <span className="text-[10px] surface-elevated text-faint px-1.5 py-0.5 rounded">
+                        <span className="text-[10px] surface-elevated text-faint px-1.5 py-0.5 rounded-sm">
                           {task.assigned_agent}
                         </span>
                       )}
@@ -106,7 +106,7 @@ export default function KanbanBoard({ tasks, columns, columnLabels, onMoveTask, 
                       {(['review', 'deploy'] as TaskStatus[]).includes(task.status) && onOpenDiffReview && (
                         <button
                           onClick={(e) => { e.stopPropagation(); onOpenDiffReview(task); }}
-                          className="text-[10px] text-faint hover:text-[var(--text-primary)] border border-subtle rounded px-1.5 py-1 transition-colors"
+                          className="text-[10px] text-faint hover:text-[var(--text-primary)] border border-subtle rounded-sm px-1.5 py-1 transition-colors"
                         >
                           Diff
                         </button>

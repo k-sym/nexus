@@ -28,7 +28,7 @@ export function ThinkingBlock({ thinking, isThinking, expanded = false, simple =
   }
 
   return (
-    <details open={localExpanded} className="text-xs my-1.5 rounded border border-subtle surface-panel">
+    <details open={localExpanded} className="text-xs my-1.5 rounded-sm border border-subtle surface-panel">
       <summary
         className="cursor-pointer px-2 py-1 select-none flex items-center gap-1.5 list-none"
         onClick={(e) => { e.preventDefault(); setLocalExpanded(v => !v); }}

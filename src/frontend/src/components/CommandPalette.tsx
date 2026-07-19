@@ -65,7 +65,7 @@ export default function CommandPalette({ open, commands, onClose }: CommandPalet
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-[12vh] backdrop-blur-sm"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/55 pt-[12vh] backdrop-blur-xs"
       onClick={onClose}
     >
       <div
@@ -78,7 +78,7 @@ export default function CommandPalette({ open, commands, onClose }: CommandPalet
           onChange={e => { setQuery(e.target.value); setActive(0); }}
           onKeyDown={onKeyDown}
           placeholder="Jump to a project, view, or agent — or run an action…"
-          className="w-full bg-transparent px-4 py-3 text-sm text-primary placeholder:text-faint border-b border-subtle focus:outline-none"
+          className="w-full bg-transparent px-4 py-3 text-sm text-primary placeholder:text-faint border-b border-subtle focus:outline-hidden"
         />
         <div ref={listRef} className="max-h-80 overflow-y-auto py-1">
           {filtered.length === 0 && (

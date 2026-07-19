@@ -75,7 +75,7 @@ export default function BraindumpView({ projects, onTriage }: BraindumpViewProps
               onChange={e => setDraft(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
               placeholder="Capture an idea and press Enter…"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-strong"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-hidden focus:border-strong"
             />
           </div>
 
@@ -117,7 +117,7 @@ export default function BraindumpView({ projects, onTriage }: BraindumpViewProps
                   onBlur={handleSaveBody}
                   rows={6}
                   placeholder="Flesh out the idea…"
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-strong resize-none"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-md px-3 py-2 text-sm text-zinc-200 focus:outline-hidden focus:border-strong resize-none"
                 />
               </div>
               <TriageToProject projects={projects} resetKey={selected.id} onCreate={handleTriage} />

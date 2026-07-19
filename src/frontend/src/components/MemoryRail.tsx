@@ -91,7 +91,7 @@ export default function MemoryRail({ projectId, onOpenFull }: MemoryRailProps) {
             onKeyDown={onKeyDown}
             placeholder="Add a memory… (Enter to save)"
             rows={2}
-            className="w-full surface-panel border border-subtle rounded-md px-2 py-1.5 text-xs text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong"
+            className="w-full surface-panel border border-subtle rounded-md px-2 py-1.5 text-xs text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong"
           />
           <button
             onClick={handleAdd}

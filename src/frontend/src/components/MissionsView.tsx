@@ -159,7 +159,7 @@ export default function MissionsView({ projects }: Props) {
               placeholder="Mission title…"
               value={draft.title}
               onChange={(e) => setDraft({ ...draft, title: e.target.value })}
-              className="w-full rounded-lg border border-zinc-800 bg-transparent px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-strong"
+              className="w-full rounded-lg border border-zinc-800 bg-transparent px-3 py-2 text-sm text-zinc-200 focus:outline-hidden focus:border-strong"
             />
             <div className="grid grid-cols-2 gap-3">
               <label className="text-xs text-zinc-500">Kind

@@ -755,7 +755,7 @@ export default function App() {
       {archiveError && (
         <div
           role="alert"
-          className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-3 rounded-md border border-red-400/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 shadow-lg backdrop-blur"
+          className="fixed bottom-4 right-4 z-50 flex max-w-md items-start gap-3 rounded-md border border-red-400/30 bg-red-950/80 px-4 py-3 text-sm text-red-100 shadow-lg backdrop-blur-sm"
         >
           <div className="min-w-0 flex-1">
             <div className="font-medium">Archive failed</div>
@@ -766,7 +766,7 @@ export default function App() {
             title="Dismiss archive error"
             aria-label="Dismiss archive error"
             onClick={() => setArchiveError(null)}
-            className="shrink-0 rounded p-0.5 text-red-100/60 transition-colors hover:bg-red-100/10 hover:text-red-50"
+            className="shrink-0 rounded-sm p-0.5 text-red-100/60 transition-colors hover:bg-red-100/10 hover:text-red-50"
           >
             <X size={14} />
           </button>

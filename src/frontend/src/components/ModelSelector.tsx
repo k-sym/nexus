@@ -129,7 +129,7 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search models…"
-                className="w-full rounded-sm surface-panel border border-subtle pl-7 pr-2 py-1 text-xs text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                className="w-full rounded-xs surface-panel border border-subtle pl-7 pr-2 py-1 text-xs text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
             </div>
           </div>

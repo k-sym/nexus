@@ -128,15 +128,15 @@ function ToolCallBlock({
         aria-expanded={showContent}
       >
         {isQueued ? (
-          <Circle className="w-3 h-3 flex-shrink-0 text-zinc-500" />
+          <Circle className="w-3 h-3 shrink-0 text-zinc-500" />
         ) : isRunning ? (
-          <Spinner className={`w-3 h-3 animate-spin flex-shrink-0 ${accentColor}`} />
+          <Spinner className={`w-3 h-3 animate-spin shrink-0 ${accentColor}`} />
         ) : isError ? (
-          <WarningCircle className={`w-3 h-3 flex-shrink-0 ${accentColor}`} />
+          <WarningCircle className={`w-3 h-3 shrink-0 ${accentColor}`} />
         ) : isInterrupted ? (
-          <Prohibit className={`w-3 h-3 flex-shrink-0 ${accentColor}`} />
+          <Prohibit className={`w-3 h-3 shrink-0 ${accentColor}`} />
         ) : (
-          <Check className={`w-3 h-3 flex-shrink-0 ${accentColor}`} />
+          <Check className={`w-3 h-3 shrink-0 ${accentColor}`} />
         )}
         <span className="text-zinc-300 flex-1 truncate" title={header}>{header}</span>
         <span className={`text-[10px] ${accentColor}`}>{toolStatusLabel(toolCall.status)}</span>
@@ -144,7 +144,7 @@ function ToolCallBlock({
           <span className="text-[10px] text-zinc-600">{formatToolDuration(toolCall)}</span>
         )}
         {!showContent && !isRunning && (
-          <span className="text-[10px] text-zinc-600 flex-shrink-0">Ctrl+O</span>
+          <span className="text-[10px] text-zinc-600 shrink-0">Ctrl+O</span>
         )}
       </button>
 
@@ -190,7 +190,7 @@ export function ToolActivity({ toolCalls, running, detailsExpanded, terminalLabe
         aria-expanded={showFull}
         className="flex items-center gap-1.5 px-1 py-0.5 w-full text-left text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
       >
-        <Wrench className="w-3 h-3 flex-shrink-0 text-zinc-500" />
+        <Wrench className="w-3 h-3 shrink-0 text-zinc-500" />
         <span>{summaryText}</span>
         {!running && terminalLabel && (
           <span className={failed > 0 ? 'text-red-400' : 'text-emerald-400'}>· {terminalLabel}</span>
@@ -541,7 +541,7 @@ function DiffRow({ line, isNewFile }: { line: DiffLine; isNewFile: boolean }) {
     return (
       <>
         <div className="px-1 flex gap-1 bg-red-500/10 text-red-300">
-          <span className="text-zinc-600 w-6 text-right flex-shrink-0">{line.oldNum}</span>
+          <span className="text-zinc-600 w-6 text-right shrink-0">{line.oldNum}</span>
           <span className="truncate">{line.text || ' '}</span>
         </div>
         {!isNewFile && <div className="px-1 bg-red-500/10" />}
@@ -553,7 +553,7 @@ function DiffRow({ line, isNewFile }: { line: DiffLine; isNewFile: boolean }) {
       <>
         {!isNewFile && <div className="px-1 bg-emerald-500/10" />}
         <div className={`px-1 flex gap-1 bg-emerald-500/10 text-emerald-300 ${isNewFile ? 'col-span-2' : ''}`}>
-          <span className="text-zinc-600 w-6 text-right flex-shrink-0">{line.newNum}</span>
+          <span className="text-zinc-600 w-6 text-right shrink-0">{line.newNum}</span>
           <span className="truncate">{line.text || ' '}</span>
         </div>
       </>
@@ -563,12 +563,12 @@ function DiffRow({ line, isNewFile }: { line: DiffLine; isNewFile: boolean }) {
     <>
       {!isNewFile && (
         <div className="px-1 flex gap-1 text-zinc-500">
-          <span className="text-zinc-600 w-6 text-right flex-shrink-0">{line.oldNum}</span>
+          <span className="text-zinc-600 w-6 text-right shrink-0">{line.oldNum}</span>
           <span className="truncate">{line.text || ' '}</span>
         </div>
       )}
       <div className={`px-1 flex gap-1 text-zinc-500 ${isNewFile ? 'col-span-2' : ''}`}>
-        <span className="text-zinc-600 w-6 text-right flex-shrink-0">{line.newNum}</span>
+        <span className="text-zinc-600 w-6 text-right shrink-0">{line.newNum}</span>
         <span className="truncate">{line.text || ' '}</span>
       </div>
     </>

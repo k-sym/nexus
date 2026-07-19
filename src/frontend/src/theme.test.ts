@@ -2,14 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const tailwindConfig = readFileSync(resolve(process.cwd(), 'tailwind.config.js'), 'utf-8');
 const css = readFileSync(resolve(process.cwd(), 'src/index.css'), 'utf-8');
+const viteConfig = readFileSync(resolve(process.cwd(), 'vite.config.ts'), 'utf-8');
 const app = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf-8');
 
 describe('theme palette contract', () => {
-  it('does not override Tailwind zinc or indigo with app-specific colors', () => {
-    expect(tailwindConfig).not.toMatch(/\bzinc\s*:/);
-    expect(tailwindConfig).not.toMatch(/\bindigo\s*:/);
+  it('uses the Tailwind 4 Vite integration and keeps the app theme CSS-first', () => {
+    expect(viteConfig).toContain("from '@tailwindcss/vite'");
+    expect(viteConfig).toContain('tailwindcss()');
+    expect(css).toContain('@import "tailwindcss";');
+    expect(css).toContain('--color-ink: var(--accent-foreground);');
+    expect(css).not.toMatch(/--color-(?:zinc|indigo)-/);
   });
 
   it('defines semantic graphite-glass design tokens', () => {

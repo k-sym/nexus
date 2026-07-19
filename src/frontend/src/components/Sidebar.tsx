@@ -437,7 +437,7 @@ export default function Sidebar({
                                     if (ev.key === 'Enter') { ev.preventDefault(); commitRename(thread.id); }
                                     else if (ev.key === 'Escape') { ev.preventDefault(); cancelRename(); }
                                   }}
-                                  className="w-full surface-elevated text-primary text-sm px-1 py-0.5 rounded outline-none ring-1 ring-[var(--accent)]"
+                                  className="w-full surface-elevated text-primary text-sm px-1 py-0.5 rounded-sm outline-hidden ring-1 ring-[var(--accent)]"
                                 />
                               ) : (
                                 thread.title

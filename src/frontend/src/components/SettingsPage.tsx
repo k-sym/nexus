@@ -136,7 +136,7 @@ export default function SettingsPage() {
                     value={config.server?.url ?? ''}
                     onChange={(e) => update(['server', 'url'], e.target.value)}
                     placeholder="https://baker-pro.taileea629.ts.net:8444"
-                    className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                    className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
                   />
                   <p className="text-[10px] text-faint mt-1">
                     Point <em>this device</em> at a remote Nexus server (e.g. your Tailscale host,
@@ -151,7 +151,7 @@ export default function SettingsPage() {
                     value={config.server?.token ?? ''}
                     onChange={(e) => update(['server', 'token'], e.target.value)}
                     placeholder="${NEXUS_BACKEND_TOKEN} or paste the server's token"
-                    className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                    className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
                   />
                   <p className="text-[10px] text-faint mt-1">
                     Must match the server's <span className="font-mono">NEXUS_BACKEND_TOKEN</span>.
@@ -165,7 +165,7 @@ export default function SettingsPage() {
 
           <Section title="Appearance">
             <Field label="Animated background">
-              <div className="inline-flex rounded overflow-hidden border border-subtle">
+              <div className="inline-flex rounded-sm overflow-hidden border border-subtle">
                 {MOTION_OPTIONS.map(({ mode, label }) => (
                   <button
                     key={mode}
@@ -200,7 +200,7 @@ export default function SettingsPage() {
                 value={config.assistant?.url ?? ''}
                 onChange={(e) => update(['assistant', 'url'], e.target.value)}
                 placeholder="https://assistant.example.com/v1"
-                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
                 Remote OpenAI-compatible assistant endpoint (e.g. Hermes, OpenClaw).
@@ -212,7 +212,7 @@ export default function SettingsPage() {
                 value={config.assistant?.api_key ?? ''}
                 onChange={(e) => update(['assistant', 'api_key'], e.target.value)}
                 placeholder="${ASSISTANT_API_KEY} or paste a key"
-                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
                 Supports <span className="font-mono">{'${ASSISTANT_API_KEY}'}</span>. Existing saved keys are masked on load.
@@ -234,7 +234,7 @@ export default function SettingsPage() {
                 value={config.models.local?.base_url ?? ''}
                 onChange={(e) => update(['models', 'local', 'base_url'], e.target.value)}
                 placeholder="http://localhost:8000/v1"
-                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
                 OpenAI-compatible endpoint (omlx, LM Studio, llama.cpp…). Include the /v1 suffix.
@@ -247,7 +247,7 @@ export default function SettingsPage() {
                 value={config.models.local?.api_key ?? ''}
                 onChange={(e) => update(['models', 'local', 'api_key'], e.target.value)}
                 placeholder="${OMLX_API_KEY} or paste a key"
-                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
                 omlx requires this. Supports <span className="font-mono">{'${ENV_VAR}'}</span> interpolation.
@@ -260,7 +260,7 @@ export default function SettingsPage() {
                 value={config.models.local?.display_name ?? 'Local Model'}
                 onChange={(e) => update(['models', 'local', 'display_name'], e.target.value)}
                 placeholder="Local Model"
-                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
                 Shown in model pickers while the raw model id is still sent to the local server.
@@ -273,7 +273,7 @@ export default function SettingsPage() {
                 value={config.models.local?.chat_model ?? ''}
                 onChange={(e) => update(['models', 'local', 'chat_model'], e.target.value)}
                 placeholder="qwen2.5-coder:7b"
-                className="w-full surface-panel border border-subtle rounded px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-none focus:border-strong"
+                className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
                 Saved as <span className="font-mono">local/&lt;model id&gt;</span> in the curated model list.
@@ -284,7 +284,7 @@ export default function SettingsPage() {
                 type="button"
                 aria-label={`Image input ${config.models.local?.supports_images ? 'Enabled' : 'Disabled'}`}
                 onClick={() => update(['models', 'local', 'supports_images'], !(config.models.local?.supports_images ?? false))}
-                className={`px-3 py-1 text-xs rounded transition-colors ${config.models.local?.supports_images ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                className={`px-3 py-1 text-xs rounded-sm transition-colors ${config.models.local?.supports_images ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
               >
                 {config.models.local?.supports_images ? 'Enabled' : 'Disabled'}
               </button>
@@ -297,7 +297,7 @@ export default function SettingsPage() {
                 type="button"
                 onClick={handleTestLocalModel}
                 disabled={testingLocalModel}
-                className="px-3 py-1.5 text-xs rounded surface-elevated text-muted hover:text-primary border border-subtle disabled:opacity-40 transition-colors"
+                className="px-3 py-1.5 text-xs rounded-sm surface-elevated text-muted hover:text-primary border border-subtle disabled:opacity-40 transition-colors"
               >
                 {testingLocalModel ? 'Testing…' : 'Test local model'}
               </button>
@@ -314,7 +314,7 @@ export default function SettingsPage() {
             <Field label="Enabled">
               <button
                 onClick={() => update(['memory', 'auto_inject', 'enabled'], !config.memory.auto_inject.enabled)}
-                className={`px-3 py-1 text-xs rounded transition-colors ${config.memory.auto_inject.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                className={`px-3 py-1 text-xs rounded-sm transition-colors ${config.memory.auto_inject.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
               >
                 {config.memory.auto_inject.enabled ? 'Enabled' : 'Disabled'}
               </button>
@@ -324,7 +324,7 @@ export default function SettingsPage() {
                 type="number"
                 value={config.memory.auto_inject.max_memories}
                 onChange={(e) => update(['memory', 'auto_inject', 'max_memories'], parseInt(e.target.value, 10) || 5)}
-                className="w-32 surface-panel border border-subtle rounded px-3 py-2 text-sm text-primary focus:outline-none focus:border-strong"
+                className="w-32 surface-panel border border-subtle rounded-sm px-3 py-2 text-sm text-primary focus:outline-hidden focus:border-strong"
               />
             </Field>
             <Field label="Token budget">
@@ -332,7 +332,7 @@ export default function SettingsPage() {
                 type="number"
                 value={config.memory.auto_inject.token_budget}
                 onChange={(e) => update(['memory', 'auto_inject', 'token_budget'], parseInt(e.target.value, 10) || 1000)}
-                className="w-32 surface-panel border border-subtle rounded px-3 py-2 text-sm text-primary focus:outline-none focus:border-strong"
+                className="w-32 surface-panel border border-subtle rounded-sm px-3 py-2 text-sm text-primary focus:outline-hidden focus:border-strong"
               />
             </Field>
           </Section>
@@ -342,7 +342,7 @@ export default function SettingsPage() {
             <Field label="Sync">
               <button
                 onClick={() => update(['jira', 'enabled'], !config.jira.enabled)}
-                className={`px-3 py-1 text-xs rounded transition-colors ${config.jira.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                className={`px-3 py-1 text-xs rounded-sm transition-colors ${config.jira.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
               >
                 {config.jira.enabled ? 'Enabled' : 'Disabled'}
               </button>
@@ -353,7 +353,7 @@ export default function SettingsPage() {
                 value={config.jira.user}
                 onChange={(e) => update(['jira', 'user'], e.target.value)}
                 placeholder="you@example.com"
-                className="w-full surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary"
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
             </Field>
             <Field label="Instance host">
@@ -362,7 +362,7 @@ export default function SettingsPage() {
                 value={config.jira.instance}
                 onChange={(e) => update(['jira', 'instance'], e.target.value)}
                 placeholder="your-company.atlassian.net (https:// optional)"
-                className="w-full surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary"
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
             </Field>
             <Field label="Project key">
@@ -371,7 +371,7 @@ export default function SettingsPage() {
                 value={config.jira.project}
                 onChange={(e) => update(['jira', 'project'], e.target.value)}
                 placeholder="SUP"
-                className="w-full surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary"
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
             </Field>
             <Field label="Poll interval (minutes)">
@@ -380,7 +380,7 @@ export default function SettingsPage() {
                 min={1}
                 value={config.jira.poll_minutes}
                 onChange={(e) => update(['jira', 'poll_minutes'], parseInt(e.target.value, 10) || 15)}
-                className="w-full surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary"
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
             </Field>
             <Field label="Content strip rules">
@@ -396,7 +396,7 @@ export default function SettingsPage() {
                       }}
                       rows={3}
                       placeholder="Paste a footer chunk to strip from every ticket..."
-                      className="flex-1 surface-panel border border-subtle rounded px-2 py-1 text-sm text-primary font-mono resize-y"
+                      className="flex-1 surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary font-mono resize-y"
                     />
                     <button
                       onClick={() => {
@@ -404,7 +404,7 @@ export default function SettingsPage() {
                         update(['jira', 'content_rules'], next);
                       }}
                       title="Remove rule"
-                      className="shrink-0 px-2 py-1 text-xs surface-elevated text-faint hover:text-red-400 rounded transition-colors"
+                      className="shrink-0 px-2 py-1 text-xs surface-elevated text-faint hover:text-red-400 rounded-sm transition-colors"
                     >
                       Remove
                     </button>
@@ -412,7 +412,7 @@ export default function SettingsPage() {
                 ))}
                 <button
                   onClick={() => update(['jira', 'content_rules'], [...((config.jira.content_rules ?? []) as string[]), ''])}
-                  className="px-3 py-1 text-xs surface-elevated text-faint hover:text-primary rounded transition-colors"
+                  className="px-3 py-1 text-xs surface-elevated text-faint hover:text-primary rounded-sm transition-colors"
                 >
                   + Add rule
                 </button>
@@ -433,7 +433,7 @@ export default function SettingsPage() {
             <Field label="Issue sync">
               <button
                 onClick={() => update(['github', 'enabled'], !config.github?.enabled)}
-                className={`px-3 py-1 text-xs rounded transition-colors ${config.github?.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                className={`px-3 py-1 text-xs rounded-sm transition-colors ${config.github?.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
               >
                 {config.github?.enabled ? 'Enabled' : 'Disabled'}
               </button>

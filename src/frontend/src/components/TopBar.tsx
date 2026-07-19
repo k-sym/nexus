@@ -34,7 +34,7 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
       className={`h-12 shrink-0 flex items-center gap-1.5 px-3 border-b border-subtle surface-glass${chrome}`}
     >
       <div className="flex items-center gap-2 pr-1">
-        <div className="w-6 h-6 rounded accent-button flex items-center justify-center text-[11px] font-bold">N</div>
+        <div className="w-6 h-6 rounded-sm accent-button flex items-center justify-center text-[11px] font-bold">N</div>
         <span className="font-semibold text-sm tracking-wide hidden md:inline">NEXUS</span>
       </div>
       <button onClick={onOpenPalette} title="Command palette" className="shrink-0 px-2 py-1 text-xs text-faint hover:text-[var(--text-primary)] border border-subtle rounded-md hover:border-[var(--border-strong)] transition-colors">⌘K</button>

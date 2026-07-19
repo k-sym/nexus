@@ -75,7 +75,7 @@ export default function RightRail({ label, title, open, onOpenChange, actions, f
             event.preventDefault();
             setWidth((current) => Math.min(MAX_RAIL_WIDTH, Math.max(MIN_RAIL_WIDTH, current + (event.key === 'ArrowLeft' ? 24 : -24))));
           }}
-          className="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none focus:outline-none"
+          className="group absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize touch-none focus:outline-hidden"
         >
           <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-[var(--border-strong)] group-focus:bg-[var(--accent)]" />
         </div>

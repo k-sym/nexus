@@ -242,7 +242,7 @@ export default function AssistantView() {
                     setRenaming(false);
                   }
                 }}
-                className="surface-elevated text-primary text-lg font-semibold px-2 py-0.5 rounded outline-none ring-1 ring-[var(--accent)]"
+                className="surface-elevated text-primary text-lg font-semibold px-2 py-0.5 rounded-sm outline-hidden ring-1 ring-[var(--accent)]"
               />
             ) : (
               <h2 className="text-lg font-semibold truncate">{selectedSession?.title ?? 'Assistant'}</h2>
@@ -412,7 +412,7 @@ export default function AssistantView() {
               placeholder="Message Assistant..."
               rows={2}
               disabled={!selectedSessionId}
-              className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-none focus:border-strong disabled:opacity-50"
+              className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong disabled:opacity-50"
             />
             <button
               type="button"
@@ -477,7 +477,7 @@ function SessionRow({ session, selected, onSelect }: { session: AssistantSession
         <span className={`h-2 w-2 rounded-full shrink-0 ${active ? 'bg-emerald-400' : 'bg-[var(--border-strong)]'}`} aria-hidden="true" />
         <span className="text-sm font-medium truncate">{session.title}</span>
         {session.remoteOnly && (
-          <span className="ml-auto rounded border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-faint shrink-0">
+          <span className="ml-auto rounded-sm border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-faint shrink-0">
             {remoteSourceLabel(session.source)}
           </span>
         )}
@@ -516,7 +516,7 @@ function AssistantBubble({ message }: { message: AssistantMessage }) {
                   key={`${attachment.name}-${index}`}
                   className="min-w-0 rounded-md border border-subtle bg-zinc-950/35 px-2 py-1.5 text-xs text-primary"
                 >
-                  <span className="mr-2 rounded border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
+                  <span className="mr-2 rounded-sm border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
                     {fileExtensionLabel(attachment.name)}
                   </span>
                   <span>{attachment.name}</span>
@@ -560,7 +560,7 @@ function AttachmentChip({
         />
       ) : (
         <div className="flex h-full items-center gap-2 pr-6">
-          <span className="rounded border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
+          <span className="rounded-sm border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-muted">
             {fileExtensionLabel(attachment.name)}
           </span>
           <span className="truncate text-xs text-primary">{attachment.name}</span>
