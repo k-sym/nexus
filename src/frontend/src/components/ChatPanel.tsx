@@ -415,6 +415,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             setError(message);
             opts.onError?.(message);
           },
+          // Backend auto-named this session mid-turn — pull the new title into
+          // the sidebar now rather than at the end of the turn.
+          onTitle: () => onThreadsChanged?.(),
         });
         if (streamError) return false;
         onThreadsChanged?.();
