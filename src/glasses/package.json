@@ -29,5 +29,5 @@
     "typescript": "~5.9.3",
     "vite": "^8.1.5"
   },
-  "comment": "Phase 3b adds even-toolkit + @evenrealities/even_hub_sdk for the HUD; kept out of the first install so the dashboard installs clean."
+  "comment": "Phase 3b adds even-toolkit + @evenrealities/even_hub_sdk for the HUD; kept out of the first install so the dashboard installs clean. typescript is held at 5.9 (not ^7 like the root workspace) because @evenrealities/evenhub-cli peers on `typescript: ^5` — TS 6+ fails the install and breaks `npm run pack`. Dependabot ignores the major bump; see .github/dependabot.yml."
 }

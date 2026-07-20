@@ -44,6 +44,11 @@ updates:
       include: scope
     labels:
       - dependencies
+    ignore:
+      # @evenrealities/evenhub-cli declares `typescript: ^5` as a peer, so TS 6+
+      # breaks `npm install` here. Bumped and reverted once already (#195, #206).
+      - dependency-name: typescript
+        versions: [">=6"]
     groups:
       routine-updates:
         patterns:
