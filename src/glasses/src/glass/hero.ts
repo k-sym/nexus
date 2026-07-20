@@ -1,12 +1,9 @@
 // Image-container hero for the interrupt screen — a prototype of the "spend a few
-// bitmap sprites where pixels earn their keep" path. Renders a real notification
+// bitmap sprites where pixels earn their keep" path. Renders a notification
 // bell + a big system-font headline to a canvas, then encodes 3 × 200×100 tiles
 // (a 576×100 band) the way even-toolkit's splash does. The display is 16-level
 // greyscale, so anti-aliased type and icons read cleanly — none of this is
 // possible in the firmware text container.
-import { createElement } from 'react'
-import { renderToStaticMarkup } from 'react-dom/server'
-import { IcFeatNotification } from 'even-toolkit/web/icons/svg-icons'
 import { encodeTilesBatch } from 'even-toolkit/png-utils'
 import { IMAGE_TILES, G2_IMAGE_MAX_W } from 'even-toolkit/layout'
 
@@ -22,29 +19,9 @@ const TW = G2_IMAGE_MAX_W // 200
 const TH = 144            // taller than the 100 default (max image height)
 const COLS = 3
 const BAND_Y = 72         // (288 − 144) / 2 → vertically centred
-const ICON_PX = 74        // rasterised sprite size (source canvas)
-
-// Rasterise even-toolkit's own notification bell (an Ic* pixel-art SVG) into an
-// offscreen canvas once. currentColor resolves from the inline `color` style.
-// Resolves as soon as the sprite is ready so the hero can re-encode with it.
-let iconCanvas: HTMLCanvasElement | null = null
-export const iconReady: Promise<void> = (async () => {
-  try {
-    const svg = renderToStaticMarkup(
-      createElement(IcFeatNotification, {
-        xmlns: 'http://www.w3.org/2000/svg', // standalone SVG data URLs require this
-        width: ICON_PX, height: ICON_PX, style: { color: '#efefef' },
-      }),
-    )
-    const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
-    const img = new Image()
-    await new Promise<void>((res, rej) => { img.onload = () => res(); img.onerror = rej; img.src = url })
-    const c = document.createElement('canvas')
-    c.width = ICON_PX; c.height = ICON_PX
-    c.getContext('2d')!.drawImage(img, 0, 0, ICON_PX, ICON_PX)
-    iconCanvas = c
-  } catch { /* fall back to the drawn bell */ }
-})()
+// Kept as a settled promise so the HUD renderer's existing readiness lifecycle
+// remains stable without loading React's server renderer and a complete icon set.
+export const iconReady: Promise<void> = Promise.resolve()
 
 function clip(text: string, n: number): string {
   return text.length > n ? text.slice(0, n).trimEnd() + '…' : text
@@ -132,10 +109,7 @@ export function renderInterruptHero(name: string, reason: string): HeroTile[] {
   const cx = 288
   ctx.textAlign = 'center'
 
-  // Real Even sprite if it's rasterised yet, else the drawn bell — fully in frame.
-  const drawn = 60
-  if (iconCanvas) ctx.drawImage(iconCanvas, cx - drawn / 2, 6, drawn, drawn)
-  else drawBell(ctx, cx, 12, 34)
+  drawBell(ctx, cx, 12, 34)
 
   ctx.fillStyle = '#ffffff'
   ctx.textBaseline = 'alphabetic'

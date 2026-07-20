@@ -1,14 +1,18 @@
-import { useState } from 'react'
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { Connect } from './screens/Connect'
-import { Lab } from './sim/Lab'
-import { Phase3App } from './sim/phase3'
-import { Phase3FW } from './sim/phase3fw'
-import { Glyphs } from './sim/glyphs'
-import { AppGlasses3c } from './glass/AppGlasses3c'
 import { store, useStore } from './store'
 import { answer, connectEvents, decide, getCockpitConfig, getPending, getSession, getSessions, sendSteer, setArmed } from './api'
 import type { Approval, AskUserQuestionInput, SseEvent } from './types'
+
+const Lab = lazy(() => import('./sim/Lab').then(module => ({ default: module.Lab })))
+const Phase3App = lazy(() => import('./sim/phase3').then(module => ({ default: module.Phase3App })))
+const Phase3FW = lazy(() => import('./sim/phase3fw').then(module => ({ default: module.Phase3FW })))
+const Glyphs = lazy(() => import('./sim/glyphs').then(module => ({ default: module.Glyphs })))
+const AppGlasses3c = lazy(() => import('./glass/AppGlasses3c').then(module => ({ default: module.AppGlasses3c })))
+
+function LoadingView() {
+  return <div className="cockpit"><p className="muted">Loading glasses view…</p></div>
+}
 
 /** Pull the session list so the ● needs-you / ◐ live dots reflect the latest
  *  attention state. Fire-and-forget; a stale fetch just loses to the next one. */
@@ -269,10 +273,10 @@ export function App() {
   const simName = new URLSearchParams(window.location.search).get('sim')
     ?? (import.meta.env as unknown as Record<string, string | undefined>).VITE_FORCE_SIM
     ?? null
-  if (simName?.startsWith('lab-')) return <Lab name={simName} />
-  if (simName === 'p3') return <Phase3App />
-  if (simName === 'fw') return <Phase3FW />
-  if (simName === 'glyphs') return <Glyphs />
+  if (simName?.startsWith('lab-')) return <Suspense fallback={<LoadingView />}><Lab name={simName} /></Suspense>
+  if (simName === 'p3') return <Suspense fallback={<LoadingView />}><Phase3App /></Suspense>
+  if (simName === 'fw') return <Suspense fallback={<LoadingView />}><Phase3FW /></Suspense>
+  if (simName === 'glyphs') return <Suspense fallback={<LoadingView />}><Glyphs /></Suspense>
   // Show Connect when there's no saved hub, or when the user asked to change it.
   if (!baseUrl || forceConnect) return <Connect />
   // Simulator fixture mode (?sim=): the store is pre-seeded, so skip the live feed
@@ -283,7 +287,7 @@ export function App() {
       {!sim && <HubFeed />}
       <Cockpit />
       {/* Phase 3c: GlassesSdk element renderer (replaces AppGlasses text-page mode) */}
-      <AppGlasses3c />
+      <Suspense fallback={null}><AppGlasses3c /></Suspense>
     </>
   )
 }

@@ -6,10 +6,10 @@
   "description": "Cockpit client for the session-cockpit hub — web dashboard now, Even G2 HUD (even-toolkit) next.",
   "scripts": {
     "dev": "vite --port 5273 --host",
-    "build": "tsc --noEmit && vite build",
+    "build": "tsc --noEmit && vite build && node scripts/check-bundle-size.mjs",
     "preview": "vite preview --port 5273 --host",
     "qr": "./scripts/qr.sh",
-    "build:pack": "tsc --noEmit && VITE_BASE=./ vite build --outDir dist-pack --emptyOutDir",
+    "build:pack": "tsc --noEmit && VITE_BASE=./ vite build --outDir dist-pack --emptyOutDir && node scripts/check-bundle-size.mjs dist-pack",
     "pack": "npm run build:pack && evenhub pack app.json ./dist-pack -o session-cockpit.ehpk",
     "sim": "./scripts/sim.sh"
   },
@@ -18,7 +18,6 @@
     "even-toolkit": "^1.7.7",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "react-router": "^8.2.0",
     "upng-js": "^2.1.0"
   },
   "devDependencies": {

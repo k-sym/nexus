@@ -1,6 +1,5 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { BrowserRouter } from 'react-router'
 import { storageGetRaw } from 'even-toolkit/storage'
 import { App } from './App'
 import { store } from './store'
@@ -94,13 +93,9 @@ async function boot() {
     await seedFromHub()
   }
 
-  // even-toolkit's useGlasses hook calls useLocation() internally, so the app must
-  // live under a Router even though the cockpit does its own state-driven routing.
   createRoot(document.getElementById('root')!).render(
     <StrictMode>
-      <BrowserRouter>
-        <App />
-      </BrowserRouter>
+      <App />
     </StrictMode>,
   )
 }
