@@ -3,7 +3,7 @@ import type { ChatThread, Project } from '@nexus/shared';
 import type { PiRuntime } from '../pi/runtime.js';
 import { loadConfig, resolveEnvVars } from '../config.js';
 import { addMemory, type MemoryInput } from '../memory/index.js';
-import { daemon } from '../memory/client.js';
+import { daemon, DaemonRequestError } from '../memory/client.js';
 import { resolveSignalFilterConfig, type ResolvedSignalFilterConfig } from '../signal-filters/config.js';
 import { projectToolResultMessages } from '../signal-filters/messages.js';
 
@@ -202,7 +202,11 @@ export async function summarizeWithMemoryDaemon(input: {
       transcript: input.transcript,
     });
     return String(res.summary ?? '').trim();
-  } catch {
-    throw new ArchiveThreadError(502, 'Memory daemon archive summary failed');
+  } catch (err) {
+    const detail = err instanceof DaemonRequestError ? err.detail : undefined;
+    throw new ArchiveThreadError(
+      502,
+      detail ? `Memory daemon archive summary failed: ${detail}` : 'Memory daemon archive summary failed',
+    );
   }
 }

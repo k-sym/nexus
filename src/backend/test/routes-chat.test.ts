@@ -2624,6 +2624,46 @@ test('archiveThreadToMemory requests archive summaries from the memory daemon', 
   }
 });
 
+test('archiveThreadToMemory surfaces the daemon model diagnosis on failure', async () => {
+  const previousUrl = process.env.MEMORY_DAEMON_URL;
+  const daemon = Fastify({ logger: false });
+  daemon.post('/operations/summarize-session-archive', async (_request, reply) =>
+    reply.code(502).send({
+      error: 'Archive summary model failed',
+      detail: 'http://127.0.0.1:4001/v1/chat/completions -> HTTP 400: request (8287 tokens) exceeds the available context size (8192 tokens)',
+    }));
+  await daemon.listen({ host: '127.0.0.1', port: 0 });
+  const address = daemon.server.address();
+  assert.equal(typeof address, 'object');
+  process.env.MEMORY_DAEMON_URL = `http://127.0.0.1:${address!.port}`;
+
+  const { archiveThreadToMemory } = await import('../sessions/archive');
+  const { app, db, dir } = await makeApp({
+    readMessages: async () => [
+      { type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'Decision: surface the real model error.' }] } },
+    ],
+    dropSession: () => assert.fail('dropSession must not run when summarization fails'),
+    sessionFor: async () => ({ subscribe: () => () => {}, setModel: async () => {}, prompt: async () => {}, abort: async () => {} }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    models: { find: () => undefined },
+  });
+  try {
+    // A bare "failed" left the real cause (an undersized context window) invisible
+    // in the jobs UI — the actionable text must reach the caller.
+    await assert.rejects(
+      () => archiveThreadToMemory(db, app.pi, 'thread-1', { storeMemory: async () => assert.fail('must not store') }),
+      /exceeds the available context size/,
+    );
+  } finally {
+    process.env.MEMORY_DAEMON_URL = previousUrl;
+    await daemon.close();
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('archiveThreadToMemory keeps the thread when memory storage fails', async () => {
   const { archiveThreadToMemory, ArchiveThreadError } = await import('../sessions/archive');
   const { app, db, dir } = await makeApp({

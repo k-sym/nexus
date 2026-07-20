@@ -91,7 +91,7 @@ export interface SessionArchiveSummaryResponse {
 }
 
 export class DaemonRequestError extends Error {
-  constructor(readonly status: number, message: string) {
+  constructor(readonly status: number, message: string, readonly detail?: string) {
     super(message);
     this.name = 'DaemonRequestError';
   }
@@ -108,6 +108,17 @@ function qs(params: Record<string, unknown>): string {
   return s ? `?${s}` : '';
 }
 
+/** Pull the daemon's deliberate `detail` string off an error response, if present. */
+async function readErrorDetail(res: Response): Promise<string | undefined> {
+  try {
+    const body = await res.json() as { detail?: unknown } | null;
+    const detail = body?.detail;
+    return typeof detail === 'string' && detail.trim() ? detail.trim().slice(0, 400) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${daemonUrl()}${path}`, {
     method,
@@ -116,13 +127,16 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
   });
   if (!res.ok) {
     // Status is enough for callers to preserve validation/conflict semantics.
-    // Deliberately do not forward an arbitrary daemon body or stack trace.
+    // Deliberately do not forward an arbitrary daemon body or stack trace — only
+    // the one field the daemon sets on purpose, capped, since the daemon may be a
+    // remote thin-client target rather than loopback.
+    const detail = await readErrorDetail(res);
     const message = res.status === 409
       ? 'Memory maintenance already running'
       : res.status === 400
         ? 'Memory daemon rejected request'
         : 'Memory daemon request failed';
-    throw new DaemonRequestError(res.status, message);
+    throw new DaemonRequestError(res.status, message, detail);
   }
   return (res.status === 204 ? null : await res.json()) as T;
 }
