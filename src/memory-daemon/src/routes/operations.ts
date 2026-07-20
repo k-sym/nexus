@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import type { AppContext } from "../context.js";
 import { clearNexusMemory, maintenanceCoordinatorFor, type ClearNexusResult } from "../maintenance.js";
+import { ModelError } from "../models/client.js";
 import { reindexAll, type ReindexStats } from "../sync/reindex.js";
 
 const SESSION_ARCHIVE_SYSTEM_PROMPT =
@@ -78,8 +79,12 @@ export function registerOperationRoutes(
       )).trim();
       if (!summary) return reply.code(502).send({ error: "Archive summary model returned empty content" });
       return { summary };
-    } catch {
-      return reply.code(502).send({ error: "Archive summary model failed" });
+    } catch (err) {
+      // Forward the model stack's own diagnosis. ModelError messages are already
+      // bounded (300-char body snippet) and say things like "exceeds the available
+      // context size" — actionable in a way that a bare "failed" is not.
+      const detail = err instanceof ModelError ? err.message : undefined;
+      return reply.code(502).send({ error: "Archive summary model failed", detail });
     }
   });
 }
