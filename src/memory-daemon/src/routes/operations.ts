@@ -7,6 +7,13 @@ import { reindexAll, type ReindexStats } from "../sync/reindex.js";
 const SESSION_ARCHIVE_SYSTEM_PROMPT =
   "Summarize this Nexus session for long-term project memory. Keep only durable decisions, constraints, implementation notes, discoveries, user preferences, and follow-up context. Exclude chat filler and transient status.";
 
+/** A full-size archive is the heaviest gen call we make: the backend caps transcripts
+ *  at 30k chars (~10k tokens), and on a local 9B that measures at ~53s of prompt eval
+ *  plus ~54s to generate the 700-token summary — ~107s before any queueing behind
+ *  other work sharing the gen server. The old 120s budget left no margin and failed
+ *  intermittently; this is sized so a queued archive still completes. */
+const SESSION_ARCHIVE_TIMEOUT_MS = 300_000;
+
 export interface OperationDependencies {
   rebuild: () => Promise<ReindexStats>;
   clearNexus: () => ClearNexusResult;
@@ -75,7 +82,7 @@ export function registerOperationRoutes(
     try {
       const summary = (await ctx.models.complete(
         `Project: ${projectName}\nSession: ${threadTitle}\n\nTranscript:\n${transcript}`,
-        { system: SESSION_ARCHIVE_SYSTEM_PROMPT, temperature: 0.1, maxTokens: 700, timeoutMs: 120_000 },
+        { system: SESSION_ARCHIVE_SYSTEM_PROMPT, temperature: 0.1, maxTokens: 700, timeoutMs: SESSION_ARCHIVE_TIMEOUT_MS },
       )).trim();
       if (!summary) return reply.code(502).send({ error: "Archive summary model returned empty content" });
       return { summary };
