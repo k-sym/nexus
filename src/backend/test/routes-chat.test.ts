@@ -194,6 +194,47 @@ test('run history reloads multiple assistant/tool messages as one logical run ca
   assert.equal(assistant.run.runId, 'run-1');
 });
 
+test('run history keeps later turns out of a run whose end event never landed', () => {
+  const messages = flattenEntries([
+    { type: 'custom', id: 'start-1', customType: 'nexus.agent_run', data: { event: 'start', runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' } },
+    { type: 'message', id: 'user-1', message: { role: 'user', content: 'first ask', timestamp: 1 } },
+    { type: 'message', id: 'assistant-1', message: { role: 'assistant', content: [{ type: 'text', text: 'First answer.' }], timestamp: 2 } },
+    // backend died here — no run_end for run-1
+    { type: 'custom', id: 'start-2', customType: 'nexus.agent_run', data: { event: 'start', runId: 'run-2', threadId: 'thread-1', startedAt: '2026-06-22T10:05:00.000Z' } },
+    { type: 'message', id: 'user-2', message: { role: 'user', content: 'second ask', timestamp: 3 } },
+    { type: 'message', id: 'assistant-2', message: { role: 'assistant', content: [{ type: 'text', text: 'Second answer.' }], timestamp: 4 } },
+    { type: 'custom', id: 'end-2', customType: 'nexus.agent_run', data: { event: 'end', runId: 'run-2', threadId: 'thread-1', assistantEntryId: 'assistant-2', completedAt: '2026-06-22T10:05:10.000Z', status: 'completed' } },
+  ]) as any[];
+
+  assert.deepEqual(
+    messages.map((message) => [message.role, message.content]),
+    [
+      ['user', 'first ask'],
+      ['assistant', 'First answer.'],
+      ['user', 'second ask'],
+      ['assistant', 'Second answer.'],
+    ],
+  );
+  assert.equal(messages[1].run.runId, 'run-1');
+  assert.equal(messages[1].run.status, 'interrupted');
+  assert.equal(messages[3].run.runId, 'run-2');
+});
+
+test('run history keeps a mid-run prompt below the turn it answered', () => {
+  const messages = flattenEntries([
+    { type: 'custom', id: 'start', customType: 'nexus.agent_run', data: { event: 'start', runId: 'run-1', threadId: 'thread-1', startedAt: '2026-06-22T10:00:00.000Z' } },
+    { type: 'message', id: 'user-1', message: { role: 'user', content: 'work', timestamp: 1 } },
+    { type: 'message', id: 'assistant-1', message: { role: 'assistant', content: [{ type: 'text', text: 'Which scope?' }], timestamp: 2 } },
+    { type: 'message', id: 'user-2', message: { role: 'user', content: 'small', timestamp: 3 } },
+    { type: 'custom', id: 'end', customType: 'nexus.agent_run', data: { event: 'end', runId: 'run-1', threadId: 'thread-1', assistantEntryId: 'assistant-1', completedAt: '2026-06-22T10:00:10.000Z', status: 'completed' } },
+  ]) as any[];
+
+  assert.deepEqual(
+    messages.map((message) => [message.role, message.content]),
+    [['user', 'work'], ['assistant', 'Which scope?'], ['user', 'small']],
+  );
+});
+
 async function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean; detectGitBranch?: (repoPath: string) => Promise<string> } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-chat-test-'));
   const db = new Database(join(dir, 'test.db'));
