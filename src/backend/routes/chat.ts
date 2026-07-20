@@ -23,6 +23,7 @@ import {
 } from '@nexus/shared';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
+import { autoTitleSession, NEW_THREAD_TITLE } from '../sessions/auto-title.js';
 import { loadConfig } from '../config.js';
 import { resolveSignalFilterConfig } from '../signal-filters/config.js';
 import { projectToolResultMessages, type SignalProjection } from '../signal-filters/messages.js';
@@ -249,7 +250,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     const thread: ChatThread = {
       id: uuid(),
       project_id: projectId,
-      title: body.title?.trim() || 'New Session',
+      title: body.title?.trim() || NEW_THREAD_TITLE,
       git_branch: project?.repo_path ? await detectGitBranch(project.repo_path) : '',
       created_at: now,
       updated_at: now,
@@ -582,6 +583,19 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       } catch (err: any) {
         console.error('[chat] persistUserTurn failed:', err?.message);
       }
+      // Name the session from its opening prompt. Fire-and-forget on purpose:
+      // it runs alongside the turn rather than before it, so titling never
+      // delays the first token. The DB write is authoritative — the stream
+      // event is only so the sidebar updates without waiting for the turn to
+      // finish, and dropping it (title landed after run_end) costs nothing
+      // because the frontend reloads threads once the stream closes.
+      void autoTitleSession(
+        db,
+        { table: 'chat_threads', id: threadId, currentTitle: thread.title, placeholder: NEW_THREAD_TITLE },
+        body.content,
+      ).then((title) => {
+        if (title) write({ kind: 'thread_title', threadId, title });
+      });
       if (session) {
         activeStreams.set(threadId, { session, runId });
         const runStartMs = Date.parse(startEvent.startedAt);

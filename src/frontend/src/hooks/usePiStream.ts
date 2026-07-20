@@ -550,7 +550,7 @@ export function usePiStream() {
     async (
       threadId: string,
       text: string,
-      opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[]; onError?: (message: string) => void } = {},
+      opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[]; onError?: (message: string) => void; onTitle?: (title: string) => void } = {},
     ): Promise<ContextUsage | null> => {
       activeThreadRef.current = threadId;
       streamingThreadRef.current = threadId;
@@ -653,6 +653,13 @@ export function usePiStream() {
               sawRunEnd = true;
               routeEvent(parsed, threadId, opts.onError);
               return lastContextUsage;
+            }
+            // The backend named a session from its opening prompt (see
+            // sessions/auto-title.ts). Not a stream event — it just tells the
+            // sidebar to refresh early instead of waiting for the turn to end.
+            if (parsed?.kind === 'thread_title') {
+              if (typeof parsed.title === 'string' && parsed.title) opts.onTitle?.(parsed.title);
+              continue;
             }
             if (parsed?.kind === 'done') {
               dispatch({ type: 'STREAM_COMPLETE' });

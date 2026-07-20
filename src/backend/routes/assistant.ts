@@ -20,6 +20,7 @@ import {
   type HermesRunStatus,
 } from '../hermes/client.js';
 import { hermesMessagesToTranscript } from '../hermes/transcript.js';
+import { autoTitleSession, NEW_ASSISTANT_SESSION_TITLE } from '../sessions/auto-title.js';
 import { flattenEntries } from './chat.js';
 
 interface AssistantMessage {
@@ -278,7 +279,7 @@ function createSession(db: FastifyInstance['db'], title?: string): AssistantSess
     `INSERT INTO assistant_sessions
       (id, title, status, created_at, updated_at, archived_at)
      VALUES (?, ?, 'idle', ?, ?, NULL)`,
-  ).run(id, title?.trim() || 'New Assistant Session', now, now);
+  ).run(id, title?.trim() || NEW_ASSISTANT_SESSION_TITLE, now, now);
   return db.prepare('SELECT * FROM assistant_sessions WHERE id = ?').get(id) as AssistantSession;
 }
 
@@ -563,6 +564,16 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const write = (ev: unknown) => { try { reply.raw.write(JSON.stringify(ev) + '\n'); } catch { /* client gone */ } };
       const startedAtIso = new Date().toISOString();
       write({ kind: 'run_start', run: { runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' } });
+
+      // Name the session from its opening prompt, in parallel with the turn.
+      // See the matching call in routes/chat.ts for why this is fire-and-forget.
+      void autoTitleSession(
+        db,
+        { table: 'assistant_sessions', id: session.id, currentTitle: session.title, placeholder: NEW_ASSISTANT_SESSION_TITLE },
+        trimmed,
+      ).then((title) => {
+        if (title) write({ kind: 'session_title', sessionId: session.id, title });
+      });
 
       let accumulated = '';
       let status: string = 'completed';

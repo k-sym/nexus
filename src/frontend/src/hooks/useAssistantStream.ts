@@ -368,6 +368,14 @@ export function useAssistantStream() {
             setSessions((current) => current.map((session) =>
               session.id === selectedSessionId ? { ...session, status: status === 'completed' ? 'idle' : status } : session,
             ));
+          } else if (event.kind === 'session_title') {
+            // Backend named this session from its opening prompt.
+            const title = String(event.title ?? '');
+            if (title) {
+              setSessions((current) => current.map((session) =>
+                session.id === selectedSessionId ? { ...session, title } : session,
+              ));
+            }
           } else if (event.type === 'error') {
             setError(String(event.error ?? 'Assistant request failed.'));
           }

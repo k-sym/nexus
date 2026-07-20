@@ -90,6 +90,14 @@ export interface SessionArchiveSummaryResponse {
   summary: string;
 }
 
+export interface SessionTitleRequest {
+  prompt: string;
+}
+
+export interface SessionTitleResponse {
+  title: string;
+}
+
 export class DaemonRequestError extends Error {
   constructor(readonly status: number, message: string, readonly detail?: string) {
     super(message);
@@ -171,5 +179,8 @@ export const daemon = {
   },
   summarizeSessionArchive(input: SessionArchiveSummaryRequest) {
     return req<SessionArchiveSummaryResponse>('POST', '/operations/summarize-session-archive', input);
+  },
+  generateSessionTitle(input: SessionTitleRequest) {
+    return req<SessionTitleResponse>('POST', '/operations/generate-session-title', input);
   },
 };

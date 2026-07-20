@@ -14,6 +14,29 @@ const SESSION_ARCHIVE_SYSTEM_PROMPT =
  *  intermittently; this is sized so a queued archive still completes. */
 const SESSION_ARCHIVE_TIMEOUT_MS = 300_000;
 
+const SESSION_TITLE_SYSTEM_PROMPT =
+  "You name chat sessions. Read the user's opening message and reply with a title of three to six words naming the task or topic. Reply with the title alone: no quotes, no trailing punctuation, no preamble, no explanation.";
+
+/** Titling generates ~15 tokens off a short prompt, so it is orders of magnitude
+ *  cheaper than an archive summary — but it still queues behind whatever else is
+ *  using the gen server, and it runs while the user's real turn is streaming.
+ *  30s is generous for the work and short enough that a wedged gen server never
+ *  holds a title write open. */
+const SESSION_TITLE_TIMEOUT_MS = 30_000;
+
+/** Small local models pad titles with preamble, quotes, or a trailing period no
+ *  matter how firmly the prompt forbids it. Keep the first non-empty line, strip
+ *  the decoration, and cap the length so the sidebar never has to. */
+export function cleanSessionTitle(raw: string): string {
+  const firstLine = raw.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+  return firstLine
+    .replace(/^(?:title|session)\s*:\s*/i, "")
+    .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, "")
+    .replace(/[.!?,;:\s]+$/, "")
+    .trim()
+    .slice(0, 60);
+}
+
 export interface OperationDependencies {
   rebuild: () => Promise<ReindexStats>;
   clearNexus: () => ClearNexusResult;
@@ -92,6 +115,25 @@ export function registerOperationRoutes(
       // context size" — actionable in a way that a bare "failed" is not.
       const detail = err instanceof ModelError ? err.message : undefined;
       return reply.code(502).send({ error: "Archive summary model failed", detail });
+    }
+  });
+
+  app.post("/operations/generate-session-title", async (request, reply) => {
+    const prompt = ((request.body ?? {}) as { prompt?: string }).prompt?.trim();
+    if (!prompt) return reply.code(400).send({ error: "prompt is required" });
+
+    try {
+      const title = cleanSessionTitle(await ctx.models.complete(prompt, {
+        system: SESSION_TITLE_SYSTEM_PROMPT,
+        temperature: 0.2,
+        maxTokens: 32,
+        timeoutMs: SESSION_TITLE_TIMEOUT_MS,
+      }));
+      if (!title) return reply.code(502).send({ error: "Session title model returned empty content" });
+      return { title };
+    } catch (err) {
+      const detail = err instanceof ModelError ? err.message : undefined;
+      return reply.code(502).send({ error: "Session title model failed", detail });
     }
   });
 }
