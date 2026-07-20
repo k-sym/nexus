@@ -931,6 +931,7 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
   const runStarts = new Map<string, AgentRunStart>();
   const runEndsByAssistant = new Map<string, AgentRunEnd>();
   const runEndIndexes = new Map<string, { index: number; event: AgentRunEnd }>();
+  const runStartIndexes: number[] = [];
   const sourceEntries = entries as any[];
   for (const [index, entry] of sourceEntries.entries()) {
     const message = entry?.type === 'message' ? entry.message : undefined;
@@ -939,7 +940,10 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
     }
     if (entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE) {
       const data = entry.data as AgentRunStart | AgentRunEnd | undefined;
-      if (data?.event === 'start') runStarts.set(data.runId, data);
+      if (data?.event === 'start') {
+        runStarts.set(data.runId, data);
+        runStartIndexes.push(index);
+      }
       if (data?.event === 'end') {
         runEndIndexes.set(data.runId, { index, event: data });
         if (data.assistantEntryId) runEndsByAssistant.set(data.assistantEntryId, data);
@@ -948,6 +952,7 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
   }
   const runStartsByAssistant = new Map<string, AgentRunStart>();
   const normalizedEntries: any[] = [];
+  let nextStartCursor = 0;
   for (let index = 0; index < sourceEntries.length; index += 1) {
     const entry = sourceEntries[index];
     const data = entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE
@@ -956,10 +961,23 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
     if (data?.event === 'start') {
       const end = runEndIndexes.get(data.runId);
       const endIndex = end?.index ?? sourceEntries.length;
-      const segment = sourceEntries.slice(index + 1, endIndex);
-      normalizedEntries.push(...segment.filter((candidate) => candidate?.type === 'message' && candidate.message?.role === 'user'));
+      // A run whose `run_end` never landed (backend killed mid-turn) must not
+      // swallow the rest of the transcript: without this bound its segment runs
+      // to EOF, hoisting every later prompt above one merged assistant bubble.
+      // The next run's start always terminates the previous run's segment.
+      while (nextStartCursor < runStartIndexes.length && runStartIndexes[nextStartCursor] <= index) nextStartCursor += 1;
+      const nextStartIndex = runStartIndexes[nextStartCursor] ?? sourceEntries.length;
+      const boundary = Math.min(endIndex, nextStartIndex);
+      const segment = sourceEntries.slice(index + 1, boundary);
       const assistants = segment.filter((candidate) => candidate?.type === 'message' && candidate.message?.role === 'assistant');
       const lastAssistant = assistants.at(-1);
+      // Users keep their position relative to the assistant output they bracket,
+      // so a prompt sent mid-run (e.g. answering a question tool) stays below the
+      // turn it replied to instead of jumping above it.
+      const firstAssistantIndex = segment.indexOf(assistants[0]);
+      const isUser = (candidate: any) => candidate?.type === 'message' && candidate.message?.role === 'user';
+      normalizedEntries.push(...segment.filter((candidate, i) =>
+        isUser(candidate) && (firstAssistantIndex < 0 || i < firstAssistantIndex)));
       if (lastAssistant) {
         const synthetic = {
           ...lastAssistant,
@@ -972,8 +990,11 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
         runStartsByAssistant.set(String(synthetic.id), data);
         if (end && !end.event.assistantEntryId) runEndsByAssistant.set(String(synthetic.id), end.event);
         normalizedEntries.push(synthetic);
+        normalizedEntries.push(...segment.filter((candidate, i) => isUser(candidate) && i > firstAssistantIndex));
       }
-      index = endIndex;
+      // Consume the `run_end` we just folded in; a segment cut short by the next
+      // run's start must leave that start for the following iteration.
+      index = boundary === endIndex ? boundary : boundary - 1;
       continue;
     }
     if (data?.event === 'end') continue;
