@@ -4,7 +4,7 @@ import { Project, Task, Ticket, ChatThread, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS
 import { api, MissionStatus } from './api';
 import TopBar from './components/TopBar';
 import CommandPalette, { Command } from './components/CommandPalette';
-import Sidebar, { SubView, ThreadMeta, type ActiveSessionRun } from './components/Sidebar';
+import Sidebar, { SubView, ThreadMeta, type SidebarSession, type SessionActivity } from './components/Sidebar';
 import MissionControl from './components/MissionControl';
 import TicketsView from './components/TicketsView';
 import BraindumpView from './components/BraindumpView';
@@ -23,7 +23,7 @@ import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
 import ActivityConsole from './components/ActivityConsole';
 import DiffReviewPanel from './components/DiffReviewPanel';
-import type { ActivityResponse, OperationKind, OperationStatus, ReviewActionResult } from './api';
+import type { ActivityResponse, ChatSessionSummary, OperationKind, OperationStatus, ReviewActionResult } from './api';
 import { loadViewState, saveViewState } from './viewState';
 
 type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'settings';
@@ -77,11 +77,9 @@ export default function App() {
   const [subView, setSubView] = useState<SubView>(() => loadViewState().subView ?? 'kanban');
   const [activeThreadId, setActiveThreadId] = useState<string | null>(() => loadViewState().activeThreadId ?? null);
   const [threads, setThreads] = useState<ChatThread[]>([]);
-  const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(() => new Set());
+  const [runningThreadIds, setRunningThreadIds] = useState<Set<string>>(() => new Set());
   const [waitingSessionIds, setWaitingSessionIds] = useState<Set<string>>(() => new Set());
-  const [activeProjectIds, setActiveProjectIds] = useState<Set<string>>(() => new Set());
-  const [waitingProjectIds, setWaitingProjectIds] = useState<Set<string>>(() => new Set());
-  const [activeRuns, setActiveRuns] = useState<ActiveSessionRun[]>([]);
+  const [liveSessions, setLiveSessions] = useState<ChatSessionSummary[]>([]);
   const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [assistantActive, setAssistantActive] = useState(false);
@@ -225,16 +223,8 @@ export default function App() {
   const refreshActiveChatRuns = useCallback(async () => {
     try {
       const data = await api.chat.activeRuns();
-      setActiveRuns(data.runs.map((run) => ({
-        threadId: run.threadId,
-        title: run.title,
-        projectId: run.projectId,
-        waitingForResponse: run.waitingForResponse,
-      })));
-      setActiveSessionIds(new Set(data.activeThreadIds));
+      setRunningThreadIds(new Set(data.activeThreadIds));
       setWaitingSessionIds(new Set(data.runs.filter((run) => run.waitingForResponse).map((run) => run.threadId)));
-      setActiveProjectIds(new Set(data.runs.filter((run) => run.projectId).map((run) => run.projectId!)));
-      setWaitingProjectIds(new Set(data.runs.filter((run) => run.projectId && run.waitingForResponse).map((run) => run.projectId!)));
     } catch (err) {
       console.error('Failed to load active chat runs:', err);
     }
@@ -245,6 +235,56 @@ export default function App() {
     const interval = setInterval(refreshActiveChatRuns, 2000);
     return () => clearInterval(interval);
   }, [refreshActiveChatRuns]);
+
+  // The set of live sessions changes only on create/rename/delete/archive, so it
+  // polls far more slowly than the run feed; those handlers refresh it directly.
+  const refreshLiveSessions = useCallback(async () => {
+    try {
+      const { sessions } = await api.chat.sessions();
+      setLiveSessions(sessions);
+    } catch (err) {
+      console.error('Failed to load sessions:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshLiveSessions();
+    const interval = setInterval(refreshLiveSessions, 5000);
+    return () => clearInterval(interval);
+  }, [refreshLiveSessions]);
+
+  /** Join the slow session list to the fast run feed into one badge state. */
+  const sidebarSessions: SidebarSession[] = useMemo(() => {
+    const activityFor = (threadId: string): SessionActivity =>
+      waitingSessionIds.has(threadId) ? 'waiting' : runningThreadIds.has(threadId) ? 'working' : 'idle';
+
+    return liveSessions.map((session) => ({
+      threadId: session.threadId,
+      title: session.title,
+      projectId: session.projectId,
+      activity: activityFor(session.threadId),
+    }));
+  }, [liveSessions, runningThreadIds, waitingSessionIds]);
+
+  // Derived from the run feed rather than the session list, so a row badge turns
+  // red the moment a turn starts instead of waiting for the slower session poll.
+  const workingSessionIds = useMemo(
+    () => new Set([...runningThreadIds].filter((id) => !waitingSessionIds.has(id))),
+    [runningThreadIds, waitingSessionIds],
+  );
+
+  const projectIdsByActivity = useMemo(() => {
+    const working = new Set<string>();
+    const waiting = new Set<string>();
+    const live = new Set<string>();
+    for (const session of sidebarSessions) {
+      if (!session.projectId) continue;
+      live.add(session.projectId);
+      if (session.activity === 'waiting') waiting.add(session.projectId);
+      else if (session.activity === 'working') working.add(session.projectId);
+    }
+    return { working, waiting, live };
+  }, [sidebarSessions]);
 
   const refreshAssistantActive = useCallback(async () => {
     try {
@@ -506,6 +546,7 @@ export default function App() {
   const handleRenameThread = async (threadId: string, title: string) => {
     await api.chat.renameThread(threadId, title);
     if (activeProjectId) await loadThreads(activeProjectId);
+    await refreshLiveSessions();
   };
 
   const handleArchiveThread = async (threadId: string) => {
@@ -516,6 +557,7 @@ export default function App() {
       await api.chat.archiveThread(threadId);
       if (threadId === activeThreadId) setActiveThreadId(null);
       if (activeProjectId) await loadThreads(activeProjectId);
+      await refreshLiveSessions();
       await loadActivity();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to archive session.';
@@ -535,11 +577,13 @@ export default function App() {
     await api.chat.deleteThread(threadId);
     if (threadId === activeThreadId) setActiveThreadId(null);
     if (activeProjectId) await loadThreads(activeProjectId);
+    await refreshLiveSessions();
   };
 
   const startNewSession = async (projectId: string) => {
     const thread = await api.chat.createThread(projectId);
     await loadThreads(projectId);
+    await refreshLiveSessions();
     selectThread(projectId, thread.id);
   };
 
@@ -571,7 +615,7 @@ export default function App() {
   }, []);
 
   const handleSessionActivityChange = useCallback((threadId: string, active: boolean) => {
-    setActiveSessionIds((current) => {
+    setRunningThreadIds((current) => {
       const next = new Set(current);
       if (active) next.add(threadId);
       else next.delete(threadId);
@@ -687,9 +731,9 @@ export default function App() {
                   projectId={activeProject.id}
                   threadId={activeThreadId}
                   onBusyConflict={() => {}}
-                  onThreadsChanged={() => loadThreads(activeProject.id)}
+                  onThreadsChanged={() => { void loadThreads(activeProject.id); void refreshLiveSessions(); }}
                   onSessionActivityChange={handleSessionActivityChange}
-                  backendActiveThreadIds={activeSessionIds}
+                  backendActiveThreadIds={runningThreadIds}
                   seed={taskSeed}
                   onSeedConsumed={() => setTaskSeed(null)}
                 />
@@ -729,11 +773,12 @@ export default function App() {
             subView={subView}
             activeThreadId={activeThreadId}
             threads={activeProjectId ? threadMetas : []}
-            activeSessionIds={activeSessionIds}
+            workingSessionIds={workingSessionIds}
             waitingSessionIds={waitingSessionIds}
-            activeProjectIds={activeProjectIds}
-            waitingProjectIds={waitingProjectIds}
-            activeRuns={activeRuns}
+            workingProjectIds={projectIdsByActivity.working}
+            waitingProjectIds={projectIdsByActivity.waiting}
+            liveProjectIds={projectIdsByActivity.live}
+            sessions={sidebarSessions}
             archivingThreadIds={archivingThreadIds}
             projectCounts={sidebarProjectCounts}
             onSelectProject={focusProject}

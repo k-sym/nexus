@@ -228,6 +228,24 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     };
   });
 
+  // Every live session across every project. The sidebar's "Active sessions"
+  // list is built from this, so a session stays listed after its run finishes
+  // and only leaves when it is deleted or archived. Deliberately lighter than
+  // the per-project thread route: no git-branch detection, no message bodies.
+  fastify.get('/api/chat/sessions', async () => {
+    const rows = db
+      .prepare('SELECT id, project_id, title, updated_at FROM chat_threads WHERE archived_at IS NULL ORDER BY updated_at DESC')
+      .all() as Array<{ id: string; project_id: string; title: string; updated_at: string }>;
+    return {
+      sessions: rows.map((row) => ({
+        threadId: row.id,
+        projectId: row.project_id,
+        title: row.title,
+        updatedAt: row.updated_at,
+      })),
+    };
+  });
+
   fastify.get('/api/projects/:projectId/threads', async (request) => {
     const { projectId } = request.params as { projectId: string };
     const project = db.prepare('SELECT repo_path FROM projects WHERE id = ?').get(projectId) as

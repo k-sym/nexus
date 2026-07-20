@@ -1,7 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import Sidebar, { type ThreadMeta, type ActiveSessionRun } from './Sidebar';
+import Sidebar, { type ThreadMeta, type SidebarSession } from './Sidebar';
 import { confirmDialog } from '../lib/confirm';
 import type { ChatThread, Project } from '@nexus/shared';
 
@@ -43,11 +43,12 @@ function renderSidebar({
   threads = [{ thread }],
   subView = 'chat',
   activeThreadId = thread.id,
-  activeSessionIds = new Set<string>(),
+  workingSessionIds = new Set<string>(),
   waitingSessionIds = new Set<string>(),
-  activeProjectIds = new Set<string>(),
+  workingProjectIds = new Set<string>(),
   waitingProjectIds = new Set<string>(),
-  activeRuns = [],
+  liveProjectIds = new Set<string>(),
+  sessions = [],
   archivingThreadIds = new Set<string>(),
   onEditProject = noop,
   onDeleteProject = noop,
@@ -59,11 +60,12 @@ function renderSidebar({
   threads?: ThreadMeta[];
   subView?: 'kanban' | 'memory' | 'chat';
   activeThreadId?: string | null;
-  activeSessionIds?: Set<string>;
+  workingSessionIds?: Set<string>;
   waitingSessionIds?: Set<string>;
-  activeProjectIds?: Set<string>;
+  workingProjectIds?: Set<string>;
   waitingProjectIds?: Set<string>;
-  activeRuns?: ActiveSessionRun[];
+  liveProjectIds?: Set<string>;
+  sessions?: SidebarSession[];
   archivingThreadIds?: Set<string>;
   onEditProject?: (project: Project) => void;
   onDeleteProject?: (projectId: string) => void;
@@ -79,11 +81,12 @@ function renderSidebar({
       subView={subView}
       activeThreadId={activeThreadId}
       threads={threads}
-      activeSessionIds={activeSessionIds}
+      workingSessionIds={workingSessionIds}
       waitingSessionIds={waitingSessionIds}
-      activeProjectIds={activeProjectIds}
+      workingProjectIds={workingProjectIds}
       waitingProjectIds={waitingProjectIds}
-      activeRuns={activeRuns}
+      liveProjectIds={liveProjectIds}
+      sessions={sessions}
       archivingThreadIds={archivingThreadIds}
       projectCounts={{
         [project.id]: { tasks: 3, sessions: threads.length },
@@ -110,23 +113,59 @@ describe('Sidebar', () => {
     vi.mocked(confirmDialog).mockReset().mockResolvedValue(true);
   });
 
-  it('labels chat threads as sessions and shows active session activity', () => {
-    renderSidebar({ threads: [{ thread }], activeSessionIds: new Set([thread.id]) });
+  it('labels chat threads as sessions and marks a working session red', () => {
+    renderSidebar({ threads: [{ thread }], workingSessionIds: new Set([thread.id]) });
 
     expect(screen.getByLabelText('Project sessions')).toHaveTextContent('Inspect progress docs first');
     expect(screen.queryByText('Chat')).not.toBeInTheDocument();
-    expect(screen.getByTitle('Session active')).toBeInTheDocument();
+    expect(screen.getByTitle('Session model working')).toHaveClass('bg-red-500');
   });
 
-  it('shows a waiting-for-response marker instead of the active spinner', () => {
+  it('badges a live session with nothing running as green idle', () => {
+    renderSidebar({ threads: [{ thread }] });
+
+    expect(screen.getByTitle('Session idle')).toHaveClass('bg-emerald-400');
+    expect(screen.queryByTitle('Session model working')).not.toBeInTheDocument();
+  });
+
+  it('shows the amber waiting marker in place of the working badge', () => {
     renderSidebar({
       threads: [{ thread }],
-      activeSessionIds: new Set([thread.id]),
+      workingSessionIds: new Set([thread.id]),
       waitingSessionIds: new Set([thread.id]),
     });
 
-    expect(screen.getByTitle('Waiting for response')).toBeInTheDocument();
-    expect(screen.queryByTitle('Session active')).not.toBeInTheDocument();
+    expect(screen.getByTitle('Session waiting for input')).toHaveClass('bg-amber-400');
+    expect(screen.queryByTitle('Session model working')).not.toBeInTheDocument();
+  });
+
+  it('badges the project rail green for live sessions, red while working, amber while waiting', () => {
+    renderSidebar({ liveProjectIds: new Set([project.id, secondProject.id]) });
+    expect(screen.getByTitle(`${project.name}: idle`)).toHaveClass('bg-emerald-400');
+    // The green dot is what lets you see, without switching, that the OTHER
+    // project has sessions at all.
+    expect(screen.getByTitle(`${secondProject.name}: idle`)).toHaveClass('bg-emerald-400');
+
+    cleanup();
+    renderSidebar({
+      liveProjectIds: new Set([project.id]),
+      workingProjectIds: new Set([project.id]),
+    });
+    expect(screen.getByTitle(`${project.name}: model working`)).toHaveClass('bg-red-500');
+
+    cleanup();
+    renderSidebar({
+      liveProjectIds: new Set([project.id]),
+      workingProjectIds: new Set([project.id]),
+      waitingProjectIds: new Set([project.id]),
+    });
+    expect(screen.getByTitle(`${project.name}: waiting for input`)).toHaveClass('bg-amber-400');
+  });
+
+  it('leaves the rail undotted for a project with no live sessions', () => {
+    renderSidebar({ liveProjectIds: new Set([project.id]) });
+
+    expect(screen.queryByTitle(`${secondProject.name}: idle`)).not.toBeInTheDocument();
   });
 
   it('shows an empty sessions state', () => {
@@ -173,11 +212,11 @@ describe('Sidebar', () => {
 
     renderSidebar({
       threads: [{ thread }, { thread: waitingThread }],
-      activeSessionIds: new Set([thread.id, waitingThread.id]),
+      workingSessionIds: new Set([thread.id]),
       waitingSessionIds: new Set([waitingThread.id]),
-      activeRuns: [
-        { threadId: thread.id, title: thread.title, projectId: project.id, waitingForResponse: false },
-        { threadId: waitingThread.id, title: waitingThread.title, projectId: project.id, waitingForResponse: true },
+      sessions: [
+        { threadId: thread.id, title: thread.title, projectId: project.id, activity: 'working' },
+        { threadId: waitingThread.id, title: waitingThread.title, projectId: project.id, activity: 'waiting' },
       ],
     });
 
@@ -188,11 +227,46 @@ describe('Sidebar', () => {
     expect(activeSection).toHaveTextContent('WAIT');
   });
 
-  it('shows active sessions from OTHER projects (global), so a run stays visible after navigating away', () => {
-    // Active run lives in secondProject while the user is viewing `project`.
+  it('keeps a finished session in the active sessions list, badged IDLE', () => {
+    // The whole point of the list: a session does not vanish when its run ends.
+    // It only leaves on delete/archive, which drops it from `sessions` upstream.
     renderSidebar({
-      activeRuns: [
-        { threadId: 'other-1', title: 'Long build in other project', projectId: secondProject.id, waitingForResponse: false },
+      threads: [{ thread }],
+      sessions: [
+        { threadId: thread.id, title: thread.title, projectId: project.id, activity: 'idle' },
+      ],
+    });
+
+    const activeSection = screen.getByLabelText('Active sessions');
+    expect(activeSection).toHaveTextContent('Inspect progress docs first');
+    expect(activeSection).toHaveTextContent('IDLE');
+    expect(activeSection).not.toHaveTextContent('RUN');
+  });
+
+  it('orders the list waiting first, then working, then idle', () => {
+    renderSidebar({
+      sessions: [
+        { threadId: 'idle-1', title: 'Idle session', projectId: project.id, activity: 'idle' },
+        { threadId: 'work-1', title: 'Working session', projectId: project.id, activity: 'working' },
+        { threadId: 'wait-1', title: 'Waiting session', projectId: project.id, activity: 'waiting' },
+      ],
+    });
+
+    const titles = within(screen.getByLabelText('Active sessions'))
+      .getAllByRole('button')
+      .map((el) => el.textContent);
+    expect(titles).toEqual([
+      expect.stringContaining('Waiting session'),
+      expect.stringContaining('Working session'),
+      expect.stringContaining('Idle session'),
+    ]);
+  });
+
+  it('shows sessions from OTHER projects (global), so they stay visible after navigating away', () => {
+    // Session lives in secondProject while the user is viewing `project`.
+    renderSidebar({
+      sessions: [
+        { threadId: 'other-1', title: 'Long build in other project', projectId: secondProject.id, activity: 'working' },
       ],
     });
 

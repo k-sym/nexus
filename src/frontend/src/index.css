@@ -449,14 +449,21 @@ body {
     letter-spacing: 0.04em;
   }
 
-  .compact-session-status-run {
-    background: var(--accent);
-    color: #071014;
+  /* Shares the badge vocabulary with the rail/session dots:
+     red = model working, amber = waiting on the user, green = live but idle. */
+  .compact-session-status-work {
+    background: #ef4444;
+    color: #2b0505;
   }
 
   .compact-session-status-wait {
     background: #fbbf24;
     color: #3a2500;
+  }
+
+  .compact-session-status-idle {
+    background: var(--accent);
+    color: #071014;
   }
 
   .ticket-priority-pill {

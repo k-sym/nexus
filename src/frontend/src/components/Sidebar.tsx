@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useMemo } from 'react';
 import { Project, ChatThread } from '@nexus/shared';
 import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch, GitBranch } from '@phosphor-icons/react';
 import { confirmDialog } from '../lib/confirm';
@@ -14,12 +14,23 @@ export interface SidebarProjectCounts {
   sessions: number;
 }
 
-/** A currently-running (or waiting) chat run, surfaced globally in the sidebar. */
-export interface ActiveSessionRun {
+/**
+ * What a session is doing right now. Drives one badge vocabulary shared by the
+ * project rail, the per-project session rows and the Active sessions list:
+ *   waiting → amber  (the model asked a question and is blocked on the user)
+ *   working → red    (the model is running a turn)
+ *   idle    → green  (the session is live but nothing is running)
+ * Precedence is waiting > working > idle: a session needing *you* outranks one
+ * that is busy on its own.
+ */
+export type SessionActivity = 'waiting' | 'working' | 'idle';
+
+/** One live session, surfaced globally in the sidebar. */
+export interface SidebarSession {
   threadId: string;
   title: string;
   projectId: string | null;
-  waitingForResponse: boolean;
+  activity: SessionActivity;
 }
 
 interface SidebarProps {
@@ -28,14 +39,15 @@ interface SidebarProps {
   subView: SubView;
   activeThreadId: string | null;
   threads: ThreadMeta[];
-  activeSessionIds: Set<string>;
+  workingSessionIds: Set<string>;
   waitingSessionIds: Set<string>;
-  activeProjectIds: Set<string>;
+  workingProjectIds: Set<string>;
   waitingProjectIds: Set<string>;
-  /** Active runs across ALL projects (from the backend active-runs feed), so a
-   *  running session stays visible in the Active sessions list even after the
-   *  user navigates to a different project. */
-  activeRuns: ActiveSessionRun[];
+  /** Projects owning at least one live session — the green rail dot. */
+  liveProjectIds: Set<string>;
+  /** Every live session across ALL projects, ordered most-recent first. Sessions
+   *  stay listed once their run finishes and leave only on delete/archive. */
+  sessions: SidebarSession[];
   archivingThreadIds: Set<string>;
   projectCounts: Record<string, SidebarProjectCounts>;
   onSelectProject: (id: string) => void;
@@ -126,9 +138,32 @@ function pluralize(count: number, singular: string): string {
   return `${count} ${singular}${count === 1 ? '' : 's'}`;
 }
 
+/** Badge colour per activity. Only the two states that are changing pulse —
+ *  idle is a resting light, so it stays still and doesn't compete for attention. */
+const ACTIVITY_DOT: Record<SessionActivity, string> = {
+  waiting: 'bg-amber-400 animate-pulse',
+  working: 'bg-red-500 animate-pulse',
+  idle: 'bg-emerald-400',
+};
+
+const ACTIVITY_LABEL: Record<SessionActivity, string> = {
+  waiting: 'waiting for input',
+  working: 'model working',
+  idle: 'idle',
+};
+
+const ACTIVITY_PILL: Record<SessionActivity, { className: string; text: string }> = {
+  waiting: { className: 'compact-session-status-wait', text: 'WAIT' },
+  working: { className: 'compact-session-status-work', text: 'RUN' },
+  idle: { className: 'compact-session-status-idle', text: 'IDLE' },
+};
+
+/** waiting > working > idle, so the list surfaces what needs the user first. */
+const ACTIVITY_RANK: Record<SessionActivity, number> = { waiting: 0, working: 1, idle: 2 };
+
 export default function Sidebar({
-  projects, activeProjectId, subView, activeThreadId, threads, activeSessionIds,
-  waitingSessionIds, activeProjectIds, waitingProjectIds, activeRuns,
+  projects, activeProjectId, subView, activeThreadId, threads, workingSessionIds,
+  waitingSessionIds, workingProjectIds, waitingProjectIds, liveProjectIds, sessions,
   archivingThreadIds,
   projectCounts,
   onSelectProject, onSelectSubView, onSelectThread, onRenameThread, onArchiveThread, onDeleteThread, onNewChat, onNewProject,
@@ -138,6 +173,13 @@ export default function Sidebar({
   const [renameDraft, setRenameDraft] = useState('');
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const dragStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  // Sessions arrive most-recent first; lift the ones needing attention to the top
+  // without disturbing recency within each band.
+  const orderedSessions = useMemo(
+    () => [...sessions].sort((a, b) => ACTIVITY_RANK[a.activity] - ACTIVITY_RANK[b.activity]),
+    [sessions],
+  );
 
   const startRename = (id: string, current: string) => { setRenamingId(id); setRenameDraft(current); };
   const cancelRename = () => { setRenamingId(null); setRenameDraft(''); };
@@ -213,8 +255,13 @@ export default function Sidebar({
       <nav aria-label="Project rail" className="compact-project-rail w-14 shrink-0 px-2 py-3 flex flex-col items-center gap-2">
         {projects.map((project) => {
           const isActiveProject = project.id === activeProjectId;
-          const isWaiting = waitingProjectIds.has(project.id);
-          const isActive = !isWaiting && activeProjectIds.has(project.id);
+          const activity: SessionActivity | null = waitingProjectIds.has(project.id)
+            ? 'waiting'
+            : workingProjectIds.has(project.id)
+              ? 'working'
+              : liveProjectIds.has(project.id)
+                ? 'idle'
+                : null;
           return (
             <button
               key={project.id}
@@ -233,14 +280,11 @@ export default function Sidebar({
               }`}
             >
               {projectInitial(project.name)}
-              {(isActive || isWaiting) && (
+              {activity && (
                 <span
-                  className={`absolute bottom-0.5 right-0.5 h-2.5 w-2.5 rounded-full border border-[var(--bg-canvas)] ${
-                    isWaiting
-                      ? 'bg-amber-400 animate-pulse'
-                      : 'bg-emerald-400 animate-pulse'
-                  }`}
-                  aria-hidden="true"
+                  title={`${project.name}: ${ACTIVITY_LABEL[activity]}`}
+                  aria-label={`${project.name}: ${ACTIVITY_LABEL[activity]}`}
+                  className={`absolute bottom-0.5 right-0.5 h-2.5 w-2.5 rounded-full border border-[var(--bg-canvas)] ${ACTIVITY_DOT[activity]}`}
                 />
               )}
             </button>
@@ -352,9 +396,14 @@ export default function Sidebar({
                 <>
                   {threads.map(({ thread }) => {
                           const isRenaming = renamingId === thread.id;
-                          const isActiveSession = activeSessionIds.has(thread.id);
-                          const isWaitingForResponse = waitingSessionIds.has(thread.id);
                           const isArchiving = archivingThreadIds.has(thread.id);
+                          // Every listed thread is live by definition (archived ones
+                          // are filtered out server-side), so it always has a badge.
+                          const activity: SessionActivity = waitingSessionIds.has(thread.id)
+                            ? 'waiting'
+                            : workingSessionIds.has(thread.id)
+                              ? 'working'
+                              : 'idle';
                           return (
                             <Row
                               key={thread.id}
@@ -375,15 +424,11 @@ export default function Sidebar({
                                       <CircleNotch size={13} className="animate-spin" />
                                       <span>Archiving...</span>
                                     </span>
-                                  ) : isWaitingForResponse ? (
+                                  ) : (
                                     <span
-                                      title="Waiting for response"
-                                      className="inline-block h-3.5 w-3.5 rounded-full border border-amber-200/80 bg-amber-400 shadow-[0_0_10px_rgba(251,191,36,0.45)] animate-pulse"
-                                    />
-                                  ) : isActiveSession && (
-                                    <span
-                                      title="Session active"
-                                      className="inline-block h-3.5 w-3.5 rounded-full border-2 border-[var(--text-faint)] border-t-[var(--accent-strong)] animate-spin"
+                                      title={`Session ${ACTIVITY_LABEL[activity]}`}
+                                      aria-label={`Session ${ACTIVITY_LABEL[activity]}`}
+                                      className={`inline-block h-2.5 w-2.5 rounded-full ${ACTIVITY_DOT[activity]}`}
                                     />
                                   )}
                                   {!isArchiving && (
@@ -455,28 +500,29 @@ export default function Sidebar({
           <div className="px-3 py-2 text-xs text-faint">No projects yet</div>
         )}
 
-        {activeRuns.length > 0 && (
+        {orderedSessions.length > 0 && (
           <section aria-label="Active sessions" className="mt-auto px-3 pt-3 pb-2 border-t border-subtle">
-            <div className="mb-1.5 text-[10px] uppercase tracking-wider text-faint font-medium">Active sessions</div>
-            <div className="space-y-1.5">
-              {activeRuns.map((run) => {
-                const runProject = projects.find((p) => p.id === run.projectId);
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="text-[10px] uppercase tracking-wider text-faint font-medium">Active sessions</span>
+              <CountBadge>{orderedSessions.length}</CountBadge>
+            </div>
+            {/* Holds every live session across all projects, so it can get long. */}
+            <div className="space-y-1.5 max-h-56 overflow-y-auto">
+              {orderedSessions.map((session) => {
+                const sessionProject = projects.find((p) => p.id === session.projectId);
+                const pill = ACTIVITY_PILL[session.activity];
                 return (
                   <button
                     type="button"
-                    key={run.threadId}
-                    onClick={() => { if (run.projectId) onSelectThread(run.projectId, run.threadId); }}
+                    key={session.threadId}
+                    onClick={() => { if (session.projectId) onSelectThread(session.projectId, session.threadId); }}
                     className="compact-session-card group w-full px-2.5 py-2 text-left transition-colors cursor-pointer"
                   >
                     <div className="flex items-start justify-between gap-2">
-                      <span className="min-w-0 truncate text-xs font-semibold text-primary">{run.title}</span>
-                      <span className={`compact-session-status shrink-0 ${
-                        run.waitingForResponse ? 'compact-session-status-wait' : 'compact-session-status-run'
-                      }`}>
-                        {run.waitingForResponse ? 'WAIT' : 'RUN'}
-                      </span>
+                      <span className="min-w-0 truncate text-xs font-semibold text-primary">{session.title}</span>
+                      <span className={`compact-session-status shrink-0 ${pill.className}`}>{pill.text}</span>
                     </div>
-                    <div className="mt-1 text-[11px] text-faint truncate">{runProject?.name ?? 'Unknown project'}</div>
+                    <div className="mt-1 text-[11px] text-faint truncate">{sessionProject?.name ?? 'Unknown project'}</div>
                   </button>
                 );
               })}
