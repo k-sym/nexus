@@ -21,6 +21,7 @@ import anthropicMessagesBridge from '@blackbelt-technology/pi-anthropic-messages
 import { QuestionBroker, createQuestionExtension } from './questions.js';
 import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
+import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
 import { defaultLocalModelsFile } from './local-models.js';
 
 type ResourceLoaderOptions = {
@@ -94,11 +95,15 @@ export function buildSessionExtensionFactories(
   approvals: ApprovalBroker,
   isSupervised: () => boolean,
   signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
+  recallMemories?: MemoryRecallFn,
 ): ExtensionFactory[] {
   return [
     createQuestionExtension(threadId, questions),
     createApprovalExtension(threadId, cwd, approvals, isSupervised),
     signalFactoryBuilder(cwd),
+    // Omitted when the runtime was built without a recall backend (tests,
+    // headless callers) so sessions don't advertise a tool that can't run.
+    ...(recallMemories ? [createMemoryExtension(cwd, recallMemories)] : []),
   ];
 }
 
@@ -127,14 +132,24 @@ export class PiRuntime {
    *  (so a restart never leaves a session silently gating). Toggled by the
    *  gateway `POST /api/supervise`; read live at each tool call. */
   private readonly supervised = new Set<string>();
+  /** Backend for the `memory_recall` tool. Undefined = the tool isn't registered. */
+  private readonly recallMemories?: MemoryRecallFn;
 
-  private constructor(paths: Required<PiRuntimePaths>, modelRuntime: ModelRuntime) {
+  private constructor(
+    paths: Required<PiRuntimePaths>,
+    modelRuntime: ModelRuntime,
+    recallMemories?: MemoryRecallFn,
+  ) {
     this.paths = paths;
     this.auth = modelRuntime;
     this.models = new ModelRegistry(modelRuntime);
+    this.recallMemories = recallMemories;
   }
 
-  static async create(paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths()): Promise<PiRuntime> {
+  static async create(
+    paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths(),
+    deps: { recallMemories?: MemoryRecallFn } = {},
+  ): Promise<PiRuntime> {
     const defaults = defaultPiRuntimePaths();
     const resolvedPaths = {
       authFile: paths.authFile ?? defaults.authFile,
@@ -148,7 +163,7 @@ export class PiRuntime {
       modelsPath: resolvedPaths.modelsFile,
       allowModelNetwork: false,
     });
-    return new PiRuntime(resolvedPaths, modelRuntime);
+    return new PiRuntime(resolvedPaths, modelRuntime, deps.recallMemories);
   }
 
   /**
@@ -261,6 +276,7 @@ export class PiRuntime {
       settingsManager,
       extensionFactories: buildSessionExtensionFactories(
         threadId, cwd, this.questions, this.approvals, () => this.isSupervised(threadId),
+        createSignalFilterExtension, this.recallMemories,
       ),
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();

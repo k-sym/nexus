@@ -50,7 +50,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Assistant** | A separate, project-less Hermes Assistant surface with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs that can be reconciled after restart. |
 | **Braindump** | Capture free-form ideas before they become tasks; triage them into a project's Kanban from the Braindump view. |
 | **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
-| **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Auto-injected into agent context; exposed over HTTP + MCP. |
+| **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Agents pull it on demand via a `memory_recall` tool; exposed over HTTP + MCP. |
 | **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, image + PDF/document attachments, and manual archival into memory. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
 | **GitHub triage** | Open issues on a project's GitHub remote are mirrored into the Triage column on Kanban open (token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. |
@@ -602,15 +602,11 @@ signal_filters:
 
 # Memory is served by the standalone @nexus/memory-daemon (separate process, see
 # src/memory-daemon/). The Obsidian vault is canonical; the SQLite index is rebuildable.
-# This `memory:` block is shared: the Nexus backend reads `daemon_url` + `auto_inject`;
-# the daemon reads `port`/`vault_path`/`models`/`retrieval` (all optional — it defaults
-# them, so a minimal config only needs daemon_url + auto_inject).
+# This `memory:` block is shared: the Nexus backend reads `daemon_url`; the daemon
+# reads `port`/`vault_path`/`models`/`retrieval` (all optional — it defaults them, so
+# a minimal config only needs daemon_url).
 memory:
   daemon_url: "http://127.0.0.1:4100"  # Nexus backend -> daemon (HTTP)
-  auto_inject:
-    enabled: true
-    max_memories: 5            # top N memories injected into agent context
-    token_budget: 1000         # hard cap on injected memory tokens
   # --- daemon's own settings (optional; defaults shown) ---
   port: 4100
   vault_path: "~/Obsidian/Nexus"       # canonical markdown vault
@@ -702,7 +698,7 @@ Memory is served by the standalone **`@nexus/memory-daemon`** (`src/memory-daemo
 - **Hybrid retrieval**: optional HyDE (gen model on 4001) → sentence + chunk vector KNN (nomic-embed, 4002) fused with FTS5 prefix search by Reciprocal Rank Fusion → cross-encoder rerank (qwen3-reranker, 4003) → surgical sentence trimming + small-to-big parent-chunk expansion, capped to a token budget. Degrades gracefully to FTS-only if the model stack is down.
 - **Knowledge graph**: subject-relation-object triples are extracted per memory (gen model, strict JSON) and fused into recall as related facts. Additive — extraction failure never breaks retrieval.
 - **Background jobs**: ingestion enqueues `deep_index` (embeddings) and `extract_kg` (knowledge graph) jobs. Jobs retry with backoff and **dead-letter after 5 attempts**; dead jobs do not auto-retry (see Troubleshooting).
-- **Auto-injection**: before an agent runs, the top relevance-ranked memories are injected within a configurable token budget (`memory.auto_inject`).
+- **On-demand recall**: memory is pull-based, not injected. Chat sessions get a `memory_recall` tool (`src/backend/pi/memory-tool.ts`); the model calls it when project history is relevant and gets back the top memories within a token budget. Recall runs HyDE in the daemon and costs seconds, so injecting it into every turn would tax turns that never needed it.
 
 Namespaces: `nexus` (per project), `global`, plus external agent namespaces. See `src/memory-daemon/README.md` for the HTTP/MCP surface and ops.
 

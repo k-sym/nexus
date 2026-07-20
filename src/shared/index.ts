@@ -350,11 +350,6 @@ export interface NexusConfig {
   memory: {
     // The standalone @nexus/memory-daemon (markdown-canonical vault + index).
     daemon_url: string;
-    auto_inject: {
-      enabled: boolean;
-      max_memories: number;
-      token_budget: number;
-    };
   };
   obsidian: {
     vault_path: string;

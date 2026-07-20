@@ -3,6 +3,7 @@ import type { NexusConfig } from '@nexus/shared';
 import type { PiRuntime } from '../pi/runtime.js';
 import { expandHome, getNexusDir, resolveEnvVars } from '../config.js';
 import { resolveGitHubTokenStatus } from '../github/token.js';
+import { DEFAULT_RECALL_LIMIT, DEFAULT_RECALL_TOKEN_BUDGET } from '../memory/index.js';
 
 export type SecretSource = 'environment' | 'config-env-reference' | 'config-literal' | 'pi-auth-file' | 'gh-cli' | 'absent' | 'unknown';
 export interface TrustSecret { configured: boolean; source: SecretSource; location?: string; credentialType?: 'api_key' | 'oauth' }
@@ -10,7 +11,7 @@ export interface TrustSnapshot {
   services: Array<{ name: string; url: string; loopback: boolean }>;
   storage: Array<{ name: string; path: string; role: 'canonical' | 'rebuildable' | 'application' | 'credentials' | 'configuration' }>;
   secrets: Record<string, TrustSecret>;
-  memory: { namespaces: string[]; autoInject: { enabled: boolean; maxMemories: number; tokenBudget: number }; archive: { mode: 'manual'; destination: string; removesHotThreadAfterSuccess: true } };
+  memory: { namespaces: string[]; recall: { mode: 'on_demand'; tool: string; maxMemories: number; tokenBudget: number }; archive: { mode: 'manual'; destination: string; removesHotThreadAfterSuccess: true } };
   outbound: Array<{ name: string; destination: string; sends: string[]; enabled: boolean }>;
   telemetry: { applicationTelemetry: false; statement: string };
 }
@@ -134,10 +135,13 @@ export async function buildTrustSnapshot(
     secrets,
     memory: {
       namespaces: ['nexus', 'global'],
-      autoInject: {
-        enabled: config.memory.auto_inject.enabled,
-        maxMemories: config.memory.auto_inject.max_memories,
-        tokenBudget: config.memory.auto_inject.token_budget,
+      // Recall is agent-initiated: nothing is read from the vault unless the
+      // model calls `memory_recall` during a turn.
+      recall: {
+        mode: 'on_demand',
+        tool: 'memory_recall',
+        maxMemories: DEFAULT_RECALL_LIMIT,
+        tokenBudget: DEFAULT_RECALL_TOKEN_BUDGET,
       },
       archive: { mode: 'manual', destination: 'nexus', removesHotThreadAfterSuccess: true },
     },

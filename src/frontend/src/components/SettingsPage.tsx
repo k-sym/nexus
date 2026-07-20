@@ -309,34 +309,6 @@ export default function SettingsPage() {
             </div>
           </Section>
 
-          {/* Memory */}
-          <Section title="Memory Auto-Injection">
-            <Field label="Enabled">
-              <button
-                onClick={() => update(['memory', 'auto_inject', 'enabled'], !config.memory.auto_inject.enabled)}
-                className={`px-3 py-1 text-xs rounded-sm transition-colors ${config.memory.auto_inject.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
-              >
-                {config.memory.auto_inject.enabled ? 'Enabled' : 'Disabled'}
-              </button>
-            </Field>
-            <Field label="Max memories injected">
-              <input
-                type="number"
-                value={config.memory.auto_inject.max_memories}
-                onChange={(e) => update(['memory', 'auto_inject', 'max_memories'], parseInt(e.target.value, 10) || 5)}
-                className="w-32 surface-panel border border-subtle rounded-sm px-3 py-2 text-sm text-primary focus:outline-hidden focus:border-strong"
-              />
-            </Field>
-            <Field label="Token budget">
-              <input
-                type="number"
-                value={config.memory.auto_inject.token_budget}
-                onChange={(e) => update(['memory', 'auto_inject', 'token_budget'], parseInt(e.target.value, 10) || 1000)}
-                className="w-32 surface-panel border border-subtle rounded-sm px-3 py-2 text-sm text-primary focus:outline-hidden focus:border-strong"
-              />
-            </Field>
-          </Section>
-
           {/* Jira */}
           <Section title="Jira">
             <Field label="Sync">

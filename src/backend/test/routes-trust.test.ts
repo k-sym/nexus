@@ -26,7 +26,7 @@ function config(root: string): NexusConfig {
     },
     assistant: { url: 'https://assistant.example/v1', api_key: '${ASSISTANT_API_KEY}' },
     signal_filters: { enabled: true, min_input_bytes: 1, max_output_bytes: 2, filters: { ansi: true, progress: true, repeated_lines: true, package_manager: true, test_output: true, stack_trace: true, diff_context: true }, projects: {} },
-    memory: { daemon_url: 'http://127.0.0.1:4100', auto_inject: { enabled: true, max_memories: 5, token_budget: 1000 } },
+    memory: { daemon_url: 'http://127.0.0.1:4100' },
     obsidian: { vault_path: join(root, 'vault'), sync_interval_seconds: 30 },
     jira: { enabled: true, user: 'user@example.com', instance: 'acme.atlassian.net', project: 'SUP', poll_minutes: 15, content_rules: [] },
     github: { enabled: true },
