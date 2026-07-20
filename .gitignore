@@ -36,6 +36,8 @@ npm-debug.log*
 
 # Testing
 coverage/
+playwright-report/
+test-results/
 
 # Claude Code
 .claude/
