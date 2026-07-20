@@ -63,11 +63,6 @@ const DEFAULT_CONFIG: NexusConfig = {
   },
   memory: {
     daemon_url: 'http://127.0.0.1:4100',
-    auto_inject: {
-      enabled: true,
-      max_memories: 5,
-      token_budget: 1000,
-    },
   },
   obsidian: {
     // Visible location so the vault shows up in Obsidian's "Open folder as

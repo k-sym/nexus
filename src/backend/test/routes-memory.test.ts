@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { registerMemoryRoutes } from '../routes/memory';
-import { getRelevantMemories } from '../memory/index';
+import { getRelevantMemories, recallForRepoPath } from '../memory/index';
 
 async function fakeMemoryDaemon() {
   const app = Fastify({ logger: false });
@@ -98,7 +98,7 @@ function makeApp() {
   };
 }
 
-test('memory page search returns actionable records with ids while recall injection remains strings', async () => {
+test('memory page search returns actionable records with ids while recall returns strings', async () => {
   const previousUrl = process.env.MEMORY_DAEMON_URL;
   const daemon = await fakeMemoryDaemon();
   process.env.MEMORY_DAEMON_URL = daemon.url;
@@ -117,8 +117,32 @@ test('memory page search returns actionable records with ids while recall inject
       updated_at: '2026-06-25T09:00:00.000Z',
     }]);
 
-    const injected = await getRelevantMemories(db, 'project-1', 'archive');
-    assert.deepEqual(injected, ['Archive sessions should preserve decisions before deletion.']);
+    const recalled = await getRelevantMemories(db, 'project-1', 'archive');
+    assert.deepEqual(recalled, ['Archive sessions should preserve decisions before deletion.']);
+  } finally {
+    process.env.MEMORY_DAEMON_URL = previousUrl;
+    await app.close();
+    await daemon.app.close();
+    cleanup();
+  }
+});
+
+test('recallForRepoPath resolves the project owning a cwd, and stays quiet for untracked ones', async () => {
+  const previousUrl = process.env.MEMORY_DAEMON_URL;
+  const daemon = await fakeMemoryDaemon();
+  process.env.MEMORY_DAEMON_URL = daemon.url;
+  const { app, db, cleanup } = makeApp();
+  try {
+    const repoPath = (db.prepare('SELECT repo_path FROM projects WHERE id = ?').get('project-1') as { repo_path: string }).repo_path;
+
+    // The pi session knows its cwd, not its project id — this is the bridge.
+    assert.deepEqual(
+      await recallForRepoPath(db, repoPath, 'archive'),
+      ['Archive sessions should preserve decisions before deletion.'],
+    );
+
+    // A cwd outside any project has no project memories, so recall never reaches the daemon.
+    assert.deepEqual(await recallForRepoPath(db, '/not/a/nexus/project', 'archive'), []);
   } finally {
     process.env.MEMORY_DAEMON_URL = previousUrl;
     await app.close();

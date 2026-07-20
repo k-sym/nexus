@@ -11,7 +11,6 @@
  * written to the vault as plain markdown by ./obsidian (the daemon indexes them too).
  */
 import Database from 'better-sqlite3';
-import { loadConfig } from '../config.js';
 import { daemon, DaemonRecallItem } from './client.js';
 
 export { writeTaskSummary, writeChatArchive, getVaultPath, ensureProjectDir } from './obsidian.js';
@@ -95,9 +94,18 @@ function mapRecallItem(projectId: string, item: DaemonRecallItem): Memory {
   };
 }
 
+/** Default cap on memories returned by a single recall. */
+export const DEFAULT_RECALL_LIMIT = 5;
+/** Default hard cap on the tokens a single recall may return. */
+export const DEFAULT_RECALL_TOKEN_BUDGET = 1000;
+
 /**
- * Token-budgeted recall for auto-injection. Returns formatted strings (the shape the
- * orchestrator/chat injectors and the frontend Memory panel already expect).
+ * Token-budgeted recall. Returns formatted strings ready to hand to a model.
+ *
+ * This is pull-based, not push-based: the agent calls the `memory_recall` tool
+ * (see ../pi/memory-tool.ts) when it decides memory is relevant. Recall runs
+ * HyDE in the daemon and costs seconds, so it is deliberately not injected into
+ * every turn.
  */
 export async function getRelevantMemories(
   db: Database.Database,
@@ -107,9 +115,8 @@ export async function getRelevantMemories(
   tokenBudget?: number,
 ): Promise<string[]> {
   if (!query || query.trim().length === 0) return [];
-  const config = loadConfig();
-  const max = maxResults || config.memory.auto_inject.max_memories;
-  const budget = tokenBudget || config.memory.auto_inject.token_budget;
+  const max = maxResults || DEFAULT_RECALL_LIMIT;
+  const budget = tokenBudget || DEFAULT_RECALL_TOKEN_BUDGET;
   const slug = projectSlug(db, projectId);
 
   let items: DaemonRecallItem[] = [];
@@ -133,6 +140,24 @@ export async function getRelevantMemories(
     if (results.length >= max) break;
   }
   return results;
+}
+
+/**
+ * Recall scoped to whatever project owns `repoPath`.
+ *
+ * Pi sessions are keyed by cwd, not project id, so the `memory_recall` tool
+ * resolves its project this way. Returns [] for a cwd that isn't a known
+ * project — an untracked directory has no project memories to recall.
+ */
+export async function recallForRepoPath(
+  db: Database.Database,
+  repoPath: string,
+  query: string,
+  maxResults?: number,
+): Promise<string[]> {
+  const row = db.prepare('SELECT id FROM projects WHERE repo_path = ?').get(repoPath) as { id: string } | undefined;
+  if (!row) return [];
+  return getRelevantMemories(db, row.id, query, maxResults);
 }
 
 /** Search memories for the management UI. Unlike recall injection, this preserves IDs. */

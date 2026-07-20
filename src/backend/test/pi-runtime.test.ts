@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { PiRuntime, buildResourceLoaderOptions, buildSessionExtensionFactories, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
 import { QuestionBroker } from '../pi/questions';
 import { ApprovalBroker } from '../pi/approvals';
+import type { MemoryRecallFn } from '../pi/memory-tool';
 import { buildModelCatalog } from '../routes/pi';
 
 test('cwdSlug encodes repo paths safely', () => {
@@ -272,6 +273,56 @@ test('question and approval extensions install after the Anthropic bridge and be
   } as any);
   assert.equal(approvalHandlerRegistered, true, 'approval extension registers a tool_call handler');
   assert.strictEqual(options.extensionFactories?.[3], signalFactory);
+});
+
+/** Register the session's memory_recall tool and hand back its definition. */
+async function registerMemoryTool(cwd: string, recall: MemoryRecallFn) {
+  const factories = buildSessionExtensionFactories(
+    'thread-1', cwd, new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {}, recall,
+  );
+  assert.equal(factories.length, 4, 'memory extension is appended when a recall backend is supplied');
+  let tool: any;
+  await factories[3]?.({ registerTool(value: unknown) { tool = value; } } as any);
+  return tool;
+}
+
+test('sessions omit the memory tool when the runtime has no recall backend', () => {
+  const factories = buildSessionExtensionFactories(
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+  );
+  assert.equal(factories.length, 3, 'no memory_recall tool without a backend to serve it');
+});
+
+test('memory_recall returns recalled memories as a bulleted list', async () => {
+  const calls: Array<{ cwd: string; query: string; limit?: number }> = [];
+  const tool = await registerMemoryTool('/tmp/project', async (cwd, query, limit) => {
+    calls.push({ cwd, query, limit });
+    return ['We chose SQLite over Postgres for the index.', 'Archives are manual, never automatic.'];
+  });
+
+  assert.equal(tool.name, 'memory_recall');
+  const result = await tool.execute('call-1', { query: '  why sqlite  ', limit: 2 });
+
+  // The session's cwd is bound at registration; the model never supplies it.
+  assert.deepEqual(calls, [{ cwd: '/tmp/project', query: 'why sqlite', limit: 2 }]);
+  assert.equal(
+    result.content[0].text,
+    '- We chose SQLite over Postgres for the index.\n- Archives are manual, never automatic.',
+  );
+  assert.deepEqual(result.details, { status: 'ok', query: 'why sqlite', count: 2 });
+});
+
+test('memory_recall reports an empty result without claiming the project has no memories', async () => {
+  const tool = await registerMemoryTool('/tmp/project', async () => []);
+  const result = await tool.execute('call-1', { query: 'unknown topic' });
+
+  assert.equal(result.content[0].text, 'No memories matched: unknown topic');
+  assert.deepEqual(result.details, { status: 'empty', query: 'unknown topic', count: 0 });
+});
+
+test('memory_recall throws on a blank query so pi renders it as a tool error', async () => {
+  const tool = await registerMemoryTool('/tmp/project', async () => ['unreachable']);
+  await assert.rejects(() => tool.execute('call-1', { query: '   ' }), /non-empty query/);
 });
 
 test('PiRuntime.findModel exposes model input capabilities', async () => {

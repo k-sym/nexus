@@ -11,7 +11,6 @@ vi.mock('../api', () => ({
         server: { port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
         assistant: { url: 'https://assistant.example.test/v1', api_key: '${ASSISTANT_API_KEY}' },
         models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '', supports_images: false } },
-        memory: { auto_inject: { enabled: true, max_memories: 5, token_budget: 1000 } },
         jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
       })),
       update: vi.fn(async (config) => config),
@@ -27,7 +26,7 @@ vi.mock('../api', () => ({
         services: [], storage: [], secrets: {}, outbound: [],
         memory: {
           namespaces: ['nexus'],
-          autoInject: { enabled: true, maxMemories: 5, tokenBudget: 1000 },
+          recall: { mode: 'on_demand', tool: 'memory_recall', maxMemories: 5, tokenBudget: 1000 },
           archive: { mode: 'manual', destination: 'nexus', removesHotThreadAfterSuccess: true },
         },
         telemetry: { applicationTelemetry: false, statement: 'No application telemetry' },

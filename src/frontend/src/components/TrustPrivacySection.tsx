@@ -99,9 +99,7 @@ export function TrustPrivacySection() {
 
           <Boundary title="Memory boundaries">
             <Row label="Namespaces" value={snapshot.memory.namespaces.join(', ')} />
-            <Row label="Auto-injection" value={snapshot.memory.autoInject.enabled
-              ? `Enabled · up to ${snapshot.memory.autoInject.maxMemories} memories / ${snapshot.memory.autoInject.tokenBudget} tokens`
-              : 'Disabled'} />
+            <Row label="Recall" value={`On demand · agent calls ${snapshot.memory.recall.tool} · up to ${snapshot.memory.recall.maxMemories} memories / ${snapshot.memory.recall.tokenBudget} tokens`} />
             <Row label="Archive" value={`Manual · ${snapshot.memory.archive.destination} · removes hot thread after successful storage`} />
           </Boundary>
 

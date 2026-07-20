@@ -26,7 +26,7 @@ const snapshot: TrustSnapshot = {
   },
   memory: {
     namespaces: ['nexus', 'global'],
-    autoInject: { enabled: true, maxMemories: 5, tokenBudget: 1000 },
+    recall: { mode: 'on_demand', tool: 'memory_recall', maxMemories: 5, tokenBudget: 1000 },
     archive: { mode: 'manual', destination: 'nexus', removesHotThreadAfterSuccess: true },
   },
   outbound: [{ name: 'Model providers', destination: 'Configured endpoints', sends: ['prompts', 'context'], enabled: true }],
@@ -59,6 +59,18 @@ describe('TrustPrivacySection', () => {
     expect(screen.getByText('~/.nexus/auth.json')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Memory boundaries' })).toBeInTheDocument();
     expect(screen.queryByText('raw-secret')).not.toBeInTheDocument();
+  });
+
+  it('describes memory recall as agent-initiated rather than automatic', async () => {
+    render(<TrustPrivacySection />);
+
+    // This panel is the user's account of what happens to their data, so it has
+    // to match the runtime: nothing is read from the vault unless the agent
+    // calls memory_recall during a turn.
+    expect(await screen.findByText(
+      'On demand · agent calls memory_recall · up to 5 memories / 1000 tokens',
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/Auto-injection/)).not.toBeInTheDocument();
   });
 
   it('keeps the surface available when trust information cannot load', async () => {

@@ -30,11 +30,11 @@ import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
-import { initMemorySystem } from './memory/index.js';
+import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMissionScheduler } from './missions/runner.js';
 import { ActivityManager } from './activity/manager.js';
-import { PiRuntime } from './pi/runtime.js';
+import { PiRuntime, defaultPiRuntimePaths } from './pi/runtime.js';
 import { ConcurrencyTracker } from './pi/concurrency.js';
 import { ModelCurationStore } from './pi/model-curation.js';
 import { OAuthFlowManager } from './pi/oauth-flows.js';
@@ -50,7 +50,9 @@ async function main() {
   writeLocalModelsFile(config);
 
   const db = getDb(getDbPath());
-  const pi = await PiRuntime.create();
+  const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
+    recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
+  });
 
   const openRouterKey = resolveOpenRouterKey(config);
   if (openRouterKey) {

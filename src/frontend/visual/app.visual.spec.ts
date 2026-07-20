@@ -36,7 +36,6 @@ const fixtures: Record<string, unknown> = {
     server: { port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
     assistant: { url: 'https://assistant.example.test/v1', api_key: '${ASSISTANT_API_KEY}' },
     models: { local: { base_url: 'http://127.0.0.1:8081/v1', api_key: '', display_name: 'Local Model', chat_model: 'qwen2.5-coder:7b', supports_images: true } },
-    memory: { auto_inject: { enabled: true, max_memories: 5, token_budget: 1000 } },
     jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
     github: { enabled: true },
   },
@@ -47,7 +46,7 @@ const fixtures: Record<string, unknown> = {
     outbound: [],
     memory: {
       namespaces: ['nexus'],
-      autoInject: { enabled: true, maxMemories: 5, tokenBudget: 1000 },
+      recall: { mode: 'on_demand', tool: 'memory_recall', maxMemories: 5, tokenBudget: 1000 },
       archive: { mode: 'manual', destination: 'nexus', removesHotThreadAfterSuccess: true },
     },
     telemetry: { applicationTelemetry: false, statement: 'No application telemetry' },

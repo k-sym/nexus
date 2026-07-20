@@ -117,7 +117,7 @@ export interface TrustSnapshot {
   secrets: Record<string, TrustSecret>;
   memory: {
     namespaces: string[];
-    autoInject: { enabled: boolean; maxMemories: number; tokenBudget: number };
+    recall: { mode: 'on_demand'; tool: string; maxMemories: number; tokenBudget: number };
     archive: { mode: 'manual'; destination: string; removesHotThreadAfterSuccess: true };
   };
   outbound: Array<{ name: string; destination: string; sends: string[]; enabled: boolean }>;
