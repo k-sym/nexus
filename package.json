@@ -30,7 +30,7 @@
     "tauri"
   ],
   "devDependencies": {
-    "concurrently": "^9.1.0",
+    "concurrently": "^10.0.3",
     "typescript": "^7.0.2",
     "wait-on": "^9.0.10"
   },
