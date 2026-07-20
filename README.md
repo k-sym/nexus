@@ -30,6 +30,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
   - [Missions](#missions)
 - [Model Routing](#model-routing)
 - [API Reference](#api-reference)
+- [Glasses (Even G2 HUD)](#glasses-even-g2-hud)
 - [Project Layout](#project-layout)
 - [Development](#development)
 - [Troubleshooting](#troubleshooting)
@@ -990,6 +991,98 @@ Base URL: `http://127.0.0.1:4173`
 
 ---
 
+## Glasses (Even G2 HUD)
+
+NEXUS ships an optional **Even Realities G2** heads-up client — the *Session Cockpit* — that
+lives in [`src/glasses/`](src/glasses/README.md). It lets you monitor your running Claude Code
+sessions and **Allow/Deny tool-permission prompts from the glasses** while you're away from the
+desk, driven entirely by touchpad gestures (tap / double-tap / slide). It's a **thin client**: it
+points at the NEXUS gateway URL the same way any other thin client does (see
+[Server + thin clients](#server--thin-clients-tailscale)). Build it only if you actually use the
+glasses — nothing else depends on it.
+
+The cockpit has three faces: a browser dashboard, the [`evenhub-simulator`](https://www.npmjs.com/package/@evenrealities/evenhub-simulator)
+(renders the real 576×288 LVGL canvas with no hardware), and the on-device G2 HUD. See
+[`src/glasses/README.md`](src/glasses/README.md) for the full gesture/screen guide and the
+simulator automation API.
+
+### Prerequisites
+
+- The Even Realities app on your phone (for dev-load QR and for installing published packages).
+- The Even CLI for building/packing and QR dev-load:
+  ```bash
+  npm install -g @evenrealities/evenhub-cli        # provides `evenhub`
+  ```
+
+### Build
+
+```bash
+cd src/glasses
+npm install
+
+npm run dev            # hosted dashboard/HUD for a browser or the simulator (:5273)
+npm run build          # type-check + production build into dist/ (enforces the bundle budget)
+npm run build:pack     # relative-path build into dist-pack/ (for the .ehpk package)
+npm run pack           # build:pack + `evenhub pack` -> session-cockpit.ehpk
+```
+
+`npm run build` produces `dist/` — the web build the NEXUS gateway serves to browser/simulator
+clients. `npm run pack` produces the installable **`.ehpk`** package you deploy through the Even
+Realities app.
+
+### Test on the glasses without publishing (dev-load QR)
+
+The Even app can load your dev server over the LAN and mirror it to the glasses — no packaging
+required. The phone must reach the dev server, so use the Mac's LAN IP (`localhost` won't work
+from the phone):
+
+```bash
+cd src/glasses
+npm run dev                                   # dev server (:5273, --host exposes the LAN)
+npm run qr                                    # detects LAN IP, preflights it, prints the QR
+```
+
+Scan the QR in the Even app's developer / dev-load screen. Add `TS=1` to `npm run qr` to use this
+Mac's Tailscale IP instead. See [`src/glasses/README.md`](src/glasses/README.md) for overrides and
+the voice (STT) key setup.
+
+### Deploy through the Even Realities app — bump the version first
+
+To install the packaged HUD (rather than dev-loading), you build the `.ehpk` and load it through the
+Even Realities app. The app identifies a package by the **`version`** field in
+[`src/glasses/app.json`](src/glasses/app.json):
+
+```jsonc
+{
+  "package_id": "it.resolve.sessioncockpit",
+  "name": "Session Cockpit",
+  "version": "0.1.5",          // <-- bump this on EVERY deploy
+  "min_app_version": "2.0.0",
+  "min_sdk_version": "0.0.7",
+  ...
+}
+```
+
+**Increase `version` before every `npm run pack` you intend to install.** The Even Realities app
+keys installed packages by `package_id` + `version` and caches aggressively: if you re-pack with the
+**same** version, the app sees it as already-installed and **won't pick up your changes** — you'll
+keep running the old build with no error to tell you why. Bumping the version (e.g. `0.1.5` → `0.1.6`)
+is what signals the app that this is a new build and forces it to install the update onto the glasses.
+
+Deploy flow:
+
+```bash
+cd src/glasses
+# 1. edit app.json -> bump "version" (e.g. 0.1.5 -> 0.1.6)
+npm run pack                                   # -> session-cockpit.ehpk
+# 2. load session-cockpit.ehpk into the Even Realities app (import/install the package)
+```
+
+A good habit: bump the version in the same commit as the change you're shipping, so the installed
+build is always traceable to a source revision.
+
+---
+
 ## Project Layout
 
 ```
@@ -1059,6 +1152,10 @@ nexus/
 │   │   └── tickets/
 │   │       └── sync.ts          # shared ticket upsert (poll + push endpoint)
 │   ├── memory-daemon/           # Standalone memory daemon (own README) — vault + index + retrieval, HTTP :4100 + MCP
+│   ├── glasses/                 # Even Realities G2 HUD — Session Cockpit thin client (own README)
+│   │   ├── app.json             # Even package manifest — bump "version" on every deploy (see Glasses section)
+│   │   ├── scripts/qr.sh        # dev-load QR (LAN/Tailscale) → Even app
+│   │   └── src/glass/           # AppGlasses3c — on-device HUD (even-toolkit GlassesSdk renderer)
 │   └── frontend/
 │       ├── index.html
 │       ├── vite.config.ts
