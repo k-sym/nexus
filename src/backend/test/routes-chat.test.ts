@@ -1256,6 +1256,55 @@ test('GET /api/chat/active-runs marks runs waiting on pending questions', async 
   }
 });
 
+test('GET /api/chat/sessions lists live sessions across every project, newest first', async () => {
+  const { app, db, dir } = await makeApp();
+  try {
+    // A second project with its own session — the sidebar needs cross-project
+    // visibility so you can see activity without switching projects.
+    db.prepare(
+      'INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('proj-2', 'other', 'Other', dir, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z');
+    const insertThread = db.prepare(
+      'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)',
+    );
+    insertThread.run('thread-newest', 'proj-2', 'Newest', '2026-01-01T00:00:00.000Z', '2026-03-01T00:00:00.000Z', null);
+    insertThread.run('thread-archived', 'proj-2', 'Archived', '2026-01-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z', '2026-04-02T00:00:00.000Z');
+    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run('2026-02-01T00:00:00.000Z', 'thread-1');
+
+    const res = await app.inject({ method: 'GET', url: '/api/chat/sessions' });
+
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), {
+      sessions: [
+        { threadId: 'thread-newest', projectId: 'proj-2', title: 'Newest', updatedAt: '2026-03-01T00:00:00.000Z' },
+        { threadId: 'thread-1', projectId: 'proj-1', title: 'T1', updatedAt: '2026-02-01T00:00:00.000Z' },
+      ],
+    });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/chat/sessions drops a session as soon as it is deleted', async () => {
+  const { app, db, dir } = await makeApp();
+  try {
+    const before = await app.inject({ method: 'GET', url: '/api/chat/sessions' });
+    assert.deepEqual(before.json().sessions.map((s: { threadId: string }) => s.threadId), ['thread-1']);
+
+    const deleted = await app.inject({ method: 'DELETE', url: '/api/threads/thread-1' });
+    assert.equal(deleted.statusCode, 200);
+
+    const after = await app.inject({ method: 'GET', url: '/api/chat/sessions' });
+    assert.deepEqual(after.json(), { sessions: [] });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/threads/:threadId keeps unfinished active run history running', async () => {
   const promptStarted = deferred<void>();
   const promptStopped = deferred<void>();

@@ -102,6 +102,18 @@ export interface ActiveChatRunsResponse {
   }>;
 }
 
+/** One live (non-archived) session, from any project. */
+export interface ChatSessionSummary {
+  threadId: string;
+  projectId: string;
+  title: string;
+  updatedAt: string;
+}
+
+export interface ChatSessionsResponse {
+  sessions: ChatSessionSummary[];
+}
+
 export type SecretSource = 'environment' | 'config-env-reference' | 'config-literal' | 'pi-auth-file' | 'gh-cli' | 'absent' | 'unknown';
 
 export interface TrustSecret {
@@ -217,6 +229,8 @@ export const api = {
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`/api/projects/${projectId}/threads`),
     activeRuns: () => fetchJson<ActiveChatRunsResponse>(`/api/chat/active-runs`),
+    // Every live session across all projects, running or not.
+    sessions: () => fetchJson<ChatSessionsResponse>(`/api/chat/sessions`),
     // Creates a thread. Threads don't bind to a persona any more.
     // The optional `title` sets the initial title (defaults to "New Session").
     createThread: (projectId: string, title?: string) =>
