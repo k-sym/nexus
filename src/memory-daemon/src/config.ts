@@ -3,7 +3,10 @@
 import { readFileSync, existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import yaml from "js-yaml";
+// Namespace import, not default: js-yaml 5 is ESM-only with named exports and no
+// default, so `import yaml from "js-yaml"` throws at load time. This package's lock
+// already resolves 5.2.1; only a stale node_modules was hiding it.
+import * as yaml from "js-yaml";
 
 export interface DaemonConfig {
   /** HTTP/MCP bind port for the daemon. */

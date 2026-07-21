@@ -8,7 +8,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import yaml from 'js-yaml';
+// Namespace import, not default: js-yaml 5 (#226) is ESM-only with named exports
+// and no default, so `import yaml from 'js-yaml'` throws at load time.
+import * as yaml from 'js-yaml';
 import { NexusConfig } from '@nexus/shared';
 
 const NEXUS_DIR = path.join(os.homedir(), '.nexus');
