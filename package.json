@@ -34,6 +34,10 @@
     "typescript": "^7.0.2",
     "wait-on": "^9.0.10"
   },
+  "comment:overrides": "concurrently pins shell-quote at an exact 1.8.4, which is below the patched release, so no update can move it and only an override will. npm audit's own suggestion is to downgrade concurrently to 9.2.4 instead, which would undo #214 for no reason. ^1.9.0 is the same major concurrently already asks for. Drop this once concurrently ships the bump itself. Note that overrides CANNOT fix the two advisories in .audit-allowlist.json: those sit under @earendil-works/pi-coding-agent, which ships an npm-shrinkwrap.json, and a dependency's shrinkwrap wins over a consumer's overrides.",
+  "overrides": {
+    "shell-quote": "^1.9.0"
+  },
   "engines": {
     "node": ">=20.19.0"
   }

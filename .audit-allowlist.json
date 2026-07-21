@@ -1,0 +1,38 @@
+{
+  "comment": [
+    "Advisories that are ACCEPTED for now, checked by scripts/audit-allowlist.mjs.",
+    "An entry belongs here only when the fix is genuinely not ours to make. If a version",
+    "bump or an npm `overrides` entry can resolve it, do that instead — see shell-quote",
+    "in the root package.json for an example of the latter.",
+    "",
+    "Every entry expires. On the expiry date CI fails and the exception has to be",
+    "re-argued: re-check upstream, then either fix it or extend the date with a fresh",
+    "reason. An entry that stops matching also fails, so a fixed advisory cannot sit here",
+    "pretending to be a live risk.",
+    "",
+    "Fields: id (GHSA), package, directory (which audited tree it applies to), severity,",
+    "reason, blocker (why we cannot fix it), expires (YYYY-MM-DD), review (what to check)."
+  ],
+  "allow": [
+    {
+      "id": "GHSA-3jxr-9vmj-r5cp",
+      "package": "brace-expansion",
+      "directory": ".",
+      "severity": "high",
+      "reason": "DoS via exponential-time expansion of consecutive non-expanding {} groups. Reached only through @earendil-works/pi-coding-agent's own minimatch, expanding glob patterns we author ourselves — not attacker-supplied input.",
+      "blocker": "pi-coding-agent 0.80.10 ships an npm-shrinkwrap.json pinning brace-expansion 5.0.6, and a dependency's shrinkwrap wins over a consumer's overrides, so neither `overrides` nor `npm dedupe` nor `npm audit fix` can move it. 0.80.10 is the latest published version, so there is nothing newer to upgrade to. The root's own copy is already patched at 5.0.7.",
+      "expires": "2026-10-21",
+      "review": "Check for a pi-coding-agent release above 0.80.10 whose shrinkwrap carries brace-expansion >= 5.0.7."
+    },
+    {
+      "id": "GHSA-j3f2-48v5-ccww",
+      "package": "protobufjs",
+      "directory": ".",
+      "severity": "moderate",
+      "reason": "DoS via infinite loop when parsing .proto options. Reached only through pi-coding-agent's nested @google/genai; we do not parse untrusted .proto files.",
+      "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.80.10, which fixes protobufjs at 7.6.4. The root's own copy is already patched at 7.6.5.",
+      "expires": "2026-10-21",
+      "review": "Check for a pi-coding-agent release above 0.80.10 whose shrinkwrap carries protobufjs >= 7.6.5."
+    }
+  ]
+}

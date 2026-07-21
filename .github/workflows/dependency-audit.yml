@@ -11,6 +11,8 @@ on:
       - src/glasses/package-lock.json
       - src/memory-daemon/package.json
       - src/memory-daemon/package-lock.json
+      - .audit-allowlist.json
+      - scripts/audit-allowlist.mjs
       - .github/workflows/dependency-audit.yml
   push:
     branches:
@@ -24,6 +26,8 @@ on:
       - src/glasses/package-lock.json
       - src/memory-daemon/package.json
       - src/memory-daemon/package-lock.json
+      - .audit-allowlist.json
+      - scripts/audit-allowlist.mjs
       - .github/workflows/dependency-audit.yml
   schedule:
     - cron: "30 7 * * 1"
@@ -61,6 +65,8 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      # Wrapped rather than raw `npm audit`, so a genuinely unfixable advisory can be
+      # accepted in writing with an expiry date instead of leaving this check
+      # permanently red. See .audit-allowlist.json.
       - name: Audit production and development dependencies
-        working-directory: ${{ matrix.directory }}
-        run: npm audit --audit-level=moderate
+        run: node scripts/audit-allowlist.mjs ${{ matrix.directory }} --level=moderate
