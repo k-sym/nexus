@@ -20,6 +20,7 @@ import { answer, decide, getSession, sendSteer, setSteerFocus } from '../api'
 import { attentionSessions, isInterruptActive, reason } from './screens/interrupt'
 import { renderInterruptHero, iconReady } from './hero'
 import { matchAnswer, sttConfig } from './stt'
+import { toGlassText } from './markdown'
 import type { GlassSnapshot } from './shared'
 import type { Approval, AskUserQuestionInput, SessionSummary, TranscriptEvent } from '../types'
 
@@ -40,6 +41,8 @@ const SPEAK = '__speak__'
 // Locked status glyphs (verified to render in a firmware LIST): ◆ needs you,
 // ⊙ live (running), ○ idle. ★ is the Assistant PROJECT badge (see projBadge).
 const GLYPH = { needs: '◆', live: '⊙', idle: '○' } as const
+// Verified to render in a firmware LIST (so safe anywhere) — marks a measured truncation.
+const ELLIPSIS = '…'
 function sessionGlyph(s: SessionSummary): string {
   return s.needsAttention ? GLYPH.needs : s.live ? GLYPH.live : GLYPH.idle
 }
@@ -170,7 +173,7 @@ function finalizeSteer(text: string) {
 function pageDetail(delta: number) {
   const st = store.getState()
   if (st.glassSteering) return
-  const total = replyPages(st.activeEvents).length
+  const total = detailBody(st.activeEvents).pages.length
   if (total <= 1) return
   const next = Math.max(0, Math.min(total - 1, st.detailPage + delta))
   if (next !== st.detailPage) store.set({ detailPage: next })
@@ -184,11 +187,22 @@ function ageShort(ms: number): string {
   return `${Math.floor(s / 86400)}d`
 }
 
+// Sessions-screen geometry. Shared by the row builder (which measures a title against
+// the width it will actually get) and the renderer, so the two can't drift apart.
+const SESSIONS_RAIL_X = 10, SESSIONS_RAIL_W = 48
+const SESSIONS_LIST_X = SESSIONS_RAIL_X + SESSIONS_RAIL_W + 12
+const SESSION_ROW_W = 576 - SESSIONS_LIST_X - 22
+const SESSION_NAME_W = SESSION_ROW_W - 24  // the native select-highlight insets each row
+
 // Session-row label for the sessions list: status glyph · name · needs-you|age.
+// The name gets whatever pixel width the fixed parts leave, so a long title ends in
+// an ellipsis at the real edge instead of being cut mid-word at a fixed char count.
 function sessionRow(s: SessionSummary): { id: string; label: string } {
-  const name = (s.title || s.project || s.id.slice(0, 8)).slice(0, 24)
+  const glyph = sessionGlyph(s)
   const meta = s.needsAttention ? 'needs you' : ageShort(s.lastActivityAt)
-  return { id: s.id, label: `${sessionGlyph(s)}  ${name}   ·   ${meta}` }
+  const budget = SESSION_NAME_W - Math.ceil(getTextWidth(`${glyph}     ·   ${meta}`))
+  const name = fitToWidth(s.title || s.project || s.id.slice(0, 8), budget)
+  return { id: s.id, label: `${glyph}  ${name}   ·   ${meta}` }
 }
 
 // A compact signature of what's on screen — skip re-rendering (and resetting native
@@ -198,7 +212,10 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
     return `proj|${s.connection}|${groups.map((g) => `${g.badge}${g.name}${g.sessions.length}${g.sessions.some((x) => x.needsAttention) ? '!' : ''}`).join('~')}`
   if (scr === 'sessions')
     return `sess|${nav.projIdx}|${groups.map((g) => g.badge).join('')}|${(groups[nav.projIdx]?.sessions ?? []).map((x) => sessionRow(x).label).join('~')}`
-  if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${s.pendingSteer ? `P${s.pendingSteer.text.length}:${s.pendingSteer.baseReply.length}` : ''}`
+  // The activity line is part of the signature, not just the reply — while the agent
+  // works through tools the reply doesn't change, and without this the screen would
+  // sit on a stale tool name until the next reply landed.
+  if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${latestActivity(s.activeEvents) ?? ''}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${s.pendingSteer ? `P${s.pendingSteer.text.length}:${s.pendingSteer.baseReply.length}` : ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
   if (scr === 'question') { const a = questions(s)[0]; const q = a ? currentQuestion(a, s) : null; return `q|${a?.id}|${q ? `${q.idx}/${q.total}` : ''}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}|${q?.allowOther ? 'O' : ''}` }
   return `intr|${attentionSessions(s).map((a) => a.id).join(',')}`
@@ -456,7 +473,7 @@ async function buildAndRender(
   } else if (scr === 'sessions') {
     // A project's sessions. Left = a bare letter rail (› marks the current project);
     // right = the session list. Still no frames but the native select-highlight.
-    const railX = 10, railW = 48, railY = 12
+    const railX = SESSIONS_RAIL_X, railW = SESSIONS_RAIL_W, railY = 12
     const rail = page.addTextElement(groups.map((g, i) => `${i === nav.projIdx ? '›' : ' '} ${g.badge}`).join('\n\n'))
     rail.setPosition((p) => { p.setX(railX).setY(railY) })
     rail.setSize((z) => { z.setWidth(railW).setHeight(264) })
@@ -464,9 +481,9 @@ async function buildAndRender(
     const sessions = groups[nav.projIdx]?.sessions ?? []
     const rows = sessions.length ? sessions.map(sessionRow) : [{ id: '', label: '(no active sessions)' }]
     rowsRef.current = rows
-    const listX = railX + railW + 12
+    const listX = SESSIONS_LIST_X
     const list = page.addListElement(rows.map((r) => r.label))
-    list.setItemWidth(576 - listX - 22)
+    list.setItemWidth(SESSION_ROW_W)
     list.setIsItemSelectBorderEn(true)
     list.markAsEventCaptureElement()
     list.setPosition((p) => { p.setX(listX).setY(10) })
@@ -535,37 +552,39 @@ async function buildAndRender(
     const sess = s.sessions.find((x) => x.id === s.activeSessionId)
     const title = sess?.title || sess?.project || 'session'
     const hx = 8, hy = 8, hw = 560, hh = 36
-    let headerText: string, hint: string, bodyText: string
+    // The hint is fixed by the sub-view, so measure it up front: the title's width
+    // budget is whatever the header bar has left once the hint and page tag are placed.
+    const hint = s.steering ? '• send   •• cancel' : '• steer   •• back'
+    const hintW = Math.ceil(getTextWidth(hint))
+    const titleAt = (tag: string) =>
+      `‹ ${fitToWidth(String(title), hw - hintW - HEADER_TITLE_RESERVE - Math.ceil(getTextWidth(`‹ ${tag}`)))}${tag}`
+
+    let headerText: string, bodyText: string
     if (s.steering) {
-      headerText = `‹ ${String(title).slice(0, 30)}`
-      hint = '• send   •• cancel'
+      headerText = titleAt('')
       bodyText = s.error ? `! ${s.error}` : s.interim ? `“${s.interim}”` : '(speak your steer…)'
     } else if (s.pendingSteer && latestReplyText(s.activeEvents) === s.pendingSteer.baseReply) {
       // A steer was just sent and the agent hasn't replied yet — echo what you said,
       // so it shows in the session view before the response. Gives way to the reply
       // the moment a newer assistant message lands (latestReply diverges from baseReply).
-      headerText = `‹ ${String(title).slice(0, 30)}`
-      hint = '• steer   •• back'
+      headerText = titleAt('')
       const wrapped = wrapToWidth(`you › ${s.pendingSteer.text}`, DETAIL_BODY_WRAP).slice(0, DETAIL_ROWS).join('\n')
       bodyText = s.error ? `${wrapped}\n! ${s.error}` : `${wrapped}\n\n(sent — working…)`
     } else {
-      const pages = replyPages(s.activeEvents)
+      const { activity, pages } = detailBody(s.activeEvents)
       const total = Math.max(1, pages.length)
       const pg = Math.min(Math.max(0, s.detailPage), total - 1)
-      headerText = `‹ ${String(title).slice(0, 26)}${pages.length > 1 ? `   ${pg + 1}/${total}` : ''}`
-      hint = '• steer   •• back'
-      if (pages.length === 0) {
-        const status = sess?.live ? '(working — no reply yet)' : '(no reply yet)'
-        bodyText = s.error ? `${status}\n! ${s.error}` : status
-      } else {
-        bodyText = s.error ? `${pages[pg]}\n! ${s.error}` : pages[pg]
-      }
+      headerText = titleAt(pages.length > 1 ? `   ${pg + 1}/${total}` : '')
+      // With an activity line there is always something to read, so the "no reply yet"
+      // placeholder only stands in when we know nothing at all about what's happening.
+      const reply = pages.length ? pages[pg] : activity ? '' : sess?.live ? '(working — no reply yet)' : '(no reply yet)'
+      const lines = [activity, reply, s.error ? `! ${s.error}` : ''].filter(Boolean)
+      bodyText = lines.join('\n')
     }
     const header = page.addTextElement(headerText)
     header.setBorder((b) => b.setWidth(2).setColor(BORDER).setRadius(10))
     header.setPosition((p) => { p.setX(hx).setY(hy) })
     header.setSize((z) => { z.setWidth(hw).setHeight(hh) })
-    const hintW = Math.ceil(getTextWidth(hint))
     const right = page.addTextElement(hint)
     right.setPosition((p) => { p.setX(hx + hw - hintW - 22).setY(hy + 6) })
     right.setSize((z) => { z.setWidth(hintW + 18).setHeight(hh - 10) })
@@ -639,6 +658,9 @@ const DETAIL_ROWS = 7
 const DETAIL_BODY_X = 8
 const DETAIL_BODY_EL_W = 560   // the text element's width
 const DETAIL_BODY_WRAP = 546   // wrap target in px, a hair inside the element (re-wrap headroom)
+// Header bar padding the title can't have: the ‹ prefix's own inset, plus the gap the
+// right-aligned hint element is placed with (see `right.setPosition` below).
+const HEADER_TITLE_RESERVE = 40
 
 /** Greedy word-wrap to a PIXEL width using the real G2/LVGL font metrics (pretext
  *  getTextWidth), so each line fills to the true edge. Over-long single words are
@@ -666,25 +688,77 @@ function wrapToWidth(text: string, innerPx: number): string[] {
   return lines.length ? lines : ['']
 }
 
-/** Text of the most recent non-empty assistant message (the "latest reply"). */
+/** Truncate to a PIXEL budget using the real LVGL metrics, with an ellipsis. The lens
+ *  font is proportional, so a .slice(n) cut a different amount off every string — and
+ *  never signalled that it had cut at all ("Checking Network Connectio"). */
+function fitToWidth(text: string, maxPx: number): string {
+  if (maxPx <= 0) return ''
+  if (getTextWidth(text) <= maxPx) return text
+  const budget = maxPx - getTextWidth(ELLIPSIS)
+  if (budget <= 0) return ELLIPSIS
+  let cut = ''
+  for (const ch of text) {
+    if (getTextWidth(cut + ch) > budget) break
+    cut += ch
+  }
+  return `${cut.trimEnd()}${ELLIPSIS}`
+}
+
+/** Text of the most recent non-empty assistant message (the "latest reply"), flattened
+ *  out of Markdown — the firmware can't render emphasis, so its delimiters would just
+ *  eat words off a seven-line page. */
 function latestReplyText(events: TranscriptEvent[]): string {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     if (events[i].kind === 'assistant_text') {
-      const t = (events[i].text ?? '').trim()
+      const t = toGlassText(events[i].text ?? '').trim()
       if (t) return t
     }
   }
   return ''
 }
 
-/** The latest reply, pixel-wrapped to the body width then split into DETAIL_ROWS-line
- *  pages (each a ready-to-render block). Pixel wrapping fills each line to the element
- *  edge; the firmware, seeing lines that already fit, renders them without re-wrapping. */
-function replyPages(events: TranscriptEvent[]): string[] {
+// Fields worth showing for a tool call, most telling first — a bare tool name doesn't
+// answer the question you looked up to ask ("bash" — running WHAT?).
+const TOOL_ARG_KEYS = ['command', 'file_path', 'path', 'pattern', 'query', 'url', 'description', 'prompt']
+
+/** The most informative single string in a tool's input. */
+function toolArg(input: unknown): string {
+  const one = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim() : '')
+  if (typeof input === 'string') return one(input)
+  if (!input || typeof input !== 'object') return ''
+  const o = input as Record<string, unknown>
+  for (const k of TOOL_ARG_KEYS) { const v = one(o[k]); if (v) return v }
+  for (const v of Object.values(o)) { const s = one(v); if (s) return s }
+  return ''
+}
+
+/** What the agent is doing RIGHT NOW, or null when the last thing it produced was
+ *  speech. Walks back to whichever comes first: a reply means it has finished talking,
+ *  a tool call means it is still working and the reply above it is the previous one. */
+function latestActivity(events: TranscriptEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const e = events[i]
+    if (e.kind === 'assistant_text' && (e.text ?? '').trim()) return null
+    if (e.kind === 'tool_use') {
+      const arg = toolArg(e.input)
+      return fitToWidth(`${GLYPH.live} ${e.name ?? 'working'}${arg ? ` · ${arg}` : ''}`, DETAIL_BODY_WRAP)
+    }
+  }
+  return null
+}
+
+/** Everything the detail body shows: the live activity line (when the agent is mid-tool)
+ *  above the latest reply, pixel-wrapped and paginated into whatever rows are left.
+ *  Single source of truth so the renderer and the scroll pager agree on the page count. */
+function detailBody(events: TranscriptEvent[]): { activity: string | null; pages: string[] } {
+  const activity = latestActivity(events)
   const text = latestReplyText(events)
-  if (!text) return []
+  if (!text) return { activity, pages: [] }
+  // The activity line rides in the SAME element as the reply (a second element would
+  // overlap the event-capture body and cost it a scrollbar), so it costs one row.
+  const rows = activity ? DETAIL_ROWS - 1 : DETAIL_ROWS
   const lines = wrapToWidth(text, DETAIL_BODY_WRAP)
   const pages: string[] = []
-  for (let i = 0; i < lines.length; i += DETAIL_ROWS) pages.push(lines.slice(i, i + DETAIL_ROWS).join('\n'))
-  return pages
+  for (let i = 0; i < lines.length; i += rows) pages.push(lines.slice(i, i + rows).join('\n'))
+  return { activity, pages }
 }

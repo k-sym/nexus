@@ -59,6 +59,20 @@ export function applyFixture(name: string): boolean {
       ])
       return true
     }
+    case 'detail-working': {
+      // The mid-tool state the live gateway rarely holds still for: a previous reply
+      // (in Markdown, to exercise the flattener) with tool calls after it, so the
+      // detail body shows the live activity line above the last thing it said.
+      const s = session({ id: 'demo', title: 'A very long session title that will not fit the header bar', project: 'nexus', live: true, turns: 9 })
+      store.set({ sessions: [s], approvals: [], connection: 'ok' })
+      store.openDetail(s.id, [
+        { kind: 'user', text: 'find where the glasses app lives' },
+        { kind: 'assistant_text', text: 'Yes! I can see the **glasses app** at `apps/even-glasses/`.\n\nIt has a `run.sh`, a `shim/` directory, launchd configs and a LiteLLM config. Want me to dig into anything *specific*?' },
+        { kind: 'tool_use', name: 'Read', input: { file_path: '/Users/dev/project/apps/even-glasses/run.sh' } },
+        { kind: 'tool_use', name: 'Bash', input: { command: 'npm --prefix src/glasses run build && npm test' } },
+      ])
+      return true
+    }
     case 'detail-short': {
       const s = session({ id: 'demo', title: 'nexus · gateway', project: 'nexus', live: true, turns: 3 })
       store.set({ sessions: [s], approvals: [], connection: 'ok' })
