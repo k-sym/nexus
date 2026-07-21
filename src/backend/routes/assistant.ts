@@ -1,8 +1,9 @@
-import { FastifyInstance } from 'fastify';
+import { FastifyInstance, FastifyRequest } from 'fastify';
 import { v4 as uuid } from 'uuid';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
+import { corsHeaders } from '../cors-headers.js';
 import {
   ASSISTANT_CWD,
   openAssistantSession,
@@ -543,7 +544,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return remoteSessionId;
     };
 
-    const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, reply: any) => {
+    const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, reply: any, request: FastifyRequest) => {
       const trimmed = content.trim();
       const attachmentsResult = validateAssistantAttachments(attachmentsInput);
       if (!attachmentsResult.ok) { reply.code(400); return { error: attachmentsResult.error }; }
@@ -560,7 +561,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       fastify.activity?.bus.emit({ type: 'start', operationId: run.id, kind: 'assistant_stream', title: session.title, provider: 'assistant', model: 'hermes-agent' });
 
       reply.hijack();
-      reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive' });
+      // Hijacked replies bypass @fastify-cors — add CORS by hand or the browser
+      // blocks the cross-origin stream (200 with no allow-origin).
+      reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', ...corsHeaders(request) });
       const write = (ev: unknown) => { try { reply.raw.write(JSON.stringify(ev) + '\n'); } catch { /* client gone */ } };
       const startedAtIso = new Date().toISOString();
       write({ kind: 'run_start', run: { runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' } });
@@ -824,7 +827,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     fastify.post('/api/assistant/sessions/:id/messages/stream', { bodyLimit: ASSISTANT_BODY_LIMIT_BYTES }, async (request, reply) => {
       const { id } = request.params as { id: string };
       const body = (request.body ?? {}) as { content?: string; attachments?: unknown };
-      return streamSessionTurn(id, body.content ?? '', body.attachments, reply);
+      return streamSessionTurn(id, body.content ?? '', body.attachments, reply, request);
     });
 
     fastify.post('/api/assistant/sessions/:id/runs', { bodyLimit: ASSISTANT_BODY_LIMIT_BYTES }, async (request, reply) => {
@@ -939,7 +942,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     fastify.post('/api/assistant/messages/stream', async (request, reply) => {
       const body = (request.body ?? {}) as { content?: string };
       const session = ensureDefaultSession(db);
-      return streamSessionTurn(session.id, body.content ?? '', undefined, reply);
+      return streamSessionTurn(session.id, body.content ?? '', undefined, reply, request);
     });
 
     fastify.post('/api/assistant/abort', async () => {
