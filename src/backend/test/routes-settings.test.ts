@@ -211,7 +211,7 @@ test('POST /api/settings/local-model/test verifies the configured chat model res
     assert.equal(res.statusCode, 200);
     assert.deepEqual(res.json(), {
       ok: true,
-      message: 'Local model responded.',
+      message: 'Model responded.',
       models: ['qwen2.5-coder:7b'],
       modelFound: true,
     });

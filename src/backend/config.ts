@@ -35,7 +35,7 @@ const DEFAULT_CONFIG: NexusConfig = {
     local: {
       base_url: 'http://127.0.0.1:4001/v1',
       api_key: '${OMLX_API_KEY}',
-      display_name: 'Local Model',
+      display_name: 'Custom Model',
       chat_model: '',
       supports_images: false,
       embedding_model: '',
