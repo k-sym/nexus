@@ -359,7 +359,7 @@ body {
 
   .compact-project-avatar-active {
     border-color: var(--accent-strong);
-    background: var(--accent);
+    background: linear-gradient(135deg, var(--accent), #0f766e);
     color: #071014;
     box-shadow: 0 0 0 4px rgba(137, 232, 203, 0.16);
   }
