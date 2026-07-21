@@ -71,6 +71,83 @@ async function fetchActiveRuns(mainPort: number, mainToken?: string): Promise<Ma
   }
 }
 
+/** How much of a message survives into a summary. Both consumers — the companion
+ *  dashboard and the lens — show one line, and this list is polled every ~10s for
+ *  every session, so shipping whole replies would bloat the payload for nobody. */
+const PREVIEW_MAX = 240;
+
+function preview(text: unknown): string {
+  if (typeof text !== 'string' || !text) return '';
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > PREVIEW_MAX ? `${flat.slice(0, PREVIEW_MAX - 1)}…` : flat;
+}
+
+export interface SessionPreview {
+  lastPrompt: string;
+  lastAssistant: string;
+  turns: number;
+}
+
+const NO_PREVIEW: SessionPreview = { lastPrompt: '', lastAssistant: '', turns: 0 };
+
+/**
+ * Reduce a transcript to its summary preview.
+ *
+ * Note this deliberately does NOT read the message tables. `chat_messages` holds only
+ * the user side — a chat thread's assistant replies live in the pi store on disk — and
+ * `assistant_session_messages` is empty in practice, its transcript coming back over
+ * loopback. The transcript readers are the only place both sides exist, so previews are
+ * derived from the same events the detail view uses.
+ */
+export function previewFromEvents(events: { kind: string; text?: string }[]): SessionPreview {
+  let lastPrompt = '';
+  let lastAssistant = '';
+  let turns = 0;
+  for (const e of events) {
+    if (e.kind === 'user') {
+      turns += 1;
+      if ((e.text ?? '').trim()) lastPrompt = e.text as string;
+    } else if (e.kind === 'assistant_text' && (e.text ?? '').trim()) {
+      lastAssistant = e.text as string;
+    }
+  }
+  return { lastPrompt: preview(lastPrompt), lastAssistant: preview(lastAssistant), turns };
+}
+
+/**
+ * Previews cost a transcript read (a file for chat, a loopback call for Assistant), and
+ * this list is polled every ~10s for every session. A transcript can only change when
+ * the session's activity timestamp does, so that timestamp IS the cache key: steady
+ * state costs nothing and only sessions that actually moved are re-read. The map is
+ * rebuilt from each pass, so entries for vanished sessions can't accumulate.
+ */
+let previewCache = new Map<string, SessionPreview>();
+
+async function readPreview(deps: GatewayDeps, id: string): Promise<SessionPreview> {
+  try {
+    const resolved = resolveSession(deps.db, id);
+    if (!resolved) return NO_PREVIEW;
+    return previewFromEvents(await readEvents(deps, resolved));
+  } catch {
+    return NO_PREVIEW; // a preview is never worth failing the whole list over
+  }
+}
+
+async function attachPreviews(deps: GatewayDeps, sessions: SessionSummary[]): Promise<void> {
+  const next = new Map<string, SessionPreview>();
+  await Promise.all(
+    sessions.map(async (s) => {
+      const key = `${s.id}:${s.lastActivityAt}`;
+      const p = previewCache.get(key) ?? (await readPreview(deps, s.id));
+      next.set(key, p);
+      s.lastPrompt = p.lastPrompt;
+      s.lastAssistant = p.lastAssistant;
+      s.turns = p.turns;
+    }),
+  );
+  previewCache = next;
+}
+
 interface ChatThreadRow {
   id: string;
   title: string;
@@ -87,7 +164,11 @@ interface AssistantSessionRow {
   updated_at: string;
 }
 
-export async function buildSessions(deps: GatewayDeps, scope: Scope = 'active'): Promise<SessionSummary[]> {
+export async function buildSessions(
+  deps: GatewayDeps,
+  scope: Scope = 'active',
+  opts: { previews?: boolean } = {},
+): Promise<SessionSummary[]> {
   const now = Date.now();
   const runByThread = await fetchActiveRuns(deps.mainPort, deps.mainToken);
 
@@ -112,9 +193,7 @@ export async function buildSessions(deps: GatewayDeps, scope: Scope = 'active'):
       title: run?.title || row.title || 'Session',
       cwd: row.repo_path || '',
       project: row.project_name || '',
-      lastPrompt: '',
-      lastAssistant: '',
-      turns: 0,
+      ...NO_PREVIEW, // filled in by attachPreviews, for the sessions we actually return
       lastActivityAt,
       live: !!run,
       recent: now - lastActivityAt < deps.recentMs,
@@ -140,9 +219,7 @@ export async function buildSessions(deps: GatewayDeps, scope: Scope = 'active'):
       title: row.title || 'Assistant Session',
       cwd: ASSISTANT_CWD,
       project: 'Assistant',
-      lastPrompt: '',
-      lastAssistant: '',
-      turns: 0,
+      ...NO_PREVIEW, // filled in by attachPreviews, for the sessions we actually return
       lastActivityAt,
       live: running,
       recent: now - lastActivityAt < deps.recentMs,
@@ -158,7 +235,10 @@ export async function buildSessions(deps: GatewayDeps, scope: Scope = 'active'):
       : scope === 'recent'
         ? all.filter((s) => s.recent || s.needsAttention)
         : all.filter((s) => s.live || s.needsAttention || s.recent);
-  return filtered.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  const result = filtered.sort((a, b) => b.lastActivityAt - a.lastActivityAt);
+  // After the filter, so a transcript is only read for a session we actually return.
+  if (opts.previews !== false) await attachPreviews(deps, result);
+  return result;
 }
 
 export type ResolvedSession =
@@ -202,7 +282,12 @@ async function readEvents(deps: GatewayDeps, resolved: ResolvedSession) {
 export async function buildDetail(deps: GatewayDeps, id: string): Promise<SessionDetail | null> {
   const resolved = resolveSession(deps.db, id);
   if (!resolved) return null;
-  const [sessions, events] = await Promise.all([buildSessions(deps, 'all'), readEvents(deps, resolved)]);
+  // No previews here: the detail response carries the full transcript anyway, and
+  // enriching the whole list would read every session's transcript to serve one.
+  const [sessions, events] = await Promise.all([
+    buildSessions(deps, 'all', { previews: false }),
+    readEvents(deps, resolved),
+  ]);
   const session = sessions.find((s) => s.id === id) ?? null;
   if (!session) return null;
   return { session, events };
