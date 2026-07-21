@@ -11,7 +11,8 @@
     "qr": "./scripts/qr.sh",
     "build:pack": "tsc --noEmit && VITE_BASE=./ vite build --outDir dist-pack --emptyOutDir && node scripts/check-bundle-size.mjs dist-pack",
     "pack": "npm run build:pack && evenhub pack app.json ./dist-pack -o session-cockpit.ehpk",
-    "sim": "./scripts/sim.sh"
+    "sim": "./scripts/sim.sh",
+    "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@evenrealities/even_hub_sdk": "^0.0.12",

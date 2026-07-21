@@ -14,6 +14,7 @@ function session(over: Partial<SessionSummary> & { id: string }): SessionSummary
     title: over.title ?? 'session',
     cwd: over.cwd ?? '/Users/dev/project',
     project: over.project ?? 'project',
+    projectBadge: over.projectBadge,
     lastPrompt: '',
     lastAssistant: '',
     lastActivityAt: over.lastActivityAt ?? now,
@@ -59,6 +60,33 @@ export function applyFixture(name: string): boolean {
       ])
       return true
     }
+    case 'approval': {
+      // A supervised tool gate — the third takeover screen, and the one with no live
+      // path to reach it without turning Supervise on.
+      const s = session({ id: 'demo', title: 'nexus · gateway', project: 'nexus', live: true })
+      const gate: Approval = {
+        id: 'gate-1', kind: 'approval', session_id: s.id,
+        tool_name: 'Bash', tool_input: { command: 'rm -rf dist && npm run build:glasses && npm --prefix src/glasses run pack' },
+        cwd: '/Users/dev/Projects/nexus', title: 'run a shell command',
+        createdAt: now, decision: null,
+      }
+      store.set({ sessions: [s], approvals: [gate], connection: 'ok' })
+      return true
+    }
+    case 'detail-working': {
+      // The mid-tool state the live gateway rarely holds still for: a previous reply
+      // (in Markdown, to exercise the flattener) with tool calls after it, so the
+      // detail body shows the live activity line above the last thing it said.
+      const s = session({ id: 'demo', title: 'A very long session title that will not fit the header bar', project: 'nexus', live: true, turns: 9 })
+      store.set({ sessions: [s], approvals: [], connection: 'ok' })
+      store.openDetail(s.id, [
+        { kind: 'user', text: 'find where the glasses app lives' },
+        { kind: 'assistant_text', text: 'Yes! I can see the **glasses app** at `apps/even-glasses/`.\n\nIt has a `run.sh`, a `shim/` directory, launchd configs and a LiteLLM config. Want me to dig into anything *specific*?' },
+        { kind: 'tool_use', name: 'Read', input: { file_path: '/Users/dev/project/apps/even-glasses/run.sh' } },
+        { kind: 'tool_use', name: 'Bash', input: { command: 'npm --prefix src/glasses run build && npm test' } },
+      ])
+      return true
+    }
     case 'detail-short': {
       const s = session({ id: 'demo', title: 'nexus · gateway', project: 'nexus', live: true, turns: 3 })
       store.set({ sessions: [s], approvals: [], connection: 'ok' })
@@ -74,9 +102,9 @@ export function applyFixture(name: string): boolean {
         // instead of the pushed "needs you" hero. Key = sorted needs-attention ids.
         dismissedAttentionKey: 's1',
         sessions: [
-          session({ id: 's1', title: 'nexus · gateway', project: 'nexus', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' }, lastActivityAt: now - 4_000 }),
-          session({ id: 's2', title: 'baker · api', project: 'baker', live: true, lastActivityAt: now - 90_000 }),
-          session({ id: 's3', title: 'docs · site', project: 'docs', live: false, recent: true, lastActivityAt: now - 3_600_000 }),
+          session({ id: 's1', title: 'nexus · gateway', project: 'nexus', projectBadge: 'NEX', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' }, lastActivityAt: now - 4_000 }),
+          session({ id: 's2', title: 'baker · api', project: 'Baker Internal', projectBadge: 'BAK', live: true, lastActivityAt: now - 90_000 }),
+          session({ id: 's3', title: 'docs · site', project: 'docs', projectBadge: 'DOC', live: false, recent: true, lastActivityAt: now - 3_600_000 }),
         ],
       })
       return true

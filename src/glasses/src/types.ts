@@ -21,6 +21,7 @@ export interface SessionSummary {
   // Nexus extensions (the gateway sends these; the flat web dashboard ignores them,
   // the Phase-3 glasses nav groups on them).
   kind?: 'chat' | 'assistant'      // which store the session came from
+  projectBadge?: string            // the project's rail badge (up to 3 chars), as on the desktop
   projectId?: string | null        // stable project key for grouping (null for Assistant)
 }
 
