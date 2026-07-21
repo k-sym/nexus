@@ -20,9 +20,9 @@ vi.mock('../api', () => ({
 }));
 
 const projects = [
-  { id: 'p1', slug: 'p1', name: 'Project One', description: '', repo_path: '/tmp/p1',
+  { id: 'p1', slug: 'p1', name: 'Project One', badge: 'PO', description: '', repo_path: '/tmp/p1',
     config_json: '{}', git_remote: '', created_at: '', updated_at: '' },
-  { id: 'p2', slug: 'p2', name: 'Baker', description: '', repo_path: '/tmp/p2',
+  { id: 'p2', slug: 'p2', name: 'Baker', badge: 'BAK', description: '', repo_path: '/tmp/p2',
     config_json: '{}', git_remote: '', created_at: '', updated_at: '' },
 ];
 

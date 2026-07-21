@@ -4,7 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { Project, Task, TaskStatus, type ReviewActionRequest, type ReviewActionResult } from '@nexus/shared';
+import { Project, Task, TaskStatus, normalizeProjectBadge, type ReviewActionRequest, type ReviewActionResult } from '@nexus/shared';
 import { buildReviewActionPrompt, buildReviewActionTitle, getProjectGitDiff, reviewActionPlan } from '../git/diff.js';
 import { summarizeTaskThread } from '../memory/summarize.js';
 import { insertNotification } from '../notifications/index.js';
@@ -354,7 +354,7 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/projects', async (request) => {
-    const body = request.body as { name: string; description?: string; repo_path: string };
+    const body = request.body as { name: string; badge?: string; description?: string; repo_path: string };
     const repoPath = expandHome(body.repo_path);
 
     if (!repoPath || !fs.existsSync(repoPath)) {
@@ -374,6 +374,9 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       id: uuid(),
       slug,
       name: body.name,
+      // Empty/garbage input falls back to the name-derived badge, so the rail
+      // always has something to render.
+      badge: normalizeProjectBadge(body.badge, body.name),
       description: body.description || '',
       repo_path: repoPath,
       config_json: '{}',
@@ -383,8 +386,8 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       updated_at: now,
     };
 
-    db.prepare('INSERT INTO projects (id, slug, name, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(project.id, project.slug, project.name, project.description, project.repo_path, project.config_json, project.sort_order, project.git_remote, project.created_at, project.updated_at);
+    db.prepare('INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(project.id, project.slug, project.name, project.badge, project.description, project.repo_path, project.config_json, project.sort_order, project.git_remote, project.created_at, project.updated_at);
 
     const docsDir = path.join(repoPath, 'project_docs');
     for (const sub of ['specs', 'plans', 'uploads']) {
@@ -399,9 +402,9 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
   fastify.put('/api/projects/:id', async (request) => {
     const { id } = request.params as { id: string };
-    const body = request.body as { name?: string; description?: string; repo_path?: string; config_json?: string };
+    const body = request.body as { name?: string; badge?: string; description?: string; repo_path?: string; config_json?: string };
 
-    const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
     if (!existing) {
       const err = new Error('Project not found') as any;
       err.statusCode = 404;
@@ -417,9 +420,15 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
     const gitRemote = repoPath !== undefined ? await detectGitRemote(repoPath) : undefined;
 
+    // A badge only changes when explicitly sent — renaming a project leaves an
+    // edited badge alone, the same way it leaves `slug` alone.
+    const badge = body.badge !== undefined
+      ? normalizeProjectBadge(body.badge, body.name ?? existing.name)
+      : undefined;
+
     const now = new Date().toISOString();
-    db.prepare('UPDATE projects SET name = COALESCE(?, name), description = COALESCE(?, description), repo_path = COALESCE(?, repo_path), config_json = COALESCE(?, config_json), git_remote = COALESCE(?, git_remote), updated_at = ? WHERE id = ?')
-      .run(body.name ?? null, body.description ?? null, repoPath ?? null, body.config_json ?? null, gitRemote ?? null, now, id);
+    db.prepare('UPDATE projects SET name = COALESCE(?, name), badge = COALESCE(?, badge), description = COALESCE(?, description), repo_path = COALESCE(?, repo_path), config_json = COALESCE(?, config_json), git_remote = COALESCE(?, git_remote), updated_at = ? WHERE id = ?')
+      .run(body.name ?? null, badge ?? null, body.description ?? null, repoPath ?? null, body.config_json ?? null, gitRemote ?? null, now, id);
 
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
   });

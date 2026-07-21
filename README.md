@@ -836,7 +836,7 @@ Base URL: `http://127.0.0.1:4173`
 |---|---|---|
 | GET | `/api/projects` | List projects (with `task_count` + `chat_session_count`) |
 | GET | `/api/projects/:id` | Get a project |
-| POST | `/api/projects` | Create (body: `name`, `description`, `repo_path`) |
+| POST | `/api/projects` | Create (body: `name`, `repo_path`, optional `badge` — up to 3 chars for the project rail; derived from `name` when omitted) |
 | PUT | `/api/projects/:id` | Update (incl. `config_json`, `repo_path`) |
 | DELETE | `/api/projects/:id` | Delete |
 | PUT | `/api/projects/order` | Reorder projects (`{ project_ids }`) |

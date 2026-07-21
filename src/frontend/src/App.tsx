@@ -387,7 +387,7 @@ export default function App() {
     return counts;
   }, [projects, activeProjectId, tasks.length, threads.length]);
 
-  const handleCreateProject = async (data: { name: string; description: string; repo_path: string }) => {
+  const handleCreateProject = async (data: { name: string; badge: string; repo_path: string }) => {
     const created = await api.projects.create(data);
     setShowProjectModal(false);
     await refreshProjects();
@@ -404,7 +404,7 @@ export default function App() {
     setShowProjectModal(true);
   };
 
-  const handleSaveProject = async (data: { name: string; description: string; repo_path: string }) => {
+  const handleSaveProject = async (data: { name: string; badge: string; repo_path: string }) => {
     if (!editingProject) {
       await handleCreateProject(data);
       return;

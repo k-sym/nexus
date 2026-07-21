@@ -1,5 +1,5 @@
 import { useState, useRef, useMemo } from 'react';
-import { Project, ChatThread } from '@nexus/shared';
+import { Project, ChatThread, deriveProjectBadge } from '@nexus/shared';
 import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch, GitBranch } from '@phosphor-icons/react';
 import { confirmDialog } from '../lib/confirm';
 
@@ -130,8 +130,13 @@ function BranchIcon({ branch }: { branch?: string }) {
   );
 }
 
-function projectInitial(name: string): string {
-  return name.trim().charAt(0).toUpperCase() || '?';
+/**
+ * Stored badge, falling back to the derived one. The migration backfills every
+ * row, so the fallback only fires on version skew — a thin client talking to a
+ * server that predates the badge column (see #164) sends no badge at all.
+ */
+function projectBadge(project: Project): string {
+  return project.badge || deriveProjectBadge(project.name);
 }
 
 function pluralize(count: number, singular: string): string {
@@ -273,18 +278,20 @@ export default function Sidebar({
               onDragStart={(ev) => handleProjectDragStart(ev, project.id)}
               onDragOver={handleProjectDragOver}
               onDrop={(ev) => handleProjectDrop(ev, project.id)}
-              className={`compact-project-avatar relative h-10 w-10 text-sm ${
+              className={`compact-project-avatar relative grid place-items-center h-10 w-10 text-xs tracking-tight ${
                 isActiveProject
                   ? 'compact-project-avatar-active'
                   : 'text-muted hover:text-[var(--text-primary)]'
               }`}
             >
-              {projectInitial(project.name)}
+              {projectBadge(project)}
               {activity && (
                 <span
                   title={`${project.name}: ${ACTIVITY_LABEL[activity]}`}
                   aria-label={`${project.name}: ${ACTIVITY_LABEL[activity]}`}
-                  className={`absolute bottom-0.5 right-0.5 h-2.5 w-2.5 rounded-full border border-[var(--bg-canvas)] ${ACTIVITY_DOT[activity]}`}
+                  /* Sits on the badge's corner rather than inside it — a 3-char
+                     badge fills the box that a single initial left empty. */
+                  className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border border-[var(--bg-canvas)] ${ACTIVITY_DOT[activity]}`}
                 />
               )}
             </button>
@@ -317,7 +324,7 @@ export default function Sidebar({
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-primary">{activeProject.name}</div>
-                  <div className="mt-1 truncate text-xs text-faint">{activeProject.repo_path || activeProject.description || 'No path set'}</div>
+                  <div className="mt-1 truncate text-xs text-faint">{activeProject.repo_path || 'No path set'}</div>
                 </div>
                 <div className="shrink-0 flex items-center gap-1">
                   <span className="rounded-full bg-[var(--accent-soft)] px-2 py-0.5 text-[10px] font-bold accent-text">

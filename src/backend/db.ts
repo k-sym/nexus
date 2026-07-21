@@ -13,6 +13,7 @@
  * migration alongside `chat_messages`.
  */
 import Database from 'better-sqlite3';
+import { deriveProjectBadge } from '@nexus/shared';
 
 export function getDb(dbPath: string): Database.Database {
   const db = new Database(dbPath);
@@ -28,6 +29,7 @@ function runMigrations(db: Database.Database) {
       id TEXT PRIMARY KEY,
       slug TEXT UNIQUE NOT NULL,
       name TEXT NOT NULL,
+      badge TEXT NOT NULL DEFAULT '',
       description TEXT DEFAULT '',
       repo_path TEXT NOT NULL,
       config_json TEXT DEFAULT '{}',
@@ -283,6 +285,17 @@ function runMigrations(db: Database.Database) {
   const projCols2 = db.pragma('table_info(projects)') as { name: string }[];
   if (!projCols2.some((c) => c.name === 'git_remote')) {
     db.exec("ALTER TABLE projects ADD COLUMN git_remote TEXT NOT NULL DEFAULT ''");
+  }
+
+  // Project rail badge (issue #230). Backfill existing rows from their name so
+  // the rail never renders blank after upgrade; users can edit them afterwards.
+  if (!projCols2.some((c) => c.name === 'badge')) {
+    db.exec("ALTER TABLE projects ADD COLUMN badge TEXT NOT NULL DEFAULT ''");
+    const named = db.prepare('SELECT id, name FROM projects').all() as { id: string; name: string }[];
+    const setBadge = db.prepare('UPDATE projects SET badge = ? WHERE id = ?');
+    db.transaction(() => {
+      for (const project of named) setBadge.run(deriveProjectBadge(project.name), project.id);
+    })();
   }
   const taskCols2 = db.pragma('table_info(tasks)') as { name: string }[];
   if (!taskCols2.some((c) => c.name === 'external_source')) {
