@@ -76,7 +76,7 @@ export default function SettingsPage() {
       });
       setLocalModelStatus({ ok: result.ok, message: result.message });
     } catch (err: any) {
-      setLocalModelStatus({ ok: false, message: err?.message || 'Local model test failed.' });
+      setLocalModelStatus({ ok: false, message: err?.message || 'Endpoint test failed.' });
     } finally {
       setTestingLocalModel(false);
     }
@@ -224,9 +224,11 @@ export default function SettingsPage() {
             <ModelCurationSection />
           </Section>
 
-          {/* Local server config — kept here because it's an env-style
-              detail that doesn't fit a per-provider API key. */}
-          <Section title="Local Model Server">
+          {/* Endpoint config — kept here because it's an env-style detail
+              that doesn't fit a per-provider API key. "Custom" rather than
+              "local": the endpoint is wherever you point it, which may be
+              another machine on the network. */}
+          <Section title="Custom Model Endpoint">
             <Field label="Base URL">
               <input
                 aria-label="Base URL"
@@ -237,7 +239,8 @@ export default function SettingsPage() {
                 className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
-                OpenAI-compatible endpoint (omlx, LM Studio, llama.cpp…). Include the /v1 suffix.
+                Any OpenAI-compatible server (omlx, LM Studio, llama.cpp…) — on this machine or
+                another host you can reach. Include the /v1 suffix.
               </p>
             </Field>
             <Field label="API key (env)">
@@ -257,13 +260,13 @@ export default function SettingsPage() {
               <input
                 aria-label="Display name"
                 type="text"
-                value={config.models.local?.display_name ?? 'Local Model'}
+                value={config.models.local?.display_name ?? 'Custom Model'}
                 onChange={(e) => update(['models', 'local', 'display_name'], e.target.value)}
-                placeholder="Local Model"
+                placeholder="Custom Model"
                 className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
-                Shown in model pickers while the raw model id is still sent to the local server.
+                Shown in model pickers while the raw model id is still sent to the endpoint.
               </p>
             </Field>
             <Field label="Chat model id">
@@ -277,6 +280,8 @@ export default function SettingsPage() {
               />
               <p className="text-[10px] text-faint mt-1">
                 Saved as <span className="font-mono">local/&lt;model id&gt;</span> in the curated model list.
+                {' '}<span className="font-mono">local/</span> is the internal provider id — it does not mean
+                the endpoint runs on this machine.
               </p>
             </Field>
             <Field label="Image input">
@@ -289,7 +294,7 @@ export default function SettingsPage() {
                 {config.models.local?.supports_images ? 'Enabled' : 'Disabled'}
               </button>
               <p className="text-[10px] text-faint mt-1">
-                Enable when the local OpenAI-compatible server is running a vision-capable model or multimodal projector.
+                Enable when the endpoint is running a vision-capable model or multimodal projector.
               </p>
             </Field>
             <div className="flex items-center gap-3">
@@ -299,7 +304,7 @@ export default function SettingsPage() {
                 disabled={testingLocalModel}
                 className="px-3 py-1.5 text-xs rounded-sm surface-elevated text-muted hover:text-primary border border-subtle disabled:opacity-40 transition-colors"
               >
-                {testingLocalModel ? 'Testing…' : 'Test local model'}
+                {testingLocalModel ? 'Testing…' : 'Test endpoint'}
               </button>
               {localModelStatus && (
                 <span className={`text-xs ${localModelStatus.ok ? 'text-green-400' : 'text-red-400'}`}>

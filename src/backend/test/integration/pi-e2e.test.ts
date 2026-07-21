@@ -228,7 +228,7 @@ test('GET /api/models includes configured Nexus local model from custom registry
   writeFileSync(modelsFile, JSON.stringify({
     providers: {
       local: {
-        name: 'Local Model Server',
+        name: 'Custom Model Endpoint',
         baseUrl: 'http://127.0.0.1:8081/v1',
         api: 'openai-completions',
         apiKey: 'local',

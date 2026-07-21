@@ -25,12 +25,15 @@ export function writeLocalModelsFile(config: NexusConfig, filePath = defaultLoca
   const local = config.models.local;
   const baseUrl = local.base_url.trim();
   const chatModel = local.chat_model.trim();
-  const displayName = local.display_name?.trim() || 'Local Model';
+  const displayName = local.display_name?.trim() || 'Custom Model';
   const input: Array<'text' | 'image'> = local.supports_images ? ['text', 'image'] : ['text'];
   const providers = baseUrl && chatModel
     ? {
+        // Provider id stays `local` — it is persisted in model-curation.json,
+        // chat_threads.last_model_key and tasks.model_key, and renaming it would
+        // silently drop those keys from the catalog. Only the label changes.
         local: {
-          name: 'Local Model Server',
+          name: 'Custom Model Endpoint',
           baseUrl,
           api: 'openai-completions',
           apiKey: localModelsApiKey(local.api_key),
@@ -78,16 +81,16 @@ export async function testLocalModel(input: LocalModelTestInput): Promise<LocalM
     const models = await fetchModelIds(baseUrl, headers);
     const chatModel = input.chat_model?.trim() || '';
     if (!chatModel) {
-      return { ok: true, message: 'Local model server responded.', models };
+      return { ok: true, message: 'Endpoint responded.', models };
     }
     const modelFound = models.length === 0 || models.includes(chatModel);
     if (!modelFound) {
-      return { ok: false, message: `Model "${chatModel}" was not listed by the local server.`, models, modelFound: false };
+      return { ok: false, message: `Model "${chatModel}" was not listed by the endpoint.`, models, modelFound: false };
     }
     await fetchChatCompletion(baseUrl, headers, chatModel);
-    return { ok: true, message: 'Local model responded.', models, modelFound: true };
+    return { ok: true, message: 'Model responded.', models, modelFound: true };
   } catch (err: any) {
-    return { ok: false, message: err?.message || 'Local model test failed.', models: [] };
+    return { ok: false, message: err?.message || 'Endpoint test failed.', models: [] };
   }
 }
 
@@ -125,6 +128,6 @@ async function fetchChatCompletion(baseUrl: string, headers: Record<string, stri
   if (!res.ok) throw new Error(`/chat/completions returned ${res.status}`);
   const body = await res.json() as { choices?: unknown[] };
   if (!Array.isArray(body.choices) || body.choices.length === 0) {
-    throw new Error('Local model returned no choices.');
+    throw new Error('Model returned no choices.');
   }
 }

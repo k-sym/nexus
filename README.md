@@ -572,7 +572,9 @@ server:
 models:
   openrouter:
     api_key: "${OPENROUTER_API_KEY}"   # env var interpolation
-  local:                               # OpenAI-compatible server for chat
+  local:                               # "Custom Model Endpoint" in Settings: any OpenAI-compatible
+                                       #   chat server. `local` is just the provider id — the host can
+                                       #   be this machine or another box on the network/tailnet.
     base_url: "http://127.0.0.1:4001/v1"
     api_key: "${OMLX_API_KEY}"         # if your server requires auth; env interpolation supported
     supports_images: false             # true when the chat endpoint has vision support (e.g. mmproj loaded)
@@ -1219,7 +1221,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 | `N memory job(s) failed (dead-lettered)` / `embedder unreachable` | Almost always the local model stack is misconfigured, **not** down. A `llama-server` can be listening but return `501` for `/v1/embeddings` or `/v1/rerank` if it wasn't started with the right flags. Launch embeddings with `--embedding --pooling mean --ubatch-size 1024` (:4002; the default `--ubatch-size` 512 rejects chunks that tokenize above 512 tokens) and rerank with `--reranking` (:4003). Confirm with `curl -s -X POST http://127.0.0.1:4002/v1/embeddings -d '{"input":"hi","model":"..."}'` returns 200. Dead jobs do **not** auto-retry — requeue them once the stack is fixed. |
 | KG extraction dead-letters / gen returns empty content | Your generation model (:4001) is a reasoning/"thinking" model burning its whole token budget on hidden reasoning. Relaunch it with `--reasoning off`, or use a non-reasoning model. |
 | A model server shows green but recall is empty | A port ping isn't a capability check — verify `/v1/embeddings` and `/v1/rerank` actually return 200 (see above). |
-| Local-server model not in the picker | Confirm your local server is running and reachable at `models.local.base_url`, then **Settings → Auth → save-key** for the `local` provider and **Settings → Models** to enable it. The model `id` must match a loaded model name (check `GET {base_url}/models`). |
+| Custom-endpoint model not in the picker | Confirm the server is running and reachable at `models.local.base_url` (it need not be on this machine — a LAN or tailnet address is fine), then **Settings → Auth → save-key** for the `local` provider and **Settings → Models** to enable it. The model `id` must match a loaded model name (check `GET {base_url}/models`). |
 | `409 model_busy` / `project_busy` on a chat turn | Another run holds the per-`(project, model)` or project-wide slot. Retry with `X-Confirm-Cancel: true` to abort the holder first, or pick a different model. See issue #95. |
 | OAuth flow stuck | **Settings → Auth** polls the flow; if a provider needs a manual callback, the flow UI accepts the value via `/api/auth/oauth/:flowId/respond`. Cancel with `/api/auth/cancel-oauth` and retry. |
 | Hermes-style remote endpoint fails | Ensure `HERMES_API_KEY` is exported in the backend's environment before launching (or the endpoint's auth is otherwise configured); the key is never stored in git. |

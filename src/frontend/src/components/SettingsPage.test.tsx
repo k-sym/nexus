@@ -16,7 +16,7 @@ vi.mock('../api', () => ({
       update: vi.fn(async (config) => config),
       testLocalModel: vi.fn(async () => ({
         ok: true,
-        message: 'Local model responded.',
+        message: 'Model responded.',
         models: ['qwen2.5-coder:7b'],
         modelFound: true,
       })),
@@ -100,7 +100,7 @@ describe('SettingsPage', () => {
     const modelInput = await screen.findByLabelText('Chat model id');
     await user.type(screen.getByLabelText('Base URL'), 'http://127.0.0.1:8081/v1');
     await user.type(modelInput, 'qwen2.5-coder:7b');
-    await user.click(screen.getByRole('button', { name: 'Test local model' }));
+    await user.click(screen.getByRole('button', { name: 'Test endpoint' }));
 
     await waitFor(() => {
       expect(api.settings.testLocalModel).toHaveBeenCalledWith({
@@ -109,7 +109,7 @@ describe('SettingsPage', () => {
         chat_model: 'qwen2.5-coder:7b',
       });
     });
-    expect(await screen.findByText('Local model responded.')).toBeInTheDocument();
+    expect(await screen.findByText('Model responded.')).toBeInTheDocument();
   });
 
   it('saves a display name separately from a path-like local model id', async () => {
