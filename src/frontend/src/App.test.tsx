@@ -21,6 +21,7 @@ const mockApi = vi.hoisted(() => ({
   chat: {
     threads: vi.fn(),
     activeRuns: vi.fn(),
+    sessions: vi.fn(),
     createThread: vi.fn(),
     renameThread: vi.fn(),
     archiveThread: vi.fn(),
@@ -91,9 +92,61 @@ describe('App project navigation', () => {
     mockApi.projects.tasks.mockResolvedValue([]);
     mockApi.projects.githubSync.mockResolvedValue({ created: 0, total: 0 });
     mockApi.chat.activeRuns.mockResolvedValue({ activeThreadIds: [], runs: [] });
+    mockApi.chat.sessions.mockResolvedValue({ sessions: [] });
     mockApi.chat.threads.mockImplementation(async (projectId: string) => (
       projectId === 'project-a' ? [alphaThread] : []
     ));
+  });
+
+  // Regression: the rail once sourced every dot from /api/chat/sessions alone, so
+  // a backend without that route left it completely dark while the session rows
+  // kept badging correctly off the run feed — status was invisible until you
+  // clicked into each project, which is the problem the rail exists to solve.
+  it('lights the rail from the run feed when the session list is unavailable', async () => {
+    mockApi.chat.sessions.mockRejectedValue(new Error('Route GET:/api/chat/sessions not found'));
+    mockApi.chat.activeRuns.mockResolvedValue({
+      activeThreadIds: ['thread-alpha', 'thread-beta'],
+      runs: [
+        { threadId: 'thread-alpha', title: 'Alpha session', modelKey: 'anthropic/opus',
+          projectId: 'project-a', waitingForResponse: false, questionCount: 0 },
+        { threadId: 'thread-beta', title: 'Beta session', modelKey: 'anthropic/opus',
+          projectId: 'project-b', waitingForResponse: true, questionCount: 1 },
+      ],
+    });
+
+    render(<App />);
+
+    expect(await screen.findByTitle('Alpha: model working')).toHaveClass('bg-red-500');
+    expect(await screen.findByTitle('Beta: waiting for input')).toHaveClass('bg-amber-400');
+  });
+
+  it('falls back to the project session count for the green rail dot', async () => {
+    mockApi.chat.sessions.mockRejectedValue(new Error('Route GET:/api/chat/sessions not found'));
+
+    render(<App />);
+
+    // Alpha has chat_session_count 1, Beta has 0 — so only Alpha is dotted.
+    expect(await screen.findByTitle('Alpha: idle')).toHaveClass('bg-emerald-400');
+    await waitFor(() => {
+      expect(screen.queryByTitle('Beta: idle')).not.toBeInTheDocument();
+    });
+  });
+
+  it('still lists a running session when the session list is unavailable', async () => {
+    mockApi.chat.sessions.mockRejectedValue(new Error('Route GET:/api/chat/sessions not found'));
+    mockApi.chat.activeRuns.mockResolvedValue({
+      activeThreadIds: ['thread-beta'],
+      runs: [
+        { threadId: 'thread-beta', title: 'Beta session', modelKey: 'anthropic/opus',
+          projectId: 'project-b', waitingForResponse: false, questionCount: 0 },
+      ],
+    });
+
+    render(<App />);
+
+    const section = await screen.findByLabelText('Active sessions');
+    expect(section).toHaveTextContent('Beta session');
+    expect(section).toHaveTextContent('RUN');
   });
 
   it('clears the selected thread when switching to a different project', async () => {

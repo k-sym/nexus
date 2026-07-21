@@ -28,6 +28,15 @@ import { loadViewState, saveViewState } from './viewState';
 
 type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'settings';
 
+/** The slice of an in-flight run the sidebar needs: which project owns it and
+ *  whether it is blocked on the user. */
+interface ActiveRunSummary {
+  threadId: string;
+  title: string;
+  projectId: string | null;
+  waitingForResponse: boolean;
+}
+
 /** A task-seeded first turn handed to ChatPanel once the run-task chat opens. */
 interface TaskSeed {
   threadId: string;
@@ -80,6 +89,7 @@ export default function App() {
   const [runningThreadIds, setRunningThreadIds] = useState<Set<string>>(() => new Set());
   const [waitingSessionIds, setWaitingSessionIds] = useState<Set<string>>(() => new Set());
   const [liveSessions, setLiveSessions] = useState<ChatSessionSummary[]>([]);
+  const [activeRuns, setActiveRuns] = useState<ActiveRunSummary[]>([]);
   const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [assistantActive, setAssistantActive] = useState(false);
@@ -225,6 +235,12 @@ export default function App() {
       const data = await api.chat.activeRuns();
       setRunningThreadIds(new Set(data.activeThreadIds));
       setWaitingSessionIds(new Set(data.runs.filter((run) => run.waitingForResponse).map((run) => run.threadId)));
+      setActiveRuns(data.runs.map((run) => ({
+        threadId: run.threadId,
+        title: run.title,
+        projectId: run.projectId,
+        waitingForResponse: run.waitingForResponse,
+      })));
     } catch (err) {
       console.error('Failed to load active chat runs:', err);
     }
@@ -258,13 +274,28 @@ export default function App() {
     const activityFor = (threadId: string): SessionActivity =>
       waitingSessionIds.has(threadId) ? 'waiting' : runningThreadIds.has(threadId) ? 'working' : 'idle';
 
-    return liveSessions.map((session) => ({
+    const merged: SidebarSession[] = liveSessions.map((session) => ({
       threadId: session.threadId,
       title: session.title,
       projectId: session.projectId,
       activity: activityFor(session.threadId),
     }));
-  }, [liveSessions, runningThreadIds, waitingSessionIds]);
+
+    // A run can name a session the list hasn't caught up with: a thread created
+    // on another device before the poll lands, or a backend too old to serve
+    // /api/chat/sessions at all. Surface it rather than dropping it silently.
+    const known = new Set(merged.map((session) => session.threadId));
+    for (const run of activeRuns) {
+      if (known.has(run.threadId)) continue;
+      merged.push({
+        threadId: run.threadId,
+        title: run.title,
+        projectId: run.projectId,
+        activity: activityFor(run.threadId),
+      });
+    }
+    return merged;
+  }, [liveSessions, activeRuns, runningThreadIds, waitingSessionIds]);
 
   // Derived from the run feed rather than the session list, so a row badge turns
   // red the moment a turn starts instead of waiting for the slower session poll.
@@ -273,18 +304,36 @@ export default function App() {
     [runningThreadIds, waitingSessionIds],
   );
 
+  /**
+   * Rail dots, deliberately sourced from more than one feed so the rail cannot go
+   * dark just because one of them is unavailable:
+   *   red/amber ← the run feed, which already names the owning project and is the
+   *               freshest signal (2s). Independent of /api/chat/sessions, so an
+   *               older backend without that route still lights up correctly.
+   *   green     ← the session list, falling back to the per-project count that
+   *               /api/projects already returns.
+   */
   const projectIdsByActivity = useMemo(() => {
     const working = new Set<string>();
     const waiting = new Set<string>();
     const live = new Set<string>();
-    for (const session of sidebarSessions) {
-      if (!session.projectId) continue;
-      live.add(session.projectId);
-      if (session.activity === 'waiting') waiting.add(session.projectId);
-      else if (session.activity === 'working') working.add(session.projectId);
+
+    for (const run of activeRuns) {
+      if (!run.projectId) continue;
+      if (run.waitingForResponse) waiting.add(run.projectId);
+      else working.add(run.projectId);
     }
+
+    for (const session of liveSessions) live.add(session.projectId);
+    for (const project of projects) {
+      if ((project.chat_session_count ?? 0) > 0) live.add(project.id);
+    }
+    // A project mid-run owns a live session by definition, whatever the list says.
+    for (const id of waiting) live.add(id);
+    for (const id of working) live.add(id);
+
     return { working, waiting, live };
-  }, [sidebarSessions]);
+  }, [activeRuns, liveSessions, projects]);
 
   const refreshAssistantActive = useCallback(async () => {
     try {
