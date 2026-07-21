@@ -60,11 +60,11 @@ const NOW = new Date().toISOString();
 function db(): Database.Database {
   const d = new Database(':memory:');
   d.exec(`
-    CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, repo_path TEXT);
+    CREATE TABLE projects (id TEXT PRIMARY KEY, name TEXT, badge TEXT NOT NULL DEFAULT '', repo_path TEXT);
     CREATE TABLE chat_threads (id TEXT PRIMARY KEY, title TEXT, updated_at TEXT, project_id TEXT, archived_at TEXT);
     CREATE TABLE assistant_sessions (id TEXT PRIMARY KEY, title TEXT, status TEXT, updated_at TEXT, archived_at TEXT);
     CREATE TABLE assistant_runs (id TEXT PRIMARY KEY, session_id TEXT, status TEXT, started_at TEXT, updated_at TEXT);
-    INSERT INTO projects VALUES ('p1', 'nexus', '/repo');
+    INSERT INTO projects VALUES ('p1', 'nexus', 'NEX', '/repo');
   `);
   d.prepare('INSERT INTO chat_threads VALUES (?, ?, ?, ?, NULL)').run('t1', 'Session', NOW, 'p1');
   return d;
@@ -91,6 +91,21 @@ test('a transcript is read once per session and then cached until it changes', a
   d.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(new Date(Date.now() + 1000).toISOString(), 't1');
   await buildSessions(deps, 'all');
   assert.equal(calls.length, 2, 'a session that moved must be re-read');
+});
+
+test('a chat session carries its project rail badge', async () => {
+  const d = db();
+  const { pi } = countingPi();
+  const [s] = await buildSessions({ db: d as never, pi, mainPort: 1, recentMs: 60_000 }, 'all');
+  assert.equal(s.projectBadge, 'NEX', 'the lens rail should read the same badge as the desktop rail');
+});
+
+test('a project with no badge yet leaves it unset for the client to derive', async () => {
+  const d = db();
+  d.prepare("UPDATE projects SET badge = '' WHERE id = 'p1'").run();
+  const { pi } = countingPi();
+  const [s] = await buildSessions({ db: d as never, pi, mainPort: 1, recentMs: 60_000 }, 'all');
+  assert.equal(s.projectBadge, undefined);
 });
 
 test('buildSessions can skip previews entirely', async () => {

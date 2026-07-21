@@ -154,6 +154,7 @@ interface ChatThreadRow {
   updated_at: string;
   project_id: string;
   project_name: string;
+  project_badge: string | null;
   repo_path: string;
 }
 
@@ -174,7 +175,7 @@ export async function buildSessions(
 
   const threadRows = deps.db
     .prepare(`
-      SELECT t.id, t.title, t.updated_at, t.project_id, p.name AS project_name, p.repo_path
+      SELECT t.id, t.title, t.updated_at, t.project_id, p.name AS project_name, p.badge AS project_badge, p.repo_path
       FROM chat_threads t
       JOIN projects p ON p.id = t.project_id
       WHERE t.archived_at IS NULL
@@ -193,6 +194,8 @@ export async function buildSessions(
       title: run?.title || row.title || 'Session',
       cwd: row.repo_path || '',
       project: row.project_name || '',
+      // Empty only if the badge backfill hasn't run; the client derives one then.
+      projectBadge: row.project_badge || undefined,
       ...NO_PREVIEW, // filled in by attachPreviews, for the sessions we actually return
       lastActivityAt,
       live: !!run,

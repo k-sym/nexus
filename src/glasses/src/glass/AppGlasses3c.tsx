@@ -51,10 +51,18 @@ function sessionGlyph(s: SessionSummary): string {
 // the project name), so chat threads of one project collapse into a single row.
 interface ProjGroup { key: string; name: string; badge: string; asst: boolean; sessions: SessionSummary[] }
 
-function projBadge(name: string, asst: boolean): string {
+/** The rail badge. The gateway sends the project's own `projects.badge` — the same
+ *  up-to-three-character badge the desktop rail shows — so the two read alike. The
+ *  fallback only matters against a backend too old to send one, or a project whose
+ *  badge backfill hasn't run; it mirrors the shared derivation closely enough for a
+ *  rail letter (initials of a multi-word name, else the first three letters). */
+function projBadge(name: string, asst: boolean, badge?: string): string {
   if (asst) return '★' // the Assistant project reads as "special"
-  const m = name.match(/[a-z0-9]/i)
-  return (m ? m[0] : name[0] ?? '·').toUpperCase()
+  const given = (badge ?? '').replace(/[^a-z0-9]/gi, '').slice(0, 3).toUpperCase()
+  if (given) return given
+  const words = name.split(/[\s_-]+/).filter((w) => /[a-z0-9]/i.test(w))
+  if (words.length > 1) return words.slice(0, 3).map((w) => w[0]).join('').toUpperCase()
+  return (words[0] ?? name ?? '·').replace(/[^a-z0-9]/gi, '').slice(0, 3).toUpperCase() || '·'
 }
 
 /** Group the live session list by project, preserving recency order (sessions arrive
@@ -68,7 +76,7 @@ function groupProjects(sessions: SessionSummary[]): ProjGroup[] {
     let g = byKey.get(key)
     if (!g) {
       const name = s.project || (asst ? 'Assistant' : 'project')
-      g = { key, name, badge: projBadge(name, asst), asst, sessions: [] }
+      g = { key, name, badge: projBadge(name, asst, s.projectBadge), asst, sessions: [] }
       byKey.set(key, g); order.push(key)
     }
     g.sessions.push(s)
@@ -189,10 +197,19 @@ function ageShort(ms: number): string {
 
 // Sessions-screen geometry. Shared by the row builder (which measures a title against
 // the width it will actually get) and the renderer, so the two can't drift apart.
-const SESSIONS_RAIL_X = 10, SESSIONS_RAIL_W = 48
-const SESSIONS_LIST_X = SESSIONS_RAIL_X + SESSIONS_RAIL_W + 12
-const SESSION_ROW_W = 576 - SESSIONS_LIST_X - 22
-const SESSION_NAME_W = SESSION_ROW_W - 24  // the native select-highlight insets each row
+const SESSIONS_RAIL_X = 10
+const SESSIONS_RAIL_MIN_W = 48
+
+/** Sessions-screen geometry, derived from the badges actually on screen. Badges are up
+ *  to three characters (the desktop rail's own `projects.badge`), so a rail fixed at
+ *  single-letter width would clip them — and every column right of it has to move. */
+function sessionsLayout(groups: ProjGroup[]): { railW: number; listX: number; rowW: number; nameW: number } {
+  const widest = groups.reduce((m, g) => Math.max(m, Math.ceil(getTextWidth(`› ${g.badge}`))), 0)
+  const railW = Math.max(SESSIONS_RAIL_MIN_W, widest + 8)
+  const listX = SESSIONS_RAIL_X + railW + 12
+  const rowW = 576 - listX - 22
+  return { railW, listX, rowW, nameW: rowW - 24 }  // the select-highlight insets each row
+}
 const PROJECT_ROW_W = 536
 const PROJECT_NAME_W = PROJECT_ROW_W - 24
 
@@ -211,10 +228,10 @@ function projectRow(g: ProjGroup): string {
 // Session-row label for the sessions list: status glyph · name · needs-you|age.
 // The name gets whatever pixel width the fixed parts leave, so a long title ends in
 // an ellipsis at the real edge instead of being cut mid-word at a fixed char count.
-function sessionRow(s: SessionSummary): { id: string; label: string } {
+function sessionRow(s: SessionSummary, nameW: number): { id: string; label: string } {
   const glyph = sessionGlyph(s)
   const meta = s.needsAttention ? 'needs you' : ageShort(s.lastActivityAt)
-  const budget = SESSION_NAME_W - Math.ceil(getTextWidth(`${glyph}     ·   ${meta}`))
+  const budget = nameW - Math.ceil(getTextWidth(`${glyph}     ·   ${meta}`))
   const name = fitToWidth(s.title || s.project || s.id.slice(0, 8), budget)
   return { id: s.id, label: `${glyph}  ${name}   ·   ${meta}` }
 }
@@ -225,7 +242,7 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
   if (scr === 'projects')
     return `proj|${s.connection}|${groups.map((g) => `${g.badge}${g.name}${g.sessions.length}${g.sessions.some((x) => x.needsAttention) ? '!' : ''}`).join('~')}`
   if (scr === 'sessions')
-    return `sess|${nav.projIdx}|${groups.map((g) => g.badge).join('')}|${(groups[nav.projIdx]?.sessions ?? []).map((x) => sessionRow(x).label).join('~')}`
+    return `sess|${nav.projIdx}|${groups.map((g) => g.badge).join('')}|${(groups[nav.projIdx]?.sessions ?? []).map((x) => sessionRow(x, sessionsLayout(groups).nameW).label).join('~')}`
   // The activity line is part of the signature, not just the reply — while the agent
   // works through tools the reply doesn't change, and without this the screen would
   // sit on a stale tool name until the next reply landed.
@@ -373,7 +390,15 @@ export function AppGlasses3c() {
     const onBack = () => {
       const s = glass(store.getState())
       switch (screenRef.current) {
-        case 'projects': break // home — nowhere further back
+        case 'projects': {
+          // Home is the root, so "back" from here means leaving the app. exitMode 0
+          // closes immediately; exitMode 1 raises the system's "really exit?" layer,
+          // which is the long-press flow this replaces.
+          GlassesSdk.getRawBridge()
+            .then((raw) => raw.shutDownPageContainer(0))
+            .catch(() => { /* no bridge (browser/sim) — stay where we are */ })
+          break
+        }
         case 'sessions': { navRef.current = { home: 'projects', projIdx: navRef.current.projIdx }; render(); break } // back to projects home
         case 'detail': { if (s.steering) { cancelSteer(); break } closeSession(); break } // 2tap: stop steering, else leave
         case 'approval': { const a = gates(s)[0]; if (a) deny(a.id); break }
@@ -474,7 +499,7 @@ async function buildAndRender(
     const state = s.connection === 'ok'
       ? `${groups.length} project${groups.length === 1 ? '' : 's'}`
       : s.connection === 'error' ? 'disconnected' : 'connecting…'
-    addNavChrome(page, `NEXUS   ·   ${state}`, '• open')  // 2-tap does nothing at the root
+    addNavChrome(page, `NEXUS   ·   ${state}`, '• open   •• exit')
 
     const rows = groups.length
       ? groups.map((g) => ({ id: g.key, label: projectRow(g) }))
@@ -493,17 +518,16 @@ async function buildAndRender(
     const group = groups[nav.projIdx]
     addNavChrome(page, fitToWidth(group?.name ?? 'sessions', 300), '• open   •• back')
 
-    const railX = SESSIONS_RAIL_X, railW = SESSIONS_RAIL_W
+    const { railW, listX, rowW, nameW } = sessionsLayout(groups)
     const rail = page.addTextElement(groups.map((g, i) => `${i === nav.projIdx ? '›' : ' '} ${g.badge}`).join('\n\n'))
-    rail.setPosition((p) => { p.setX(railX).setY(NAV_LIST_Y + 2) })
+    rail.setPosition((p) => { p.setX(SESSIONS_RAIL_X).setY(NAV_LIST_Y + 2) })
     rail.setSize((z) => { z.setWidth(railW).setHeight(NAV_LIST_H) })
 
     const sessions = group?.sessions ?? []
-    const rows = sessions.length ? sessions.map(sessionRow) : [{ id: '', label: '(no active sessions)' }]
+    const rows = sessions.length ? sessions.map((x) => sessionRow(x, nameW)) : [{ id: '', label: '(no active sessions)' }]
     rowsRef.current = rows
-    const listX = SESSIONS_LIST_X
     const list = page.addListElement(rows.map((r) => r.label))
-    list.setItemWidth(SESSION_ROW_W)
+    list.setItemWidth(rowW)
     list.setIsItemSelectBorderEn(true)
     list.markAsEventCaptureElement()
     list.setPosition((p) => { p.setX(listX).setY(NAV_LIST_Y) })

@@ -14,6 +14,7 @@ function session(over: Partial<SessionSummary> & { id: string }): SessionSummary
     title: over.title ?? 'session',
     cwd: over.cwd ?? '/Users/dev/project',
     project: over.project ?? 'project',
+    projectBadge: over.projectBadge,
     lastPrompt: '',
     lastAssistant: '',
     lastActivityAt: over.lastActivityAt ?? now,
@@ -101,9 +102,9 @@ export function applyFixture(name: string): boolean {
         // instead of the pushed "needs you" hero. Key = sorted needs-attention ids.
         dismissedAttentionKey: 's1',
         sessions: [
-          session({ id: 's1', title: 'nexus · gateway', project: 'nexus', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' }, lastActivityAt: now - 4_000 }),
-          session({ id: 's2', title: 'baker · api', project: 'baker', live: true, lastActivityAt: now - 90_000 }),
-          session({ id: 's3', title: 'docs · site', project: 'docs', live: false, recent: true, lastActivityAt: now - 3_600_000 }),
+          session({ id: 's1', title: 'nexus · gateway', project: 'nexus', projectBadge: 'NEX', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' }, lastActivityAt: now - 4_000 }),
+          session({ id: 's2', title: 'baker · api', project: 'Baker Internal', projectBadge: 'BAK', live: true, lastActivityAt: now - 90_000 }),
+          session({ id: 's3', title: 'docs · site', project: 'docs', projectBadge: 'DOC', live: false, recent: true, lastActivityAt: now - 3_600_000 }),
         ],
       })
       return true

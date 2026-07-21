@@ -31,6 +31,9 @@ export interface SessionSummary {
   kind?: 'chat' | 'assistant';
   /** Nexus extension (ignored by the glasses today; used by P3 grouping). */
   projectId?: string | null;
+  /** Nexus extension: the project's rail badge (`projects.badge`, up to 3 chars),
+   *  so the lens rail reads the same as the desktop one. Absent for Assistant. */
+  projectBadge?: string;
 }
 
 export interface TranscriptEvent {
