@@ -75,7 +75,12 @@ async function main() {
 
   const app = Fastify({ logger: false });
 
-  await app.register(cors, { origin: true });
+  // @fastify/cors v11 defaults methods to 'GET,HEAD,POST' — omitting DELETE/PUT/PATCH
+  // would make every such route fail CORS preflight over remote (Tailscale) exposure.
+  await app.register(cors, {
+    origin: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  });
   await app.register(sensible);
   await app.register(websocket);
 

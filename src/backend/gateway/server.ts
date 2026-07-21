@@ -157,7 +157,12 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
     }
   }, 15000);
 
-  app.register(cors, { origin: true });
+  // @fastify/cors v11 defaults methods to 'GET,HEAD,POST' — omitting DELETE/PUT/PATCH
+  // would make every such route fail CORS preflight. Explicit so all verbs are allowed.
+  app.register(cors, {
+    origin: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  });
 
   // ── auth: gate only the API (except health); the UI bundle is public ────────
   app.addHook('onRequest', async (request, reply) => {
