@@ -4,3 +4,7 @@ dist-pack/
 *.ehpk
 *.local
 .DS_Store
+# The evenhub simulator's camera button writes glasses_<timestamp>.png into its
+# working directory, which is this one — so screenshots land here and get swept
+# up by `git add -A`. Capture to a scratch path instead if you want to keep one.
+glasses_*.png
