@@ -13,6 +13,7 @@ import { FastifyInstance } from 'fastify';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { v4 as uuid } from 'uuid';
+import { corsHeaders } from '../cors-headers.js';
 import {
   AGENT_RUN_CUSTOM_TYPE,
   type AgentRunAbortSource,
@@ -533,10 +534,14 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       );
 
     reply.hijack();
+    // Hijacked replies bypass @fastify-cors, so the Access-Control-Allow-Origin
+    // header it would normally inject must be added by hand or the browser blocks
+    // the cross-origin (remote Tailscale) stream with a 200 + no allow-origin.
     reply.raw.writeHead(200, {
       'Content-Type': 'application/x-ndjson; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
       Connection: 'keep-alive',
+      ...corsHeaders(request),
     });
 
     const write = (ev: unknown) => {
