@@ -59,6 +59,19 @@ export function applyFixture(name: string): boolean {
       ])
       return true
     }
+    case 'approval': {
+      // A supervised tool gate — the third takeover screen, and the one with no live
+      // path to reach it without turning Supervise on.
+      const s = session({ id: 'demo', title: 'nexus · gateway', project: 'nexus', live: true })
+      const gate: Approval = {
+        id: 'gate-1', kind: 'approval', session_id: s.id,
+        tool_name: 'Bash', tool_input: { command: 'rm -rf dist && npm run build:glasses && npm --prefix src/glasses run pack' },
+        cwd: '/Users/dev/Projects/nexus', title: 'run a shell command',
+        createdAt: now, decision: null,
+      }
+      store.set({ sessions: [s], approvals: [gate], connection: 'ok' })
+      return true
+    }
     case 'detail-working': {
       // The mid-tool state the live gateway rarely holds still for: a previous reply
       // (in Markdown, to exercise the flattener) with tool calls after it, so the
