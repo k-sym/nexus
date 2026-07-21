@@ -230,6 +230,20 @@ describe('Sidebar', () => {
     expect(activeSection).toHaveTextContent('WAIT');
   });
 
+  it('docks active sessions above the version label without a fixed list height', () => {
+    renderSidebar({
+      sessions: [
+        { threadId: thread.id, title: thread.title, projectId: project.id, activity: 'idle' },
+      ],
+    });
+
+    const activeSection = screen.getByLabelText('Active sessions');
+    expect(activeSection).not.toHaveClass('mt-auto');
+    expect(activeSection).toHaveClass('min-h-0');
+    expect(activeSection.querySelector('.overflow-y-auto')).not.toHaveClass('max-h-56');
+    expect(activeSection.nextElementSibling).toHaveTextContent('v0.1.0 · Personal');
+  });
+
   it('keeps a finished session in the active sessions list, badged IDLE', () => {
     // The whole point of the list: a session does not vanish when its run ends.
     // It only leaves on delete/archive, which drops it from `sessions` upstream.

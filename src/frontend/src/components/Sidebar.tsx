@@ -307,7 +307,8 @@ export default function Sidebar({
         </button>
       </nav>
 
-      <div aria-label="Project details" className="compact-project-panel min-w-0 flex-1 flex flex-col overflow-y-auto">
+      <div aria-label="Project details" className="compact-project-panel min-w-0 flex-1 flex flex-col overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-y-auto">
         <div className="px-3 pt-3 pb-2">
           <div className="flex items-center justify-between pb-2">
             <span className="text-[10px] uppercase tracking-wider text-faint font-medium">Projects</span>
@@ -506,15 +507,16 @@ export default function Sidebar({
         ) : (
           <div className="px-3 py-2 text-xs text-faint">No projects yet</div>
         )}
+        </div>
 
         {orderedSessions.length > 0 && (
-          <section aria-label="Active sessions" className="mt-auto px-3 pt-3 pb-2 border-t border-subtle">
+          <section aria-label="Active sessions" className="flex min-h-0 flex-col px-3 pt-3 pb-2 border-t border-subtle">
             <div className="mb-1.5 flex items-center justify-between">
               <span className="text-[10px] uppercase tracking-wider text-faint font-medium">Active sessions</span>
               <CountBadge>{orderedSessions.length}</CountBadge>
             </div>
-            {/* Holds every live session across all projects, so it can get long. */}
-            <div className="space-y-1.5 max-h-56 overflow-y-auto">
+            {/* Grows with its sessions and only scrolls when the sidebar runs out of room. */}
+            <div className="min-h-0 space-y-1.5 overflow-y-auto">
               {orderedSessions.map((session) => {
                 const sessionProject = projects.find((p) => p.id === session.projectId);
                 const pill = ACTIVITY_PILL[session.activity];
@@ -537,7 +539,7 @@ export default function Sidebar({
           </section>
         )}
 
-        <div className="mt-auto px-3 py-3 border-t border-subtle">
+        <div className="px-3 py-3 border-t border-subtle">
           <div className="text-[10px] text-faint">v0.1.0 · Personal</div>
         </div>
       </div>
