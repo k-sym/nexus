@@ -5,8 +5,25 @@ const sessions = [
   { id: 'session-2', title: 'Dependency watch', status: 'idle', latestRun: null },
 ];
 
+// Enough projects to exercise the rail's badges (#230) at their varied widths:
+// a three-letter derived badge, a two-letter one, and a hand-set override.
+const projects = [
+  { id: 'p1', slug: 'nexus', name: 'Nexus', badge: 'NEX', description: '' },
+  { id: 'p2', slug: 'brooklyn-roasters', name: 'Brooklyn Roasters', badge: 'BR', description: '' },
+  { id: 'p3', slug: 'essential-systems', name: 'Essential Systems', badge: 'ESS', description: '' },
+].map((p) => ({
+  ...p,
+  repo_path: `/repo/${p.slug}`,
+  config_json: '{}',
+  git_remote: '',
+  task_count: 0,
+  chat_session_count: 0,
+  created_at: '2026-07-01T00:00:00.000Z',
+  updated_at: '2026-07-01T00:00:00.000Z',
+}));
+
 const fixtures: Record<string, unknown> = {
-  '/api/projects': [],
+  '/api/projects': projects,
   '/api/chat/active-runs': { activeThreadIds: [], runs: [] },
   '/api/activity': {
     running: [],
@@ -105,6 +122,17 @@ test('settings desktop', async ({ page }) => {
   await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
   await expect(page.locator('input[value="https://assistant.example.test/v1"]')).toBeVisible();
   await expect(page).toHaveScreenshot('settings.png');
+});
+
+// Scoped to the rail rather than the full page: a whole-viewport diff of three
+// 40px badges falls under maxDiffPixelRatio, so it would not catch a regression.
+test('project rail badges', async ({ page }) => {
+  const rail = page.getByLabel('Project rail');
+  await expect(rail).toBeVisible();
+  await expect(rail.getByTitle('Nexus')).toHaveText('NEX');
+  await expect(rail.getByTitle('Brooklyn Roasters')).toHaveText('BR');
+  await expect(rail.getByTitle('Essential Systems')).toHaveText('ESS');
+  await expect(rail).toHaveScreenshot('project-rail.png');
 });
 
 test('new project modal', async ({ page }) => {

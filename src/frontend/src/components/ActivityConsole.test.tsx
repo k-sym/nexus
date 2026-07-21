@@ -5,7 +5,7 @@ import type { ActivityResponse, Operation } from '../api';
 import type { Project, Task } from '@nexus/shared';
 import type { ThreadMeta } from './Sidebar';
 
-const projects: Project[] = [{ id: 'p1', slug: 'demo', name: 'Demo', description: '', repo_path: '/tmp/demo', config_json: '{}', git_remote: '', created_at: '', updated_at: '' }];
+const projects: Project[] = [{ id: 'p1', slug: 'demo', name: 'Demo', badge: 'DEM', description: '', repo_path: '/tmp/demo', config_json: '{}', git_remote: '', created_at: '', updated_at: '' }];
 const tasks: Task[] = [];
 const threads: ThreadMeta[] = [];
 

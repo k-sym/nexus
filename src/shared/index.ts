@@ -9,10 +9,50 @@
 export type TaskStatus = 'triage' | 'todo' | 'in_progress' | 'review' | 'deploy';
 export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
 
+/** Max characters in a project rail badge. */
+export const PROJECT_BADGE_MAX_LENGTH = 3;
+
+/** Connector words that shouldn't win an initial in a derived badge. */
+const BADGE_STOPWORDS = new Set(['a', 'an', 'and', 'the', 'of', 'for', 'to', 'in', 'on', 'at', 'by']);
+
+/**
+ * Default rail badge for a project name: up to three characters, uppercase.
+ *
+ * Multi-word names collapse to initials ("United States of America" -> USA,
+ * connector words ignored); a single word takes its first three letters
+ * ("Nexus" -> NEX). Two-word names legitimately yield two characters. This is
+ * only a starting point — the badge is user-editable, so a name whose initials
+ * read badly can be fixed by hand rather than by a cleverer rule here.
+ */
+export function deriveProjectBadge(name: string): string {
+  const words = name.match(/[a-z0-9]+/gi) ?? [];
+  if (words.length === 0) return '?';
+  // Drop connectors only while at least two real words survive, so "Of Mice"
+  // doesn't strip itself down to nothing.
+  const significant = words.filter((w) => !BADGE_STOPWORDS.has(w.toLowerCase()));
+  const chosen = significant.length >= 2 ? significant : words;
+  if (chosen.length >= 2) {
+    return chosen.slice(0, PROJECT_BADGE_MAX_LENGTH).map((w) => w[0]).join('').toUpperCase();
+  }
+  return chosen[0].slice(0, PROJECT_BADGE_MAX_LENGTH).toUpperCase();
+}
+
+/**
+ * Coerce user input into a storable badge, falling back to the derived value
+ * when the field is left empty or contains nothing usable.
+ */
+export function normalizeProjectBadge(value: string | undefined, name = ''): string {
+  const cleaned = (value ?? '').replace(/[^a-z0-9]/gi, '').slice(0, PROJECT_BADGE_MAX_LENGTH).toUpperCase();
+  return cleaned || deriveProjectBadge(name);
+}
+
 export interface Project {
   id: string;
   slug: string;
   name: string;
+  /** Up to 3 uppercase chars shown in the project rail; derived from name, user-editable. */
+  badge: string;
+  /** @deprecated No longer surfaced in the UI — superseded by `badge`. Retained so existing rows keep their data. */
   description: string;
   repo_path: string;
   config_json: string;

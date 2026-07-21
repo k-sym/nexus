@@ -11,6 +11,7 @@ const project: Project = {
   id: 'project-1',
   slug: 'nexus',
   name: 'nexus',
+  badge: 'NEX',
   description: '',
   repo_path: '/repo/nexus',
   config_json: '{}',
@@ -24,6 +25,7 @@ const secondProject: Project = {
   id: 'project-2',
   slug: 'mywise',
   name: 'mywise',
+  badge: 'MYW',
   repo_path: '/repo/mywise',
 };
 
@@ -189,8 +191,9 @@ describe('Sidebar', () => {
 
     expect(screen.getByLabelText('Project rail')).toBeInTheDocument();
     expect(screen.getByLabelText('Project details')).toBeInTheDocument();
-    expect(screen.getByTitle('nexus')).toHaveTextContent('N');
-    expect(screen.getByTitle('mywise')).toHaveTextContent('M');
+    // The rail shows the stored 3-char badge, not a bare initial (#230).
+    expect(screen.getByTitle('nexus')).toHaveTextContent('NEX');
+    expect(screen.getByTitle('mywise')).toHaveTextContent('MYW');
   });
 
   it('shows the active project as a summary card in the details panel', () => {

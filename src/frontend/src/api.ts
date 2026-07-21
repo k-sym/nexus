@@ -200,9 +200,9 @@ export const api = {
   projects: {
     list: () => fetchJson<Project[]>(`/api/projects`),
     get: (id: string) => fetchJson<Project>(`/api/projects/${id}`),
-    create: (data: { name: string; description?: string; repo_path: string }) =>
+    create: (data: { name: string; badge?: string; repo_path: string }) =>
       fetchJson<Project>(`/api/projects`, { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Pick<Project, 'name' | 'description' | 'repo_path' | 'config_json'>>) =>
+    update: (id: string, data: Partial<Pick<Project, 'name' | 'badge' | 'repo_path' | 'config_json'>>) =>
       fetchJson<Project>(`/api/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     reorder: (projectIds: string[]) =>
       fetchJson<Project[]>(`/api/projects/order`, { method: 'PUT', body: JSON.stringify({ project_ids: projectIds }) }),
