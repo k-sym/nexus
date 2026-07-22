@@ -22,6 +22,8 @@ import { QuestionBroker, createQuestionExtension } from './questions.js';
 import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
+import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
+import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
 import { defaultLocalModelsFile } from './local-models.js';
 
 type ResourceLoaderOptions = {
@@ -30,6 +32,11 @@ type ResourceLoaderOptions = {
   settingsManager: unknown;
   noExtensions?: boolean;
   extensionFactories?: ExtensionFactory[];
+  /** Re-evaluated on every session create AND resume (unlike the transcript),
+   *  so a thread reopened later sees current state rather than a stale line
+   *  frozen in message history. Matches pi's DefaultResourceLoaderOptions
+   *  shape exactly (verified against resource-loader.d.ts). */
+  systemPromptOverride?: (base: string | undefined) => string | undefined;
 };
 
 type SessionInfoLike = {
@@ -79,7 +86,7 @@ export function cwdSlug(repoPath: string): string {
 }
 
 export function buildResourceLoaderOptions(
-  options: Pick<ResourceLoaderOptions, 'cwd' | 'agentDir' | 'settingsManager' | 'extensionFactories'>,
+  options: Pick<ResourceLoaderOptions, 'cwd' | 'agentDir' | 'settingsManager' | 'extensionFactories' | 'systemPromptOverride'>,
 ): ResourceLoaderOptions {
   return {
     ...options,
@@ -96,7 +103,9 @@ export function buildSessionExtensionFactories(
   isSupervised: () => boolean,
   signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
   recallMemories?: MemoryRecallFn,
+  mondayTools?: (threadId: string) => MondayToolDeps | null,
 ): ExtensionFactory[] {
+  const monday = mondayTools?.(threadId) ?? null;
   return [
     createQuestionExtension(threadId, questions),
     createApprovalExtension(threadId, cwd, approvals, isSupervised),
@@ -104,6 +113,9 @@ export function buildSessionExtensionFactories(
     // Omitted when the runtime was built without a recall backend (tests,
     // headless callers) so sessions don't advertise a tool that can't run.
     ...(recallMemories ? [createMemoryExtension(cwd, recallMemories)] : []),
+    // Same contract for Monday: omitted wholesale when the feature is off,
+    // unconfigured, or this thread's task has no linked item.
+    ...(monday ? [createMondayExtension(monday)] : []),
   ];
 }
 
@@ -134,21 +146,36 @@ export class PiRuntime {
   private readonly supervised = new Set<string>();
   /** Backend for the `memory_recall` tool. Undefined = the tool isn't registered. */
   private readonly recallMemories?: MemoryRecallFn;
+  /** Resolves the linked-item snapshot for a thread's system prompt, or null
+   *  when the thread's task has no linked item (or the feature is off).
+   *  Undefined = no resolver supplied, e.g. tests and other headless callers. */
+  private readonly mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null;
+  /** Resolves the Monday tool deps for a thread, or null to omit the tools
+   *  entirely. Same "omit when absent" contract as recallMemories. */
+  private readonly mondayTools?: (threadId: string) => MondayToolDeps | null;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
     modelRuntime: ModelRuntime,
     recallMemories?: MemoryRecallFn,
+    mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null,
+    mondayTools?: (threadId: string) => MondayToolDeps | null,
   ) {
     this.paths = paths;
     this.auth = modelRuntime;
     this.models = new ModelRegistry(modelRuntime);
     this.recallMemories = recallMemories;
+    this.mondayContext = mondayContext;
+    this.mondayTools = mondayTools;
   }
 
   static async create(
     paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths(),
-    deps: { recallMemories?: MemoryRecallFn } = {},
+    deps: {
+      recallMemories?: MemoryRecallFn;
+      mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null;
+      mondayTools?: (threadId: string) => MondayToolDeps | null;
+    } = {},
   ): Promise<PiRuntime> {
     const defaults = defaultPiRuntimePaths();
     const resolvedPaths = {
@@ -163,7 +190,7 @@ export class PiRuntime {
       modelsPath: resolvedPaths.modelsFile,
       allowModelNetwork: false,
     });
-    return new PiRuntime(resolvedPaths, modelRuntime, deps.recallMemories);
+    return new PiRuntime(resolvedPaths, modelRuntime, deps.recallMemories, deps.mondayContext, deps.mondayTools);
   }
 
   /**
@@ -270,14 +297,20 @@ export class PiRuntime {
       sessionManager = SessionManager.create(cwd, sessionDir, { id: threadId });
     }
     const settingsManager = SettingsManager.inMemory();
+    const mondayContext = this.mondayContext?.(threadId, cwd) ?? null;
     const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
       extensionFactories: buildSessionExtensionFactories(
         threadId, cwd, this.questions, this.approvals, () => this.isSupervised(threadId),
-        createSignalFilterExtension, this.recallMemories,
+        createSignalFilterExtension, this.recallMemories, this.mondayTools,
       ),
+      // Re-evaluated on every session create AND resume, so a thread reopened
+      // later sees current item state rather than a stale frozen line.
+      systemPromptOverride: mondayContext
+        ? (base: string | undefined) => `${base ?? ''}\n\n${buildMondayContextBlock(mondayContext)}`
+        : undefined,
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({
