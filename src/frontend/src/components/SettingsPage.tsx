@@ -92,6 +92,10 @@ export default function SettingsPage() {
   const apiBase = window.__NEXUS_API__;
   const remoteBackend = !!apiBase && !/(127\.0\.0\.1|localhost|\[::1?\]|::1)/.test(apiBase);
   const connectedUrl = apiBase ? apiBase.replace(/\/api\/?$/, '') : '';
+  // Host only, for prose — the full URL is shown in the Connection section.
+  const serverHost = (() => {
+    try { return new URL(connectedUrl).host; } catch { return connectedUrl; }
+  })();
 
   return (
     <div className="h-full overflow-y-auto">
@@ -99,7 +103,19 @@ export default function SettingsPage() {
         <div className="sticky top-0 z-10 -mx-6 px-6 py-4 mb-6 flex items-center justify-between gap-4 surface-glass border-b border-subtle">
           <div className="min-w-0">
             <h1 className="text-lg font-semibold">Settings</h1>
-            <p className="text-xs text-faint mt-0.5">Edit ~/.nexus/config.yaml. Some changes require a backend restart.</p>
+            {/* Which config.yaml this page edits is not obvious on a thin client — it is
+                the SERVER's, because that is where the backend runs. Say whose. */}
+            <p className="text-xs text-faint mt-0.5">
+              {remoteBackend ? (
+                <>
+                  Editing <span className="font-mono text-muted">config.yaml</span> on{' '}
+                  <span className="font-mono text-muted">{serverHost}</span>, not this device.
+                  Some changes require a backend restart.
+                </>
+              ) : (
+                <>Edit ~/.nexus/config.yaml. Some changes require a backend restart.</>
+              )}
+            </p>
           </div>
           <div className="flex items-center gap-3 shrink-0">
             {saved && <span className="text-xs text-green-400">Saved ✓</span>}
@@ -114,7 +130,12 @@ export default function SettingsPage() {
         </div>
 
         <div className="space-y-6">
-          <Section title="Connection (this device)">
+          <GroupHeading
+            title="This device"
+            hint="Stored on this machine. Not affected by Save Changes, and not shared with the server."
+          />
+
+          <Section title="Connection">
             {remoteBackend ? (
               <Field label="Connected to">
                 <div className="text-sm font-mono text-primary break-all">{connectedUrl}</div>
@@ -188,6 +209,16 @@ export default function SettingsPage() {
               </p>
             </Field>
           </Section>
+
+          <GroupHeading
+            title="Server"
+            host={remoteBackend ? serverHost : undefined}
+            hint={
+              remoteBackend
+                ? 'Saved to the connected server’s config.yaml. These apply to every client of that server, not just this device.'
+                : 'Saved to this machine’s ~/.nexus/config.yaml, which is also what any thin client of it will edit.'
+            }
+          />
 
           <Section title="Provider Auth">
             <PiAuthSection />
@@ -430,6 +461,32 @@ export default function SettingsPage() {
           <TrustPrivacySection />
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Ownership divider (#167). Settings below one of these all write to the same place,
+ * which is the thing a thin client cannot otherwise tell: "this device" settings are
+ * local (localStorage, or this machine's own config.yaml), while everything under
+ * "Server" is the connected backend's config.yaml — on another machine when remote.
+ */
+function GroupHeading({ title, host, hint }: { title: string; host?: string; hint: string }) {
+  return (
+    <div className="pt-2 first:pt-0">
+      {/* aria-label because the accessible name is otherwise assembled across the
+          element boundary and loses the space before the dash ("Server— host"),
+          which is how a screen reader would read it out too. */}
+      <h2
+        aria-label={host ? `${title} — ${host}` : title}
+        className="text-[11px] font-semibold uppercase tracking-wider text-muted"
+      >
+        {title}
+        {/* The host is exempt from the uppercase treatment — shouting a hostname is
+            harder to read, and monospace makes it scan as an address. */}
+        {host && <span className="font-mono normal-case tracking-normal text-faint"> — {host}</span>}
+      </h2>
+      <p className="text-[10px] text-faint mt-0.5">{hint}</p>
     </div>
   );
 }

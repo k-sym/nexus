@@ -124,6 +124,27 @@ test('settings desktop', async ({ page }) => {
   await expect(page).toHaveScreenshot('settings.png');
 });
 
+// #167: on a thin client the page edits ANOTHER machine's config.yaml, and nothing
+// on screen used to say so. Drives the same view with __NEXUS_API__ pointed at a
+// remote host — the one signal the app uses to detect it is a thin client.
+test('settings desktop — thin client', async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as unknown as { __NEXUS_API__?: string }).__NEXUS_API__ =
+      'https://baker-pro.taileea629.ts.net:8444/api';
+  });
+  await page.reload();
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+
+  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'This device' })).toBeVisible();
+  await expect(
+    page.getByRole('heading', { name: 'Server — baker-pro.taileea629.ts.net:8444' }),
+  ).toBeVisible();
+  // Server URL is read-only when remote — editing it here would hit the wrong config.
+  await expect(page.getByLabel('Server URL')).toHaveCount(0);
+  await expect(page).toHaveScreenshot('settings-thin-client.png');
+});
+
 // Scoped to the rail rather than the full page: a whole-viewport diff of three
 // 40px badges falls under maxDiffPixelRatio, so it would not catch a regression.
 test('project rail badges', async ({ page }) => {
