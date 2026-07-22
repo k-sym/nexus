@@ -2,6 +2,7 @@ delete process.env.MONDAY_TOKEN;
 
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import type { MondayProjectConfig, Project } from '@nexus/shared';
 import { getDb } from '../db';
 import { scheduleRollup, disableRollupForProject } from '../monday/trigger';
@@ -77,7 +78,11 @@ test('scheduleRollup is a no-op for an unlinked task and never throws', async ()
   db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
               VALUES ('t9','p1','B','','todo','medium','now','now')`).run();
   const events: ActivityEvent[] = [];
-  await scheduleRollup(db, 't9', null, (e) => events.push(e));
+  // Wrapped like its siblings: with Monday genuinely enabled and tokened, the
+  // ONLY thing that can explain zero events is the unlinked-task check itself
+  // — not the disabled-by-default kill switch, which would produce the same
+  // "zero events" outcome for an unrelated reason and mask a broken guard.
+  await withMondayEnabled(() => scheduleRollup(db, 't9', null, (e) => events.push(e)));
   assert.equal(events.length, 0);
   delete process.env.MONDAY_TOKEN;
   db.close();
@@ -99,6 +104,24 @@ test('a failed write does not throw — the caller must not be blocked', async (
   db.close();
 });
 
+test('scheduleRollup resolves rather than rejects when the DB predates the Monday tables', async () => {
+  // A schema with no task_monday_links table at all — the exact case the
+  // docblock's outer try/catch calls out: "a caller whose schema predates the
+  // Monday tables". getLinkForTask's very first query throws before any
+  // Monday-specific guard (enabled, token, project config) ever runs.
+  //
+  // scheduleRollup is declared `async`, so even with the try/catch DELETED
+  // this throw would still be delivered as a promise rejection rather than a
+  // synchronous exception at the call site — but a `void`-ed fire-and-forget
+  // call site (every real call site in routes/) does nothing to handle a
+  // REJECTED promise. Left unhandled, Node treats that as a crash. The outer
+  // try/catch is what turns this into a resolved promise instead, and that is
+  // exactly what this test would catch if it were removed.
+  const bareDb = new Database(':memory:');
+  await assert.doesNotReject(() => scheduleRollup(bareDb, 't1', null));
+  bareDb.close();
+});
+
 test('a deleted roll-up column self-disables the project and notifies once', async () => {
   const db = getDb(':memory:');
   seed(db);
@@ -117,14 +140,53 @@ test('a deleted roll-up column self-disables the project and notifies once', asy
   db.close();
 });
 
-test('disableRollupForProject preserves the rest of the project config', () => {
+test('disableRollupForProject is idempotent — calling it twice notifies exactly once', () => {
+  // Exercises disableRollupForProject directly, not through scheduleRollup:
+  // the sequential double-call test above passes because scheduleRollupForItem
+  // gates on `projectCfg.rollup.enabled` before ever reaching this function
+  // again — it never proves disableRollupForProject itself is idempotent.
+  // Two task moves racing against the same project's configuration error
+  // could both reach this function before either write has landed, which is
+  // exactly what a direct double-call simulates.
   const db = getDb(':memory:');
   seed(db);
   disableRollupForProject(db, 'p1', 'column deleted');
-  const cfg = readConfig(db);
-  assert.equal(cfg.rollup.enabled, false);
-  assert.equal(cfg.board_id, 'b1', 'scope must survive');
-  assert.equal(cfg.updates.min_interval_minutes, 30);
+  assert.equal(readConfig(db).rollup.enabled, false);
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c, 1);
+
+  disableRollupForProject(db, 'p1', 'column deleted');
+  assert.equal(readConfig(db).rollup.enabled, false);
+  assert.equal(
+    (db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c,
+    1,
+    'a second call against an already-disabled project must not notify again',
+  );
+  delete process.env.MONDAY_TOKEN;
+  db.close();
+});
+
+test('disableRollupForProject preserves the rest of the project config', () => {
+  const db = getDb(':memory:');
+  seed(db);
+  // seed()'s config_json carries ONLY a `monday` key, which would let this
+  // test pass even if disableRollupForProject clobbered every non-Monday key
+  // in the blob — it would just never be caught. Inject an unrelated
+  // top-level key (the shape a real project config carries alongside
+  // `monday`; see ProjectConfig in shared) so "preserves the rest" actually
+  // exercises a non-Monday key surviving untouched.
+  const before = db.prepare('SELECT * FROM projects WHERE id = ?').get('p1') as Project;
+  const seededCfg = JSON.parse(before.config_json) as Record<string, unknown>;
+  seededCfg.column_defaults = { triage: 'todo' };
+  db.prepare('UPDATE projects SET config_json = ? WHERE id = ?').run(JSON.stringify(seededCfg), 'p1');
+
+  disableRollupForProject(db, 'p1', 'column deleted');
+
+  const after = db.prepare('SELECT * FROM projects WHERE id = ?').get('p1') as Project;
+  const cfg = JSON.parse(after.config_json) as { monday: MondayProjectConfig; column_defaults?: unknown };
+  assert.equal(cfg.monday.rollup.enabled, false);
+  assert.equal(cfg.monday.board_id, 'b1', 'scope must survive');
+  assert.equal(cfg.monday.updates.min_interval_minutes, 30);
+  assert.deepEqual(cfg.column_defaults, { triage: 'todo' }, 'a non-Monday config key must survive untouched');
   delete process.env.MONDAY_TOKEN;
   db.close();
 });

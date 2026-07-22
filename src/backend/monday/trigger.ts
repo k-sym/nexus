@@ -36,7 +36,11 @@ export function disableRollupForProject(db: Database.Database, projectId: string
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
   if (!project) return;
   const parsed = JSON.parse(project.config_json || '{}') as { monday?: MondayProjectConfig };
-  if (!parsed.monday) return;
+  // Idempotent: no monday config, no rollup sub-key (a legacy config blob that
+  // predates it), or roll-up already disabled — nothing left to do. Without
+  // this, two task moves racing against the same project's configuration
+  // error would each reach this function and each insert a notification.
+  if (!parsed.monday?.rollup?.enabled) return;
   parsed.monday.rollup.enabled = false;
   db.prepare('UPDATE projects SET config_json = ?, updated_at = ? WHERE id = ?')
     .run(JSON.stringify(parsed), new Date().toISOString(), projectId);

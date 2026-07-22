@@ -61,8 +61,20 @@ function errorMessage(e: GraphqlErrorEntry): string {
   return e.message ?? 'unknown error';
 }
 
+/** A legacy plain-string error carries no `extensions.code` at all, so a
+ *  deleted column reported this way would never match a configuration-error
+ *  code and would retry forever instead of self-disabling. Monday's message
+ *  for that specific case names the column explicitly. Deliberately narrow:
+ *  only a message that says a column wasn't found is reclassified — a plain
+ *  auth or rate-limit string in this same legacy shape must keep code
+ *  undefined, or a transient failure could disable a working integration. */
+const LEGACY_MISSING_COLUMN = /column\b.*(not found|does(?:n't| not) exist)/i;
+
 function errorCode(e: GraphqlErrorEntry): string | undefined {
-  return typeof e === 'string' ? undefined : e.extensions?.code;
+  if (typeof e === 'string') {
+    return LEGACY_MISSING_COLUMN.test(e) ? 'ColumnValueException' : undefined;
+  }
+  return e.extensions?.code;
 }
 
 export interface RawMondayColumnValue {

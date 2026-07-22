@@ -12,7 +12,8 @@ import { detectGitRemote } from '../github/repo.js';
 import { syncGitHubIssues, ensureProjectGitRemote, noteSyncError, clearSyncError } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
 import { loadConfig } from '../config.js';
-import { scheduleRollup } from '../monday/trigger.js';
+import { scheduleRollup, scheduleRollupForItem } from '../monday/trigger.js';
+import { getLinkForTask, unlinkTask } from '../monday/store.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
 function expandHome(p: string): string {
@@ -600,7 +601,24 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
   fastify.delete('/api/tasks/:id', async (request) => {
     const { id } = request.params as { id: string };
+    // Capture the link BEFORE deleting the task: task_monday_links has no FK
+    // or cascade tying it to the task row, so once the task is gone there is
+    // no way back to the item id it was rolled up into. Same shape as the
+    // unlink handler in routes/monday.ts.
+    const existing = getLinkForTask(db, id);
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    if (existing) {
+      // The link row is just as orphan-prone as the task row was: remove it
+      // now, or it accumulates forever and keeps counting toward a roll-up
+      // for a task that no longer exists.
+      unlinkTask(db, id);
+      // Recompute the item this task was linked to, or its roll-up keeps a
+      // count that still includes the deleted task until some sibling task
+      // happens to move. Fire-and-forget (void, no await): the delete above
+      // already committed and a slow or failing Monday call must never delay
+      // or fail it.
+      void scheduleRollupForItem(db, existing.item_id, existing.project_id, null);
+    }
     return { success: true };
   });
 }

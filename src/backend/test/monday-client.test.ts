@@ -93,6 +93,31 @@ test('a legacy string-array errors shape preserves the real message', async () =
   );
 });
 
+test('a legacy string-array error naming a missing column is classified as a configuration error', async () => {
+  const fakeFetch = async () => jsonResponse({ errors: ['Column "text_1" not found on board'] });
+  await assert.rejects(
+    () => mondayGraphql({ ...OPTS, fetchImpl: fakeFetch as any }, 'query { ok }', {}),
+    (err: unknown) => {
+      assert.ok(err instanceof MondayError);
+      assert.equal(err.code, 'ColumnValueException');
+      assert.match(err.message, /not found/);
+      return true;
+    },
+  );
+});
+
+test('a legacy string-array error unrelated to a missing column stays unclassified (must not disable a working integration)', async () => {
+  const fakeFetch = async () => jsonResponse({ errors: ['Rate limit exceeded, try again later'] });
+  await assert.rejects(
+    () => mondayGraphql({ ...OPTS, fetchImpl: fakeFetch as any }, 'query { ok }', {}),
+    (err: unknown) => {
+      assert.ok(err instanceof MondayError);
+      assert.equal(err.code, undefined);
+      return true;
+    },
+  );
+});
+
 test('complexity exhaustion is surfaced as a retryable error', async () => {
   const fakeFetch = async () => jsonResponse({
     errors: [{ message: 'Complexity budget exhausted', extensions: { code: 'ComplexityException' } }],
