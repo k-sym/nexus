@@ -162,6 +162,25 @@ export function ensureVaultDir(vaultPath: string): void {
   }
 }
 
+/**
+ * Parse the raw config.yaml text into the overrides layered over the defaults.
+ *
+ * An empty file means "no overrides" — that is what the old `|| {}` fallback
+ * expressed, but js-yaml 5 (#226) throws `expected a document, but the input is
+ * empty` where js-yaml 4 returned `undefined`, so the empty case has to be
+ * caught before the parse. Otherwise a zero-byte config.yaml — left by a
+ * crashed editor, a full disk, or a user emptying the file — takes the whole
+ * backend down at startup instead of falling back to defaults.
+ *
+ * Malformed YAML still throws: a corrupt config must fail loudly rather than
+ * silently resolve to defaults that the next save would persist over the
+ * user's real settings.
+ */
+export function parseConfigYaml(raw: string): Partial<NexusConfig> {
+  if (raw.trim() === '') return {};
+  return (yaml.load(raw) as Partial<NexusConfig>) || {};
+}
+
 export function loadConfig(): NexusConfig {
   ensureNexusDir();
 
@@ -173,7 +192,7 @@ export function loadConfig(): NexusConfig {
   }
 
   const raw = fs.readFileSync(configPath(), 'utf-8');
-  const parsed = (yaml.load(raw) as Partial<NexusConfig>) || {};
+  const parsed = parseConfigYaml(raw);
   // Deep-merge over defaults so configs written by older versions (missing
   // nested keys like models.local) still load with sane fallbacks rather than
   // producing `undefined` and crashing at access time.
@@ -214,8 +233,15 @@ export function saveConfig(config: NexusConfig): void {
   // half-written one.
   const target = configPath();
   const tmp = `${target}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, yamlStr, 'utf-8');
-  fs.renameSync(tmp, target);
+  try {
+    fs.writeFileSync(tmp, yamlStr, 'utf-8');
+    fs.renameSync(tmp, target);
+  } catch (err) {
+    // A failed write (full disk, permissions) would otherwise strand the temp
+    // file next to the config it never replaced.
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 export function resolveEnvVars(value: string): string {
