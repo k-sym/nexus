@@ -1,0 +1,64 @@
+name: Glasses quality
+
+# src/glasses had no CI at all: `frontend-quality` is path-filtered to
+# src/frontend/**, and `dependency-audit` only audits manifests. So its 9 tests,
+# its typecheck and its 225 KB entry-bundle budget only ever ran on a laptop.
+#
+# `src/glasses` is deliberately NOT an npm workspace (it ships as its own Even Hub
+# app with its own lockfile), so every step runs with --no-workspaces and the npm
+# cache is keyed on the glasses lockfile rather than the root one.
+
+on:
+  pull_request:
+    paths:
+      - src/glasses/**
+      - .github/workflows/glasses-quality.yml
+  push:
+    branches:
+      - main
+    paths:
+      - src/glasses/**
+      - .github/workflows/glasses-quality.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glasses-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Test, typecheck, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/glasses/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/glasses
+        run: npm ci --no-workspaces
+
+      - name: Run glasses tests
+        working-directory: src/glasses
+        run: npm test
+
+      # `npm run build` is tsc --noEmit && vite build && check-bundle-size.mjs.
+      # Typecheck runs first as its own step so a type error reads as a type error
+      # rather than as a build failure; the build then re-runs it, which is cheap.
+      - name: Typecheck glasses
+        working-directory: src/glasses
+        run: npx tsc --noEmit
+
+      - name: Build glasses (enforces the 225 KB entry-bundle budget)
+        working-directory: src/glasses
+        run: npm run build
