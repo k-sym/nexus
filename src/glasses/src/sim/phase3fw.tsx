@@ -13,9 +13,11 @@ const REPLY_COLS = 42, REPLY_ROWS = 7 // reply pagination for the detail body
 
 const LINE = 0xffffff as never // the one deliberate border (detail header bar)
 
-const GLYPH = { needs: '◆', live: '⊙', idle: '○' } as const
-// ✳ is TOFU on the firmware font; ★ renders and reads as "special".
-const badgeChar = (g: string) => (g === '✳' ? '★' : g)
+// Kept in step with AppGlasses3c's GLYPH so the prototype and the shipping UI don't
+// disagree about what a row means.
+const GLYPH = { needs: '★', live: '⊙', idle: '○' } as const
+// ✳ is TOFU on the firmware font; ※ renders and reads as "an aside" (the Assistant).
+const badgeChar = (g: string) => (g === '✳' ? '※' : g)
 
 type Screen = 'projects' | 'sessions' | 'detail'
 

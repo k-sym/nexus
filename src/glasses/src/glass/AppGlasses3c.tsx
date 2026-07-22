@@ -38,9 +38,14 @@ const BORDER = 0xffffff as never // maps to green on the monochrome lens
 // Sentinel row id for the "speak your answer" option on the question screen.
 const SPEAK = '__speak__'
 
-// Locked status glyphs (verified to render in a firmware LIST): ◆ needs you,
-// ⊙ live (running), ○ idle. ★ is the Assistant PROJECT badge (see projBadge).
-const GLYPH = { needs: '◆', live: '⊙', idle: '○' } as const
+// Locked status glyphs (verified to render in a firmware LIST): ★ needs you,
+// ⊙ live (running), ○ idle. ※ is the Assistant PROJECT badge (see projBadge).
+//
+// ★ rather than the filled ◆ it replaced: at 320/16px the diamond is a solid block
+// that shouts louder than "one session is waiting" deserves, while the star reads as
+// a mark against a row. ★ was free because the Assistant badge moved to ※, which is
+// a reference mark — an aside, which is what the Assistant is next to real projects.
+const GLYPH = { needs: '★', live: '⊙', idle: '○' } as const
 // Verified to render in a firmware LIST (so safe anywhere) — marks a measured truncation.
 const ELLIPSIS = '…'
 function sessionGlyph(s: SessionSummary): string {
@@ -57,7 +62,7 @@ export interface ProjGroup { key: string; name: string; badge: string; asst: boo
  *  badge backfill hasn't run; it mirrors the shared derivation closely enough for a
  *  rail letter (initials of a multi-word name, else the first three letters). */
 function projBadge(name: string, asst: boolean, badge?: string): string {
-  if (asst) return '★' // the Assistant project reads as "special"
+  if (asst) return '※' // reference mark — the Assistant is an aside, not a project
   const given = (badge ?? '').replace(/[^a-z0-9]/gi, '').slice(0, 3).toUpperCase()
   if (given) return given
   const words = name.split(/[\s_-]+/).filter((w) => /[a-z0-9]/i.test(w))

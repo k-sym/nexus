@@ -17,6 +17,10 @@ const GEOMETRIC = [
   'dots  · • ∙ ‣ ◦ ⁃ ⋮ ⋯ …',
   'bars  │ ┃ ▌ █ ░ ▒ ▓ ═ ─',
   'live  ⟳ ↻ ↺ ⇄ ⧗ ⧖ ⚑ ⚐ ⏻',
+  // Marks — ※ is the Assistant badge, so it has to be confirmed on glass, not just
+  // in the metrics table (a non-zero advance width says the font knows a codepoint,
+  // not that the firmware draws it).
+  'marks ※ ‡ † § ¶ ⁂ ⌁ ✻ ☆',
 ]
 
 // LVGL / FontAwesome symbol codepoints (private use area). If the firmware font
