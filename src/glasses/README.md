@@ -101,6 +101,34 @@ in dev), and Connect. Trigger a tool call in any Claude Code session that has th
 cockpit hook installed — it appears under **Approvals waiting**; Allow/Deny releases
 it.
 
+## In the browser (`?sim=preview`)
+
+The fastest way to look at the HUD — no hardware, no simulator install:
+
+```bash
+npm --prefix src/glasses run dev     # then open http://localhost:5273/?sim=preview
+```
+
+It draws the **real composed page**: `composeCockpitPage()` builds the same
+`GlassesPage` the glasses receive, and the preview paints that page's own element
+coordinates and content. It cannot drift from the shipping UI the way a hand-drawn
+mockup would — change the layout in `AppGlasses3c.tsx` and the preview changes with it.
+
+- Pickers for fixture (`list`, `detail-*`, `approval`, `question*`), screen, and project
+  index, so every screen is reachable — including `approval`, which has no live path
+  without Supervise on.
+- A per-element readout (`type`, `x,y`, `w×h`, content) underneath — useful when a
+  label is being truncated and you want to know by how much.
+- Text is measured with `@evenrealities/pretext`, the same LVGL metrics the firmware
+  uses, and each glyph is placed at its true advance — so **line breaks and overflow
+  are accurate**, which is the thing worth previewing.
+- The `interrupt` screen renders its actual bitmap hero; `?sim=lab-*` mockups now draw
+  in the browser as well as pushing to the lens.
+
+Exact: geometry, text, line breaks, advances. Approximate: glyph shapes (the lens font
+isn't available to a browser) and the firmware's internal container padding. **For
+pixel truth, use the simulator below** — it runs the real LVGL renderer.
+
 ## On the simulator
 
 The [`evenhub-simulator`](https://www.npmjs.com/package/@evenrealities/evenhub-simulator)

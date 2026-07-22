@@ -96,9 +96,14 @@ function drawGestureFooter(ctx: CanvasRenderingContext2D, cx: number, baseY: num
   ctx.restore()
 }
 
-/** Render the interrupt hero and return positioned, encoded image tiles. */
-export function renderInterruptHero(name: string, reason: string): HeroTile[] {
-  const canvas = document.createElement('canvas')
+/**
+ * Paint the hero band onto a caller-supplied canvas.
+ *
+ * Split from renderInterruptHero so the browser preview (sim/preview.tsx) can show
+ * this screen too — it needs the pixels, not the encoded BLE tiles. The band is
+ * drawn at the canvas origin; the caller places it (on the lens it sits at BAND_Y).
+ */
+export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reason: string): void {
   canvas.width = COLS * TW  // 600
   canvas.height = TH        // 144
   const ctx = canvas.getContext('2d')!
@@ -121,6 +126,15 @@ export function renderInterruptHero(name: string, reason: string): HeroTile[] {
   ctx.fillText(`${clip(name, 30)}  ·  ${reason}`, cx, 116)
 
   drawGestureFooter(ctx, cx, 138)
+}
+
+/** The hero band's on-lens geometry, so a preview can place it as the firmware does. */
+export const HERO_BAND = { y: BAND_Y, w: COLS * TW, h: TH }
+
+/** Render the interrupt hero and return positioned, encoded image tiles. */
+export function renderInterruptHero(name: string, reason: string): HeroTile[] {
+  const canvas = document.createElement('canvas')
+  paintInterruptHero(canvas, name, reason)
 
   const tiles: HeroTile[] = []
   for (let i = 0; i < COLS; i++) {

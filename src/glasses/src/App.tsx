@@ -8,6 +8,7 @@ const Lab = lazy(() => import('./sim/Lab').then(module => ({ default: module.Lab
 const Phase3App = lazy(() => import('./sim/phase3').then(module => ({ default: module.Phase3App })))
 const Phase3FW = lazy(() => import('./sim/phase3fw').then(module => ({ default: module.Phase3FW })))
 const Glyphs = lazy(() => import('./sim/glyphs').then(module => ({ default: module.Glyphs })))
+const Preview = lazy(() => import('./sim/preview').then(module => ({ default: module.Preview })))
 const AppGlasses3c = lazy(() => import('./glass/AppGlasses3c').then(module => ({ default: module.AppGlasses3c })))
 
 function LoadingView() {
@@ -277,6 +278,8 @@ export function App() {
   if (simName === 'p3') return <Suspense fallback={<LoadingView />}><Phase3App /></Suspense>
   if (simName === 'fw') return <Suspense fallback={<LoadingView />}><Phase3FW /></Suspense>
   if (simName === 'glyphs') return <Suspense fallback={<LoadingView />}><Glyphs /></Suspense>
+  // The only route that draws the HUD in the browser rather than on the lens.
+  if (simName === 'preview') return <Suspense fallback={<LoadingView />}><Preview /></Suspense>
   // Show Connect when there's no saved hub, or when the user asked to change it.
   if (!baseUrl || forceConnect) return <Connect />
   // Simulator fixture mode (?sim=): the store is pre-seeded, so skip the live feed

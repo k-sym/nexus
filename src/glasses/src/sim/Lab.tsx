@@ -5,7 +5,7 @@
 // white/greys and the display tints it green.
 //
 // Not shipped in production: lazy-imported only when App sees `?sim=lab-*`.
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import {
   CreateStartUpPageContainer,
@@ -304,13 +304,41 @@ async function pushFullScreen(draw: Draw): Promise<string> {
   return `update tiles=${pushed}/${tiles.length} changed`
 }
 
-/** Renders nothing to the DOM; on mount it pushes the named mockup to the lens. */
+/**
+ * Pushes the named mockup to the lens, and also draws it in the browser.
+ *
+ * These are pure-canvas designs, so showing them costs one extra draw — worth it
+ * because otherwise reviewing a mockup means putting the glasses on. The lens push
+ * is unchanged and still the source of truth for how it really looks.
+ */
 export function Lab({ name }: { name: string }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
   useEffect(() => {
     const draw = MOCKS[name]
-    if (draw) pushFullScreen(draw).catch((e) => console.error('[lab] render failed', e))
+    if (!draw) return
+    pushFullScreen(draw).catch((e) => console.error('[lab] render failed', e))
+    const ctx = canvasRef.current?.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(2, 0, 0, 2, 0, 0) // 2× so it is legible on a desktop
+    ctx.fillStyle = '#000'
+    ctx.fillRect(0, 0, W, H)
+    draw(ctx)
   }, [name])
-  return null
+
+  return (
+    <div style={{ padding: 20, background: '#0b0f10', minHeight: '100vh', fontFamily: 'ui-monospace, monospace' }}>
+      <p style={{ color: '#cfe', fontSize: 12, margin: '0 0 12px', opacity: 0.7 }}>
+        {name} — design mockup (also pushed to the lens)
+      </p>
+      <canvas
+        ref={canvasRef}
+        width={W * 2}
+        height={H * 2}
+        style={{ width: `min(100%, ${W * 2}px)`, aspectRatio: `${W} / ${H}`, border: '1px solid #243', display: 'block' }}
+      />
+    </div>
+  )
 }
 
 // Reusable primitives + tile push for the Phase 3 live renderer (see phase3.tsx).
