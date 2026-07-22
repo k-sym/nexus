@@ -1186,6 +1186,32 @@ nexus/
 npm run build      # shared → backend → frontend → memory daemon  (the Tauri shell builds separately via tauri:build / dist)
 ```
 
+### Rebuild + restart the backend service
+
+When the backend runs as a **service** (the `com.k-sym.nexus-backend` LaunchAgent, or the desktop
+app) rather than under `npm run dev:backend`, it executes built output from `src/backend/dist/` —
+so editing TypeScript changes nothing until you rebuild *and* restart the long-lived process:
+
+```bash
+npm run restart:backend
+```
+
+Builds `@nexus/shared` then `@nexus/backend`, restarts the LaunchAgent via
+`launchctl kickstart -k`, and polls `/api/health` until it answers (30s timeout, after which it
+tails `~/Library/Logs/nexus-backend.log` so a failed boot shows you why).
+
+- `npm run restart:backend -- --skip-build` restarts without rebuilding.
+- It warns when `package-lock.json` is newer than the installed `node_modules` — after pulling or
+  rebasing onto a commit that regenerated the lockfile, run `npm install` first. A build against a
+  stale tree compiles fine and then dies at *runtime*, with nothing useful in the log.
+- Shared is built first on purpose: the backend imports `@nexus/shared`, and a stale `shared/dist`
+  compiles the backend against outdated types **without erroring**.
+- The health check reads `server.port` from `~/.nexus/config.yaml` (default `4173`).
+- If the LaunchAgent isn't installed, it falls back to a foreground `node dist/index.js`.
+- It does **not** touch the memory daemon (`com.k-sym.nexus-memory`) or the frontend.
+
+Not needed under `npm run web` / `npm run dev:backend` — those run `tsx watch` with live reload.
+
 ### Type-check
 
 ```bash
@@ -1225,7 +1251,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 | `409 model_busy` / `project_busy` on a chat turn | Another run holds the per-`(project, model)` or project-wide slot. Retry with `X-Confirm-Cancel: true` to abort the holder first, or pick a different model. See issue #95. |
 | OAuth flow stuck | **Settings → Auth** polls the flow; if a provider needs a manual callback, the flow UI accepts the value via `/api/auth/oauth/:flowId/respond`. Cancel with `/api/auth/cancel-oauth` and retry. |
 | Hermes-style remote endpoint fails | Ensure `HERMES_API_KEY` is exported in the backend's environment before launching (or the endpoint's auth is otherwise configured); the key is never stored in git. |
-| Jira tickets don't appear | Check, in order: (1) **Settings → Jira** is *Enabled* and you **restarted the backend** afterwards (config is read once at startup); (2) `JIRA_TOKEN` is exported in the shell that launched the backend; (3) the **account email** is the one that owns the token — a wrong email returns an empty result, not an error, so it looks like "no tickets". The instance host accepts a bare host or a full `https://…` URL. |
+| Jira tickets don't appear | Check, in order: (1) **Settings → Jira** is *Enabled* and you **restarted the backend** afterwards (config is read once at startup — `npm run restart:backend` if it runs as a service); (2) `JIRA_TOKEN` is exported in the shell that launched the backend; (3) the **account email** is the one that owns the token — a wrong email returns an empty result, not an error, so it looks like "no tickets". The instance host accepts a bare host or a full `https://…` URL. |
 | GitHub issues don't mirror into Triage | Run `gh auth login` or set `GITHUB_TOKEN`; confirm **Settings → GitHub** is enabled; ensure the project's repo has a detected remote (`git_remote` on the project). Sync runs on Kanban open. |
 
 ---
