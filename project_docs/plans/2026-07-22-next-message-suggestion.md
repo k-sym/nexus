@@ -1077,6 +1077,14 @@ git commit -m "feat(frontend): offer a next-message suggestion in the assistant 
 
 ## Manual verification
 
+**Precondition: the gen server must have thinking disabled.** A reasoning model spends its entire
+token budget on hidden reasoning and returns empty `content` with `finish_reason: "length"` —
+verified against `Ornith-1.0-35B-Q8_0` on `:8081`, where even a 512-token budget produced nothing.
+`ModelClient.complete()` detects this and throws a non-retryable `config` ModelError, so the
+suggestion degrades silently to "no placeholder" and you will chase a feature that looks dead.
+`generate-session-title` shares the code path, so the same server breaks session auto-naming — if
+new sessions are stuck on the "New Session" placeholder, that is the symptom.
+
 Automated tests cover the wiring; they cannot tell you whether the suggestions are any *good*. That is the real acceptance criterion, and it needs a human.
 
 Run the stack:
