@@ -10,7 +10,7 @@
  * `db` at app-boot in index.ts, not a bespoke `{ db }` deps argument.
  */
 import type { FastifyInstance } from 'fastify';
-import type { MondayProjectConfig, MondayItemWithLinks, Project } from '@nexus/shared';
+import type { MondayProjectConfig, MondayItemWithLinks, Project, Task } from '@nexus/shared';
 import { loadConfig } from '../config.js';
 import { resolveMondayToken } from '../monday/poll.js';
 import { syncScope } from '../monday/sync.js';
@@ -106,9 +106,11 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.get('/api/monday/projects/:projectId/links', async (request) => {
+  fastify.get('/api/monday/projects/:projectId/links', async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    return { links: listLinksForProject(db, projectId) };
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
+    if (!project) return reply.code(404).send({ error: 'project not found' });
+    return { links: listLinksForProject(db, project.id) };
   });
 
   fastify.post('/api/monday/links', async (request, reply) => {
@@ -117,6 +119,22 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     if (!taskId || !itemId || !projectId) {
       return reply.code(400).send({ error: 'task_id, item_id and project_id are required' });
     }
+
+    // The table has no FK constraints, so without these checks a caller can
+    // link a task_id that doesn't exist (an orphan `/links` surfaces forever)
+    // or attach a task from project A to project B's link list, silently
+    // polluting B's roll-up. 404 for unknown ids matches the "project not
+    // found" convention already used by GET /items and /search; 400 for a
+    // well-formed-but-inconsistent combination matches the 400 this same
+    // handler already returns for missing fields.
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Task | undefined;
+    if (!task) return reply.code(404).send({ error: 'task not found' });
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
+    if (!project) return reply.code(404).send({ error: 'project not found' });
+    if (task.project_id !== projectId) {
+      return reply.code(400).send({ error: 'task does not belong to that project' });
+    }
+
     const link = { task_id: taskId, item_id: itemId, project_id: projectId, created_at: new Date().toISOString() };
     linkTask(db, link);
     return { link };
