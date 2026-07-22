@@ -34,6 +34,7 @@ import { registerMondayRoutes } from './routes/monday.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMondayPoll } from './monday/poll.js';
+import { buildMondayContext, buildMondayToolDeps } from './monday/session-deps.js';
 import { startMissionScheduler } from './missions/runner.js';
 import { ActivityManager } from './activity/manager.js';
 import { PiRuntime, defaultPiRuntimePaths } from './pi/runtime.js';
@@ -54,6 +55,8 @@ async function main() {
   const db = getDb(getDbPath());
   const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
     recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
+    mondayContext: (threadId) => buildMondayContext(db, threadId),
+    mondayTools: (threadId) => buildMondayToolDeps(db, threadId),
   });
 
   const openRouterKey = resolveOpenRouterKey(config);
