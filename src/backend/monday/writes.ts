@@ -13,7 +13,7 @@
  * to say something.
  */
 import type Database from 'better-sqlite3';
-import type { MondayProjectConfig } from '@nexus/shared';
+import type { MondayItem, MondayProjectConfig } from '@nexus/shared';
 import { setSimpleColumnValue, createUpdate, type MondayClientOptions } from './client.js';
 import { computeRollup, formatRollupText, formatRollupPercent } from './rollup.js';
 import { listLinkedTaskStatuses, getItem } from './store.js';
@@ -28,12 +28,19 @@ export class UpdateThrottle {
   /**
    * Record an event. Returns the events to post NOW (leading edge), or null
    * when the event was queued for the trailing flush.
+   *
+   * A leading-edge fire must also take and clear anything already pending —
+   * otherwise an event that lands exactly on the boundary posts alone, out of
+   * order, and strands the queue behind a newly-reset window (each such event
+   * would defer the stranded batch another full window).
    */
   record(itemId: string, event: string, now: number): string[] | null {
     const last = this.lastPostAt.get(itemId);
     if (last === undefined || now - last >= this.windowMs) {
       this.lastPostAt.set(itemId, now);
-      return [event];
+      const queued = this.pending.get(itemId);
+      this.pending.delete(itemId);
+      return queued && queued.length > 0 ? [...queued, event] : [event];
     }
     const queue = this.pending.get(itemId) ?? [];
     queue.push(event);
@@ -68,12 +75,29 @@ export interface RollupWriteDeps {
 
 const DEFAULT_DEPS: RollupWriteDeps = { setColumn: setSimpleColumnValue, postUpdate: createUpdate };
 
-/** Last value written per item, so an unchanged roll-up never re-writes. */
-const lastWritten = new Map<string, string>();
+/** What Nexus itself last wrote for one item+column, and the mirror snapshot
+ *  (its `synced_at`) that was already stale at the moment of that write. */
+interface WriteRecord {
+  value: string;
+  syncedAt: string;
+}
+
+/** Last value written per item+column, so an unchanged roll-up never re-writes. */
+const lastWritten = new Map<string, WriteRecord>();
 
 /** Test helper: clear the in-memory last-written cache between cases. */
 export function __resetWriteState(): void {
   lastWritten.clear();
+}
+
+/** The mirror's own stored text for one column, or null if unset/unknown. */
+function mirrorColumnText(item: MondayItem, columnId: string): string | null {
+  try {
+    const cols = JSON.parse(item.column_values_json) as Record<string, { text?: string | null } | undefined>;
+    return cols[columnId]?.text ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -83,6 +107,18 @@ export function __resetWriteState(): void {
  *
  * A numeric roll-up column receives the percentage; anything else receives the
  * text form. The column type was resolved when the column was configured.
+ *
+ * The skip decision is self-healing rather than a pure in-memory diff. Two
+ * signals are available: what Nexus itself last wrote for this item+column,
+ * and the mirror row's stored column text plus its `synced_at`. The mirror is
+ * only refreshed periodically, so immediately after Nexus writes it still
+ * holds the OLD value — comparing against it naively would rewrite on every
+ * trigger (e.g. every Kanban drag), which is the trap. So: as long as the
+ * mirror snapshot in hand is the SAME one that was already stale when Nexus
+ * last wrote (same `synced_at`), trust Nexus's own memory of what it wrote.
+ * Only once the mirror has actually refreshed to a new snapshot is its stored
+ * value trusted as ground truth — which is what lets a human's edit or clear
+ * (only visible after that refresh) be detected and restored.
  */
 export async function writeRollup(
   db: Database.Database,
@@ -102,17 +138,44 @@ export async function writeRollup(
     : formatRollupText(counts);
 
   const cacheKey = `${itemId}::${cfg.rollup.column_id}`;
-  if (lastWritten.get(cacheKey) === value) return 'unchanged';
+  const cached = lastWritten.get(cacheKey);
+  const mirrorStale = cached !== undefined && cached.syncedAt === item.synced_at;
+  const baseline = mirrorStale ? cached.value : mirrorColumnText(item, cfg.rollup.column_id);
+
+  if (baseline === value) {
+    lastWritten.set(cacheKey, { value, syncedAt: item.synced_at });
+    return 'unchanged';
+  }
 
   await deps.setColumn(opts, item.board_id, itemId, cfg.rollup.column_id, value);
-  lastWritten.set(cacheKey, value);
+  lastWritten.set(cacheKey, { value, syncedAt: item.synced_at });
   return 'written';
+}
+
+/** Monday update bodies are HTML: escape the five characters that could open
+ *  markup or an attribute, so agent-authored text can only ever render as
+ *  inert text — never as a tag, and never as a forged copy of the provenance
+ *  line's own `<br><br>` formatting. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
  * Post to an item's updates feed. `provenance` names the Nexus task and thread
  * for agent-authored updates so a human reading Monday never has to guess who
  * wrote it; pass null for Nexus's own automated notes.
+ *
+ * `body` is agent-authored and is HTML-escaped before use: Monday renders
+ * update bodies as HTML, so raw agent text could otherwise inject markup or
+ * forge its own convincing "posted by Nexus on behalf of ..." line using the
+ * same formatting as the real one. The real provenance line is appended after
+ * escaping, with an actual `<br><br>` line break (not `\n\n`, which does not
+ * render as a break in HTML) so it never runs into the body text.
  */
 export async function postItemUpdate(
   db: Database.Database,
@@ -122,6 +185,7 @@ export async function postItemUpdate(
   provenance: string | null,
   deps: RollupWriteDeps = DEFAULT_DEPS,
 ): Promise<void> {
-  const full = provenance ? `${body}\n\n— posted by Nexus on behalf of ${provenance}` : body;
+  const escaped = escapeHtml(body);
+  const full = provenance ? `${escaped}<br><br>— posted by Nexus on behalf of ${provenance}` : escaped;
   await deps.postUpdate(opts, itemId, full);
 }

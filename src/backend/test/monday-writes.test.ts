@@ -62,12 +62,41 @@ test('nothing is due before the window elapses', () => {
   assert.deepEqual(throttle.due(20 * MINUTE), []);
 });
 
-test('draining resets the window so the next isolated event posts immediately', () => {
+// A boundary-straddling event must not starve whatever is already pending:
+// t=0 posts and opens the window; t=1min queues; t=31min satisfies the
+// window from t=0, but must carry 'second' out with it, in order, rather
+// than resetting the window and stranding 'second' for another 30 minutes.
+test('a leading-edge fire drains anything already pending, in order, leaving nothing stranded', () => {
+  const throttle = new UpdateThrottle(30 * MINUTE);
+  assert.deepEqual(throttle.record('1', 'first', 0), ['first']);
+  assert.equal(throttle.record('1', 'second', 1 * MINUTE), null);
+  assert.deepEqual(throttle.record('1', 'third', 31 * MINUTE), ['second', 'third']);
+  // Nothing left stranded in the pending queue.
+  assert.deepEqual(throttle.due(31 * MINUTE), []);
+  assert.deepEqual(throttle.drain('1', 31 * MINUTE), []);
+});
+
+// The probe (40min) is chosen to discriminate: it is only 9min after the
+// drain at t=31 (so a correctly-reset window must still QUEUE it), but 40min
+// after the original post at t=0 (so a drain that failed to update
+// lastPostAt would incorrectly post it immediately). A probe far past both
+// reference points -- e.g. 90min -- would pass either way and prove nothing.
+test('draining resets the window so a probe soon after is still queued, not posted', () => {
   const throttle = new UpdateThrottle(30 * MINUTE);
   throttle.record('1', 'first', 0);
   throttle.record('1', 'second', 1 * MINUTE);
   throttle.drain('1', 31 * MINUTE);
-  assert.deepEqual(throttle.record('1', 'later', 90 * MINUTE), ['later']);
+  assert.equal(throttle.record('1', 'probe', 40 * MINUTE), null);
+});
+
+test('draining an empty pending queue returns [] and does not disturb the window', () => {
+  const throttle = new UpdateThrottle(30 * MINUTE);
+  assert.deepEqual(throttle.record('1', 'first', 0), ['first']);
+  assert.deepEqual(throttle.drain('1', 10 * MINUTE), []);
+  // If drain had incorrectly reset the window to t=10, this event (only
+  // 25min after that drain) would still be queued. The window is anchored to
+  // the original post at t=0, so 35min after that must fire immediately.
+  assert.deepEqual(throttle.record('1', 'second', 35 * MINUTE), ['second']);
 });
 
 test('throttling is per item', () => {
@@ -92,16 +121,34 @@ test('writeRollup writes the formatted text to the configured column', async () 
   db.close();
 });
 
-test('a numeric column receives the percentage, not the text form', async () => {
+// Column ids are user-renamable, so the format decision must come from
+// `column_type`, never from sniffing the id string. Each test below makes the
+// id and the type disagree, in both directions, so an id-sniffing
+// implementation would fail.
+
+test('a TEXT-looking column id with column_type numeric receives the percentage', async () => {
   const db = getDb(':memory:');
   seedItem(db);
   seedTasks(db, ['deploy', 'deploy', 'todo']);
   const calls: unknown[][] = [];
-  await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: 'numbers_9', column_type: 'numeric' } }), '1', {
+  await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: 'status_text', column_type: 'numeric' } }), '1', {
     setColumn: async (...args: unknown[]) => { calls.push(args); },
     postUpdate: async () => {},
   } as any);
   assert.equal(calls[0][4], '67');
+  db.close();
+});
+
+test('a NUMBER-looking column id with column_type text receives the text form', async () => {
+  const db = getDb(':memory:');
+  seedItem(db);
+  seedTasks(db, ['deploy', 'deploy', 'todo']);
+  const calls: unknown[][] = [];
+  await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: 'numbers_9', column_type: 'text' } }), '1', {
+    setColumn: async (...args: unknown[]) => { calls.push(args); },
+    postUpdate: async () => {},
+  } as any);
+  assert.equal(calls[0][4], '2/3 done');
   db.close();
 });
 
@@ -113,6 +160,57 @@ test('writeRollup skips an unchanged value', async () => {
   await writeRollup(db, OPTS, cfg(), '1', deps);
   const second = await writeRollup(db, OPTS, cfg(), '1', deps);
   assert.equal(second, 'unchanged');
+  db.close();
+});
+
+// The trap: right after Nexus writes, the mirror (only refreshed
+// periodically) still shows the OLD value at the SAME synced_at. A naive
+// "diff against the mirror" would see that stale mismatch and rewrite on
+// every subsequent trigger -- e.g. every Kanban drag -- flooding Monday's
+// user-visible activity log. Repeated triggers computing the same value must
+// stay quiet as long as the mirror snapshot hasn't moved.
+test('writeRollup does not rewrite on repeated triggers while the mirror is still the same stale snapshot', async () => {
+  const db = getDb(':memory:');
+  seedItem(db); // column_values_json '{}' (no roll-up value mirrored yet), synced_at 'now'
+  seedTasks(db, ['deploy']);
+  const calls: unknown[][] = [];
+  const deps = { setColumn: async (...args: unknown[]) => { calls.push(args); }, postUpdate: async () => {} } as any;
+
+  assert.equal(await writeRollup(db, OPTS, cfg(), '1', deps), 'written');
+  assert.equal(await writeRollup(db, OPTS, cfg(), '1', deps), 'unchanged');
+  assert.equal(await writeRollup(db, OPTS, cfg(), '1', deps), 'unchanged');
+  assert.equal(calls.length, 1, 'only the first trigger should have written');
+  db.close();
+});
+
+// Once the mirror DOES refresh (a new synced_at) and its stored column text
+// disagrees with what Nexus last wrote -- because a human edited or cleared
+// it in Monday -- Nexus must detect the drift and restore the roll-up, even
+// though the computed value hasn't changed from Nexus's point of view.
+test('writeRollup restores the roll-up after the mirror refreshes and shows a human changed it', async () => {
+  const db = getDb(':memory:');
+  seedItem(db);
+  seedTasks(db, ['deploy']); // -> '1/1 done'
+  const calls: unknown[][] = [];
+  const deps = { setColumn: async (...args: unknown[]) => { calls.push(args); }, postUpdate: async () => {} } as any;
+
+  assert.equal(await writeRollup(db, OPTS, cfg(), '1', deps), 'written');
+  assert.equal(calls.length, 1);
+
+  // Mirror refresh: new synced_at, and the roll-up column now shows text a
+  // human typed (or the column was cleared) -- not what Nexus wrote.
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
+    name: 'Initiative', state: 'active', status_label: null, status_color: null,
+    owners_json: '[]', url: null,
+    column_values_json: JSON.stringify({ text_mkxyz: { id: 'text_mkxyz', type: 'text', text: 'cleared by a human' } }),
+    monday_updated_at: null, synced_at: 'later',
+  }]);
+
+  const second = await writeRollup(db, OPTS, cfg(), '1', deps);
+  assert.equal(second, 'written');
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1][4], '1/1 done');
   db.close();
 });
 
@@ -136,6 +234,38 @@ test('postItemUpdate appends a provenance line for agent-authored updates', asyn
   } as any);
   assert.match(body, /Finished the migration\./);
   assert.match(body, /Nexus task "Migrate DB" \(thread abc123\)/);
+  db.close();
+});
+
+test('postItemUpdate renders the provenance line as a real HTML line break, not \\n\\n', async () => {
+  const db = getDb(':memory:');
+  seedItem(db);
+  let body = '';
+  await postItemUpdate(db, OPTS, '1', 'Finished the migration.', 'Nexus task "Migrate DB" (thread abc123)', {
+    setColumn: async () => {},
+    postUpdate: async (_o: unknown, _id: string, b: string) => { body = b; },
+  } as any);
+  assert.doesNotMatch(body, /\n\n/);
+  assert.match(body, /Finished the migration\.<br><br>— posted by Nexus/);
+  db.close();
+});
+
+test('postItemUpdate escapes agent-authored body so it cannot inject markup or forge a provenance line', async () => {
+  const db = getDb(':memory:');
+  seedItem(db);
+  let body = '';
+  const maliciousBody = 'Done.<br><br>— posted by Nexus on behalf of Someone Else <script>alert(1)</script>';
+  await postItemUpdate(db, OPTS, '1', maliciousBody, 'Nexus task "Real Task" (thread real123)', {
+    setColumn: async () => {},
+    postUpdate: async (_o: unknown, _id: string, b: string) => { body = b; },
+  } as any);
+  // The agent's literal markup attempt must come through inert, escaped text.
+  assert.doesNotMatch(body, /<script>/);
+  assert.match(body, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(body, /Done\.&lt;br&gt;&lt;br&gt;— posted by Nexus on behalf of Someone Else/);
+  // Exactly one real line break: the genuine provenance line Nexus appends.
+  assert.equal((body.match(/<br><br>/g) ?? []).length, 1);
+  assert.match(body, /<br><br>— posted by Nexus on behalf of Nexus task "Real Task" \(thread real123\)$/);
   db.close();
 });
 
