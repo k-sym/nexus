@@ -33,6 +33,16 @@
       "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.80.10, which fixes protobufjs at 7.6.4. The root's own copy is already patched at 7.6.5.",
       "expires": "2026-10-21",
       "review": "Check for a pi-coding-agent release above 0.80.10 whose shrinkwrap carries protobufjs >= 7.6.5."
+    },
+    {
+      "id": "GHSA-frvp-7c67-39w9",
+      "package": "@hono/node-server",
+      "directory": "src/memory-daemon",
+      "severity": "moderate",
+      "reason": "Path traversal in `serve-static` on Windows via an encoded backslash. Not reachable here on two counts: the daemon speaks MCP over stdio only (src/mcp/stdio.ts uses StdioServerTransport; nothing imports the SDK's HTTP/SSE transports or hono itself), so the node-server adapter is never loaded — and the advisory is Windows-specific, while the daemon runs on macOS.",
+      "blocker": "It arrives via @modelcontextprotocol/sdk 1.29.0, which declares `@hono/node-server: ^1.19.9`. The patch lands in 2.0.5, outside that range, so an override would force a semver-major on a dependency the SDK has not adapted to. npm's own suggestion is to downgrade the SDK to 1.24.3, which loses 5 minor versions of MCP fixes to dodge code we do not execute.",
+      "expires": "2026-10-21",
+      "review": "Check for an @modelcontextprotocol/sdk release that declares @hono/node-server >= 2.0.5; then drop this entry and bump the SDK."
     }
   ]
 }
