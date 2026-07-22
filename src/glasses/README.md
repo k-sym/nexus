@@ -62,17 +62,81 @@ Toggle it with a **double-tap on the session list**; the rail shows `armed` or
 
 ### The screens
 
+You navigate **Projects → Sessions → Transcript**, and three screens can take over from
+wherever you are. Every screen names its own gestures in the top-right corner, so the
+pictures below double as the reference.
+
 | Screen | You see it when… | Tap `●` | Double-tap `●●` | Slide |
 | --- | --- | --- | --- | --- |
-| **Sessions** (home) | default | **open** the highlighted session | **arm / disarm** | move highlight |
-| **Transcript** | you opened a session | **speak a steer** (voice) | **back** to the list | **scroll** the transcript |
+| **Projects** (home) | default | **open** the project | **exit** the app | move highlight |
+| **Sessions** | you opened a project | **open** the session | **back** to projects | move highlight |
+| **Transcript** | you opened a session | **speak a steer** (voice) | **back** to sessions | **scroll** the reply |
 | **Steer** | you tapped ● on a transcript | **send** the steer now | **cancel** | — |
-| **Approve** | a session needs permission to run a tool | **Allow** | **Deny** | — |
+| **Approve** | a session needs permission to run a tool | **allow** | **deny** | — |
+| **Question** | a session asked you something | **answer** (highlighted option) | **cancel** | move highlight |
 | **Needs you** | a session wants your input (nothing to approve) | **Review** (jump to it) | **Dismiss** | — |
 
-**Approve** and **Needs you** interrupt whatever you're looking at — they're the two
-things *pushed* to you; everything else you pull. Nothing auto-fires: an approval is
+**Approve**, **Question** and **Needs you** interrupt whatever you're looking at — they're
+what gets *pushed* to you; everything else you pull. Nothing auto-fires: an approval is
 shown and waits for a deliberate tap.
+
+#### Projects — home
+
+![Projects screen](docs/screens/projects.png)
+
+Sessions grouped by project, newest activity first. Each row is `badge · name · status`,
+where the badge is the project's own three-character rail badge — the **same one the
+desktop sidebar shows**, so the two read alike. The status answers the only question that
+matters at a glance: `◆ needs you`, `⊙ n running`, `○ n idle`.
+
+#### Sessions — inside a project
+
+![Sessions screen](docs/screens/sessions.png)
+
+The badge rail on the left marks where you are (`›`) and lets you slide between projects
+without going back. Its width is measured from the widest badge on screen, so three-letter
+badges never clip. Rows are `glyph · title · status`.
+
+#### Transcript — a session
+
+![Transcript screen](docs/screens/detail.png)
+
+The header is `‹ title` plus the gestures, truncated to the pixels the bar actually has
+left. Below it: the live activity line (`⊙ Bash · npm --prefix …`) when a tool is running,
+then the latest reply with Markdown flattened — no stray `**` or backticks eating a line
+of a seven-line screen.
+
+![Paginated transcript](docs/screens/detail-paginated.png)
+
+A long reply paginates; the header shows `n/total` and you slide to move through it.
+
+#### Approve — a permission gate
+
+![Approve screen](docs/screens/approval.png)
+
+Only reachable with **Supervise** on. Names the tool and project, then the exact command,
+wrapped rather than cut, so you are never approving something you can't fully see.
+
+#### Question — the agent asked you something
+
+![Question screen](docs/screens/question.png)
+
+The question on the left, the options on the right. `QUESTION 1/2` means a multi-question
+prompt. `● Speak answer` is the free-text path — tap it and answer out loud instead of
+picking one of the offered options.
+
+#### Needs you — the interrupt
+
+![Needs you interrupt](docs/screens/interrupt.png)
+
+The one screen that is a bitmap rather than firmware text, because it has to read as an
+alarm from across a room rather than as a list. It pushes over whatever you were looking
+at; `● Review` jumps to the session, `●● Dismiss` puts it down until the attention set
+changes.
+
+> These images are generated from the live UI — `npm --prefix src/glasses run capture:screens`
+> against a dev server re-renders them from `?sim=preview`. Re-run it after a layout change
+> so the reference can't quietly go stale.
 
 ## Under the hood
 
@@ -100,6 +164,34 @@ Open http://localhost:5173, enter the hub URL (`http://127.0.0.1:8899`, blank to
 in dev), and Connect. Trigger a tool call in any Claude Code session that has the
 cockpit hook installed — it appears under **Approvals waiting**; Allow/Deny releases
 it.
+
+## In the browser (`?sim=preview`)
+
+The fastest way to look at the HUD — no hardware, no simulator install:
+
+```bash
+npm --prefix src/glasses run dev     # then open http://localhost:5273/?sim=preview
+```
+
+It draws the **real composed page**: `composeCockpitPage()` builds the same
+`GlassesPage` the glasses receive, and the preview paints that page's own element
+coordinates and content. It cannot drift from the shipping UI the way a hand-drawn
+mockup would — change the layout in `AppGlasses3c.tsx` and the preview changes with it.
+
+- Pickers for fixture (`list`, `detail-*`, `approval`, `question*`), screen, and project
+  index, so every screen is reachable — including `approval`, which has no live path
+  without Supervise on.
+- A per-element readout (`type`, `x,y`, `w×h`, content) underneath — useful when a
+  label is being truncated and you want to know by how much.
+- Text is measured with `@evenrealities/pretext`, the same LVGL metrics the firmware
+  uses, and each glyph is placed at its true advance — so **line breaks and overflow
+  are accurate**, which is the thing worth previewing.
+- The `interrupt` screen renders its actual bitmap hero; `?sim=lab-*` mockups now draw
+  in the browser as well as pushing to the lens.
+
+Exact: geometry, text, line breaks, advances. Approximate: glyph shapes (the lens font
+isn't available to a browser) and the firmware's internal container padding. **For
+pixel truth, use the simulator below** — it runs the real LVGL renderer.
 
 ## On the simulator
 

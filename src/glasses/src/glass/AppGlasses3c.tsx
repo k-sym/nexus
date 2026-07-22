@@ -8,7 +8,7 @@
 // to rich compositions next. The bitmap interrupt hero (image container) is the
 // known follow-up — GlassesPage composes text+list only.
 import { useEffect, useRef } from 'react'
-import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
+import { GlassesSdk, type GlassesPage } from 'even-toolkit/sdk-wrapper'
 import {
   CreateStartUpPageContainer, RebuildPageContainer,
   TextContainerProperty, ImageContainerProperty, ImageRawDataUpdate,
@@ -27,12 +27,12 @@ import type { Approval, AskUserQuestionInput, SessionSummary, TranscriptEvent } 
 // Phase 3 nav: the flat session list is replaced by a projects → sessions drill-down
 // (the locked firmware-text design). approval / question / interrupt still hard-take
 // over the HUD from wherever you are; detail is a session opened from the sessions list.
-type Screen = 'approval' | 'question' | 'interrupt' | 'detail' | 'projects' | 'sessions'
+export type Screen = 'approval' | 'question' | 'interrupt' | 'detail' | 'projects' | 'sessions'
 
 // Where the "home" nav sits when nothing is taking over the HUD. `detail` is not
 // stored here — it's implied by store.activeSessionId (so it survives store updates
 // and reuses the existing steer/paging machinery).
-interface Nav { home: 'projects' | 'sessions'; projIdx: number }
+export interface Nav { home: 'projects' | 'sessions'; projIdx: number }
 
 const BORDER = 0xffffff as never // maps to green on the monochrome lens
 // Sentinel row id for the "speak your answer" option on the question screen.
@@ -49,7 +49,7 @@ function sessionGlyph(s: SessionSummary): string {
 
 // A project grouping of the flat session list. Keyed by projectId (falling back to
 // the project name), so chat threads of one project collapse into a single row.
-interface ProjGroup { key: string; name: string; badge: string; asst: boolean; sessions: SessionSummary[] }
+export interface ProjGroup { key: string; name: string; badge: string; asst: boolean; sessions: SessionSummary[] }
 
 /** The rail badge. The gateway sends the project's own `projects.badge` — the same
  *  up-to-three-character badge the desktop rail shows — so the two read alike. The
@@ -67,7 +67,7 @@ function projBadge(name: string, asst: boolean, badge?: string): string {
 
 /** Group the live session list by project, preserving recency order (sessions arrive
  *  sorted newest-first, so a project's first-seen session fixes its rail position). */
-function groupProjects(sessions: SessionSummary[]): ProjGroup[] {
+export function groupProjects(sessions: SessionSummary[]): ProjGroup[] {
   const byKey = new Map<string, ProjGroup>()
   const order: string[] = []
   for (const s of sessions) {
@@ -129,7 +129,7 @@ function submitOrAdvance(a: Approval, value: string) {
   answer(a.id, answers, Object.values(answers).join(' · ')).catch((e) => store.setGlassError(`answer failed: ${e}`))
 }
 
-function pickScreen(s: GlassSnapshot, nav: Nav): Screen {
+export function pickScreen(s: GlassSnapshot, nav: Nav): Screen {
   if (gates(s).length > 0) return 'approval'
   if (questions(s).length > 0) return 'question'
   if (isInterruptActive(s)) return 'interrupt'
@@ -466,7 +466,7 @@ export function AppGlasses3c() {
 }
 
 // Snapshot view of the store, matching GlassSnapshot shape used by the screens.
-function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
+export function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
   return {
     connection: st.connection, armed: st.armed, sessions: st.sessions,
     approvals: st.approvals, activeSessionId: st.activeSessionId,
@@ -486,9 +486,28 @@ async function buildAndRender(
   sdk: GlassesSdk, scr: Screen, s: GlassSnapshot, nav: Nav, groups: ProjGroup[],
   rowsRef: { current: { id: string; label: string }[] },
 ) {
+  const page = composeCockpitPage(sdk, scr, s, nav, groups, rowsRef)
   // The interrupt is a bitmap hero — GlassesPage composes text+list only, so it's
   // rendered directly via the raw bridge (image containers + an event-capture overlay).
-  if (scr === 'interrupt') { rowsRef.current = []; return renderInterrupt(s) }
+  if (!page) return renderInterrupt(s)
+  await page.render()
+}
+
+/**
+ * Build the GlassesPage for a screen WITHOUT pushing it to the lens.
+ *
+ * Split out of buildAndRender so the browser preview (sim/preview.tsx) can draw the
+ * very same composition the glasses receive — same element coordinates, same text,
+ * same measured widths — instead of a hand-maintained mockup that drifts. A
+ * GlassesPage is inert until render(), which is the only part that needs the bridge.
+ *
+ * Returns null for `interrupt`, which is not a GlassesPage at all (see above).
+ */
+export function composeCockpitPage(
+  sdk: GlassesSdk, scr: Screen, s: GlassSnapshot, nav: Nav, groups: ProjGroup[],
+  rowsRef: { current: { id: string; label: string }[] },
+): GlassesPage | null {
+  if (scr === 'interrupt') { rowsRef.current = []; return null }
 
   const page = sdk.createPage(`cockpit-${scr}`)
 
@@ -632,7 +651,7 @@ async function buildAndRender(
     body.setSize((z) => { z.setWidth(DETAIL_BODY_EL_W).setHeight(BODY_H) })
   }
 
-  await page.render()
+  return page
 }
 
 // Interrupt hero: rendered outside GlassesPage (which has no image element) —

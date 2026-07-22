@@ -999,10 +999,19 @@ points at the NEXUS gateway URL the same way any other thin client does (see
 [Server + thin clients](#server--thin-clients-tailscale)). Build it only if you actually use the
 glasses — nothing else depends on it.
 
-The cockpit has three faces: a browser dashboard, the [`evenhub-simulator`](https://www.npmjs.com/package/@evenrealities/evenhub-simulator)
-(renders the real 576×288 LVGL canvas with no hardware), and the on-device G2 HUD. See
-[`src/glasses/README.md`](src/glasses/README.md) for the full gesture/screen guide and the
-simulator automation API.
+[![The G2 projects screen](src/glasses/docs/screens/projects.png)](src/glasses/README.md#the-screens)
+
+**→ [Every screen, with pictures and gestures](src/glasses/README.md#the-screens)** — the
+reference to check a change against. Those images are generated from the live UI, so they
+track it rather than drifting.
+
+The cockpit has four faces: a browser dashboard; `?sim=preview`, which draws the HUD in a
+normal browser tab straight from the composed page (no install, no hardware — see
+[In the browser](src/glasses/README.md#in-the-browser-simpreview)); the
+[`evenhub-simulator`](https://www.npmjs.com/package/@evenrealities/evenhub-simulator),
+which runs the real 576×288 LVGL renderer and is the ground truth for pixels; and the
+on-device G2 HUD. See [`src/glasses/README.md`](src/glasses/README.md) for the full
+gesture/screen guide and the simulator automation API.
 
 ### Prerequisites
 
