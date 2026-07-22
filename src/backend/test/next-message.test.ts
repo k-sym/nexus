@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import Fastify from 'fastify';
+import { registerNextMessageRoutes } from '../routes/next-message';
 import {
   MAX_CONTEXT_CHARS,
   MAX_TURNS,
@@ -77,4 +79,29 @@ test('suggestNextMessage swallows a generator failure', async () => {
     { generate: async () => { throw new Error('daemon unreachable'); } },
   );
   assert.equal(suggestion, '');
+});
+
+async function routeApp() {
+  const app = Fastify();
+  await app.register(registerNextMessageRoutes);
+  return app;
+}
+
+test('route rejects a malformed transcript with 400', async () => {
+  const app = await routeApp();
+  const res = await app.inject({ method: 'POST', url: '/api/next-message', payload: { transcript: 'nope' } });
+  assert.equal(res.statusCode, 400);
+  await app.close();
+});
+
+test('route returns an empty suggestion for a transcript with no assistant turn', async () => {
+  const app = await routeApp();
+  const res = await app.inject({
+    method: 'POST',
+    url: '/api/next-message',
+    payload: { transcript: [{ role: 'user', text: 'hi' }] },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { suggestion: '' });
+  await app.close();
 });
