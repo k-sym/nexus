@@ -297,7 +297,23 @@ export class PiRuntime {
       sessionManager = SessionManager.create(cwd, sessionDir, { id: threadId });
     }
     const settingsManager = SettingsManager.inMemory();
-    const mondayContext = this.mondayContext?.(threadId, cwd) ?? null;
+    // Resolving Monday context must never be able to fail session creation.
+    // resourceLoader.reload() below is awaited with no guard, so a throw from
+    // this.mondayContext (e.g. a real DB-backed resolver hitting a bad row)
+    // would reject createSession entirely, bricking the thread until the
+    // underlying data is fixed by hand. Degrade to "no Monday context"
+    // instead — a session without its Monday block is a small loss; a
+    // session that cannot open at all is a serious one.
+    let resolvedMondayContext: MondayContextInput | null = null;
+    try {
+      resolvedMondayContext = this.mondayContext?.(threadId, cwd) ?? null;
+    } catch {
+      resolvedMondayContext = null;
+    }
+    // Bind to a const so the ternary/closure below narrows to non-null
+    // permanently, rather than re-checking a mutable `let` at closure-call
+    // time.
+    const mondayContext = resolvedMondayContext;
     const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
       agentDir: this.paths.sessionsDir,
@@ -307,9 +323,18 @@ export class PiRuntime {
         createSignalFilterExtension, this.recallMemories, this.mondayTools,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened
-      // later sees current item state rather than a stale frozen line.
+      // later sees current item state rather than a stale frozen line. Also
+      // guarded: buildMondayContextBlock is pure and defensively parses its
+      // input, but if it were ever to throw, the base prompt must still come
+      // through unmodified rather than the whole session failing to create.
       systemPromptOverride: mondayContext
-        ? (base: string | undefined) => `${base ?? ''}\n\n${buildMondayContextBlock(mondayContext)}`
+        ? (base: string | undefined) => {
+            try {
+              return `${base ?? ''}\n\n${buildMondayContextBlock(mondayContext)}`;
+            } catch {
+              return base;
+            }
+          }
         : undefined,
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();

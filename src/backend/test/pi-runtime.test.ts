@@ -325,6 +325,62 @@ test('memory_recall throws on a blank query so pi renders it as a tool error', a
   await assert.rejects(() => tool.execute('call-1', { query: '   ' }), /non-empty query/);
 });
 
+/** Same "omit when absent" contract as recallMemories/registerMemoryTool above,
+ *  for the Monday tool extension (finding: IMPORTANT 4 — the runtime's new
+ *  mondayTools parameter had no test coverage at all). */
+const MONDAY_DEPS = {
+  search: async () => [],
+  getItem: async () => null,
+};
+
+test('sessions omit the monday tools when no resolver is supplied, and when the resolver returns null', async () => {
+  const noResolver = buildSessionExtensionFactories(
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+  );
+  assert.equal(noResolver.length, 3, 'no monday tools without a resolver to serve them');
+
+  const resolverReturnsNull = buildSessionExtensionFactories(
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+    undefined, () => null,
+  );
+  assert.equal(resolverReturnsNull.length, 3, 'no monday tools when the resolver has nothing for this thread');
+});
+
+test('monday tools are registered when the resolver returns deps for the thread', async () => {
+  const factories = buildSessionExtensionFactories(
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+    undefined, () => MONDAY_DEPS as any,
+  );
+  assert.equal(factories.length, 4, 'monday tool extension appended when the resolver supplies deps');
+  const tools: Array<{ name: string }> = [];
+  await factories[3]?.({ registerTool(value: unknown) { tools.push(value as { name: string }); } } as any);
+  assert.deepEqual(tools.map((t) => t.name).sort(), ['monday_get_item', 'monday_search']);
+});
+
+test('PiRuntime.sessionFor does not reject when the mondayContext resolver throws', async () => {
+  // IMPORTANT 1(b) regression: createSession awaits resourceLoader.reload()
+  // with no guard. Before the fix, a throw from the mondayContext resolver
+  // (e.g. a real DB-backed resolver hitting a malformed row) propagated all
+  // the way out of sessionFor, so the thread could never be opened OR
+  // resumed. A resolver failure must degrade to "no Monday context" instead.
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = {
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  };
+  try {
+    const rt = await PiRuntime.create(paths, {
+      mondayContext: () => {
+        throw new Error('boom: malformed owners_json in the database row');
+      },
+    });
+    const session = await rt.sessionFor('thread-monday-throws', '/tmp/project');
+    assert.ok(session, 'session is created despite the throwing mondayContext resolver');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('PiRuntime.findModel exposes model input capabilities', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = {
