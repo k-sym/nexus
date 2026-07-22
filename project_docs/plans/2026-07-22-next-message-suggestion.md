@@ -1077,13 +1077,28 @@ git commit -m "feat(frontend): offer a next-message suggestion in the assistant 
 
 ## Manual verification
 
-**Precondition: the gen server must have thinking disabled.** A reasoning model spends its entire
-token budget on hidden reasoning and returns empty `content` with `finish_reason: "length"` —
-verified against `Ornith-1.0-35B-Q8_0` on `:8081`, where even a 512-token budget produced nothing.
-`ModelClient.complete()` detects this and throws a non-retryable `config` ModelError, so the
-suggestion degrades silently to "no placeholder" and you will chase a feature that looks dead.
-`generate-session-title` shares the code path, so the same server breaks session auto-naming — if
-new sessions are stuck on the "New Session" placeholder, that is the symptom.
+**Precondition: the memory daemon's gen server must be up, with thinking disabled.**
+
+Suggestions are served by the *daemon's* generation model — `memory.models.gen_url`, default
+`http://127.0.0.1:4001/v1` — **not** by `models.local`, which is the chat provider Nexus streams
+turns from. The two are easy to conflate: probing the chat provider tells you nothing about
+whether suggestions will work.
+
+Two ways this silently yields no placeholder, both of which `suggestNextMessage` swallows by
+design:
+
+- **Gen server down.** `ModelClient.complete()` throws a `transport` ModelError. The likeliest
+  cause, since the daemon's three servers (gen 4001, embed 4002, rerank 4003) are launched
+  externally.
+- **Gen server is a reasoning model launched without thinking off.** It spends its whole token
+  budget on hidden reasoning and returns empty `content` with `finish_reason: "length"` — measured
+  against a 35B reasoning model, where even a 512-token budget produced nothing while
+  `--reasoning off` answered in 9–12 tokens. `complete()` detects this specific case and throws a
+  non-retryable `config` ModelError naming the fix.
+
+`generate-session-title` shares this code path, so either failure also breaks session auto-naming.
+New sessions stuck on the "New Session" placeholder are the visible symptom, and a useful way to
+tell whether the daemon's gen model is healthy before blaming this feature.
 
 Automated tests cover the wiring; they cannot tell you whether the suggestions are any *good*. That is the real acceptance criterion, and it needs a human.
 
