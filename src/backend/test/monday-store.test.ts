@@ -103,3 +103,80 @@ test('listLinkedTaskStatuses joins through to the tasks table', () => {
   assert.deepEqual(listLinkedTaskStatuses(db, '1').sort(), ['deploy', 'review']);
   db.close();
 });
+
+test('upsertItems updates all 13 updatable columns on conflict', () => {
+  const db = getDb(':memory:');
+  // Insert initial item
+  upsertItems(db, [item('1', {
+    board_id: 'b1',
+    board_name: 'Portfolio',
+    group_id: 'g1',
+    group_title: 'Q3',
+    name: 'Original Name',
+    state: 'active',
+    status_label: 'In Progress',
+    status_color: '#0000FF',
+    owners_json: '["owner1"]',
+    url: 'https://monday.com/boards/1/pulses/1',
+    column_values_json: '{"col1":"val1"}',
+    monday_updated_at: '2026-07-22T00:00:00.000Z',
+    synced_at: '2026-07-22T00:00:00.000Z',
+  })]);
+
+  // Upsert the same item_id with different values in every updatable column
+  upsertItems(db, [item('1', {
+    board_id: 'b2',
+    board_name: 'Planning',
+    group_id: 'g2',
+    group_title: 'Q4',
+    name: 'Updated Name',
+    state: 'inactive',
+    status_label: 'Done',
+    status_color: '#00FF00',
+    owners_json: '["owner2","owner3"]',
+    url: 'https://monday.com/boards/2/pulses/2',
+    column_values_json: '{"col2":"val2"}',
+    monday_updated_at: '2026-07-22T12:00:00.000Z',
+    synced_at: '2026-07-22T12:00:00.000Z',
+  })]);
+
+  const row = getItem(db, '1')!;
+  // Assert all 13 updatable columns changed
+  assert.equal(row.board_id, 'b2', 'board_id should update');
+  assert.equal(row.board_name, 'Planning', 'board_name should update');
+  assert.equal(row.group_id, 'g2', 'group_id should update');
+  assert.equal(row.group_title, 'Q4', 'group_title should update');
+  assert.equal(row.name, 'Updated Name', 'name should update');
+  assert.equal(row.state, 'inactive', 'state should update');
+  assert.equal(row.status_label, 'Done', 'status_label should update');
+  assert.equal(row.status_color, '#00FF00', 'status_color should update');
+  assert.equal(row.owners_json, '["owner2","owner3"]', 'owners_json should update');
+  assert.equal(row.url, 'https://monday.com/boards/2/pulses/2', 'url should update');
+  assert.equal(row.column_values_json, '{"col2":"val2"}', 'column_values_json should update');
+  assert.equal(row.monday_updated_at, '2026-07-22T12:00:00.000Z', 'monday_updated_at should update');
+  assert.equal(row.synced_at, '2026-07-22T12:00:00.000Z', 'synced_at should update');
+  db.close();
+});
+
+test('pruneScope marks linked row missing when multiple tasks link to same item', () => {
+  const db = getDb(':memory:');
+  // Insert two items
+  upsertItems(db, [item('1'), item('2')]);
+  // Link two different tasks to the SAME item
+  linkTask(db, { task_id: 't1', item_id: '2', project_id: 'p1', created_at: 'now' });
+  linkTask(db, { task_id: 't2', item_id: '2', project_id: 'p2', created_at: 'now' });
+  // Run prune with keep list that excludes item '2'
+  pruneScope(db, 'b1', null, ['1'], '2026-07-22T01:00:00.000Z');
+  // Assert the linked item still exists and is marked missing
+  const row = getItem(db, '2');
+  assert.ok(row, 'linked item must survive prune even with multiple task links');
+  assert.equal(row!.state, 'missing', 'linked item must be marked missing');
+  // Assert both links still exist
+  const link1 = getLinkForTask(db, 't1');
+  const link2 = getLinkForTask(db, 't2');
+  assert.ok(link1, 'first task link must survive');
+  assert.equal(link1!.item_id, '2', 'first link should still point to item 2');
+  assert.ok(link2, 'second task link must survive');
+  assert.equal(link2!.item_id, '2', 'second link should still point to item 2');
+  db.close();
+});
