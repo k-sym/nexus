@@ -357,6 +357,23 @@ test('monday tools are registered when the resolver returns deps for the thread'
   assert.deepEqual(tools.map((t) => t.name).sort(), ['monday_get_item', 'monday_search']);
 });
 
+test('sessions omit the monday tools (without throwing) when the resolver itself throws', () => {
+  // MINOR 6: buildSessionExtensionFactories called mondayTools?.(threadId)
+  // with no guard of its own, unlike the mondayContext resolver call in
+  // createSession — and this call site (inline inside the
+  // extensionFactories: buildSessionExtensionFactories(...) argument) has no
+  // try/catch either. Before the fix, this throws straight out of
+  // buildSessionExtensionFactories.
+  assert.doesNotThrow(() => {
+    const factories = buildSessionExtensionFactories(
+      'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+      undefined,
+      () => { throw new Error('boom: bad row in monday_items'); },
+    );
+    assert.equal(factories.length, 3, 'no monday tools when the resolver throws — degrades like a null return');
+  });
+});
+
 test('PiRuntime.sessionFor does not reject when the mondayContext resolver throws', async () => {
   // IMPORTANT 1(b) regression: createSession awaits resourceLoader.reload()
   // with no guard. Before the fix, a throw from the mondayContext resolver
@@ -376,6 +393,30 @@ test('PiRuntime.sessionFor does not reject when the mondayContext resolver throw
     });
     const session = await rt.sessionFor('thread-monday-throws', '/tmp/project');
     assert.ok(session, 'session is created despite the throwing mondayContext resolver');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('PiRuntime.sessionFor does not reject when the mondayTools resolver throws', async () => {
+  // MINOR 6 regression, end-to-end: unlike mondayContext, createSession has
+  // no try/catch around the extensionFactories: buildSessionExtensionFactories(...)
+  // call that reaches mondayTools. Today's real resolver (buildMondayToolDeps)
+  // cannot throw, but the runtime must not depend on that — a throw here
+  // must still degrade to "no Monday tools" rather than bricking the thread.
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = {
+    authFile: join(dir, 'auth.json'),
+    sessionsDir: join(dir, 'sessions'),
+  };
+  try {
+    const rt = await PiRuntime.create(paths, {
+      mondayTools: () => {
+        throw new Error('boom: bad row in monday_items');
+      },
+    });
+    const session = await rt.sessionFor('thread-monday-tools-throws', '/tmp/project');
+    assert.ok(session, 'session is created despite the throwing mondayTools resolver');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -118,6 +118,22 @@ test('fetchItemsByIds returns the raw items', async () => {
   assert.equal(items[0].name, 'Initiative A');
 });
 
+test('fetchBoardItems requests a small bounded set of each item\'s recent updates', async () => {
+  // IMPORTANT 1 regression: the GraphQL query never fetched the updates
+  // connection at all, so recentUpdates() had nothing real to read. Assert
+  // the query text actually asks for it, bounded (not the whole thread, and
+  // not a wide field set — this query runs against every item on a board).
+  let seenQuery: string | undefined;
+  const fakeFetch = async (_url: string, init?: RequestInit) => {
+    seenQuery = JSON.parse(init!.body as string).query;
+    return jsonResponse({ data: { boards: [{ items_page: { cursor: null, items: [] } }] } });
+  };
+  await fetchBoardItems({ ...OPTS, fetchImpl: fakeFetch as any }, 'board-1', null);
+  assert.match(seenQuery!, /updates\s*\(\s*limit:\s*5\s*\)/, 'updates connection requested with a small bound');
+  assert.match(seenQuery!, /text_body/, 'plain-text body requested');
+  assert.match(seenQuery!, /created_at/, 'creation time requested');
+});
+
 test('fetchBoardItems accumulates items across a paginated cursor', async () => {
   let call = 0;
   const fakeFetch = async (_url: string, init?: RequestInit) => {
@@ -292,4 +308,31 @@ test('mapItem tolerates an item with no group, status, or owners', () => {
   assert.equal(row.status_label, null);
   assert.deepEqual(JSON.parse(row.owners_json), []);
   assert.equal(row.board_id, '');
+});
+
+test('mapItem carries the item\'s updates into updates_json', () => {
+  // IMPORTANT 1: the mirror must actually retain what the (now-fixed) query
+  // fetches — nothing downstream can recover this if mapItem drops it.
+  const row = mapItem({
+    ...RAW,
+    updates: [
+      { text_body: 'Kicked off the migration', created_at: '2026-07-20T09:00:00.000Z' },
+      { text_body: 'Blocked on infra', created_at: '2026-07-21T09:00:00.000Z' },
+    ],
+  } as any, '2026-07-22T10:00:00.000Z');
+  assert.deepEqual(JSON.parse(row.updates_json!), [
+    { text: 'Kicked off the migration', created_at: '2026-07-20T09:00:00.000Z' },
+    { text: 'Blocked on infra', created_at: '2026-07-21T09:00:00.000Z' },
+  ]);
+});
+
+test('mapItem degrades to an empty updates_json when updates is absent, null, or malformed', () => {
+  // No `updates` key at all (e.g. an older/mocked response).
+  assert.deepEqual(JSON.parse(mapItem(RAW as any, 'now').updates_json!), []);
+  // Explicit null, which the GraphQL type technically allows.
+  assert.deepEqual(JSON.parse(mapItem({ ...RAW, updates: null } as any, 'now').updates_json!), []);
+  // An entry missing text_body/created_at degrades that entry rather than
+  // throwing for the whole item.
+  const row = mapItem({ ...RAW, updates: [{}] } as any, 'now');
+  assert.deepEqual(JSON.parse(row.updates_json!), [{ text: '', created_at: null }]);
 });

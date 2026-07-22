@@ -453,6 +453,16 @@ export interface MondayItem {
   /** Raw column values, keyed by column id. Context injection and the read
    *  tools need fields this schema does not model. */
   column_values_json: string;
+  /** JSON array of the item's most recent updates — Monday's per-item
+   *  comment thread, fetched via the `updates` connection in client.ts's
+   *  ITEM_FIELDS (NOT a column value, despite the similarly-named
+   *  `column_values_json`). Each entry is `{ text: string; created_at:
+   *  string | null }`; order is whatever Monday/mapItem produced —
+   *  session-deps.ts's recentUpdates() sorts newest-first when reading it.
+   *  Optional so hand-built fixtures predating this field, and rows written
+   *  before the migration backfills it, don't need to supply it; the DB
+   *  column itself is NOT NULL DEFAULT '[]'. */
+  updates_json?: string;
   monday_updated_at: string | null;
   synced_at: string;
 }

@@ -105,7 +105,19 @@ export function buildSessionExtensionFactories(
   recallMemories?: MemoryRecallFn,
   mondayTools?: (threadId: string) => MondayToolDeps | null,
 ): ExtensionFactory[] {
-  const monday = mondayTools?.(threadId) ?? null;
+  // Mirrors the mondayContext guard in createSession below. Unlike that call,
+  // this one has no try/catch at its call site (it's part of the
+  // extensionFactories: buildSessionExtensionFactories(...) argument to an
+  // object literal, not a statement that could wrap it) — so the guard has
+  // to live here. buildMondayToolDeps() already guards its own body, but
+  // this must not depend on that: a throw here today means an unopenable,
+  // permanently broken thread (MINOR 6).
+  let monday: MondayToolDeps | null = null;
+  try {
+    monday = mondayTools?.(threadId) ?? null;
+  } catch {
+    monday = null;
+  }
   return [
     createQuestionExtension(threadId, questions),
     createApprovalExtension(threadId, cwd, approvals, isSupervised),

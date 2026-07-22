@@ -68,19 +68,38 @@ test('resolveThreadItem returns null for a thread with no linked task', () => {
   db.close();
 });
 
-test('buildMondayContext counts siblings and formats the roll-up', () => {
+test('buildMondayContext counts siblings and formats the roll-up', async () => {
   const db = getDb(':memory:');
   seed(db, false);
-  const ctx = buildMondayContext(db, 'thread-1')!;
-  assert.equal(ctx.siblingCount, 2);
-  assert.equal(ctx.rollupText, '1/2 done · 1 in review');
+  await withMondayEnabled(() => {
+    const ctx = buildMondayContext(db, 'thread-1')!;
+    assert.equal(ctx.siblingCount, 2);
+    assert.equal(ctx.rollupText, '1/2 done · 1 in review');
+  });
   db.close();
 });
 
-test('buildMondayContext returns null when the thread has no link', () => {
+test('buildMondayContext returns null when the thread has no link', async () => {
   const db = getDb(':memory:');
   seed(db, false);
-  assert.equal(buildMondayContext(db, 'thread-unknown'), null);
+  await withMondayEnabled(() => {
+    assert.equal(buildMondayContext(db, 'thread-unknown'), null);
+  });
+  db.close();
+});
+
+test('buildMondayContext returns null when Monday is globally disabled', () => {
+  // IMPORTANT 2 regression: buildMondayToolDeps gates on monday.enabled (via
+  // clientOptions()) but buildMondayContext did not, so a globally-disabled
+  // Monday integration still injected a context block instructing the model
+  // to "Call monday_get_item" — a tool that was never registered. Deliberately
+  // NOT wrapped in withMondayEnabled: this exercises the default-disabled
+  // state (DEFAULT_CONFIG.monday.enabled === false), which is what any
+  // machine that hasn't explicitly opted in has. Before the fix this
+  // returned a real context object, not null.
+  const db = getDb(':memory:');
+  seed(db, false);
+  assert.equal(buildMondayContext(db, 'thread-1'), null);
   db.close();
 });
 
@@ -108,10 +127,19 @@ test('tool deps include postUpdate when the project opts in', async () => {
   db.close();
 });
 
-test('tool deps are null without a token, so no tool is advertised', () => {
+test('tool deps are null without a token, so no tool is advertised', async () => {
+  // IMPORTANT 3: this must genuinely exercise the token check. Without
+  // withMondayEnabled, clientOptions() returns null at the `enabled` check
+  // (default config has monday.enabled === false) before the token is ever
+  // consulted — the test would still pass even if the token check were
+  // deleted outright. Wrapping it, like its siblings above, forces enabled
+  // to be true so the only remaining reason to return null is the token.
   const db = getDb(':memory:');
   seed(db, true);
-  assert.equal(buildMondayToolDeps(db, 'thread-1'), null);
+  delete process.env.MONDAY_TOKEN;
+  await withMondayEnabled(() => {
+    assert.equal(buildMondayToolDeps(db, 'thread-1'), null);
+  });
   db.close();
 });
 
@@ -124,6 +152,132 @@ test('getItem dep reports the linked Nexus tasks', async () => {
     const detail = await deps.getItem('1');
     assert.equal(detail!.linked_tasks.length, 2);
     assert.ok(detail!.linked_tasks.some((t) => t.title === 'Migrate DB'));
+  });
+  delete process.env.MONDAY_TOKEN;
+  db.close();
+});
+
+// --- IMPORTANT 1: recentUpdates() must read the item's REAL updates (from
+// updates_json, populated via Monday's updates connection — see client.ts
+// and map.ts), newest first, rather than misreading column_values_json.
+
+function seedWithUpdates(db: ReturnType<typeof getDb>, updatesJson: string) {
+  seed(db, false);
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
+    name: 'Ship the thing', state: 'active', status_label: 'Working on it', status_color: null,
+    owners_json: '[]', url: null, column_values_json: '{}', updates_json: updatesJson,
+    monday_updated_at: null, synced_at: 'later',
+  }]);
+}
+
+test('buildMondayContext surfaces the item\'s real updates, newest first', async () => {
+  const db = getDb(':memory:');
+  seedWithUpdates(db, JSON.stringify([
+    { text: 'Kicked off', created_at: '2026-07-20T09:00:00.000Z' },
+    { text: 'Shipped v1', created_at: '2026-07-22T09:00:00.000Z' },
+    { text: 'Blocked on infra', created_at: '2026-07-21T09:00:00.000Z' },
+  ]));
+  await withMondayEnabled(() => {
+    const ctx = buildMondayContext(db, 'thread-1')!;
+    assert.deepEqual(ctx.updates, ['Shipped v1', 'Blocked on infra', 'Kicked off']);
+  });
+  db.close();
+});
+
+test('buildMondayContext degrades to an empty updates list when updates_json is malformed', async () => {
+  const db = getDb(':memory:');
+  seedWithUpdates(db, 'not valid json{');
+  await withMondayEnabled(() => {
+    const ctx = buildMondayContext(db, 'thread-1')!;
+    assert.deepEqual(ctx.updates, []);
+  });
+  db.close();
+});
+
+test('buildMondayContext returns an empty updates list, not a crash, when updates_json is not an array', async () => {
+  const db = getDb(':memory:');
+  seedWithUpdates(db, '{"not":"an array"}');
+  await withMondayEnabled(() => {
+    const ctx = buildMondayContext(db, 'thread-1')!;
+    assert.deepEqual(ctx.updates, []);
+  });
+  db.close();
+});
+
+test('buildMondayContext no longer mistakes a column literally named "updates" for a real update', async () => {
+  // The exact bug described in IMPORTANT 1: recentUpdates() used to read
+  // cols.updates?.text out of column_values_json. A board with a column
+  // whose id happens to be "updates" would render that COLUMN VALUE to the
+  // model, mislabelled as an update. The fix reads updates_json instead, so
+  // this must come back empty even though column_values_json has an
+  // "updates"-keyed entry with text.
+  const db = getDb(':memory:');
+  seed(db, false);
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
+    name: 'Ship the thing', state: 'active', status_label: 'Working on it', status_color: null,
+    owners_json: '[]', url: null,
+    column_values_json: JSON.stringify({ updates: { id: 'updates', type: 'text', text: 'Not a real update — a column value' } }),
+    monday_updated_at: null, synced_at: 'later',
+  }]);
+  await withMondayEnabled(() => {
+    const ctx = buildMondayContext(db, 'thread-1')!;
+    assert.deepEqual(ctx.updates, []);
+  });
+  db.close();
+});
+
+test('getItem dep surfaces the item\'s real updates, newest first', async () => {
+  const db = getDb(':memory:');
+  seedWithUpdates(db, JSON.stringify([
+    { text: 'Older', created_at: '2026-07-20T09:00:00.000Z' },
+    { text: 'Newer', created_at: '2026-07-21T09:00:00.000Z' },
+  ]));
+  process.env.MONDAY_TOKEN = 'tok';
+  await withMondayEnabled(async () => {
+    const deps = buildMondayToolDeps(db, 'thread-1')!;
+    const detail = await deps.getItem('1');
+    assert.deepEqual(detail!.updates, ['Newer', 'Older']);
+  });
+  delete process.env.MONDAY_TOKEN;
+  db.close();
+});
+
+// --- MINOR 4: an unvalidated `cfg.updates.enabled` access throws on a
+// partial/legacy monday config with no `updates` key, and the outer catch
+// then loses the READ tools too — not just the opt-in gate it should affect.
+
+function seedMissingUpdatesBlock(db: ReturnType<typeof getDb>) {
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','','', ?, 0, '', 'now','now')`)
+    .run(JSON.stringify({
+      monday: {
+        board_id: 'b1', group_id: null,
+        rollup: { enabled: true, column_id: 'text_1', column_type: 'text' },
+        // `updates` deliberately omitted — a partial/legacy config.
+      },
+    }));
+  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at, thread_id)
+              VALUES ('t1','p1','Migrate DB','','review','medium','now','now','thread-1')`).run();
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
+    name: 'Ship the thing', state: 'active', status_label: 'Working on it', status_color: null,
+    owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
+  }]);
+  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
+}
+
+test('tool deps still include search/getItem when cfg.updates is missing entirely, only postUpdate is affected', async () => {
+  const db = getDb(':memory:');
+  seedMissingUpdatesBlock(db);
+  process.env.MONDAY_TOKEN = 'tok';
+  await withMondayEnabled(() => {
+    const deps = buildMondayToolDeps(db, 'thread-1');
+    assert.ok(deps, 'a missing updates block must not disable the whole deps object');
+    assert.equal(typeof deps!.search, 'function');
+    assert.equal(typeof deps!.getItem, 'function');
+    assert.equal(deps!.postUpdate, undefined, 'no updates block means not opted in, not a crash');
   });
   delete process.env.MONDAY_TOKEN;
   db.close();
