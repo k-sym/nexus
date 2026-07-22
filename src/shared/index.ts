@@ -457,6 +457,13 @@ export interface MondayItem {
   synced_at: string;
 }
 
+/** A mirrored item enriched with its Nexus roll-up, as returned by the API. */
+export interface MondayItemWithLinks extends MondayItem {
+  rollup: { total: number; open: number; inProgress: number; inReview: number; done: number };
+  rollup_text: string;
+  task_ids: string[];
+}
+
 /** A task→item link. NOT disposable: user intent, survives a mirror wipe. */
 export interface TaskMondayLink {
   task_id: string;
