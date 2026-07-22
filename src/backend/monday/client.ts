@@ -9,7 +9,9 @@
  * checked for `errors` before its data is trusted, and "empty result" is
  * never allowed to look like "auth rejected".
  *
- * The token comes from MONDAY_TOKEN only — never config, never the DB.
+ * This module reads no environment, config, or DB state — the caller
+ * supplies the token via MondayClientOptions. (The poll layer is what
+ * sources it from MONDAY_TOKEN.)
  */
 
 const ENDPOINT = 'https://api.monday.com/v2';
@@ -43,11 +45,24 @@ interface GraphqlErrorShape {
   extensions?: { code?: string };
 }
 
+/** Monday's legacy error shape is a plain string ("Not Authenticated") rather
+ *  than an object; a modern GraphQL error is an object with a `message`. */
+type GraphqlErrorEntry = GraphqlErrorShape | string;
+
 interface GraphqlEnvelope<T> {
   data?: T;
-  errors?: GraphqlErrorShape[];
+  errors?: GraphqlErrorEntry[];
   error_message?: string;
   extensions?: { complexity?: { after?: number; reset_in_x_seconds?: number } };
+}
+
+function errorMessage(e: GraphqlErrorEntry): string {
+  if (typeof e === 'string') return e || 'unknown error';
+  return e.message ?? 'unknown error';
+}
+
+function errorCode(e: GraphqlErrorEntry): string | undefined {
+  return typeof e === 'string' ? undefined : e.extensions?.code;
 }
 
 export interface RawMondayColumnValue {
@@ -92,8 +107,14 @@ export async function mondayGraphql<T>(
   }
 
   if (res.status === 429) {
-    const hint = Number(res.headers.get('retry-after') ?? '');
-    throw new MondayError('Monday rate limit exceeded', 'RateLimit', 429, Number.isFinite(hint) ? hint : undefined);
+    const raw = res.headers.get('retry-after');
+    const hint = raw !== null && raw !== '' ? Number(raw) : undefined;
+    throw new MondayError(
+      'Monday rate limit exceeded',
+      'RateLimit',
+      429,
+      hint !== undefined && Number.isFinite(hint) ? hint : undefined,
+    );
   }
 
   const text = await res.text();
@@ -107,10 +128,10 @@ export async function mondayGraphql<T>(
   // The load-bearing check. Do this BEFORE looking at res.ok or body.data.
   const errors = body.errors ?? (body.error_message ? [{ message: body.error_message }] : []);
   if (errors.length > 0) {
-    const code = errors[0]?.extensions?.code;
+    const code = errorCode(errors[0]!);
     const reset = body.extensions?.complexity?.reset_in_x_seconds;
     throw new MondayError(
-      errors.map((e) => e.message ?? 'unknown error').join('; '),
+      errors.map(errorMessage).join('; '),
       code,
       res.status,
       code === 'ComplexityException' ? reset : undefined,
@@ -185,7 +206,17 @@ export async function fetchBoardItems(
           opts, BOARD_ITEMS_QUERY, { boardId, cursor },
         )).boards?.[0]?.items_page;
 
-    if (!page) break;
+    if (!page) {
+      // No boards[] entry (or no matching group) means the token can't see
+      // this board/group — Monday still answers 200 with no `errors`. Never
+      // let that look like "the board is genuinely empty": the prune step
+      // would delete every mirrored row for it.
+      throw new MondayError(
+        `Monday returned no items_page for board ${boardId}` +
+          (groupId ? ` (group ${groupId})` : '') +
+          ' — the board/group may not exist or the token cannot see it',
+      );
+    }
     out.push(...(page.items ?? []));
     cursor = page.cursor ?? null;
   } while (cursor);

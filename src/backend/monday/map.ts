@@ -26,7 +26,11 @@ function statusColor(col: RawMondayColumnValue | undefined): string | null {
   }
 }
 
-function isKnownState(state: string | undefined): state is MondayItem['state'] {
+/** 'missing' is Nexus-local (set by the sync layer when an item vanishes
+ *  from Monday while a link survives) — mapItem must never produce it, so
+ *  the predicate's return type excludes it rather than merely happening to
+ *  never return it. */
+function isKnownState(state: string | undefined): state is Exclude<MondayItem['state'], 'missing'> {
   return state === 'active' || state === 'archived' || state === 'deleted';
 }
 
