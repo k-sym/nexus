@@ -1,0 +1,66 @@
+name: Memory daemon quality
+
+# The daemon's tests, typecheck and build only ever ran locally — nothing in CI
+# touched src/memory-daemon except the dependency audit, which only reads
+# manifests.
+#
+# Like src/glasses, the daemon is deliberately NOT an npm workspace (it runs as
+# its own long-lived service with its own lockfile), so every step runs with
+# --no-workspaces and the npm cache is keyed on its lockfile rather than the
+# root one. It loads better-sqlite3 and the sqlite-vec extension, so `npm ci`
+# building those natively is itself part of what this checks.
+
+on:
+  pull_request:
+    paths:
+      - src/memory-daemon/**
+      - .github/workflows/daemon-quality.yml
+  push:
+    branches:
+      - main
+    paths:
+      - src/memory-daemon/**
+      - .github/workflows/daemon-quality.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daemon-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Test, typecheck, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: src/memory-daemon/package-lock.json
+
+      - name: Install dependencies
+        working-directory: src/memory-daemon
+        run: npm ci --no-workspaces
+
+      - name: Run daemon tests
+        working-directory: src/memory-daemon
+        run: npm test
+
+      - name: Typecheck daemon
+        working-directory: src/memory-daemon
+        run: npm run typecheck
+
+      # `build` is tsc plus a copy of schema.sql into dist — the runtime reads
+      # that file, so a build that emits JS without it is broken in a way tsc
+      # will never report.
+      - name: Build daemon
+        working-directory: src/memory-daemon
+        run: npm run build
