@@ -186,6 +186,10 @@ export async function postItemUpdate(
   deps: RollupWriteDeps = DEFAULT_DEPS,
 ): Promise<void> {
   const escaped = escapeHtml(body);
-  const full = provenance ? `${escaped}<br><br>— posted by Nexus on behalf of ${provenance}` : escaped;
+  // Convert newlines to <br> so multi-line bodies render as written (after escaping,
+  // so the <br> markup we insert is not itself escaped into visible text).
+  const withLineBreaks = escaped.replace(/\n/g, '<br>');
+  const escapedProvenance = provenance ? escapeHtml(provenance) : null;
+  const full = escapedProvenance ? `${withLineBreaks}<br><br>— posted by Nexus on behalf of ${escapedProvenance}` : withLineBreaks;
   await deps.postUpdate(opts, itemId, full);
 }

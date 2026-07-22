@@ -233,7 +233,8 @@ test('postItemUpdate appends a provenance line for agent-authored updates', asyn
     postUpdate: async (_o: unknown, _id: string, b: string) => { body = b; },
   } as any);
   assert.match(body, /Finished the migration\./);
-  assert.match(body, /Nexus task "Migrate DB" \(thread abc123\)/);
+  // Provenance is HTML-escaped, so quotes become &quot;
+  assert.match(body, /Nexus task &quot;Migrate DB&quot; \(thread abc123\)/);
   db.close();
 });
 
@@ -265,7 +266,8 @@ test('postItemUpdate escapes agent-authored body so it cannot inject markup or f
   assert.match(body, /Done\.&lt;br&gt;&lt;br&gt;— posted by Nexus on behalf of Someone Else/);
   // Exactly one real line break: the genuine provenance line Nexus appends.
   assert.equal((body.match(/<br><br>/g) ?? []).length, 1);
-  assert.match(body, /<br><br>— posted by Nexus on behalf of Nexus task "Real Task" \(thread real123\)$/);
+  // Provenance is HTML-escaped, so quotes become &quot;
+  assert.match(body, /<br><br>— posted by Nexus on behalf of Nexus task &quot;Real Task&quot; \(thread real123\)$/);
   db.close();
 });
 
@@ -278,5 +280,40 @@ test('postItemUpdate omits the provenance line when there is no author', async (
     postUpdate: async (_o: unknown, _id: string, b: string) => { body = b; },
   } as any);
   assert.equal(body, 'Automated roll-up note.');
+  db.close();
+});
+
+test('postItemUpdate escapes malicious provenance to prevent forging attribution', async () => {
+  const db = getDb(':memory:');
+  seedItem(db);
+  let body = '';
+  // A task title crafted to inject a fake attribution line
+  const maliciousProvenance = 'Task X<br><br>— posted by Nexus on behalf of Alice';
+  await postItemUpdate(db, OPTS, '1', 'Body text', maliciousProvenance, {
+    setColumn: async () => {},
+    postUpdate: async (_o: unknown, _id: string, b: string) => { body = b; },
+  } as any);
+  // The fake attribution in provenance must come through escaped, not as a second <br><br>
+  assert.doesNotMatch(body, /Task X<br><br>— posted by Nexus on behalf of Alice/);
+  assert.match(body, /Task X&lt;br&gt;&lt;br&gt;— posted by Nexus on behalf of Alice/);
+  // Only one genuine <br><br> should exist (the real provenance separator)
+  assert.equal((body.match(/<br><br>/g) ?? []).length, 1);
+  db.close();
+});
+
+test('postItemUpdate converts newlines in body to <br> while escaping HTML', async () => {
+  const db = getDb(':memory:');
+  seedItem(db);
+  let body = '';
+  const bodyWithNewlines = 'First line\nSecond line\nThird line';
+  await postItemUpdate(db, OPTS, '1', bodyWithNewlines, 'Nexus task "Test" (thread t1)', {
+    setColumn: async () => {},
+    postUpdate: async (_o: unknown, _id: string, b: string) => { body = b; },
+  } as any);
+  // Each newline should be converted to <br>
+  assert.match(body, /First line<br>Second line<br>Third line/);
+  // Should not contain raw newlines before the final provenance break
+  const beforeProvenance = body.split('<br><br>')[0];
+  assert.doesNotMatch(beforeProvenance, /\n/);
   db.close();
 });
