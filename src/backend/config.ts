@@ -86,6 +86,11 @@ const DEFAULT_CONFIG: NexusConfig = {
     // written before this block existed (deepMerge backfills it on load).
     enabled: true,
   },
+  monday: {
+    enabled: false,
+    api_version: '2024-10',
+    poll_minutes: 10,
+  },
 };
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */

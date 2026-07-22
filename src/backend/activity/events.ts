@@ -3,6 +3,8 @@ export type OperationKind =
   | 'assistant_stream'
   | 'jira_sync'
   | 'github_sync'
+  | 'monday_sync'
+  | 'monday_write'
   | 'memory_archive'
   | 'memory_index'
   | 'mission_tick';
