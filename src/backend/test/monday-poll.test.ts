@@ -2,7 +2,7 @@
 // pass for the wrong reason — exactly what happened with JIRA_TOKEN.
 delete process.env.MONDAY_TOKEN;
 
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { getDb } from '../db';
 import { runMondayRefreshOnce, resolveMondayToken, __resetPollErrorState } from '../monday/poll';
@@ -10,6 +10,11 @@ import { MondayError } from '../monday/client';
 import type { ActivityEvent } from '../activity/events';
 
 const CFG = { enabled: true, api_version: '2024-10', poll_minutes: 10 };
+
+// lastErrorMessage is module-level, so without this a value set by one test
+// suppresses a notification in the next. Reset before each test to verify
+// fresh dedup behaviour independent of test ordering.
+beforeEach(() => __resetPollErrorState());
 
 test('resolveMondayToken reads MONDAY_TOKEN only', () => {
   assert.equal(resolveMondayToken(), undefined);
@@ -63,10 +68,6 @@ test('a failed refresh emits failed, records a notification, and never throws', 
 });
 
 test('an identical repeat failure does not notify twice', async () => {
-  // lastErrorMessage is process-level (see poll.ts), so the previous test's
-  // failure would otherwise leak in here and make this test's own first call
-  // look like a repeat. Reset before asserting fresh dedup behaviour.
-  __resetPollErrorState();
   const db = getDb(':memory:');
   const fail = async () => { throw new MondayError('Not Authenticated', 'UserUnauthorizedException', 200); };
   await runMondayRefreshOnce(db, CFG, 'tok', fail);
@@ -74,4 +75,33 @@ test('an identical repeat failure does not notify twice', async () => {
   const count = (db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c;
   assert.equal(count, 1);
   db.close();
+});
+
+test('a different error message notifies again', async () => {
+  const db = getDb(':memory:');
+  const fail1 = async () => { throw new MondayError('Not Authenticated', 'UserUnauthorizedException', 200); };
+  const fail2 = async () => { throw new MondayError('Rate limited', 'RateLimitException', 429); };
+  await runMondayRefreshOnce(db, CFG, 'tok', fail1);
+  await runMondayRefreshOnce(db, CFG, 'tok', fail2);
+  const count = (db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c;
+  assert.equal(count, 2);
+  db.close();
+});
+
+test('success resets dedup state so recurrence of prior error notifies again', async () => {
+  const db = getDb(':memory:');
+  const fail = async () => { throw new MondayError('Not Authenticated', 'UserUnauthorizedException', 200); };
+  const succeed = async () => 5;
+  await runMondayRefreshOnce(db, CFG, 'tok', fail);
+  await runMondayRefreshOnce(db, CFG, 'tok', succeed);
+  await runMondayRefreshOnce(db, CFG, 'tok', fail);
+  const count = (db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c;
+  assert.equal(count, 2);
+  db.close();
+});
+
+test('resolveMondayToken treats whitespace-only value as absent', () => {
+  process.env.MONDAY_TOKEN = '   ';
+  assert.equal(resolveMondayToken(), undefined);
+  delete process.env.MONDAY_TOKEN;
 });
