@@ -32,7 +32,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Test, typecheck, and build
+    name: Daemon test, typecheck, and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

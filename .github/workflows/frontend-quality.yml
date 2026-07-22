@@ -28,7 +28,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Test, typecheck, and build
+    name: Frontend test, typecheck, and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -57,7 +57,7 @@ jobs:
         run: npm run --workspace=src/frontend build
 
   visual:
-    name: Visual regression
+    name: Frontend visual regression
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:

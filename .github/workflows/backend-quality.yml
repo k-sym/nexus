@@ -38,7 +38,7 @@ concurrency:
 
 jobs:
   checks:
-    name: Test, typecheck, and build
+    name: Backend test, typecheck, and build
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
