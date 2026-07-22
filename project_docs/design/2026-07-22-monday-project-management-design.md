@@ -126,7 +126,7 @@ memory-index rebuild.
   "monday": {
     "board_id": "1234567890",
     "group_id": "topics",
-    "rollup":  { "enabled": true,  "column_id": "text_mkxyz" },
+    "rollup":  { "enabled": true,  "column_id": "text_mkxyz", "column_type": "text" },
     "updates": { "enabled": false, "min_interval_minutes": 30 }
   }
 }

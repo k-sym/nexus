@@ -180,7 +180,13 @@ export interface MondayProjectConfig {
   board_id: string;
   /** Optional narrowing to a single group on the board. */
   group_id?: string | null;
-  rollup: { enabled: boolean; column_id: string | null };
+  rollup: {
+    enabled: boolean;
+    column_id: string | null;
+    /** Resolved when the column is chosen, not inferred per write: Monday
+     *  column ids are user-renamable, so the id is not a reliable type hint. */
+    column_type: 'text' | 'numeric';
+  };
   updates: { enabled: boolean; min_interval_minutes: number };
 }
 ```
@@ -1471,7 +1477,7 @@ function cfg(over: Partial<MondayProjectConfig> = {}): MondayProjectConfig {
   return {
     board_id: 'b1',
     group_id: null,
-    rollup: { enabled: true, column_id: 'text_mkxyz' },
+    rollup: { enabled: true, column_id: 'text_mkxyz', column_type: 'text' },
     updates: { enabled: true, min_interval_minutes: 30 },
     ...over,
   };
@@ -1547,6 +1553,19 @@ test('writeRollup writes the formatted text to the configured column', async () 
   db.close();
 });
 
+test('a numeric column receives the percentage, not the text form', async () => {
+  const db = getDb(':memory:');
+  seedItem(db);
+  seedTasks(db, ['deploy', 'deploy', 'todo']);
+  const calls: unknown[][] = [];
+  await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: 'numbers_9', column_type: 'numeric' } }), '1', {
+    setColumn: async (...args: unknown[]) => { calls.push(args); },
+    postUpdate: async () => {},
+  } as any);
+  assert.equal(calls[0][4], '67');
+  db.close();
+});
+
 test('writeRollup skips an unchanged value', async () => {
   const db = getDb(':memory:');
   seedItem(db);
@@ -1563,8 +1582,8 @@ test('writeRollup is skipped when roll-up is disabled or has no column', async (
   seedItem(db);
   seedTasks(db, ['deploy']);
   const deps = { setColumn: async () => { throw new Error('must not write'); }, postUpdate: async () => {} } as any;
-  assert.equal(await writeRollup(db, OPTS, cfg({ rollup: { enabled: false, column_id: 'c' } }), '1', deps), 'skipped');
-  assert.equal(await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: null } }), '1', deps), 'skipped');
+  assert.equal(await writeRollup(db, OPTS, cfg({ rollup: { enabled: false, column_id: 'c', column_type: 'text' } }), '1', deps), 'skipped');
+  assert.equal(await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: null, column_type: 'text' } }), '1', deps), 'skipped');
   db.close();
 });
 
@@ -1703,8 +1722,9 @@ export async function writeRollup(
   if (!item) return 'skipped';
 
   const counts = computeRollup(listLinkedTaskStatuses(db, itemId));
-  const isNumeric = cfg.rollup.column_id.startsWith('numbers') || cfg.rollup.column_id.startsWith('numeric');
-  const value = isNumeric ? String(formatRollupPercent(counts)) : formatRollupText(counts);
+  const value = cfg.rollup.column_type === 'numeric'
+    ? String(formatRollupPercent(counts))
+    : formatRollupText(counts);
 
   const cacheKey = `${itemId}::${cfg.rollup.column_id}`;
   if (lastWritten.get(cacheKey) === value) return 'unchanged';
@@ -2013,7 +2033,7 @@ function seed(db: ReturnType<typeof getDb>) {
     .run(JSON.stringify({
       monday: {
         board_id: 'b1', group_id: null,
-        rollup: { enabled: true, column_id: 'text_1' },
+        rollup: { enabled: true, column_id: 'text_1', column_type: 'text' },
         updates: { enabled: false, min_interval_minutes: 30 },
       },
     }));
@@ -3368,7 +3388,7 @@ function seed(db: ReturnType<typeof getDb>, updatesEnabled: boolean) {
     .run(JSON.stringify({
       monday: {
         board_id: 'b1', group_id: null,
-        rollup: { enabled: true, column_id: 'text_1' },
+        rollup: { enabled: true, column_id: 'text_1', column_type: 'text' },
         updates: { enabled: updatesEnabled, min_interval_minutes: 30 },
       },
     }));
@@ -3584,9 +3604,8 @@ export function buildMondayToolDeps(db: Database.Database, threadId: string): Mo
   // the call through the existing ApprovalBroker, which wraps every tool call
   // in a supervised session — no extra gating is needed here.
   if (resolved.cfg.updates.enabled) {
-    const provenance = `Nexus task "${db.prepare('SELECT title FROM tasks WHERE id = ?').get(resolved.taskId) as { title: string } | undefined
-      ? (db.prepare('SELECT title FROM tasks WHERE id = ?').get(resolved.taskId) as { title: string }).title
-      : resolved.taskId}" (thread ${threadId})`;
+    const task = db.prepare('SELECT title FROM tasks WHERE id = ?').get(resolved.taskId) as { title: string } | undefined;
+    const provenance = `Nexus task "${task?.title ?? resolved.taskId}" (thread ${threadId})`;
     deps.postUpdate = async (itemId, body) => {
       await postItemUpdate(db, opts, itemId, body, provenance);
     };
@@ -3596,21 +3615,7 @@ export function buildMondayToolDeps(db: Database.Database, threadId: string): Mo
 }
 ```
 
-- [ ] **Step 4: Simplify the provenance expression**
-
-The provenance line above calls the same query twice inside a ternary, which is unreadable. Replace that block with:
-
-```ts
-  if (resolved.cfg.updates.enabled) {
-    const task = db.prepare('SELECT title FROM tasks WHERE id = ?').get(resolved.taskId) as { title: string } | undefined;
-    const provenance = `Nexus task "${task?.title ?? resolved.taskId}" (thread ${threadId})`;
-    deps.postUpdate = async (itemId, body) => {
-      await postItemUpdate(db, opts, itemId, body, provenance);
-    };
-  }
-```
-
-- [ ] **Step 5: Hand the resolvers to the runtime**
+- [ ] **Step 4: Hand the resolvers to the runtime**
 
 In `src/backend/index.ts`, at the `PiRuntime` construction (around line 55, where `recallMemories` is supplied), add:
 
@@ -3627,7 +3632,7 @@ import { buildMondayContext, buildMondayToolDeps } from './monday/session-deps.j
 
 The `mondayContext` signature declared in Task 10 is `(threadId, cwd)`; `cwd` is unused here, so declare the parameter and ignore it rather than changing the runtime's call site.
 
-- [ ] **Step 6: Run tests to verify they pass**
+- [ ] **Step 5: Run tests to verify they pass**
 
 Run: `npm run --workspace=src/backend test -- --test-name-pattern="monday"`
 Expected: PASS — 8 new tests.
@@ -3635,7 +3640,7 @@ Expected: PASS — 8 new tests.
 Run: `npm run typecheck`
 Expected: no errors.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/backend/monday/session-deps.ts src/backend/index.ts src/backend/test/monday-session-deps.test.ts
@@ -3685,7 +3690,7 @@ function seed(db: ReturnType<typeof getDb>) {
     .run(JSON.stringify({
       monday: {
         board_id: 'b1', group_id: null,
-        rollup: { enabled: true, column_id: 'text_1' },
+        rollup: { enabled: true, column_id: 'text_1', column_type: 'text' },
         updates: { enabled: false, min_interval_minutes: 30 },
       },
     }));
