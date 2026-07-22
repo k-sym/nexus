@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Task } from '@nexus/shared';
 import type { MondayItemWithLinks } from '@nexus/shared';
 import { fetchMondayItems } from '../api';
@@ -30,18 +30,26 @@ export default function TaskModal({ columnLabel, task, projectId, onClose, onSub
   const [mondayItem, setMondayItem] = useState<MondayItemWithLinks | null>(null);
 
   const taskId = task?.id;
+  // Track active effects so we don't update state after component unmount.
+  // Multiple calls to loadCurrentLink may happen (on mount, on onLinked), and
+  // only the most recent one's result should update state — older ones get
+  // cancelled. Using a generation counter ensures only the latest settles.
+  const loadGenerationRef = useRef(0);
 
-  // Loaded once when the modal opens (edit mode only), not per render — this
-  // mirrors KanbanBoard's own fetch-once-with-the-list pattern. A failure here
-  // must never block editing the task itself: Monday unavailable just means
-  // the section shows no current link, same tolerant contract as the badge.
+  // Loaded (and reloaded on link/unlink) to show the current link, if any.
+  // A failure here must never block editing the task itself: Monday unavailable
+  // just means the section shows no current link, same tolerant contract as the badge.
+  // Use per-call tracking to avoid stale state updates (if the effect unmounts
+  // before resolution, or if loadCurrentLink is called multiple times rapidly).
   const loadCurrentLink = useCallback(async () => {
     if (!taskId || !projectId) return;
+    const generation = ++loadGenerationRef.current;
     try {
       const items = await fetchMondayItems(projectId);
+      if (loadGenerationRef.current !== generation) return; // superseded
       setMondayItem(items.find((item) => item.task_ids.includes(taskId)) ?? null);
     } catch {
-      setMondayItem(null);
+      if (loadGenerationRef.current === generation) setMondayItem(null);
     }
   }, [taskId, projectId]);
 

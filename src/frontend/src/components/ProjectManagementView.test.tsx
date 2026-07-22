@@ -193,4 +193,81 @@ describe('ProjectManagementView', () => {
     // vanish the task from view.
     expect(screen.getByText('t1')).toBeTruthy();
   });
+
+  it('does not enable t2\'s button mid-flight when t1\'s unlink settles first (concurrent unlink test)', async () => {
+    // Start with three tasks: we'll unlink t1 and t2, leaving t3.
+    // This keeps the item (and its task badges) visible after the first load,
+    // so we can verify t2's button stays disabled while t2 is still pending.
+    const initialItem = { ...ITEM, task_ids: ['t1', 't2', 't3'] };
+    const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
+    fetchSpy.mockResolvedValueOnce([initialItem] as never);
+
+    // Control the unlink timing: t1 unlink resolves first, t2 unlink second
+    const t1Unlink = deferred<void>();
+    const t2Unlink = deferred<void>();
+    vi.spyOn(api, 'unlinkTaskFromMondayItem').mockImplementation(async (taskId: string) => {
+      if (taskId === 't1') return t1Unlink.promise;
+      if (taskId === 't2') return t2Unlink.promise;
+      throw new Error(`Unexpected task id: ${taskId}`);
+    });
+
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+    expect(screen.getByText('t1')).toBeTruthy();
+    expect(screen.getByText('t2')).toBeTruthy();
+    expect(screen.getByText('t3')).toBeTruthy();
+
+    // Get initial button state
+    let t1Button = screen.getByRole('button', { name: /unlink task t1/i });
+    let t2Button = screen.getByRole('button', { name: /unlink task t2/i });
+    let t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+    expect(t1Button).not.toBeDisabled();
+    expect(t2Button).not.toBeDisabled();
+    expect(t3Button).not.toBeDisabled();
+
+    // Start unlink of t1 and t2 (concurrently, without waiting)
+    fireEvent.click(t1Button);
+    fireEvent.click(t2Button);
+
+    // Both t1 and t2 buttons should now be disabled because their unlinks are pending
+    t1Button = screen.getByRole('button', { name: /unlink task t1/i });
+    t2Button = screen.getByRole('button', { name: /unlink task t2/i });
+    t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+    await waitFor(() => {
+      expect(t1Button).toBeDisabled();
+      expect(t2Button).toBeDisabled();
+    });
+    // t3 was not clicked, so it should remain enabled
+    expect(t3Button).not.toBeDisabled();
+
+    // Mock the refresh response after t1 unlink: remove only t1, keep t2 and t3
+    fetchSpy.mockResolvedValueOnce([{ ...ITEM, task_ids: ['t2', 't3'] }] as never);
+
+    // Resolve t1's unlink first; this should NOT re-enable t2's button
+    t1Unlink.resolve();
+
+    // After load() completes, t1's button disappears (since t1 is no longer in task_ids)
+    // and t2 should still have its button and still be disabled (because t2 unlink is pending)
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /unlink task t1/i })).toBeNull();
+      t2Button = screen.getByRole('button', { name: /unlink task t2/i });
+      expect(t2Button).toBeDisabled();
+    });
+    // t3 should still be there and not disabled
+    t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+    expect(t3Button).not.toBeDisabled();
+
+    // Mock the second load for t2's unlink completion
+    fetchSpy.mockResolvedValueOnce([{ ...ITEM, task_ids: ['t3'] }] as never);
+
+    // Resolve t2's unlink
+    t2Unlink.resolve();
+
+    // After load() completes, t2's button should disappear and t3 remains
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: /unlink task t2/i })).toBeNull();
+      t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+      expect(t3Button).not.toBeDisabled();
+    });
+  });
 });

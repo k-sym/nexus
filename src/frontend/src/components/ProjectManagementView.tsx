@@ -39,7 +39,10 @@ export function ProjectManagementView({ projectId }: Props) {
 
   // Task-scoped, separate from the row-level `error` above: unlinking one
   // task must not be confused with (or clobber) a full load/refresh failure.
-  const [unlinkingTaskId, setUnlinkingTaskId] = useState<string | null>(null);
+  // Use a Set to track multiple concurrent unlinks; a single scalar would break
+  // when two unlinks are in flight at once (the first's finally would reset the
+  // state while the second is still pending).
+  const [unlinkingTaskIds, setUnlinkingTaskIds] = useState<Set<string>>(new Set());
   const [unlinkError, setUnlinkError] = useState<string | null>(null);
 
   const load = useCallback(async (refresh: boolean) => {
@@ -64,7 +67,7 @@ export function ProjectManagementView({ projectId }: Props) {
   // Unlink a task from an item row, then refresh so the roll-up (and this
   // row's task_ids) reflects the change — no stale state left on screen.
   const handleUnlink = useCallback(async (taskId: string) => {
-    setUnlinkingTaskId(taskId);
+    setUnlinkingTaskIds(prev => new Set([...prev, taskId]));
     setUnlinkError(null);
     try {
       await unlinkTaskFromMondayItem(taskId);
@@ -72,7 +75,11 @@ export function ProjectManagementView({ projectId }: Props) {
     } catch (err) {
       setUnlinkError((err as Error).message);
     } finally {
-      setUnlinkingTaskId(null);
+      setUnlinkingTaskIds(prev => {
+        const next = new Set(prev);
+        next.delete(taskId);
+        return next;
+      });
     }
   }, [load]);
 
@@ -191,12 +198,12 @@ export function ProjectManagementView({ projectId }: Props) {
                             <span>{taskId}</span>
                             <button
                               type="button"
-                              disabled={unlinkingTaskId === taskId}
+                              disabled={unlinkingTaskIds.has(taskId)}
                               onClick={() => void handleUnlink(taskId)}
                               aria-label={`Unlink task ${taskId} from ${item.name}`}
                               className="text-zinc-500 hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                              {unlinkingTaskId === taskId ? '…' : '✕'}
+                              {unlinkingTaskIds.has(taskId) ? '…' : '✕'}
                             </button>
                           </li>
                         ))}
