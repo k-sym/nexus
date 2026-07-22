@@ -15,6 +15,7 @@
     "build:daemon": "npm --prefix src/memory-daemon run build",
     "build:glasses": "npm --prefix src/glasses install --no-workspaces --no-audit --no-fund && npm --prefix src/glasses run build",
     "typecheck": "npm run --workspace=src/shared build && npm run --workspace=src/backend typecheck && npm run --workspace=src/frontend typecheck",
+    "restart:backend": "bash scripts/restart-backend.sh",
     "stage:services": "node scripts/stage-services.cjs",
     "stage:node": "node scripts/fetch-node-runtime.cjs",
     "prepackage": "npm run build && npm run build:glasses && npm run stage:services && node scripts/prune-foreign-natives.cjs && npm run stage:node",
