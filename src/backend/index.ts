@@ -32,6 +32,7 @@ import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
+import { startMondayPoll } from './monday/poll.js';
 import { startMissionScheduler } from './missions/runner.js';
 import { ActivityManager } from './activity/manager.js';
 import { PiRuntime, defaultPiRuntimePaths } from './pi/runtime.js';
@@ -63,6 +64,7 @@ async function main() {
   const activityManager = new ActivityManager(db);
   const stopActivityListening = activityManager.startListening();
   startJiraSync(db, activityManager);
+  startMondayPoll(db, activityManager.bus.emit.bind(activityManager.bus));
   // Shared between chat routes and the mission scheduler so an assistant_turn
   // mission claims the per-project/model slot the same way a chat turn does.
   // Created here (before the scheduler), then decorated onto the app below.
