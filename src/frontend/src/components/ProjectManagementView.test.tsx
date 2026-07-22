@@ -121,4 +121,36 @@ describe('ProjectManagementView', () => {
     expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
     expect(screen.getByText(/token or board configuration/i)).toBeTruthy();
   });
+
+  it('does not show the empty message when an error occurs after loading zero items', async () => {
+    const spy = vi.spyOn(api, 'fetchMondayItems');
+    spy.mockResolvedValueOnce([] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText(/no monday items/i)).toBeTruthy();
+
+    spy.mockRejectedValueOnce(Object.assign(new Error('Monday request failed'), { retryable: true }));
+    fireEvent.click(screen.getByRole('button', { name: /refresh from monday/i }));
+
+    await waitFor(() => expect(screen.getByText(/Monday request failed/)).toBeTruthy());
+    // The error banner must be shown, and the empty message must NOT be shown
+    // to avoid the ambiguity of "no items" vs "load failed".
+    expect(screen.queryByText(/no monday items/i)).toBeNull();
+  });
+
+  it('shows the non-retryable inline error message when a refresh fails with retryable: false after loading items', async () => {
+    const spy = vi.spyOn(api, 'fetchMondayItems');
+    spy.mockResolvedValueOnce([ITEM] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+
+    spy.mockRejectedValueOnce(Object.assign(new Error('Monday token expired'), { retryable: false }));
+    fireEvent.click(screen.getByRole('button', { name: /refresh from monday/i }));
+
+    await waitFor(() => expect(screen.getByText(/Monday token expired/)).toBeTruthy());
+    // The inline banner must show the non-retryable message without a Retry button
+    expect(screen.getByText(/token or board configuration/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /retry/i })).toBeNull();
+    // And the previously-loaded item must still be visible
+    expect(screen.getByText('Ship the thing')).toBeTruthy();
+  });
 });

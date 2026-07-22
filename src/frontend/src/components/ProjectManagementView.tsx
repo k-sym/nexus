@@ -126,7 +126,7 @@ export function ProjectManagementView({ projectId }: Props) {
       ) : null}
 
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
-        {items.length === 0 ? (
+        {!error && items.length === 0 ? (
           <div className="text-sm text-zinc-600 text-center py-10">No Monday items in this project&apos;s scope.</div>
         ) : (
           [...groups.entries()].map(([groupTitle, groupItems]) => (
