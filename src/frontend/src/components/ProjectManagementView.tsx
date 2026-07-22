@@ -8,7 +8,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MondayItemWithLinks } from '@nexus/shared';
-import { fetchMondayItems, type FetchJsonError } from '../api';
+import { fetchMondayItems, unlinkTaskFromMondayItem, type FetchJsonError } from '../api';
 
 interface Props {
   projectId: string;
@@ -37,6 +37,11 @@ export function ProjectManagementView({ projectId }: Props) {
   // monotonic counter covers both call sites correctly.
   const generationRef = useRef(0);
 
+  // Task-scoped, separate from the row-level `error` above: unlinking one
+  // task must not be confused with (or clobber) a full load/refresh failure.
+  const [unlinkingTaskId, setUnlinkingTaskId] = useState<string | null>(null);
+  const [unlinkError, setUnlinkError] = useState<string | null>(null);
+
   const load = useCallback(async (refresh: boolean) => {
     const generation = ++generationRef.current;
     setError(null);
@@ -55,6 +60,21 @@ export function ProjectManagementView({ projectId }: Props) {
   }, [projectId]);
 
   useEffect(() => { void load(false); }, [load]);
+
+  // Unlink a task from an item row, then refresh so the roll-up (and this
+  // row's task_ids) reflects the change — no stale state left on screen.
+  const handleUnlink = useCallback(async (taskId: string) => {
+    setUnlinkingTaskId(taskId);
+    setUnlinkError(null);
+    try {
+      await unlinkTaskFromMondayItem(taskId);
+      await load(false);
+    } catch (err) {
+      setUnlinkError((err as Error).message);
+    } finally {
+      setUnlinkingTaskId(null);
+    }
+  }, [load]);
 
   // No data has ever loaded successfully and the load failed — full-screen
   // error. This is the only state that must never look like an empty board.
@@ -125,6 +145,19 @@ export function ProjectManagementView({ projectId }: Props) {
         </div>
       ) : null}
 
+      {unlinkError ? (
+        <div role="alert" className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <span>{unlinkError}</span>
+          <button
+            type="button"
+            className="text-xs text-red-300 underline shrink-0"
+            onClick={() => setUnlinkError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
         {!error && items.length === 0 ? (
           <div className="text-sm text-zinc-600 text-center py-10">No Monday items in this project&apos;s scope.</div>
@@ -148,6 +181,27 @@ export function ProjectManagementView({ projectId }: Props) {
                         <span className="text-amber-300">item unavailable in Monday</span>
                       ) : null}
                     </div>
+                    {item.task_ids.length > 0 ? (
+                      <ul className="mt-2 flex flex-wrap gap-1.5">
+                        {item.task_ids.map((taskId) => (
+                          <li
+                            key={taskId}
+                            className="inline-flex items-center gap-1.5 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
+                          >
+                            <span>{taskId}</span>
+                            <button
+                              type="button"
+                              disabled={unlinkingTaskId === taskId}
+                              onClick={() => void handleUnlink(taskId)}
+                              aria-label={`Unlink task ${taskId} from ${item.name}`}
+                              className="text-zinc-500 hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                              {unlinkingTaskId === taskId ? '…' : '✕'}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </li>
                 ))}
               </ul>

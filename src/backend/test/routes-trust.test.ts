@@ -30,6 +30,7 @@ function config(root: string): NexusConfig {
     obsidian: { vault_path: join(root, 'vault'), sync_interval_seconds: 30 },
     jira: { enabled: true, user: 'user@example.com', instance: 'acme.atlassian.net', project: 'SUP', poll_minutes: 15, content_rules: [] },
     github: { enabled: true },
+    monday: { enabled: false, api_version: '2026-07', poll_minutes: 10 },
   };
 }
 
@@ -290,9 +291,9 @@ test('trust snapshot reports Monday secret source, outbound destination, and mir
   }
 });
 
-test('trust snapshot reports Monday as absent and disabled when unconfigured, without crashing on a config missing the field entirely', async () => {
+test('trust snapshot reports Monday as absent and disabled when unconfigured', async () => {
   delete process.env.MONDAY_TOKEN;
-  const { app, root } = await fixture(); // config() helper omits `monday` entirely
+  const { app, root } = await fixture(); // config() helper's monday block defaults to { enabled: false }
   try {
     const response = await app.inject({ method: 'GET', url: '/api/trust' });
     assert.equal(response.statusCode, 200);

@@ -187,10 +187,11 @@ export async function buildTrustSnapshot(
       { name: 'Assistant', destination: safeUrl(config.assistant.url), sends: ['prompts', 'conversation content'], enabled: Boolean(config.assistant.url) },
       { name: 'Jira', destination: safeUrl(config.jira.instance), sends: ['account identity', 'ticket queries'], enabled: config.jira.enabled },
       { name: 'GitHub', destination: 'https://api.github.com', sends: ['repository identity', 'issue queries'], enabled: config.github.enabled },
-      // config.monday is optional here defensively: it is a required NexusConfig
-      // field in practice (backfilled by deepMerge on load), but older fixtures
-      // and tests may omit it entirely.
-      { name: 'Monday.com', destination: 'https://api.monday.com/v2', sends: ['account identity', 'item queries'], enabled: Boolean(config.monday?.enabled) },
+      // config.monday is a required NexusConfig field — loadConfig always
+      // deep-merges over DEFAULT_CONFIG, which defines it — so it is never
+      // absent at runtime. No optional chaining: a config that genuinely
+      // lacks this field is a type-level bug and should surface as one.
+      { name: 'Monday.com', destination: 'https://api.monday.com/v2', sends: ['account identity', 'item queries'], enabled: Boolean(config.monday.enabled) },
     ],
     telemetry: {
       applicationTelemetry: false,

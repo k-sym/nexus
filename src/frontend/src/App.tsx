@@ -67,6 +67,10 @@ export default function App() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  // Bumped whenever TaskModal reports a Monday link/unlink, so the Kanban
+  // board (which loads its own badge map once per projectId) refetches and
+  // stops showing a stale link after the modal closes.
+  const [mondayRefreshKey, setMondayRefreshKey] = useState(0);
   const [diffReviewTask, setDiffReviewTask] = useState<Task | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
@@ -769,6 +773,7 @@ export default function App() {
               columns={KANBAN_COLUMNS}
               columnLabels={KANBAN_COLUMN_LABELS}
               projectId={activeProject.id}
+              mondayRefreshKey={mondayRefreshKey}
               onMoveTask={handleMoveTask}
               onAddTask={(status) => setTaskModalColumn(status)}
               onOpenTask={handleOpenTask}
@@ -903,16 +908,20 @@ export default function App() {
       {taskModalColumn && (
         <TaskModal
           columnLabel={KANBAN_COLUMN_LABELS[taskModalColumn]}
+          projectId={activeProject?.id}
           onClose={() => setTaskModalColumn(null)}
           onSubmit={handleCreateTask}
+          onMondayLinkChanged={() => setMondayRefreshKey((k) => k + 1)}
         />
       )}
 
       {editingTask && (
         <TaskModal
           task={editingTask}
+          projectId={activeProject?.id}
           onClose={() => setEditingTask(null)}
           onSubmit={handleEditTask}
+          onMondayLinkChanged={() => setMondayRefreshKey((k) => k + 1)}
         />
       )}
 

@@ -153,4 +153,44 @@ describe('ProjectManagementView', () => {
     // And the previously-loaded item must still be visible
     expect(screen.getByText('Ship the thing')).toBeTruthy();
   });
+
+  it('unlinks a task from an item row and refreshes so the roll-up updates', async () => {
+    const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
+    fetchSpy.mockResolvedValueOnce([ITEM] as never);
+    const unlink = vi.spyOn(api, 'unlinkTaskFromMondayItem').mockResolvedValue(undefined as never);
+
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+    expect(screen.getByText('t1')).toBeTruthy();
+
+    // After the unlink, the refetch reports the item with one fewer linked
+    // task and an updated roll-up.
+    fetchSpy.mockResolvedValueOnce([
+      { ...ITEM, task_ids: ['t2', 't3'], rollup: { total: 2, open: 1, inProgress: 0, inReview: 1, done: 0 }, rollup_text: '0/2 done · 1 in review' },
+    ] as never);
+
+    fireEvent.click(screen.getByRole('button', { name: /unlink task t1/i }));
+
+    await waitFor(() => expect(unlink).toHaveBeenCalledWith('t1'));
+    // The view refetched (not just spliced local state) — the new roll-up text
+    // proves the list actually reloaded rather than leaving stale state on screen.
+    await waitFor(() => expect(screen.getByText('0/2 done · 1 in review')).toBeTruthy());
+    expect(screen.queryByText('t1')).toBeNull();
+    expect(screen.getByText('t2')).toBeTruthy();
+  });
+
+  it('surfaces an inline error, without discarding the row, when unlinking fails', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    vi.spyOn(api, 'unlinkTaskFromMondayItem').mockRejectedValue(new Error('Unlink failed'));
+
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /unlink task t1/i }));
+
+    await waitFor(() => expect(screen.getByText('Unlink failed')).toBeTruthy());
+    // The row itself must still be there — a failed unlink must not silently
+    // vanish the task from view.
+    expect(screen.getByText('t1')).toBeTruthy();
+  });
 });

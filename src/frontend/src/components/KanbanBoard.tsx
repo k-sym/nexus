@@ -14,6 +14,12 @@ interface KanbanBoardProps {
    *  it — the board then simply shows no badges, matching the "Monday
    *  unavailable never blocks the board" contract. */
   projectId?: string;
+  /** Bump this (e.g. a counter) to force a refetch of the badge map without
+   *  changing `projectId` — used after a link/unlink happens elsewhere (the
+   *  task modal) so a card's badge doesn't go stale. Optional and additive;
+   *  omitting it leaves the existing fetch-once-per-projectId behaviour
+   *  unchanged. */
+  mondayRefreshKey?: number;
   onMoveTask: (taskId: string, newStatus: TaskStatus) => void;
   onAddTask: (status: TaskStatus) => void;
   /** Click a card. Linked tasks reopen their chat; unlinked tasks edit. The
@@ -30,7 +36,7 @@ const PRIORITY_CLASSES: Record<string, string> = {
   urgent: 'kanban-priority-urgent',
 };
 
-export default function KanbanBoard({ tasks, columns, columnLabels, projectId, onMoveTask, onAddTask, onOpenTask, onDeleteTask, onOpenDiffReview }: KanbanBoardProps) {
+export default function KanbanBoard({ tasks, columns, columnLabels, projectId, mondayRefreshKey, onMoveTask, onAddTask, onOpenTask, onDeleteTask, onOpenDiffReview }: KanbanBoardProps) {
   // Loaded once with the task list, not per card — every card render needs
   // this, so a per-card fetch would be one request per card. A failure here
   // (e.g. an expired Monday token) must never block the board itself: cards
@@ -54,7 +60,7 @@ export default function KanbanBoard({ tasks, columns, columnLabels, projectId, o
       }
     })();
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectId, mondayRefreshKey]);
 
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     e.dataTransfer.setData('taskId', taskId);
