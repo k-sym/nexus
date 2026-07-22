@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
@@ -12,6 +12,7 @@ vi.mock('../api', () => ({
         assistant: { url: 'https://assistant.example.test/v1', api_key: '${ASSISTANT_API_KEY}' },
         models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '', supports_images: false } },
         jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
+        monday: { enabled: false, api_version: '2026-07', poll_minutes: 10 },
       })),
       update: vi.fn(async (config) => config),
       testLocalModel: vi.fn(async () => ({
@@ -103,6 +104,26 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
 
     expect(await screen.findByRole('heading', { name: 'Trust & Privacy' })).toBeInTheDocument();
+  });
+
+  it('shows a Monday.com section that never offers a field for the token', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const heading = await screen.findByRole('heading', { name: 'Monday.com' });
+    const section = within(heading.parentElement as HTMLElement);
+    expect(screen.getByDisplayValue('2026-07')).toBeInTheDocument();
+    expect(section.getByText(/MONDAY_TOKEN/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/monday.*token/i)).not.toBeInTheDocument();
+
+    await user.click(section.getByRole('button', { name: 'Disabled' }));
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(api.settings.update).toHaveBeenCalledWith(expect.objectContaining({
+        monday: expect.objectContaining({ enabled: true }),
+      }));
+    });
   });
 
   it('tests the local model server with the unsaved settings values', async () => {

@@ -40,6 +40,11 @@ vi.mock('./components/AssistantView', () => ({
   default: () => <div data-testid="assistant-view">Assistant</div>,
 }));
 vi.mock('./components/MemoryRail', () => ({ default: () => <div data-testid="memory-rail" /> }));
+vi.mock('./components/ProjectManagementView', () => ({
+  ProjectManagementView: ({ projectId }: { projectId: string }) => (
+    <div data-testid="project-management-view">{projectId}</div>
+  ),
+}));
 vi.mock('./components/DaemonToasts', () => ({ default: () => null }));
 vi.mock('./components/NotificationToasts', () => ({ default: () => null }));
 
@@ -181,6 +186,17 @@ describe('App project navigation', () => {
     await user.click(screen.getByTitle('Dismiss archive error'));
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('renders the Project Management sub-view for the active project', async () => {
+    const user = userEvent.setup();
+    localStorage.clear();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText('Switch to Alpha'));
+    await user.click(await screen.findByText('Project Management'));
+
+    expect(await screen.findByTestId('project-management-view')).toHaveTextContent('project-a');
   });
 
   it('hides the Projects sidebar on the Assistant view', async () => {

@@ -29,4 +29,25 @@ describe('viewState', () => {
     expect(loadViewState().activeThreadId).toBeNull();
     expect(loadViewState().subView).toBe('kanban');
   });
+
+  it('round-trips the projectManagement sub-view', () => {
+    saveViewState({ activeProjectId: 'proj-1', subView: 'projectManagement', activeThreadId: null });
+    expect(loadViewState()).toEqual({
+      activeProjectId: 'proj-1',
+      subView: 'projectManagement',
+      activeThreadId: null,
+    });
+  });
+
+  it('drops an unrecognized persisted subView instead of returning it verbatim', () => {
+    localStorage.setItem(
+      VIEW_STATE_KEY,
+      JSON.stringify({ activeProjectId: 'proj-1', subView: 'some-future-view', activeThreadId: null }),
+    );
+    const state = loadViewState();
+    expect(state.subView).toBeUndefined();
+    // The rest of the selection is untouched — only the invalid key is dropped.
+    expect(state.activeProjectId).toBe('proj-1');
+    expect(state.activeThreadId).toBeNull();
+  });
 });

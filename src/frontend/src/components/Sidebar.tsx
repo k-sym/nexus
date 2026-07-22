@@ -1,9 +1,11 @@
 import { useState, useRef, useMemo } from 'react';
 import { Project, ChatThread, deriveProjectBadge } from '@nexus/shared';
-import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch, GitBranch } from '@phosphor-icons/react';
+import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, CircleNotch, GitBranch, Target } from '@phosphor-icons/react';
 import { confirmDialog } from '../lib/confirm';
 
-export type SubView = 'kanban' | 'memory' | 'chat';
+/** 'projectManagement' is the Monday.com initiative-level view (Task 12) —
+ *  Monday items are high-level initiatives that several Kanban tasks link to. */
+export type SubView = 'kanban' | 'memory' | 'chat' | 'projectManagement';
 
 export interface ThreadMeta {
   thread: ChatThread;
@@ -384,6 +386,14 @@ export default function Sidebar({
                 icon={<Brain size={15} />}
               >
                 Memory
+              </Row>
+              <Row
+                active={subView === 'projectManagement'}
+                depth={0}
+                onClick={() => onSelectSubView(activeProject.id, 'projectManagement')}
+                icon={<Target size={15} />}
+              >
+                Project Management
               </Row>
               <Row
                 active={false}

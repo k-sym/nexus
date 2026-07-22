@@ -458,6 +458,40 @@ export default function SettingsPage() {
             </p>
           </Section>
 
+          {/* Monday.com */}
+          <Section title="Monday.com">
+            <Field label="Sync">
+              <button
+                onClick={() => update(['monday', 'enabled'], !config.monday?.enabled)}
+                className={`px-3 py-1 text-xs rounded-sm transition-colors ${config.monday?.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+              >
+                {config.monday?.enabled ? 'Enabled' : 'Disabled'}
+              </button>
+            </Field>
+            <Field label="API version">
+              <input
+                type="text"
+                value={config.monday?.api_version ?? ''}
+                onChange={(e) => update(['monday', 'api_version'], e.target.value)}
+                placeholder="2026-07"
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
+              />
+            </Field>
+            <Field label="Poll interval (minutes)">
+              <input
+                type="number"
+                min={1}
+                value={config.monday?.poll_minutes ?? 10}
+                onChange={(e) => update(['monday', 'poll_minutes'], parseInt(e.target.value, 10) || 10)}
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
+              />
+            </Field>
+            <p className="text-xs text-faint">
+              The API token is read from the <span className="font-mono text-muted">MONDAY_TOKEN</span> environment
+              variable, never stored here. Changes apply on the next backend restart.
+            </p>
+          </Section>
+
           <TrustPrivacySection />
         </div>
       </div>
