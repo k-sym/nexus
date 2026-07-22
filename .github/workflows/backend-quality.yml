@@ -1,0 +1,73 @@
+name: Backend quality
+
+# The backend's ~460 tests, its typecheck and its ESM-dist check only ever ran
+# locally. `frontend-quality` is path-filtered to src/frontend/**, and
+# `dependency-audit` only reads manifests.
+#
+# src/backend IS an npm workspace, so this installs from the ROOT lockfile and
+# builds @nexus/shared first — the backend imports it, and a stale shared/dist
+# compiles the backend against outdated types without erroring.
+
+on:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - src/shared/**
+      - src/backend/**
+      - scripts/check-esm-dist.cjs
+      - .github/workflows/backend-quality.yml
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - package-lock.json
+      - src/shared/**
+      - src/backend/**
+      - scripts/check-esm-dist.cjs
+      - .github/workflows/backend-quality.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Backend test, typecheck, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run --workspace=src/shared build
+
+      # Several suites write under $HOME (~/.nexus, the Obsidian vault path).
+      # A runner's home is empty, which is the case worth testing — verified
+      # locally against a throwaway HOME before wiring this up.
+      - name: Run backend tests
+        run: npm run --workspace=src/backend test
+
+      - name: Typecheck backend
+        run: npm run --workspace=src/backend typecheck
+
+      # `build` is rm -rf dist && tsc, with a postbuild that walks the emitted
+      # JS and fails if a relative import does not resolve to a file under dist.
+      # That catches extensionless ESM imports, which typecheck cannot see.
+      - name: Build backend (runs the ESM-dist check)
+        run: npm run --workspace=src/backend build

@@ -92,7 +92,14 @@ test('approval broker emits resolved (default-deny) on cancel, cancelThread and 
 test('approval broker times out to a default-deny', async () => {
   const broker = new ApprovalBroker();
   const pending = broker.register('t', 'a', 'bash', INPUT, '/repo', undefined, 15);
+  // The broker unrefs its timeout on purpose, so a pending approval can never hold
+  // the backend process open. That leaves nothing keeping THIS test's event loop
+  // alive while we await it: locally other work happens to, but on a CI runner the
+  // loop drains first and the whole file dies with "Promise resolution is still
+  // pending but the event loop has already resolved". Hold it open ourselves.
+  const keepAlive = setTimeout(() => {}, 5_000);
   const decision = await pending;
+  clearTimeout(keepAlive);
   assert.equal(decision.block, true);
   assert.match(decision.reason ?? '', /timed out/i);
   // The gate is gone after timing out.
