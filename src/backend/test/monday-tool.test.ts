@@ -91,3 +91,52 @@ test('monday_post_update passes the body through to the dep', async () => {
   await post.execute('call-1', { item_id: '1', body: 'Done the migration' });
   assert.equal(posted, 'Done the migration');
 });
+
+test('monday_get_item surfaces missing state prominently', async () => {
+  const pi = fakePi();
+  const missingItem = { ...ITEM, state: 'missing' as const };
+  createMondayExtension({ ...READ_DEPS, getItem: async () => ({ item: missingItem, updates: [], linked_tasks: [] }) } as any)(pi as any);
+  const get = pi.tools.find((t) => t.name === 'monday_get_item')!;
+  const result = await get.execute('call-1', { item_id: '1' });
+  const text = result.content[0].text as string;
+  assert.match(text, /no longer present in Monday/);
+  assert.match(text, /last known state/);
+});
+
+test('monday_get_item does not warn for active items', async () => {
+  const pi = fakePi();
+  createMondayExtension(READ_DEPS as any)(pi as any);
+  const get = pi.tools.find((t) => t.name === 'monday_get_item')!;
+  const result = await get.execute('call-1', { item_id: '1' });
+  const text = result.content[0].text as string;
+  assert.doesNotMatch(text, /no longer present/);
+  assert.doesNotMatch(text, /archived/);
+});
+
+test('monday_get_item surfaces archived state', async () => {
+  const pi = fakePi();
+  const archivedItem = { ...ITEM, state: 'archived' as const };
+  createMondayExtension({ ...READ_DEPS, getItem: async () => ({ item: archivedItem, updates: [], linked_tasks: [] }) } as any)(pi as any);
+  const get = pi.tools.find((t) => t.name === 'monday_get_item')!;
+  const result = await get.execute('call-1', { item_id: '1' });
+  const text = result.content[0].text as string;
+  assert.match(text, /archived in Monday/);
+});
+
+test('monday_get_item degrades gracefully on malformed owners_json', async () => {
+  const pi = fakePi();
+  const badOwners = { ...ITEM, owners_json: 'not valid json' };
+  createMondayExtension({ ...READ_DEPS, getItem: async () => ({ item: badOwners, updates: [], linked_tasks: [] }) } as any)(pi as any);
+  const get = pi.tools.find((t) => t.name === 'monday_get_item')!;
+  const result = await get.execute('call-1', { item_id: '1' });
+  assert.equal(result.details.status, 'ok');
+  const text = result.content[0].text as string;
+  assert.match(text, /malformed data/);
+});
+
+test('monday_get_item rejects an empty item_id', async () => {
+  const pi = fakePi();
+  createMondayExtension(READ_DEPS as any)(pi as any);
+  const get = pi.tools.find((t) => t.name === 'monday_get_item')!;
+  await assert.rejects(() => get.execute('call-1', { item_id: '  ' }), /non-empty/);
+});

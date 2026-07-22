@@ -50,13 +50,47 @@ function formatItemLine(item: MondayItem): string {
 
 function formatDetail(detail: MondayItemDetail): string {
   const { item, updates, linked_tasks: linkedTasks } = detail;
-  const owners = (JSON.parse(item.owners_json || '[]') as string[]).join(', ');
-  const lines = [
+
+  // Guard against malformed owners_json: parse defensively and degrade gracefully
+  let owners = 'none';
+  try {
+    const parsed = JSON.parse(item.owners_json || '[]');
+    if (Array.isArray(parsed)) {
+      owners = parsed.join(', ') || 'none';
+    }
+  } catch {
+    // Malformed JSON; render as unknown rather than throwing
+    owners = 'unknown (malformed data)';
+  }
+
+  const lines: string[] = [];
+
+  // Surface non-active state prominently at the top
+  if (item.state === 'missing') {
+    lines.push(
+      '⚠️  This item is no longer present in Monday.com',
+      'The details below are the last known state:',
+      ''
+    );
+  } else if (item.state === 'archived') {
+    lines.push(
+      '⚠️  This item is archived in Monday.com',
+      ''
+    );
+  } else if (item.state === 'deleted') {
+    lines.push(
+      '⚠️  This item was deleted from Monday.com',
+      'The details below are the last known state:',
+      ''
+    );
+  }
+
+  lines.push(
     `${item.name} (id ${item.item_id})`,
     `Board: ${item.board_name}${item.group_title ? ` › ${item.group_title}` : ''}`,
     `Status: ${item.status_label ?? 'none'}`,
-    `Owners: ${owners || 'none'}`,
-  ];
+    `Owners: ${owners}`,
+  );
   if (item.url) lines.push(`URL: ${item.url}`);
   if (linkedTasks.length > 0) {
     lines.push('', 'Linked Nexus tasks:');
@@ -83,7 +117,8 @@ export function createMondayExtension(deps: MondayToolDeps): ExtensionFactory {
       label: 'Search Monday',
       description:
         'Search Monday.com items by name. Scoped to this project\'s board by default. Use it to find the '
-        + 'initiative a piece of work belongs to, or related initiatives.',
+        + 'initiative a piece of work belongs to, or related initiatives. Skip it for searches the board '
+        + 'context already answers.',
       promptSnippet: 'monday_search: find Monday.com initiatives by name',
       parameters: SearchSchema,
       async execute(_toolCallId, params): Promise<AgentToolResult<{ status: string; count: number }>> {
@@ -110,14 +145,17 @@ export function createMondayExtension(deps: MondayToolDeps): ExtensionFactory {
       label: 'Read Monday item',
       description:
         'Read a Monday.com item in full: status, owners, recent updates, and the Nexus tasks linked to it. '
-        + 'Use it when the snapshot in your context may be stale, or to read an item you found via monday_search.',
+        + 'Use it when the snapshot in your context may be stale, or to read an item you found via monday_search. '
+        + 'Skip it for items already in context — their details are already available to you.',
       promptSnippet: 'monday_get_item: read a Monday.com initiative in full, including current status',
       parameters: GetItemSchema,
       async execute(_toolCallId, params): Promise<AgentToolResult<{ status: string }>> {
-        const detail = await deps.getItem(params.item_id);
+        const itemId = params.item_id?.trim() ?? '';
+        if (!itemId) throw new Error('monday_get_item needs a non-empty item_id.');
+        const detail = await deps.getItem(itemId);
         if (!detail) {
           return {
-            content: [{ type: 'text', text: `No Monday item with id ${params.item_id}` }],
+            content: [{ type: 'text', text: `No Monday item with id ${itemId}` }],
             details: { status: 'missing' },
           };
         }
