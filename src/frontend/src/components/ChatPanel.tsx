@@ -19,6 +19,7 @@ import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
 import { api } from '../api';
 import { buildQuestionAnswerSummary, parseTerminalAskBlock, type QuestionAnswer, type QuestionRequest, type QuestionToolResult } from '../lib/questions';
+import { useNextSuggestion } from '../hooks/useNextSuggestion';
 import { ModelSelector } from './ModelSelector';
 import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -537,6 +538,17 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   }, [state.isRunning, threadId, abortStream, stopRun]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Tab' && suggestion && !input) {
+      // Accept into the composer without sending: editing before Enter is free.
+      e.preventDefault();
+      setInput(suggestion);
+      dismissSuggestion();
+      return;
+    }
+    if (e.key === 'Escape' && suggestion) {
+      dismissSuggestion();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -635,6 +647,23 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     : loadedMessages.concat(state.messages);
   const streaming = state.streamingMessage;
   const isEmpty = visible.length === 0 && !streaming;
+  // The trailing assistant message identifies the completed turn: it changes
+  // exactly once per turn, so it serves as both trigger and staleness token.
+  // Message id rather than run id — AssistantView's messages carry no run
+  // metadata, and this feature uses one signal across both surfaces.
+  const lastMessage = visible[visible.length - 1];
+  const completedTurnKey =
+    !isRunning && lastMessage?.role === 'assistant' && lastMessage.content.trim()
+      ? lastMessage.id
+      : null;
+  const { suggestion, dismiss: dismissSuggestion } = useNextSuggestion({
+    sessionKey: threadId ?? null,
+    turnKey: completedTurnKey,
+    messages: visible,
+    // Only ever offered into an empty composer — which is also the only time a
+    // placeholder renders, and why this needs no ghost-text overlay.
+    enabled: !isRunning && !input.trim() && state.status !== 'error',
+  });
   // Persistent status pinned above the composer so "is it still working?" is
   // always visible without scrolling back up to the run card's header, which
   // climbs out of view as tool output streams in.
@@ -811,16 +840,26 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           <textarea
             value={input}
             disabled={isRunning}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              // Typing their own words retires the suggestion for good — it does
+              // not reappear if they then clear the box again.
+              if (suggestion) dismissSuggestion();
+              setInput(e.target.value);
+            }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder="Type a message… (Enter to send, Shift+Enter for newline)"
+            placeholder={suggestion || 'Type a message… (Enter to send, Shift+Enter for newline)'}
             rows={2}
             data-testid="chat-input"
             className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong"
           />
           <div className="flex min-w-[7.5rem] flex-col items-stretch gap-1" data-testid="composer-actions">
             <ContextUsageLabel usage={state.contextUsage} />
+            {suggestion && !input && (
+              <span className="text-[10px] text-faint text-center" data-testid="suggestion-hint">
+                ⇥ to accept
+              </span>
+            )}
             {isRunning ? (
               <button
                 type="button"
