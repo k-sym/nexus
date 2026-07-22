@@ -157,61 +157,19 @@ test('getItem dep reports the linked Nexus tasks', async () => {
   db.close();
 });
 
-// --- IMPORTANT 1: recentUpdates() must read the item's REAL updates (from
-// updates_json, populated via Monday's updates connection — see client.ts
-// and map.ts), newest first, rather than misreading column_values_json.
+// --- IMPORTANT 1: recentUpdates() must never mistake a COLUMN VALUE for a
+// real update. Monday's updates feed isn't mirrored at all yet (no client
+// fetch, no schema field) — a column whose id happens to be literally
+// "updates" must not leak its column value through as if it were one.
 
-function seedWithUpdates(db: ReturnType<typeof getDb>, updatesJson: string) {
-  seed(db, false);
-  upsertItems(db, [{
-    item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
-    name: 'Ship the thing', state: 'active', status_label: 'Working on it', status_color: null,
-    owners_json: '[]', url: null, column_values_json: '{}', updates_json: updatesJson,
-    monday_updated_at: null, synced_at: 'later',
-  }]);
-}
-
-test('buildMondayContext surfaces the item\'s real updates, newest first', async () => {
-  const db = getDb(':memory:');
-  seedWithUpdates(db, JSON.stringify([
-    { text: 'Kicked off', created_at: '2026-07-20T09:00:00.000Z' },
-    { text: 'Shipped v1', created_at: '2026-07-22T09:00:00.000Z' },
-    { text: 'Blocked on infra', created_at: '2026-07-21T09:00:00.000Z' },
-  ]));
-  await withMondayEnabled(() => {
-    const ctx = buildMondayContext(db, 'thread-1')!;
-    assert.deepEqual(ctx.updates, ['Shipped v1', 'Blocked on infra', 'Kicked off']);
-  });
-  db.close();
-});
-
-test('buildMondayContext degrades to an empty updates list when updates_json is malformed', async () => {
-  const db = getDb(':memory:');
-  seedWithUpdates(db, 'not valid json{');
-  await withMondayEnabled(() => {
-    const ctx = buildMondayContext(db, 'thread-1')!;
-    assert.deepEqual(ctx.updates, []);
-  });
-  db.close();
-});
-
-test('buildMondayContext returns an empty updates list, not a crash, when updates_json is not an array', async () => {
-  const db = getDb(':memory:');
-  seedWithUpdates(db, '{"not":"an array"}');
-  await withMondayEnabled(() => {
-    const ctx = buildMondayContext(db, 'thread-1')!;
-    assert.deepEqual(ctx.updates, []);
-  });
-  db.close();
-});
-
-test('buildMondayContext no longer mistakes a column literally named "updates" for a real update', async () => {
+test('buildMondayContext never surfaces a column literally named "updates" as an update', async () => {
   // The exact bug described in IMPORTANT 1: recentUpdates() used to read
-  // cols.updates?.text out of column_values_json. A board with a column
-  // whose id happens to be "updates" would render that COLUMN VALUE to the
-  // model, mislabelled as an update. The fix reads updates_json instead, so
-  // this must come back empty even though column_values_json has an
-  // "updates"-keyed entry with text.
+  // cols.updates?.text out of column_values_json — the blob that holds
+  // COLUMN VALUES keyed by column id, not the updates feed. A board with a
+  // column whose id happens to be "updates" would render that COLUMN VALUE
+  // to the model, mislabelled as an update. Monday's real updates feed is
+  // not mirrored at all yet, so this must always come back empty — even
+  // though column_values_json here has an "updates"-keyed entry with text.
   const db = getDb(':memory:');
   seed(db, false);
   upsertItems(db, [{
@@ -228,17 +186,21 @@ test('buildMondayContext no longer mistakes a column literally named "updates" f
   db.close();
 });
 
-test('getItem dep surfaces the item\'s real updates, newest first', async () => {
+test('getItem dep never surfaces a column literally named "updates" as an update', async () => {
   const db = getDb(':memory:');
-  seedWithUpdates(db, JSON.stringify([
-    { text: 'Older', created_at: '2026-07-20T09:00:00.000Z' },
-    { text: 'Newer', created_at: '2026-07-21T09:00:00.000Z' },
-  ]));
+  seed(db, false);
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
+    name: 'Ship the thing', state: 'active', status_label: 'Working on it', status_color: null,
+    owners_json: '[]', url: null,
+    column_values_json: JSON.stringify({ updates: { id: 'updates', type: 'text', text: 'Not a real update — a column value' } }),
+    monday_updated_at: null, synced_at: 'later',
+  }]);
   process.env.MONDAY_TOKEN = 'tok';
   await withMondayEnabled(async () => {
     const deps = buildMondayToolDeps(db, 'thread-1')!;
     const detail = await deps.getItem('1');
-    assert.deepEqual(detail!.updates, ['Newer', 'Older']);
+    assert.deepEqual(detail!.updates, []);
   });
   delete process.env.MONDAY_TOKEN;
   db.close();

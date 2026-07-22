@@ -104,7 +104,7 @@ test('listLinkedTaskStatuses joins through to the tasks table', () => {
   db.close();
 });
 
-test('upsertItems updates all 14 updatable columns on conflict', () => {
+test('upsertItems updates all 13 updatable columns on conflict', () => {
   const db = getDb(':memory:');
   // Insert initial item
   upsertItems(db, [item('1', {
@@ -119,7 +119,6 @@ test('upsertItems updates all 14 updatable columns on conflict', () => {
     owners_json: '["owner1"]',
     url: 'https://monday.com/boards/1/pulses/1',
     column_values_json: '{"col1":"val1"}',
-    updates_json: '[{"text":"old","created_at":null}]',
     monday_updated_at: '2026-07-22T00:00:00.000Z',
     synced_at: '2026-07-22T00:00:00.000Z',
   })]);
@@ -137,13 +136,12 @@ test('upsertItems updates all 14 updatable columns on conflict', () => {
     owners_json: '["owner2","owner3"]',
     url: 'https://monday.com/boards/2/pulses/2',
     column_values_json: '{"col2":"val2"}',
-    updates_json: '[{"text":"new","created_at":"2026-07-22T12:00:00.000Z"}]',
     monday_updated_at: '2026-07-22T12:00:00.000Z',
     synced_at: '2026-07-22T12:00:00.000Z',
   })]);
 
   const row = getItem(db, '1')!;
-  // Assert all 14 updatable columns changed
+  // Assert all 13 updatable columns changed
   assert.equal(row.board_id, 'b2', 'board_id should update');
   assert.equal(row.board_name, 'Planning', 'board_name should update');
   assert.equal(row.group_id, 'g2', 'group_id should update');
@@ -155,20 +153,8 @@ test('upsertItems updates all 14 updatable columns on conflict', () => {
   assert.equal(row.owners_json, '["owner2","owner3"]', 'owners_json should update');
   assert.equal(row.url, 'https://monday.com/boards/2/pulses/2', 'url should update');
   assert.equal(row.column_values_json, '{"col2":"val2"}', 'column_values_json should update');
-  assert.equal(row.updates_json, '[{"text":"new","created_at":"2026-07-22T12:00:00.000Z"}]', 'updates_json should update');
   assert.equal(row.monday_updated_at, '2026-07-22T12:00:00.000Z', 'monday_updated_at should update');
   assert.equal(row.synced_at, '2026-07-22T12:00:00.000Z', 'synced_at should update');
-  db.close();
-});
-
-test('upsertItems defaults updates_json to \'[]\' when a row omits it', () => {
-  // The field is optional on MondayItem precisely so fixtures/rows predating
-  // this column don't need to supply it — but the DB column is NOT NULL, so
-  // upsertItems must default it rather than erroring on the missing bound
-  // parameter or writing an actual NULL.
-  const db = getDb(':memory:');
-  upsertItems(db, [item('1')]); // item() helper doesn't set updates_json
-  assert.equal(getItem(db, '1')!.updates_json, '[]');
   db.close();
 });
 

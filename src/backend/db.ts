@@ -466,20 +466,6 @@ function runMigrations(db: Database.Database) {
     );
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_mission_runs_mission ON mission_runs(mission_id, run_number)');
-
-  // Monday item updates mirror: the item's most recent update-thread entries
-  // (see monday/client.ts's ITEM_FIELDS and monday/map.ts's normalizedUpdates).
-  // Added after monday_items already shipped, so — per this file's own
-  // convention, and the incident that convention exists to prevent — this is
-  // a guarded ALTER, never added to the CREATE TABLE block above, and no
-  // index is created inline with it (this column isn't filtered/sorted on,
-  // so none is needed; if one ever is, it must come after this guard, not
-  // before — the past bug this convention guards against was exactly that
-  // ordering mistake).
-  const mondayItemCols = db.pragma('table_info(monday_items)') as { name: string }[];
-  if (!mondayItemCols.some((c) => c.name === 'updates_json')) {
-    db.exec("ALTER TABLE monday_items ADD COLUMN updates_json TEXT NOT NULL DEFAULT '[]'");
-  }
 }
 
 function migrateLegacyAssistantMessages(db: Database.Database): void {

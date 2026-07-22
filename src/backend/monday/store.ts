@@ -10,13 +10,13 @@ import type Database from 'better-sqlite3';
 import type { MondayItem, TaskMondayLink, TaskStatus } from '@nexus/shared';
 
 const ITEM_COLUMNS = `item_id, board_id, board_name, group_id, group_title, name, state,
-  status_label, status_color, owners_json, url, column_values_json, updates_json, monday_updated_at, synced_at`;
+  status_label, status_color, owners_json, url, column_values_json, monday_updated_at, synced_at`;
 
 export function upsertItems(db: Database.Database, items: MondayItem[]): void {
   const stmt = db.prepare(`
     INSERT INTO monday_items (${ITEM_COLUMNS})
     VALUES (@item_id, @board_id, @board_name, @group_id, @group_title, @name, @state,
-            @status_label, @status_color, @owners_json, @url, @column_values_json, @updates_json,
+            @status_label, @status_color, @owners_json, @url, @column_values_json,
             @monday_updated_at, @synced_at)
     ON CONFLICT(item_id) DO UPDATE SET
       board_id = excluded.board_id,
@@ -30,16 +30,11 @@ export function upsertItems(db: Database.Database, items: MondayItem[]): void {
       owners_json = excluded.owners_json,
       url = excluded.url,
       column_values_json = excluded.column_values_json,
-      updates_json = excluded.updates_json,
       monday_updated_at = excluded.monday_updated_at,
       synced_at = excluded.synced_at
   `);
   const run = db.transaction((rows: MondayItem[]) => {
-    // updates_json is optional on the MondayItem type (fixtures predating
-    // this field, and rows from an older mapItem, may omit it) but the bound
-    // statement above needs the named parameter present — default it here,
-    // matching the column's own NOT NULL DEFAULT '[]'.
-    for (const row of rows) stmt.run({ ...row, updates_json: row.updates_json ?? '[]' });
+    for (const row of rows) stmt.run(row);
   });
   run(items);
 }

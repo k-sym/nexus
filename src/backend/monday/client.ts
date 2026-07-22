@@ -72,14 +72,6 @@ export interface RawMondayColumnValue {
   value?: string | null;
 }
 
-/** One entry from an item's `updates` connection — Monday's per-item comment
- *  thread. `text_body` is the plain-text rendering (as opposed to `body`,
- *  which is HTML); we only ever want the former. */
-export interface RawMondayUpdate {
-  text_body?: string | null;
-  created_at?: string | null;
-}
-
 export interface RawMondayItem {
   id: string;
   name?: string;
@@ -89,10 +81,6 @@ export interface RawMondayItem {
   board?: { id?: string; name?: string } | null;
   group?: { id?: string; title?: string } | null;
   column_values?: RawMondayColumnValue[];
-  /** Most recent entries in the item's update thread, newest-first per
-   *  Monday's own default ordering — bounded to a handful (see ITEM_FIELDS)
-   *  since this query runs against every item on a board. */
-  updates?: RawMondayUpdate[] | null;
 }
 
 /** Single transport entry point. Every query and mutation goes through here. */
@@ -169,7 +157,6 @@ const ITEM_FIELDS = `
   board { id name }
   group { id title }
   column_values { id type text value }
-  updates(limit: 5) { text_body created_at }
 `;
 
 const BOARD_ITEMS_QUERY = `
