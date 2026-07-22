@@ -218,16 +218,47 @@ function sessionsLayout(groups: ProjGroup[]): { railW: number; listX: number; ro
 const PROJECT_ROW_W = 536
 const PROJECT_NAME_W = PROJECT_ROW_W - 24
 
+// A firmware LIST item is a single text run, so the only lever for lining the name
+// column up is padding the badge. NBSP rather than a plain space because trailing
+// spaces are the first thing any text pipeline trims and this padding is
+// load-bearing — both advance the same 5px, so it costs nothing.
+//
+// 5px is also the floor: every NARROWER Unicode space (thin, hair, en, em,
+// narrow-NBSP) is absent from the G2 font, and an absent codepoint still measures
+// ~4px while drawing as TOFU. So alignment lands within half a space of exact.
+const NBSP = '\u00A0' // escaped: an invisible literal in source is a trap
+const NBSP_W = getTextWidth(NBSP)
+
+/**
+ * Pad a badge to `targetW` so every project row's name starts at the same x.
+ *
+ * Without this a one-glyph badge (※, 20px) shares a column with three-letter ones
+ * (NEX, 36px) and the names step in and out by up to 32px. Padding lands within
+ * ±3px, which is under one glyph and reads as aligned.
+ */
+function padBadge(badge: string, targetW: number): string {
+  const pad = Math.max(0, Math.round((targetW - getTextWidth(badge)) / NBSP_W))
+  return badge + NBSP.repeat(pad)
+}
+
 // Project-row label: badge · name · status. The status answers "does this want me?"
 // with the same glyph vocabulary the sessions list uses, because a bare count ("· 1")
 // never said one WHAT.
-function projectRow(g: ProjGroup): string {
+function projectRow(g: ProjGroup, badgeW: number): string {
   const liveN = g.sessions.filter((x) => x.live).length
   const meta = g.sessions.some((x) => x.needsAttention) ? `${GLYPH.needs} needs you`
     : liveN ? `${GLYPH.live} ${liveN} running`
     : `${GLYPH.idle} ${g.sessions.length} idle`
-  const budget = PROJECT_NAME_W - Math.ceil(getTextWidth(`${g.badge}     ·   ${meta}`))
-  return `${g.badge}   ${fitToWidth(g.name, budget)}   ·   ${meta}`
+  // Measure the row's own shape rather than a hand-written approximation of it, so
+  // the name's budget can't drift from the string actually built (the previous
+  // literal counted one space fewer than the row has, under-budgeting by 5px).
+  const shell = (name: string) => `${padBadge(g.badge, badgeW)}   ${name}   ·   ${meta}`
+  return shell(fitToWidth(g.name, PROJECT_NAME_W - Math.ceil(getTextWidth(shell('')))))
+}
+
+/** Widest badge among the groups on screen — the column every row pads up to. */
+function badgeColumnW(groups: ProjGroup[]): number {
+  return groups.reduce((m, g) => Math.max(m, getTextWidth(g.badge)), 0)
 }
 
 // Session-row label for the sessions list: status glyph · name · needs-you|age.
@@ -525,8 +556,11 @@ export function composeCockpitPage(
       : s.connection === 'error' ? 'disconnected' : 'connecting…'
     addNavChrome(page, `NEXUS   ·   ${state}`, '• open   •• exit')
 
+    // Every row pads its badge up to the widest one on screen, so the name column
+    // lines up whether a badge is three letters or the Assistant's single ※.
+    const badgeW = badgeColumnW(groups)
     const rows = groups.length
-      ? groups.map((g) => ({ id: g.key, label: projectRow(g) }))
+      ? groups.map((g) => ({ id: g.key, label: projectRow(g, badgeW) }))
       : [{ id: '', label: s.connection === 'ok' ? '(no active sessions)' : s.connection === 'error' ? '(disconnected)' : '(connecting…)' }]
     rowsRef.current = rows
     const list = page.addListElement(rows.map((r) => r.label))
