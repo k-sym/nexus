@@ -98,6 +98,16 @@ export interface SessionTitleResponse {
   title: string;
 }
 
+export interface NextMessageRequest {
+  /** The conversation tail, already rendered to `User:` / `Assistant:` lines. */
+  transcript: string;
+}
+
+export interface NextMessageResponse {
+  /** '' means the model had nothing worth suggesting — not an error. */
+  suggestion: string;
+}
+
 export class DaemonRequestError extends Error {
   constructor(readonly status: number, message: string, readonly detail?: string) {
     super(message);
@@ -182,5 +192,8 @@ export const daemon = {
   },
   generateSessionTitle(input: SessionTitleRequest) {
     return req<SessionTitleResponse>('POST', '/operations/generate-session-title', input);
+  },
+  generateNextMessage(input: NextMessageRequest) {
+    return req<NextMessageResponse>('POST', '/operations/generate-next-message', input);
   },
 };

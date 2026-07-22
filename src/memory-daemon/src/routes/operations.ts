@@ -37,6 +37,27 @@ export function cleanSessionTitle(raw: string): string {
     .slice(0, 60);
 }
 
+const NEXT_MESSAGE_SYSTEM_PROMPT =
+  "You predict the user's next message in a coding session. Read the transcript and reply with the single most likely thing the user will say next, in their voice, as a short instruction or question. Reply with that message alone: no quotes, no preamble, no explanation. Reply with nothing at all if the next move is not predictable.";
+
+/** Generous on purpose: a late suggestion costs nothing because the frontend
+ *  discards anything that lands after the user has started typing or moved on.
+ *  Short enough that a wedged gen server never pins a request open. */
+const NEXT_MESSAGE_TIMEOUT_MS = 20_000;
+
+/** Same decoration problem as `cleanSessionTitle`, minus one rule: a trailing
+ *  '?' is meaning in a suggestion ("what broke?"), not decoration, so unlike a
+ *  title it survives. */
+export function cleanSuggestion(raw: string): string {
+  const firstLine = raw.split("\n").map((line) => line.trim()).find(Boolean) ?? "";
+  return firstLine
+    .replace(/^(?:next\s+message|suggestion|user|message)\s*:\s*/i, "")
+    .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, "")
+    .replace(/[.,;:\s]+$/, "")
+    .trim()
+    .slice(0, 160);
+}
+
 export interface OperationDependencies {
   rebuild: () => Promise<ReindexStats>;
   clearNexus: () => ClearNexusResult;
@@ -134,6 +155,28 @@ export function registerOperationRoutes(
     } catch (err) {
       const detail = err instanceof ModelError ? err.message : undefined;
       return reply.code(502).send({ error: "Session title model failed", detail });
+    }
+  });
+
+  /** Predict the user's next message from the tail of a conversation, for the
+   *  composer to offer as a placeholder. Note the deliberate asymmetry with
+   *  session titling above: an empty result is a 200 here, not a 502, because
+   *  "nothing worth suggesting" is a valid outcome rather than a failure. */
+  app.post("/operations/generate-next-message", async (request, reply) => {
+    const transcript = ((request.body ?? {}) as { transcript?: string }).transcript?.trim();
+    if (!transcript) return reply.code(400).send({ error: "transcript is required" });
+
+    try {
+      const suggestion = cleanSuggestion(await ctx.models.complete(transcript, {
+        system: NEXT_MESSAGE_SYSTEM_PROMPT,
+        temperature: 0.3,
+        maxTokens: 48,
+        timeoutMs: NEXT_MESSAGE_TIMEOUT_MS,
+      }));
+      return { suggestion };
+    } catch (err) {
+      const detail = err instanceof ModelError ? err.message : undefined;
+      return reply.code(502).send({ error: "Next message model failed", detail });
     }
   });
 }

@@ -7,6 +7,7 @@ import {
   useAssistantStream,
 } from '../hooks/useAssistantStream';
 import { confirmDialog } from '../lib/confirm';
+import { useNextSuggestion } from '../hooks/useNextSuggestion';
 import { AgentRunCard } from './AgentRunCard';
 import { RunStatusStrip } from './RunStatusStrip';
 import { ToolCallTimeline } from './ToolCallTimeline';
@@ -55,6 +56,21 @@ export default function AssistantView() {
     clear,
   } = useAssistantStream();
   const [input, setInput] = useState('');
+  // The trailing assistant message identifies the completed turn: it changes
+  // exactly once per turn, so it serves as both trigger and staleness token.
+  const lastMessage = messages[messages.length - 1];
+  const completedTurnKey =
+    !isRunning && lastMessage?.role === 'assistant' && lastMessage.content.trim()
+      ? lastMessage.id
+      : null;
+  const { suggestion, dismiss: dismissSuggestion } = useNextSuggestion({
+    sessionKey: selectedSessionId ?? null,
+    turnKey: completedTurnKey,
+    messages,
+    // Only ever offered into an empty composer — which is also the only time a
+    // placeholder renders, and why this needs no ghost-text overlay.
+    enabled: !isRunning && !input.trim(),
+  });
   const [pendingAttachments, setPendingAttachments] = useState<AssistantAttachment[]>([]);
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
   const [draggingAttachments, setDraggingAttachments] = useState(false);
@@ -114,6 +130,17 @@ export default function AssistantView() {
   }, [input, pendingAttachments, selectedSessionId, startBackgroundRun]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Tab' && suggestion && !input) {
+      // Accept into the composer without sending: editing before Enter is free.
+      e.preventDefault();
+      setInput(suggestion);
+      dismissSuggestion();
+      return;
+    }
+    if (e.key === 'Escape' && suggestion) {
+      dismissSuggestion();
+      return;
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       void handleSend();
@@ -401,7 +428,12 @@ export default function AssistantView() {
             </button>
             <textarea
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              onChange={(e) => {
+                // Typing their own words retires the suggestion for good — it
+                // does not reappear if they then clear the box again.
+                if (suggestion) dismissSuggestion();
+                setInput(e.target.value);
+              }}
               onKeyDown={handleKeyDown}
               onPaste={(e) => {
                 const files = Array.from(e.clipboardData.files);
@@ -409,7 +441,7 @@ export default function AssistantView() {
                 e.preventDefault();
                 void addAttachmentFiles(files);
               }}
-              placeholder="Message Assistant..."
+              placeholder={suggestion || 'Message Assistant...'}
               rows={2}
               disabled={!selectedSessionId}
               className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong disabled:opacity-50"
