@@ -137,14 +137,16 @@ memory-index rebuild.
 ```yaml
 monday:
   enabled: false
-  api_version: "2024-10"
+  api_version: "2026-07"
   poll_minutes: 10
 ```
 
 `api_version` is pinned deliberately — Monday dates its API and an unpinned client
-shifts under you. The exact value above is a placeholder to be confirmed against
-Monday's current supported versions during implementation; pinning matters more
-than which version is chosen.
+shifts under you. Confirmed during implementation (2026-07-22): `2024-10` was
+deprecated on 2026-02-15, and deprecated versions are silently routed to a
+maintenance version rather than rejected — so an unnoticed stale pin fails
+invisibly. Current window is 2026-04 (Maintenance) / 2026-07 (Current) /
+2026-10 (RC); we pin `2026-07`.
 
 **Token** — `MONDAY_TOKEN` environment variable only. Never config, never the DB.
 Same rule as `JIRA_TOKEN`, and it must be reflected in the trust snapshot's secret
