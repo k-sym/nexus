@@ -181,6 +181,15 @@ function qs(params: Record<string, string | number | undefined>): string {
   return s ? `?${s}` : '';
 }
 
+/** An Error thrown by `fetchJson` for a non-ok response. `code`/`retryable` are
+ *  attached only when the backend's error body carried them (e.g. Monday's
+ *  502 `{ error, code, retryable }`) — callers that don't care can keep
+ *  treating this as a plain `Error`. */
+export interface FetchJsonError extends Error {
+  code?: string;
+  retryable?: boolean;
+}
+
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
   // Only send a JSON content-type when there's actually a body — otherwise
   // Fastify rejects no-body DELETE/POST requests with 400 ("body cannot be empty").
@@ -191,7 +200,10 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
   const res = await apiFetch(url, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).error || res.statusText);
+    const err: FetchJsonError = new Error((body as any).error || res.statusText);
+    if (typeof (body as any).code === 'string') err.code = (body as any).code;
+    if (typeof (body as any).retryable === 'boolean') err.retryable = (body as any).retryable;
+    throw err;
   }
   return res.json() as Promise<T>;
 }

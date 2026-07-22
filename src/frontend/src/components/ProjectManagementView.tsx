@@ -6,56 +6,81 @@
  * A load failure renders as an error, never as an empty board — "Monday
  * rejected our token" and "this board has no items" must not look alike.
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MondayItemWithLinks } from '@nexus/shared';
-import { fetchMondayItems } from '../api';
+import { fetchMondayItems, type FetchJsonError } from '../api';
 
 interface Props {
   projectId: string;
 }
 
+interface LoadError {
+  message: string;
+  code?: string;
+  /** false = the user must fix something (token/board config), not retry.
+   *  true/undefined ("unknown") = safe to offer a Retry button. */
+  retryable?: boolean;
+}
+
 export function ProjectManagementView({ projectId }: Props) {
   const [items, setItems] = useState<MondayItemWithLinks[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<LoadError | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  // Guards against a stale response overwriting newer data (e.g. projectId
+  // changes while a request is in flight and the older one resolves last).
+  // Each call to `load` stamps itself with the current generation; if a
+  // newer call has started by the time this one settles, its result is
+  // discarded. A plain per-effect `cancelled` boolean (the ChatPanel.tsx
+  // convention) doesn't work here because `load` is also invoked directly
+  // from the Retry/Refresh buttons, outside that effect's closure — a
+  // monotonic counter covers both call sites correctly.
+  const generationRef = useRef(0);
+
   const load = useCallback(async (refresh: boolean) => {
+    const generation = ++generationRef.current;
     setError(null);
     if (refresh) setRefreshing(true);
     try {
-      setItems(await fetchMondayItems(projectId, refresh));
+      const result = await fetchMondayItems(projectId, refresh);
+      if (generationRef.current !== generation) return; // superseded
+      setItems(result);
     } catch (err) {
-      setError((err as Error).message);
+      if (generationRef.current !== generation) return; // superseded
+      const e = err as FetchJsonError;
+      setError({ message: e.message, code: e.code, retryable: e.retryable });
     } finally {
-      setRefreshing(false);
+      if (generationRef.current === generation) setRefreshing(false);
     }
   }, [projectId]);
 
   useEffect(() => { void load(false); }, [load]);
 
-  if (error) {
+  // No data has ever loaded successfully and the load failed — full-screen
+  // error. This is the only state that must never look like an empty board.
+  if (error && items === null) {
     return (
       <div className="p-6">
-        <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
-          {error}
+        <div role="alert" className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+          {error.message}
         </div>
-        <button
-          type="button"
-          className="mt-3 text-sm text-zinc-400 hover:text-zinc-100 underline"
-          onClick={() => void load(false)}
-        >
-          Retry
-        </button>
+        {error.retryable === false ? (
+          <p className="mt-3 text-sm text-zinc-500">Check your Monday token or board configuration, then try again.</p>
+        ) : (
+          <button
+            type="button"
+            className="mt-3 text-sm text-zinc-400 hover:text-zinc-100 underline"
+            onClick={() => void load(false)}
+          >
+            Retry
+          </button>
+        )}
       </div>
     );
   }
 
   if (items === null) {
     return <div className="p-6 text-sm text-zinc-600">Loading Monday items…</div>;
-  }
-
-  if (items.length === 0) {
-    return <div className="p-6 text-sm text-zinc-600 text-center py-10">No Monday items in this project&apos;s scope.</div>;
   }
 
   const groups = new Map<string, MondayItemWithLinks[]>();
@@ -81,31 +106,54 @@ export function ProjectManagementView({ projectId }: Props) {
         </button>
       </header>
 
+      {/* A refresh that fails after a successful load must not throw away
+          still-valid data — keep the items and surface the error inline. */}
+      {error ? (
+        <div role="alert" className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <span>{error.message}</span>
+          {error.retryable === false ? (
+            <span className="text-xs text-red-300/70 shrink-0">Check your Monday token or board configuration.</span>
+          ) : (
+            <button
+              type="button"
+              className="text-xs text-red-300 underline shrink-0"
+              onClick={() => void load(false)}
+            >
+              Retry
+            </button>
+          )}
+        </div>
+      ) : null}
+
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
-        {[...groups.entries()].map(([groupTitle, groupItems]) => (
-          <div key={groupTitle}>
-            <div className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium mb-2">
-              {groupTitle}
+        {items.length === 0 ? (
+          <div className="text-sm text-zinc-600 text-center py-10">No Monday items in this project&apos;s scope.</div>
+        ) : (
+          [...groups.entries()].map(([groupTitle, groupItems]) => (
+            <div key={groupTitle}>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-500/60 font-medium mb-2">
+                {groupTitle}
+              </div>
+              <ul className="space-y-1.5">
+                {groupItems.map((item) => (
+                  <li key={item.item_id} className="bg-zinc-900 border border-zinc-800 rounded-md px-4 py-2.5">
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="font-medium text-zinc-200">{item.name}</span>
+                      <span className="text-sm text-zinc-400 shrink-0">{item.rollup_text}</span>
+                    </div>
+                    <div className="mt-1 flex items-center gap-3 text-xs text-zinc-500">
+                      {item.status_label ? <span>{item.status_label}</span> : null}
+                      <span>{item.task_ids.length} linked task{item.task_ids.length === 1 ? '' : 's'}</span>
+                      {item.state === 'missing' ? (
+                        <span className="text-amber-300">item unavailable in Monday</span>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
-            <ul className="space-y-1.5">
-              {groupItems.map((item) => (
-                <li key={item.item_id} className="bg-zinc-900 border border-zinc-800 rounded-md px-4 py-2.5">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="font-medium text-zinc-200">{item.name}</span>
-                    <span className="text-sm text-zinc-400 shrink-0">{item.rollup_text}</span>
-                  </div>
-                  <div className="mt-1 flex items-center gap-3 text-xs text-zinc-500">
-                    {item.status_label ? <span>{item.status_label}</span> : null}
-                    <span>{item.task_ids.length} linked task{item.task_ids.length === 1 ? '' : 's'}</span>
-                    {item.state === 'missing' ? (
-                      <span className="text-amber-300">item unavailable in Monday</span>
-                    ) : null}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+          ))
+        )}
       </div>
     </div>
   );
