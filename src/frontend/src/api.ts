@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput, MondayItem, MondayItemWithLinks, TaskMondayLink } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -194,6 +194,38 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
     throw new Error((body as any).error || res.statusText);
   }
   return res.json() as Promise<T>;
+}
+
+// Monday.com — the Project Management view's read paths and link CRUD.
+// Free-standing exports (not nested under `api`) so ProjectManagementView can
+// import and mock them directly, matching the Task 11 brief's client surface.
+export async function fetchMondayItems(projectId: string, refresh = false): Promise<MondayItemWithLinks[]> {
+  const query = refresh ? '?refresh=1' : '';
+  const data = await fetchJson<{ items: MondayItemWithLinks[] }>(`/api/monday/projects/${projectId}/items${query}`);
+  return data.items;
+}
+
+export async function searchMondayItems(projectId: string, query: string): Promise<MondayItem[]> {
+  const data = await fetchJson<{ items: MondayItem[] }>(
+    `/api/monday/projects/${projectId}/search?q=${encodeURIComponent(query)}`,
+  );
+  return data.items;
+}
+
+export async function fetchMondayLinks(projectId: string): Promise<TaskMondayLink[]> {
+  const data = await fetchJson<{ links: TaskMondayLink[] }>(`/api/monday/projects/${projectId}/links`);
+  return data.links;
+}
+
+export async function linkTaskToMondayItem(projectId: string, taskId: string, itemId: string): Promise<void> {
+  await fetchJson(`/api/monday/links`, {
+    method: 'POST',
+    body: JSON.stringify({ project_id: projectId, task_id: taskId, item_id: itemId }),
+  });
+}
+
+export async function unlinkTaskFromMondayItem(taskId: string): Promise<void> {
+  await fetchJson(`/api/monday/links/${taskId}`, { method: 'DELETE' });
 }
 
 export const api = {
