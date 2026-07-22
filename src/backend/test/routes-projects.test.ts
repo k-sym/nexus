@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -7,6 +7,15 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { registerProjectRoutes } from '../routes/projects';
 import { loadConfig, saveConfig } from '../config';
+
+// The github-sync test below flips github.enabled via saveConfig(). Relocate
+// the ~/.nexus tree to a scratch dir so that write never lands in the
+// developer's real config.yaml — where an interrupted run would leave it, and
+// where the parallel `node --test` processes running the other test files
+// would read it back. See the same guard in routes-settings.test.ts.
+const NEXUS_HOME = mkdtempSync(join(tmpdir(), 'nexus-projects-home-'));
+process.env.NEXUS_HOME = NEXUS_HOME;
+after(() => rmSync(NEXUS_HOME, { recursive: true, force: true }));
 
 function makeApp() {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-project-routes-test-'));
