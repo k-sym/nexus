@@ -30,6 +30,7 @@ import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
+import { registerNextMessageRoutes } from './routes/next-message.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMissionScheduler } from './missions/runner.js';
@@ -105,6 +106,7 @@ async function main() {
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
   app.register(registerAssistantRoutes);
+  app.register(registerNextMessageRoutes);
   app.register(registerOrchestratorRoutes);
   app.register(registerMemoryRoutes);
   app.register(registerSettingsRoutes);
