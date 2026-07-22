@@ -88,7 +88,10 @@ const DEFAULT_CONFIG: NexusConfig = {
   },
   monday: {
     enabled: false,
-    api_version: '2024-10',
+    // '2024-10' was deprecated 2026-02-15; pinned to '2026-07', the current
+    // stable version as of 2026-07-22 (confirmed against
+    // developer.monday.com/api-reference/docs/api-versioning).
+    api_version: '2026-07',
     poll_minutes: 10,
   },
 };
