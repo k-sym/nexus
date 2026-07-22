@@ -87,7 +87,10 @@ shown and waits for a deliberate tap.
 Sessions grouped by project, newest activity first. Each row is `badge · name · status`,
 where the badge is the project's own three-character rail badge — the **same one the
 desktop sidebar shows**, so the two read alike. The status answers the only question that
-matters at a glance: `◆ needs you`, `⊙ n running`, `○ n idle`.
+matters at a glance: `★ needs you`, `⊙ n running`, `○ n idle`.
+
+The **Assistant** is badged `※` rather than initials — it groups on its own and is an
+aside rather than a project, so the rail says so without spelling it out.
 
 #### Sessions — inside a project
 

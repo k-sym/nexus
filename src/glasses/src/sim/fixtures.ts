@@ -15,6 +15,9 @@ function session(over: Partial<SessionSummary> & { id: string }): SessionSummary
     cwd: over.cwd ?? '/Users/dev/project',
     project: over.project ?? 'project',
     projectBadge: over.projectBadge,
+    // Passed through so a fixture can produce an Assistant session — it groups under
+    // its own rail entry with the ※ badge, which is otherwise unreachable in the sim.
+    kind: over.kind,
     lastPrompt: '',
     lastAssistant: '',
     lastActivityAt: over.lastActivityAt ?? now,
@@ -106,6 +109,9 @@ export function applyFixture(name: string): boolean {
           session({ id: 's1', title: 'nexus · gateway', project: 'nexus', projectBadge: 'NEX', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' }, lastActivityAt: now - 4_000 }),
           session({ id: 's2', title: 'baker · api', project: 'Baker Internal', projectBadge: 'BAK', live: true, lastActivityAt: now - 90_000 }),
           session({ id: 's3', title: 'docs · site', project: 'docs', projectBadge: 'DOC', live: false, recent: true, lastActivityAt: now - 3_600_000 }),
+          // The Assistant groups on its own, badged ※ rather than initials — it is an
+          // aside rather than a project, and the rail should say so at a glance.
+          session({ id: 's4', title: 'what did I ship today?', project: 'Assistant', kind: 'assistant', live: false, recent: true, lastActivityAt: now - 600_000 }),
         ],
       })
       return true
