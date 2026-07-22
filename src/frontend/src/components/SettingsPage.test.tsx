@@ -68,20 +68,32 @@ describe('SettingsPage', () => {
   it('shows editable Connection fields when the backend is local', async () => {
     render(<SettingsPage />);
 
-    expect(await screen.findByRole('heading', { name: 'Connection (this device)' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Connection' })).toBeInTheDocument();
     expect(screen.getByLabelText('Server URL')).toBeInTheDocument();
     // Masked token env-ref is shown as-is (not a real secret).
     expect(screen.getByDisplayValue('${NEXUS_BACKEND_TOKEN}')).toBeInTheDocument();
+    // Ownership groups are present, and the server group is unqualified when the
+    // backend is this machine — there is no other host to name (#167).
+    expect(screen.getByRole('heading', { name: 'This device' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Server' })).toBeInTheDocument();
   });
 
   it('shows read-only connection info when this device is a thin client', async () => {
     (window as { __NEXUS_API__?: string }).__NEXUS_API__ = 'https://baker-pro.taileea629.ts.net:8444/api';
     try {
       render(<SettingsPage />);
-      expect(await screen.findByRole('heading', { name: 'Connection (this device)' })).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: 'Connection' })).toBeInTheDocument();
       // The real connection target (sans /api) is shown, and editing is disabled.
       expect(screen.getByText('https://baker-pro.taileea629.ts.net:8444')).toBeInTheDocument();
       expect(screen.queryByLabelText('Server URL')).not.toBeInTheDocument();
+      // #167: the page has to say WHOSE config.yaml it edits, because on a thin
+      // client it is another machine's and nothing else on screen reveals that.
+      expect(screen.getByText(/Editing/)).toHaveTextContent(
+        'Editing config.yaml on baker-pro.taileea629.ts.net:8444, not this device.',
+      );
+      expect(
+        screen.getByRole('heading', { name: 'Server — baker-pro.taileea629.ts.net:8444' }),
+      ).toBeInTheDocument();
     } finally {
       delete (window as { __NEXUS_API__?: string }).__NEXUS_API__;
     }
