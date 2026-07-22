@@ -12,6 +12,7 @@ import { detectGitRemote } from '../github/repo.js';
 import { syncGitHubIssues, ensureProjectGitRemote, noteSyncError, clearSyncError } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
 import { loadConfig } from '../config.js';
+import { scheduleRollup } from '../monday/trigger.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
 function expandHome(p: string): string {
@@ -560,6 +561,15 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, existing.project_id);
 
     const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task;
+
+    // Recompute this task's Monday roll-up whenever a Kanban move actually
+    // changes its status. Fire-and-forget (void, no await): the Kanban move
+    // already committed above, and a slow or failing Monday call must never
+    // delay or fail it. Uses the same `fastify.activity?.bus.emit` seam the
+    // GitHub sync call above already reaches the ActivityManager through.
+    if (body.status != null && body.status !== existing.status) {
+      void scheduleRollup(db, id, `task moved to ${body.status}`, fastify.activity?.bus.emit.bind(fastify.activity.bus));
+    }
 
     // Summarize a completed task-chat into memory + Obsidian when its card is
     // advanced into Review/Deploy. Fires only on the transition *into* a done

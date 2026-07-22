@@ -17,9 +17,10 @@ import { syncScope } from '../monday/sync.js';
 import { fetchBoardItems, MondayError, type MondayClientOptions } from '../monday/client.js';
 import { mapItem } from '../monday/map.js';
 import {
-  listItemsForBoard, listLinksForProject, linkTask, unlinkTask, listLinkedTaskStatuses,
+  listItemsForBoard, listLinksForProject, linkTask, unlinkTask, getLinkForTask, listLinkedTaskStatuses,
 } from '../monday/store.js';
 import { computeRollup, formatRollupText } from '../monday/rollup.js';
+import { scheduleRollup, scheduleRollupForItem } from '../monday/trigger.js';
 
 function projectMondayConfig(project: Project): MondayProjectConfig | null {
   try {
@@ -137,12 +138,19 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
 
     const link = { task_id: taskId, item_id: itemId, project_id: projectId, created_at: new Date().toISOString() };
     linkTask(db, link);
+    void scheduleRollup(db, taskId, 'task linked');
     return { link };
   });
 
   fastify.delete('/api/monday/links/:taskId', async (request) => {
     const { taskId } = request.params as { taskId: string };
+    const existing = getLinkForTask(db, taskId);
     unlinkTask(db, taskId);
+    if (existing) {
+      // Recompute the item we just detached from, or it keeps a count that
+      // still includes this task.
+      void scheduleRollupForItem(db, existing.item_id, existing.project_id, null);
+    }
     return { ok: true };
   });
 }
