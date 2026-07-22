@@ -453,7 +453,7 @@ body {
      red = model working, amber = waiting on the user, green = live but idle. */
   .compact-session-status-work {
     background: #ef4444;
-    color: #2b0505;
+    color: #fff;
   }
 
   .compact-session-status-wait {
