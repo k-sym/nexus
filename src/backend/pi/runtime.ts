@@ -23,6 +23,7 @@ import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
 import { createToolPolicyResolver, type ToolPolicyResolver } from './tool-policy.js';
 import { createDockerExtension, type DockerToolDeps } from './docker-tool.js';
+import { createBrowserExtension, type BrowserToolDeps } from './browser-tool.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
 import { defaultLocalModelsFile } from './local-models.js';
@@ -80,8 +81,11 @@ export interface PiRuntimeDeps {
   mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null;
   mondayTools?: (threadId: string) => MondayToolDeps | null;
   dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null;
+  browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null;
   /** Fire-and-forget teardown of a thread's compose project on session drop. */
   tearDownServices?: (threadId: string, cwd: string) => void;
+  /** Fire-and-forget close of a thread's browser on session drop. */
+  closeBrowser?: (threadId: string) => void;
 }
 
 export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
@@ -119,6 +123,7 @@ export function buildSessionExtensionFactories(
   recallMemories?: MemoryRecallFn,
   mondayTools?: (threadId: string) => MondayToolDeps | null,
   dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null,
+  browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null,
 ): ExtensionFactory[] {
   // Mirrors the mondayContext guard in createSession below. Unlike that call,
   // this one has no try/catch at its call site (it's part of the
@@ -141,6 +146,12 @@ export function buildSessionExtensionFactories(
   } catch {
     docker = null;
   }
+  let browser: BrowserToolDeps | null = null;
+  try {
+    browser = browserTools?.(threadId, cwd) ?? null;
+  } catch {
+    browser = null;
+  }
   return [
     createQuestionExtension(threadId, questions),
     createApprovalExtension(threadId, cwd, approvals, policy),
@@ -154,6 +165,9 @@ export function buildSessionExtensionFactories(
     // And for Docker: omitted when the feature is off or no daemon answered
     // the probe, so a session never offers to start containers it can't.
     ...(docker ? [createDockerExtension(docker)] : []),
+    // And for the browser: omitted when the feature is off or the machine has
+    // no Chromium-family browser to drive.
+    ...(browser ? [createBrowserExtension(browser)] : []),
   ];
 }
 
@@ -197,6 +211,10 @@ export class PiRuntime {
   /** Tears down a thread's compose project. Called on session drop so services
    *  a thread started don't outlive it. Undefined = nothing to tear down. */
   private readonly tearDownServices?: (threadId: string, cwd: string) => void;
+  /** Resolves the browser tool deps for a thread, or null to omit them. */
+  private readonly browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null;
+  /** Closes a thread's browser on session drop. */
+  private readonly closeBrowser?: (threadId: string) => void;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
@@ -213,6 +231,8 @@ export class PiRuntime {
     this.mondayTools = deps.mondayTools;
     this.dockerTools = deps.dockerTools;
     this.tearDownServices = deps.tearDownServices;
+    this.browserTools = deps.browserTools;
+    this.closeBrowser = deps.closeBrowser;
   }
 
   static async create(
@@ -374,6 +394,7 @@ export class PiRuntime {
       extensionFactories: buildSessionExtensionFactories(
         threadId, cwd, this.questions, this.approvals, this.policyFor(threadId),
         createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
+        this.browserTools,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened
       // later sees current item state rather than a stale frozen line. Also
@@ -424,6 +445,11 @@ export class PiRuntime {
     // down, and anything left behind is still reachable by a later sweep.
     try {
       this.tearDownServices?.(threadId, cwd);
+    } catch { /* best effort */ }
+    // Same contract for the browser: a session's browser process must not
+    // outlive it, and failing to close one must not fail the drop.
+    try {
+      this.closeBrowser?.(threadId);
     } catch { /* best effort */ }
     const sessionDir = this.sessionDirFor(cwd);
     try {
