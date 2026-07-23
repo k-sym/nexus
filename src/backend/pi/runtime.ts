@@ -21,6 +21,7 @@ import { QuestionBroker, createQuestionExtension } from './questions.js';
 import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
+import { createToolPolicyResolver, type ToolPolicyResolver } from './tool-policy.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
 import { defaultLocalModelsFile } from './local-models.js';
@@ -100,7 +101,7 @@ export function buildSessionExtensionFactories(
   cwd: string,
   questions: QuestionBroker,
   approvals: ApprovalBroker,
-  isSupervised: () => boolean,
+  policy: ToolPolicyResolver,
   signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
   recallMemories?: MemoryRecallFn,
   mondayTools?: (threadId: string) => MondayToolDeps | null,
@@ -120,7 +121,7 @@ export function buildSessionExtensionFactories(
   }
   return [
     createQuestionExtension(threadId, questions),
-    createApprovalExtension(threadId, cwd, approvals, isSupervised),
+    createApprovalExtension(threadId, cwd, approvals, policy),
     signalFactoryBuilder(cwd),
     // Omitted when the runtime was built without a recall backend (tests,
     // headless callers) so sessions don't advertise a tool that can't run.
@@ -243,6 +244,17 @@ export class PiRuntime {
   }
 
   /**
+   * The tool policy for a thread. Built once per session, but every input it
+   * reads is a getter evaluated at tool-call time — so toggling Supervise (or,
+   * later, editing project policy) lands on the next tool call without
+   * rebuilding the session. That liveness is load-bearing; do not resolve
+   * these into values here.
+   */
+  policyFor(threadId: string): ToolPolicyResolver {
+    return createToolPolicyResolver({ isSupervised: () => this.isSupervised(threadId) });
+  }
+
+  /**
    * Get the model key currently set for a session.
    */
   getSessionModel(threadId: string, cwd: string): string | undefined {
@@ -331,7 +343,7 @@ export class PiRuntime {
       agentDir: this.paths.sessionsDir,
       settingsManager,
       extensionFactories: buildSessionExtensionFactories(
-        threadId, cwd, this.questions, this.approvals, () => this.isSupervised(threadId),
+        threadId, cwd, this.questions, this.approvals, this.policyFor(threadId),
         createSignalFilterExtension, this.recallMemories, this.mondayTools,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened

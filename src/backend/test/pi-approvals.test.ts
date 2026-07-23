@@ -6,6 +6,7 @@ import {
   UNGATED_TOOL_NAMES,
   type ApprovalBrokerEvent,
 } from '../pi/approvals';
+import { createToolPolicyResolver } from '../pi/tool-policy';
 
 const INPUT = { command: 'rm -rf build' };
 
@@ -161,10 +162,10 @@ test('approval broker reports pending counts by thread', async () => {
   await other;
 });
 
-test('approval extension gates a supervised tool call and allows it on decide', async () => {
+test('approval extension gates a confirm decision and allows it on decide', async () => {
   const broker = new ApprovalBroker();
   let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
-  createApprovalExtension('thread-1', '/repo', broker, () => true)({
+  createApprovalExtension('thread-1', '/repo', broker, () => 'confirm')({
     on(event: string, fn: (event: unknown, ctx: unknown) => Promise<unknown>) {
       if (event === 'tool_call') handler = fn;
     },
@@ -186,7 +187,8 @@ test('approval extension passes through when not supervised or tool is exempt', 
   const broker = new ApprovalBroker();
   let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
   let supervised = false;
-  createApprovalExtension('thread-1', '/repo', broker, () => supervised)({
+  const policy = createToolPolicyResolver({ isSupervised: () => supervised });
+  createApprovalExtension('thread-1', '/repo', broker, policy)({
     on(event: string, fn: (event: unknown, ctx: unknown) => Promise<unknown>) {
       if (event === 'tool_call') handler = fn;
     },
@@ -200,5 +202,48 @@ test('approval extension passes through when not supervised or tool is exempt', 
   supervised = true;
   assert.ok(UNGATED_TOOL_NAMES.has('question'));
   assert.equal(await handler!({ type: 'tool_call', toolName: 'question', toolCallId: 'c2', input: {} }, { signal: undefined }), undefined);
+  assert.equal(broker.hasPending('thread-1'), false);
+
+  // ...and the same resolver now gates bash, without the session being rebuilt.
+  const gated = handler!({ type: 'tool_call', toolName: 'bash', toolCallId: 'c3', input: INPUT }, { signal: undefined });
+  assert.equal(broker.hasPending('thread-1'), true, 'Supervise stays live per tool call');
+  broker.cancelThread('thread-1', 'cleanup');
+  await gated;
+});
+
+test('approval extension blocks a deny without parking a gate', async () => {
+  const broker = new ApprovalBroker();
+  let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+  createApprovalExtension('thread-1', '/repo', broker, () => 'deny')({
+    on(event: string, fn: (event: unknown, ctx: unknown) => Promise<unknown>) {
+      if (event === 'tool_call') handler = fn;
+    },
+  } as never);
+
+  const decision = await handler!({ type: 'tool_call', toolName: 'bash', toolCallId: 'c1', input: INPUT }, { signal: undefined }) as { block: boolean; reason: string };
+  assert.equal(decision.block, true);
+  assert.match(decision.reason, /blocked by policy/i);
+  assert.match(decision.reason, /bash/);
+  // Nothing waiting: a denied capability must not sit on the 5-minute timeout.
+  assert.equal(broker.hasPending('thread-1'), false);
+});
+
+test('approval extension fails closed when the policy throws', async () => {
+  const broker = new ApprovalBroker();
+  let handler: ((event: unknown, ctx: unknown) => Promise<unknown>) | undefined;
+  createApprovalExtension('thread-1', '/repo', broker, () => { throw new Error('bad config'); })({
+    on(event: string, fn: (event: unknown, ctx: unknown) => Promise<unknown>) {
+      if (event === 'tool_call') handler = fn;
+    },
+  } as never);
+
+  // Side-effectful → parked for a human rather than waved through.
+  const gated = handler!({ type: 'tool_call', toolName: 'bash', toolCallId: 'c1', input: INPUT }, { signal: undefined });
+  assert.equal(broker.hasPending('thread-1'), true);
+  broker.cancelThread('thread-1', 'cleanup');
+  await gated;
+
+  // Read-only → still allowed, so a broken policy cannot wedge every grep.
+  assert.equal(await handler!({ type: 'tool_call', toolName: 'grep', toolCallId: 'c2', input: {} }, { signal: undefined }), undefined);
   assert.equal(broker.hasPending('thread-1'), false);
 });
