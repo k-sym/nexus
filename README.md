@@ -52,6 +52,9 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Agents pull it on demand via a `memory_recall` tool; exposed over HTTP + MCP. |
 | **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, image + PDF/document attachments, and manual archival into memory. |
+| **Local services (Docker)** | Agents can bring a project's Docker Compose stack up/down to actually run and test it — always detached, namespaced per session so two threads on one repo can't collide, torn down with the session, plus a startup sweep for anything a crash orphaned. Off by default; the `docker_service` tool only appears when a Docker daemon is reachable. |
+| **Browser** | Agents can drive a headless Chromium-family browser to verify front-end work — navigate, read the rendered page as text or an accessibility tree, and read console/network output. Localhost-only by default; ephemeral profile, never your real one. Off by default; the tools only appear when a browser is installed. |
+| **Tool approvals** | A per-tool approval policy decides — before each tool call runs — whether it's allowed, confirmed, or denied. Side-effectful categories (e.g. starting containers) default to *confirm*; pending gates are answerable from the Nexus UI or the glasses. Read live, so a change lands mid-session. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
 | **GitHub triage** | Open issues on a project's GitHub remote are mirrored into the Triage column on Kanban open (token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. |
 | **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira/GitHub sync that changed tickets, a sync failure, or a task summary being written. Backed by a `notifications` table the frontend polls. |
@@ -632,6 +635,16 @@ jira:                            # native Jira ticket poll (Settings -> Jira). T
 github:                          # GitHub issue triage (Settings -> GitHub). Token via GITHUB_TOKEN or `gh auth token`.
   enabled: true                  # mirrors open issues into Triage on Kanban open
 
+docker:                          # let agents run a project's local Docker Compose services
+  enabled: false                 # off by default; the docker_service tool is also omitted entirely
+                                 #   unless a Docker daemon is reachable
+
+browser:                         # let agents drive a headless browser to verify front-end work
+  enabled: false                 # off by default; the browser tools are also omitted unless a
+                                 #   Chromium-family browser (Chrome/Edge/Chromium/Brave) is found
+  allow_hosts: []                # hosts the browser may reach beyond loopback (always allowed);
+                                 #   ".example.com" matches subdomains, "example.com" is exact
+
 obsidian:                        # where the canonical vault lives
   vault_path: "~/Obsidian/Nexus"
   sync_interval_seconds: 30
@@ -716,6 +729,20 @@ Each project has a sessions interface:
 - **Concurrency**: a per-`(project, model)` slot and a project-wide slot prevent two repo-mutating runs from racing on the same working tree (issue #95). A conflicting request gets a `409` with `kind: thread_busy` / `model_busy` / `project_busy`; the frontend can retry with `X-Confirm-Cancel: true` to abort the holder first. Live runs are listed at `GET /api/chat/active-runs` and abortable via `POST /api/threads/:threadId/abort`.
 - **Signal filters** trim noisy tool output (ANSI, progress bars, package-manager spam, test output, stack traces, diff context) before it lands in chat history — configurable globally and per-project under `signal_filters` in `config.yaml`.
 - Archival is user-triggered. Nexus summarizes the conversation into canonical `nexus` memory, then removes the hot SQLite thread only after memory storage succeeds.
+
+### Agent tools
+
+On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `grep`, …), each chat session is handed a set of Nexus tools defined in `src/backend/pi/`. Every one follows the same **omit-when-unavailable** contract: a session never advertises a tool it can't actually run, so the model's tool list is an honest reflection of what this machine and this project can do right now.
+
+| Tool | What it does | Registered when |
+|---|---|---|
+| `memory_recall` | Pull relevant memories for this project on demand (see [Memory](#memory)). | The memory daemon is configured. |
+| `docker_service` | Start/stop/inspect the project's Docker Compose services — `up` (always detached), `down`, `status`, `logs`. Namespaced to `nexus-<threadId>` so sessions can't collide; torn down on session drop, with a startup sweep for crash-orphaned projects. Compose files are contained to the repo. | `docker.enabled` **and** a Docker daemon answers. |
+| `browser_navigate` / `browser_read` / `browser_diagnostics` | Load a URL in a headless browser, read the rendered page (text or accessibility tree), and read its console/network output. One ephemeral-profile browser per thread, launched lazily and closed with the session. | `browser.enabled` **and** a Chromium-family browser is found. |
+| `monday_search` / `monday_get_item` / `monday_post_update` | Read (and, if opted in, post updates to) the Monday.com initiative a task is linked to. | Monday is configured and the task has a linked item. |
+| `question` | Emit a structured question card and wait for your answer. | Always. |
+
+**Tool approvals.** Every tool call is put to a per-thread **tool policy** (`src/backend/pi/tool-policy.ts`) *before* it runs, which returns `allow` (run it), `confirm` (park it for a human), or `deny` (refuse with a reason). Categories carry the defaults — read-only tools `allow`, `services` (Docker) defaults to `confirm` — and `deny` is a floor a lower-precedence source can't lift. The policy is read live at each call, so toggling **Supervise** (confirm-everything) for a thread takes effect on the next tool call without rebuilding the session. Parked gates are answerable from the Nexus UI (`GET /api/approvals/stream`) or the glasses cockpit — both drive one broker, so whoever answers first wins; unanswered gates default-deny after a timeout.
 
 ### Assistant
 
