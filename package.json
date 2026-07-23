@@ -35,9 +35,10 @@
     "typescript": "^7.0.2",
     "wait-on": "^9.0.10"
   },
-  "comment:overrides": "concurrently pins shell-quote at an exact 1.8.4, which is below the patched release, so no update can move it and only an override will. npm audit's own suggestion is to downgrade concurrently to 9.2.4 instead, which would undo #214 for no reason. ^1.9.0 is the same major concurrently already asks for. Drop this once concurrently ships the bump itself. Note that overrides CANNOT fix the two advisories in .audit-allowlist.json: those sit under @earendil-works/pi-coding-agent, which ships an npm-shrinkwrap.json, and a dependency's shrinkwrap wins over a consumer's overrides.",
+  "comment:overrides": "concurrently pins shell-quote at an exact 1.8.4, which is below the patched release, so no update can move it and only an override will. npm audit's own suggestion is to downgrade concurrently to 9.2.4 instead, which would undo #214 for no reason. ^1.9.0 is the same major concurrently already asks for. Drop this once concurrently ships the bump itself. find-my-way ^9.7.0 clears GHSA-c96f-x56v-gq3h (HTTP/2 DDoS in <=9.6.0); fastify 5.10.0 already asks for ^9.6.0, so 9.7.0 is within its range and the override only lifts the floor — drop it once fastify ships a lockfile carrying >=9.7.0. Note that overrides CANNOT fix the two advisories in .audit-allowlist.json: those sit under @earendil-works/pi-coding-agent, which ships an npm-shrinkwrap.json, and a dependency's shrinkwrap wins over a consumer's overrides.",
   "overrides": {
-    "shell-quote": "^1.9.0"
+    "shell-quote": "^1.9.0",
+    "find-my-way": "^9.7.0"
   },
   "engines": {
     "node": ">=20.19.0"

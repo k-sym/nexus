@@ -35,5 +35,9 @@
     "@types/node": "^26.1.1",
     "tsx": "^4.19.2",
     "typescript": "^7.0.2"
+  },
+  "comment:overrides": "find-my-way ^9.7.0 clears GHSA-c96f-x56v-gq3h (HTTP/2 DDoS in <=9.6.0), reached transitively through fastify. The daemon installs standalone (--no-workspaces), so the root override does not apply here — this mirrors it. Drop once fastify ships a lockfile carrying >=9.7.0.",
+  "overrides": {
+    "find-my-way": "^9.7.0"
   }
 }
