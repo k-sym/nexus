@@ -415,6 +415,14 @@ export interface NexusConfig {
      *  behaviour is preserved. The token is read from GITHUB_TOKEN only. */
     enabled: boolean;
   };
+  docker: {
+    /** When false the `docker_service` tool is not registered at all — no
+     *  session advertises it. Off by default: starting containers binds host
+     *  ports and can mount host paths, so it is opt-in even where Docker runs.
+     *  Enabling it does not make it silent; the tool policy defaults the
+     *  `services` category to `confirm`. */
+    enabled: boolean;
+  };
   monday: {
     /** When false the poll loop stays dormant and no tools are registered. */
     enabled: boolean;

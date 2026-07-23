@@ -20,23 +20,44 @@ test('tools are classified, and anything unrecognised is side-effectful', () => 
   assert.equal(categorizeTool('monday_post_update'), 'network');
   assert.equal(categorizeTool('question'), 'interactive');
 
+  assert.equal(categorizeTool('docker_service'), 'services');
+
   // The point of the `unknown` default: a tool nobody classified — including
   // one a future extension registers — is treated as capable of side effects.
-  assert.equal(categorizeTool('docker_service'), 'unknown');
+  assert.equal(categorizeTool('not_a_real_tool'), 'unknown');
+  assert.equal(isSideEffectful('not_a_real_tool'), true);
   assert.equal(isSideEffectful('docker_service'), true);
   assert.equal(isSideEffectful('bash'), true);
   assert.equal(isSideEffectful('grep'), false);
 });
 
-test('Phase 1 defaults change nothing: unsupervised gates nothing', () => {
+test('defaults leave every pre-existing tool ungated when not supervised', () => {
   const policy = createToolPolicyResolver({ isSupervised: () => false });
-  for (const tool of ['bash', 'edit', 'grep', 'read', 'question', 'docker_service']) {
+  // Everything Nexus shipped before the policy layer must behave exactly as it
+  // did — introducing the layer changed no thread's behaviour.
+  for (const tool of ['bash', 'edit', 'grep', 'read', 'question', 'not_a_real_tool']) {
     assert.equal(policy(call(tool)), 'allow', `${tool} should be ungated when not supervised`);
   }
+  const { services, ...rest } = DEFAULT_CATEGORY_POLICY;
   assert.ok(
-    Object.values(DEFAULT_CATEGORY_POLICY).every((d) => d === 'allow'),
-    'Phase 1 ships allow-everything defaults so no existing thread changes behaviour',
+    Object.values(rest).every((d) => d === 'allow'),
+    'every category that existed before #264 still defaults to allow',
   );
+  assert.equal(services, 'confirm');
+});
+
+test('docker_service asks before it acts, even unsupervised', () => {
+  // The first real use of the policy layer: starting containers binds host
+  // ports and can mount host paths, so it confirms by default rather than
+  // relying on the thread being supervised.
+  const policy = createToolPolicyResolver({ isSupervised: () => false });
+  assert.equal(policy(call('docker_service', { action: 'up' })), 'confirm');
+  // ...and a project can still opt out of the prompt explicitly.
+  const relaxed = createToolPolicyResolver({
+    isSupervised: () => false,
+    categoryPolicy: () => ({ services: 'allow' }),
+  });
+  assert.equal(relaxed(call('docker_service', { action: 'up' })), 'allow');
 });
 
 test('Supervise still means confirm everything gateable', () => {
