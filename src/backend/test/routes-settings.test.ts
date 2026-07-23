@@ -1,6 +1,4 @@
-import './support/nexus-test-dir';
-
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -13,6 +11,17 @@ import { loadConfig, saveConfig } from '../config';
 import { __primeTokenCache } from '../github/token';
 import { PiRuntime } from '../pi/runtime';
 import { ModelCurationStore } from '../pi/model-curation';
+
+// These tests call saveConfig() and PUT /api/settings, which write config.yaml
+// for real. Relocate the whole ~/.nexus tree to a scratch dir first: otherwise
+// they overwrite the developer's own config (permanently, if a run is
+// interrupted before the restore in `finally`), and — because `node --test`
+// runs files in parallel processes — the test values are visible to every
+// other file that calls loadConfig(). Set before any config path is resolved;
+// config.ts reads NEXUS_HOME on each call, so import order does not matter.
+const NEXUS_HOME = mkdtempSync(join(tmpdir(), 'nexus-settings-home-'));
+process.env.NEXUS_HOME = NEXUS_HOME;
+after(() => rmSync(NEXUS_HOME, { recursive: true, force: true }));
 
 // A live GITHUB_TOKEN in the developer's shell (or .env) would flip the
 // "token not detected" assertion below. Mirror the Jira tests' handling of

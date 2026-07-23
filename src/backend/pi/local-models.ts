@@ -1,8 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { homedir } from 'node:os';
 import type { NexusConfig } from '@nexus/shared';
-import { resolveEnvVars } from '../config.js';
+import { getNexusDir, resolveEnvVars } from '../config.js';
 
 export interface LocalModelTestInput {
   base_url?: string;
@@ -18,7 +17,9 @@ export interface LocalModelTestResult {
 }
 
 export function defaultLocalModelsFile(): string {
-  return join(homedir(), '.nexus', 'models.json');
+  // Via getNexusDir() so NEXUS_HOME relocates this alongside config.yaml —
+  // PUT /api/settings writes this file whenever no explicit path is supplied.
+  return join(getNexusDir(), 'models.json');
 }
 
 export function writeLocalModelsFile(config: NexusConfig, filePath = defaultLocalModelsFile()): void {

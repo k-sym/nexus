@@ -31,6 +31,7 @@ import { registerActivityRoutes } from './routes/activity.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
+import { registerNextMessageRoutes } from './routes/next-message.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMondayPoll } from './monday/poll.js';
@@ -111,6 +112,7 @@ async function main() {
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
   app.register(registerAssistantRoutes);
+  app.register(registerNextMessageRoutes);
   app.register(registerOrchestratorRoutes);
   app.register(registerMemoryRoutes);
   app.register(registerSettingsRoutes);

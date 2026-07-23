@@ -1,10 +1,11 @@
-import './support/nexus-test-dir';
-
 delete process.env.MONDAY_TOKEN;
 
-import { test, beforeEach } from 'node:test';
+import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import type { MondayProjectConfig, Project } from '@nexus/shared';
 import { getDb } from '../db';
 import { scheduleRollup, disableRollupForProject } from '../monday/trigger';
@@ -13,6 +14,14 @@ import { upsertItems, linkTask } from '../monday/store';
 import { MondayError } from '../monday/client';
 import { loadConfig, saveConfig } from '../config';
 import type { ActivityEvent } from '../activity/events';
+
+// withMondayEnabled below calls saveConfig(), which writes config.yaml for
+// real. Relocate the whole ~/.nexus tree to a scratch dir first: config.ts
+// reads NEXUS_HOME on each call, so setting it here (after imports) still
+// takes effect before any loadConfig/saveConfig call in this file.
+const NEXUS_HOME = mkdtempSync(join(tmpdir(), 'nexus-monday-trigger-home-'));
+process.env.NEXUS_HOME = NEXUS_HOME;
+after(() => rmSync(NEXUS_HOME, { recursive: true, force: true }));
 
 beforeEach(() => __resetWriteState());
 
@@ -24,8 +33,8 @@ beforeEach(() => __resetWriteState());
  * hasn't explicitly turned Monday on, so any test that expects a write to
  * actually go through must flip it first. Always restored in `finally` so
  * it can't leak into later tests in this file (loadConfig/saveConfig here
- * target the private per-file directory set up by support/nexus-test-dir,
- * never the developer's real ~/.nexus/config.yaml).
+ * target the private per-file scratch directory set up above, never the
+ * developer's real ~/.nexus/config.yaml).
  */
 async function withMondayEnabled<T>(fn: () => Promise<T>): Promise<T> {
   const original = loadConfig();

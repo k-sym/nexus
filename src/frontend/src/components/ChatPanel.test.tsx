@@ -1117,4 +1117,79 @@ describe('ChatPanel', () => {
     expect(await screen.findByText('RAW_TOOL_OUTPUT')).toBeInTheDocument();
     expect(screen.getByText('UNCHANGED_OUTPUT')).toBeInTheDocument();
   });
+
+  it('offers a next-message suggestion as the composer placeholder and accepts it with Tab', async () => {
+    const user = userEvent.setup();
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/next-message') {
+        return { ok: true, json: async () => ({ suggestion: 'run the tests' }) } as Response;
+      }
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({
+            thread: { id: 't1' },
+            messages: [
+              { id: 'm1', role: 'user', content: 'add a test', timestamp: 1 },
+              { id: 'm2', role: 'assistant', content: 'done', timestamp: 2 },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+
+    const box = await screen.findByTestId('chat-input');
+    await waitFor(() => expect(box).toHaveAttribute('placeholder', 'run the tests'));
+
+    (box as HTMLTextAreaElement).focus();
+    await user.keyboard('{Tab}');
+    await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe('run the tests'));
+    // Tab accepts into the composer; it must not send.
+    expect((global.fetch as any).mock.calls.some(([u]: [string]) => String(u).endsWith('/messages/stream'))).toBe(false);
+  });
+
+  it('does not offer a suggestion once the user has typed', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/next-message') {
+        return { ok: true, json: async () => ({ suggestion: 'run the tests' }) } as Response;
+      }
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({
+            thread: { id: 't1' },
+            messages: [
+              { id: 'm1', role: 'user', content: 'add a test', timestamp: 1 },
+              { id: 'm2', role: 'assistant', content: 'done', timestamp: 2 },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const box = await screen.findByTestId('chat-input');
+    await waitFor(() => expect(box).toHaveAttribute('placeholder', 'run the tests'));
+
+    fireEvent.change(box, { target: { value: 'my own words' } });
+    expect(box).toHaveAttribute('placeholder', 'Type a message… (Enter to send, Shift+Enter for newline)');
+  });
 });

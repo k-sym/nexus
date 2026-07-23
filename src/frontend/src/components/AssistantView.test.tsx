@@ -35,8 +35,16 @@ function ndjsonStreamResponse(events: any[]): Response {
   return { ok: true, body, json: async () => ({}) } as unknown as Response;
 }
 
+// Opt-in per test. Defaulting to '' keeps the composer placeholder stable for
+// every other test in this file — a suggestion landing mid-test would otherwise
+// race any query that looks for the default 'Message Assistant...' text.
+let nextSuggestion = '';
+
 function installDefaultMock() {
   apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (url === '/api/next-message') {
+      return { ok: true, json: async () => ({ suggestion: nextSuggestion }) } as Response;
+    }
     if (url === '/api/assistant/sessions') {
       if (init?.method === 'POST') {
         return {
@@ -98,6 +106,7 @@ function installDefaultMock() {
 describe('AssistantView', () => {
   beforeEach(() => {
     apiFetchMock.mockReset();
+    nextSuggestion = '';
     vi.mocked(confirmDialog).mockReset().mockResolvedValue(true);
     installDefaultMock();
   });
@@ -623,5 +632,36 @@ describe('AssistantView', () => {
 
     const row = await screen.findByRole('button', { name: /Remote API session/i });
     expect(within(row).getByText('Remote')).toBeInTheDocument();
+  });
+
+  it('offers a next-message suggestion as the composer placeholder', async () => {
+    nextSuggestion = 'run the tests';
+    render(<AssistantView />);
+
+    // s1 is selected by default and ends in an assistant turn ("checks queued").
+    expect(await screen.findByText('checks queued')).toBeInTheDocument();
+    const box = await screen.findByPlaceholderText('run the tests');
+    expect(box).toBeInstanceOf(HTMLTextAreaElement);
+  });
+
+  it('leaves the default placeholder when there is nothing worth suggesting', async () => {
+    render(<AssistantView />);
+
+    expect(await screen.findByText('checks queued')).toBeInTheDocument();
+    expect(await screen.findByPlaceholderText('Message Assistant...')).toBeInstanceOf(HTMLTextAreaElement);
+  });
+
+  it('accepts the suggestion with Tab without sending it', async () => {
+    nextSuggestion = 'run the tests';
+    render(<AssistantView />);
+
+    const box = await screen.findByPlaceholderText('run the tests');
+    fireEvent.keyDown(box, { key: 'Tab' });
+
+    await waitFor(() => expect((box as HTMLTextAreaElement).value).toBe('run the tests'));
+    expect(apiFetchMock).not.toHaveBeenCalledWith(
+      '/api/assistant/sessions/s1/messages/stream',
+      expect.anything(),
+    );
   });
 });

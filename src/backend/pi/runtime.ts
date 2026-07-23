@@ -9,7 +9,6 @@
  */
 import { mkdirSync, unlinkSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import type { AgentSession, ExtensionFactory } from '@earendil-works/pi-coding-agent';
 import { AGENT_RUN_CUSTOM_TYPE } from '@nexus/shared';
 import {
@@ -25,6 +24,7 @@ import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
 import { defaultLocalModelsFile } from './local-models.js';
+import { getNexusDir } from '../config.js';
 
 type ResourceLoaderOptions = {
   cwd: string;
@@ -71,8 +71,8 @@ export interface PiRuntimePaths {
 }
 
 export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
-  authFile: join(homedir(), '.nexus', 'auth.json'),
-  sessionsDir: join(homedir(), '.nexus', 'sessions'),
+  authFile: join(getNexusDir(), 'auth.json'),
+  sessionsDir: join(getNexusDir(), 'sessions'),
   modelsFile: defaultLocalModelsFile(),
 });
 

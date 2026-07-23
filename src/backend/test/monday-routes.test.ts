@@ -1,15 +1,24 @@
-import './support/nexus-test-dir';
-
 delete process.env.MONDAY_TOKEN;
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { getDb } from '../db';
 import { registerMondayRoutes } from '../routes/monday';
 import { upsertItems, getLinkForTask, getItem } from '../monday/store';
 import { loadConfig, saveConfig } from '../config';
 import type { ActivityEvent } from '../activity/events';
+
+// withMondayEnabled below calls saveConfig(), which writes config.yaml for
+// real. Relocate the whole ~/.nexus tree to a scratch dir first: config.ts
+// reads NEXUS_HOME on each call, so setting it here (after imports) still
+// takes effect before any loadConfig/saveConfig call in this file.
+const NEXUS_HOME = mkdtempSync(join(tmpdir(), 'nexus-monday-routes-home-'));
+process.env.NEXUS_HOME = NEXUS_HOME;
+after(() => rmSync(NEXUS_HOME, { recursive: true, force: true }));
 
 function seed(db: ReturnType<typeof getDb>) {
   db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
@@ -81,8 +90,8 @@ async function waitForEvents(events: ActivityEvent[], minCount: number, timeoutM
  * do, restoring it in `finally`, and (b) set MONDAY_TOKEN so
  * resolveMondayToken() returns truthy, deleting it after. Both are undone
  * unconditionally so they can't leak into later tests. loadConfig/saveConfig
- * here target the private per-file directory set up by
- * support/nexus-test-dir, never the developer's real ~/.nexus/config.yaml.
+ * here target the private per-file scratch NEXUS_HOME set up above, never
+ * the developer's real ~/.nexus/config.yaml.
  */
 async function withMondayEnabled<T>(fn: () => Promise<T>): Promise<T> {
   const original = loadConfig();

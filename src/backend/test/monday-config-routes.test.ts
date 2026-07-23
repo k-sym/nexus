@@ -1,13 +1,22 @@
-import './support/nexus-test-dir';
-
 delete process.env.MONDAY_TOKEN;
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { getDb } from '../db';
 import { registerMondayRoutes } from '../routes/monday';
 import { loadConfig, saveConfig } from '../config';
+
+// withMondayEnabled below calls saveConfig(), which writes config.yaml for
+// real. Relocate the whole ~/.nexus tree to a scratch dir first: config.ts
+// reads NEXUS_HOME on each call, so setting it here (after imports) still
+// takes effect before any loadConfig/saveConfig call in this file.
+const NEXUS_HOME = mkdtempSync(join(tmpdir(), 'nexus-monday-config-routes-home-'));
+process.env.NEXUS_HOME = NEXUS_HOME;
+after(() => rmSync(NEXUS_HOME, { recursive: true, force: true }));
 
 /**
  * Task 15: per-project Monday scope configuration — GET/PUT
@@ -47,7 +56,7 @@ async function buildApp(db: ReturnType<typeof getDb>) {
 }
 
 /** Same helper as monday-routes.test.ts: flips Monday on for the duration of
- *  `fn`, against the private per-file tmpdir set up by nexus-test-dir, never
+ *  `fn`, against the private per-file scratch NEXUS_HOME set up above, never
  *  the developer's real ~/.nexus/config.yaml. Always restored in `finally`. */
 async function withMondayEnabled<T>(fn: () => Promise<T>): Promise<T> {
   const original = loadConfig();
