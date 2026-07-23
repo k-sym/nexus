@@ -221,10 +221,24 @@ function toolStatusLabel(status: ToolCallInfo['status']): string {
   }
 }
 
+/** Providers disagree on tool-name casing — pi emits `Read`, others `read`.
+ *  Everything that branches on a tool name goes through here first so a
+ *  lower-case name still gets its formatted header, its running label, and
+ *  (most importantly) its per-tool output rules. */
+const CANONICAL_TOOL_NAMES = [
+  'Write', 'Edit', 'Read', 'Bash', 'Grep', 'Find', 'LS', 'WebSearch', 'CodeSearch', 'FetchContent',
+];
+const CANONICAL_BY_LOWER = new Map(CANONICAL_TOOL_NAMES.map((n) => [n.toLowerCase(), n]));
+
+function canonicalToolName(name?: string): string | undefined {
+  if (!name) return name;
+  return CANONICAL_BY_LOWER.get(name.toLowerCase()) ?? name;
+}
+
 function buildHeader(tc: ToolCallInfo): { header: string; statusLine?: string } {
   const args = tc.args as Record<string, unknown>;
 
-  switch (tc.name) {
+  switch (canonicalToolName(tc.name)) {
     case 'Write': {
       const path = str(args.path) || str(args.file_path) || '';
       const content = str(args.content) || '';
@@ -336,7 +350,10 @@ function ToolContent({ toolCall }: { toolCall: ToolCallInfo }) {
 
   if (toolCall.result === undefined || toolCall.result === '') return null;
 
-  if (toolCall.name === 'Edit' || toolCall.name === 'Write') {
+  const name = canonicalToolName(toolCall.name);
+  const isError = toolCall.status === 'error' || toolCall.status === 'failed';
+
+  if (name === 'Edit' || name === 'Write') {
     const details = toolCall.details as Record<string, unknown> | undefined;
     const diffText = typeof details?.diff === 'string' ? details.diff : '';
     if (diffText && isDiff(diffText)) {
@@ -347,9 +364,11 @@ function ToolContent({ toolCall }: { toolCall: ToolCallInfo }) {
     }
   }
 
-  if (toolCall.name === 'Read') return null;
+  // A read that succeeded is noise — the model asked for the file, not the
+  // user. A read that failed is the only place the reason shows up.
+  if (name === 'Read' && !isError) return null;
 
-  if (toolCall.name === 'Bash' && (toolCall.status === 'error' || toolCall.status === 'failed')) {
+  if ((name === 'Bash' || name === 'Read') && isError) {
     return (
       <pre className="text-[11px] whitespace-pre-wrap text-red-400">
         {truncate(toolCall.result, 3000)}
@@ -367,7 +386,8 @@ function formatToolDuration(toolCall: ToolCallInfo): string | null {
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
-function runningLabel(name?: string): string {
+function runningLabel(rawName?: string): string {
+  const name = canonicalToolName(rawName);
   switch (name) {
     case 'Write': return 'Writing…';
     case 'Edit': return 'Editing…';

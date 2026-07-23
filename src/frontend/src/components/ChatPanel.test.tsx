@@ -1118,6 +1118,49 @@ describe('ChatPanel', () => {
     expect(screen.getByText('UNCHANGED_OUTPUT')).toBeInTheDocument();
   });
 
+  // A tool that failed is exactly the output you need to see, so it does not
+  // wait behind Ctrl+O the way ordinary tool output does.
+  it('shows the body of a failed tool result without expanding details', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({
+            thread: { id: 't1' },
+            messages: [
+              {
+                id: 'tool-read',
+                role: 'toolResult',
+                toolName: 'read',
+                content: 'EISDIR: illegal operation on a directory, read',
+                isError: true,
+                timestamp: 1,
+              },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+
+    const body = await screen.findByText('EISDIR: illegal operation on a directory, read');
+    expect(body.closest('[data-chat-role="tool"]')).toHaveTextContent('read (error)');
+  });
+
   it('offers a next-message suggestion as the composer placeholder and accepts it with Tab', async () => {
     const user = userEvent.setup();
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
