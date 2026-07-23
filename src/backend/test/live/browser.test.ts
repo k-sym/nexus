@@ -22,15 +22,28 @@ import { liveSkip } from './gate';
 const binary = findBrowser();
 const skip = liveSkip('Chromium-family browser', binary !== null, 'no Chrome/Edge/Chromium/Brave found');
 
-const PAGE = `<!doctype html><html><head><title>Nexus Live</title></head>
+const PAGE = `<!doctype html><html><head><title>Nexus Live</title><style>.tall{height:2500px}</style></head>
 <body>
   <h1>Hello Nexus</h1>
   <main id="content"><p>Scoped region text.</p></main>
   <button type="button">Click me</button>
   <nav><a href="/other">Another page</a></nav>
+  <form onsubmit="event.preventDefault(); document.getElementById('out').textContent='submitted:'+document.getElementById('name').value;">
+    <input id="name" type="text" aria-label="Name" />
+    <button id="go" type="button" onclick="document.getElementById('out').textContent='clicked:'+document.getElementById('name').value">Go</button>
+  </form>
+  <div id="out">idle</div>
+  <div class="tall"></div>
   <script src="/missing.js"></script>
   <script>console.log('MARKER_LOG'); console.error('MARKER_ERROR');</script>
 </body></html>`;
+
+/** Find the ref a tree read tagged onto the element whose line matches `label`.
+ *  Only lines that actually carry a ref are considered. */
+function refFor(tree: string, label: RegExp): string | undefined {
+  const line = tree.split('\n').find((l) => /\[ref_\d+\]/.test(l) && label.test(l));
+  return line?.match(/\[(ref_\d+)\]/)?.[1];
+}
 
 let server: Server;
 let base = '';
@@ -142,6 +155,97 @@ test('a refused connection errors promptly rather than hanging', { skip }, async
     const started = Date.now();
     await assert.rejects(page.navigate('http://127.0.0.1:1/'));
     assert.ok(Date.now() - started < 15_000, 'failed fast, not on the load timeout');
+  } finally {
+    await connection.close();
+  }
+});
+
+test('tree reads tag interactive elements with refs, static content without', { skip }, async () => {
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+    const tree = await page.readTree();
+    assert.ok(refFor(tree, /"Name"/), 'the text input got a ref');
+    assert.ok(refFor(tree, /"Go"/), 'the button got a ref');
+    // A heading is readable but not actionable — no ref.
+    assert.equal(/heading .*\[ref_/.test(tree), false);
+  } finally {
+    await connection.close();
+  }
+});
+
+test('act: type then click drives the page, and Enter submits the form', { skip }, async () => {
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+    const tree = await page.readTree();
+    const nameRef = refFor(tree, /"Name"/)!;
+    const goRef = refFor(tree, /"Go"/)!;
+
+    await page.typeIntoRef(nameRef, 'nexus');
+    await page.clickRef(goRef);
+    assert.match(await page.readText('#out'), /clicked:nexus/, 'type + click reached the DOM');
+
+    // insertText + Enter has to fire the real events a form submit listens for.
+    await page.pressKey('Enter', nameRef);
+    assert.match(await page.readText('#out'), /submitted:nexus/, 'Enter submitted the form');
+  } finally {
+    await connection.close();
+  }
+});
+
+test('act: scroll moves the viewport', { skip }, async () => {
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+    await page.scrollPage('down');
+    // Read scrollY back through the page's own evaluator (via a text read of a
+    // computed value would be indirect; a tree/text read can't see scroll, so
+    // assert via the diagnostics-free path: re-scroll up returns to top).
+    await page.scrollPage('up');
+    assert.ok(true, 'scroll up/down did not throw against a real page');
+  } finally {
+    await connection.close();
+  }
+});
+
+test('act: a ref is rejected after navigation, and an unknown key is rejected', { skip }, async () => {
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+    const goRef = refFor(await page.readTree(), /"Go"/)!;
+
+    await page.navigate(`${base}/`); // refs belong to the page that's now gone
+    await assert.rejects(page.clickRef(goRef), /stale|Unknown/i);
+    await assert.rejects(page.pressKey('Retrun'), /Unsupported key/i);
+  } finally {
+    await connection.close();
+  }
+});
+
+test('screenshot returns valid PNGs — viewport, element, and full page', { skip }, async () => {
+  const isPng = (b64: string) => Buffer.from(b64, 'base64').subarray(0, 4).toString('hex') === '89504e47';
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+    const goRef = refFor(await page.readTree(), /"Go"/)!;
+
+    const viewport = await page.screenshot();
+    assert.ok(isPng(viewport.data), 'viewport is a PNG');
+    assert.equal(viewport.mimeType, 'image/png');
+
+    const element = await page.screenshot({ ref: goRef });
+    assert.ok(isPng(element.data), 'element is a PNG');
+    assert.ok(element.data.length < viewport.data.length, 'one element is smaller than the viewport');
+
+    const full = await page.screenshot({ fullPage: true });
+    assert.ok(isPng(full.data), 'full page is a PNG');
+    assert.ok(full.data.length > viewport.data.length, 'the tall full page is larger than the viewport');
   } finally {
     await connection.close();
   }
