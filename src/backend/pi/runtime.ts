@@ -22,6 +22,7 @@ import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
 import { createToolPolicyResolver, type ToolPolicyResolver } from './tool-policy.js';
+import { createDockerExtension, type DockerToolDeps } from './docker-tool.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
 import { defaultLocalModelsFile } from './local-models.js';
@@ -71,6 +72,18 @@ export interface PiRuntimePaths {
   modelsFile?: string;
 }
 
+/** Everything the runtime needs from the rest of the backend. Each entry is
+ *  optional and its absence means "omit that capability" — tests and headless
+ *  callers construct a runtime with none of them. */
+export interface PiRuntimeDeps {
+  recallMemories?: MemoryRecallFn;
+  mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null;
+  mondayTools?: (threadId: string) => MondayToolDeps | null;
+  dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null;
+  /** Fire-and-forget teardown of a thread's compose project on session drop. */
+  tearDownServices?: (threadId: string, cwd: string) => void;
+}
+
 export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
   authFile: join(getNexusDir(), 'auth.json'),
   sessionsDir: join(getNexusDir(), 'sessions'),
@@ -105,6 +118,7 @@ export function buildSessionExtensionFactories(
   signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
   recallMemories?: MemoryRecallFn,
   mondayTools?: (threadId: string) => MondayToolDeps | null,
+  dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null,
 ): ExtensionFactory[] {
   // Mirrors the mondayContext guard in createSession below. Unlike that call,
   // this one has no try/catch at its call site (it's part of the
@@ -119,6 +133,14 @@ export function buildSessionExtensionFactories(
   } catch {
     monday = null;
   }
+  // Same guard, same reason: a resolver that throws must cost the thread its
+  // Docker tool, not its ability to open at all.
+  let docker: DockerToolDeps | null = null;
+  try {
+    docker = dockerTools?.(threadId, cwd) ?? null;
+  } catch {
+    docker = null;
+  }
   return [
     createQuestionExtension(threadId, questions),
     createApprovalExtension(threadId, cwd, approvals, policy),
@@ -129,6 +151,9 @@ export function buildSessionExtensionFactories(
     // Same contract for Monday: omitted wholesale when the feature is off,
     // unconfigured, or this thread's task has no linked item.
     ...(monday ? [createMondayExtension(monday)] : []),
+    // And for Docker: omitted when the feature is off or no daemon answered
+    // the probe, so a session never offers to start containers it can't.
+    ...(docker ? [createDockerExtension(docker)] : []),
   ];
 }
 
@@ -166,29 +191,33 @@ export class PiRuntime {
   /** Resolves the Monday tool deps for a thread, or null to omit the tools
    *  entirely. Same "omit when absent" contract as recallMemories. */
   private readonly mondayTools?: (threadId: string) => MondayToolDeps | null;
+  /** Resolves the Docker tool deps for a thread, or null to omit the tool.
+   *  Same contract again. */
+  private readonly dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null;
+  /** Tears down a thread's compose project. Called on session drop so services
+   *  a thread started don't outlive it. Undefined = nothing to tear down. */
+  private readonly tearDownServices?: (threadId: string, cwd: string) => void;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
     modelRuntime: ModelRuntime,
-    recallMemories?: MemoryRecallFn,
-    mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null,
-    mondayTools?: (threadId: string) => MondayToolDeps | null,
+    // A deps object rather than more positional params: `create()` already
+    // takes one, and this list only grows as tools are added.
+    deps: PiRuntimeDeps,
   ) {
     this.paths = paths;
     this.auth = modelRuntime;
     this.models = new ModelRegistry(modelRuntime);
-    this.recallMemories = recallMemories;
-    this.mondayContext = mondayContext;
-    this.mondayTools = mondayTools;
+    this.recallMemories = deps.recallMemories;
+    this.mondayContext = deps.mondayContext;
+    this.mondayTools = deps.mondayTools;
+    this.dockerTools = deps.dockerTools;
+    this.tearDownServices = deps.tearDownServices;
   }
 
   static async create(
     paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths(),
-    deps: {
-      recallMemories?: MemoryRecallFn;
-      mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null;
-      mondayTools?: (threadId: string) => MondayToolDeps | null;
-    } = {},
+    deps: PiRuntimeDeps = {},
   ): Promise<PiRuntime> {
     const defaults = defaultPiRuntimePaths();
     const resolvedPaths = {
@@ -203,7 +232,7 @@ export class PiRuntime {
       modelsPath: resolvedPaths.modelsFile,
       allowModelNetwork: false,
     });
-    return new PiRuntime(resolvedPaths, modelRuntime, deps.recallMemories, deps.mondayContext, deps.mondayTools);
+    return new PiRuntime(resolvedPaths, modelRuntime, deps);
   }
 
   /**
@@ -344,7 +373,7 @@ export class PiRuntime {
       settingsManager,
       extensionFactories: buildSessionExtensionFactories(
         threadId, cwd, this.questions, this.approvals, this.policyFor(threadId),
-        createSignalFilterExtension, this.recallMemories, this.mondayTools,
+        createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened
       // later sees current item state rather than a stale frozen line. Also
@@ -387,6 +416,15 @@ export class PiRuntime {
     this.supervised.delete(threadId);
     this.questions.cancelThread(threadId, 'Session dropped');
     this.approvals.cancelThread(threadId, 'Session dropped');
+    // Containers a thread started must not outlive it. This is the whole
+    // reason the compose project name is derived from the thread id rather
+    // than recorded somewhere: teardown needs no surviving state, so it works
+    // even for a thread whose session was never held in memory. Guarded and
+    // fire-and-forget — dropping a thread must not fail because Docker is
+    // down, and anything left behind is still reachable by a later sweep.
+    try {
+      this.tearDownServices?.(threadId, cwd);
+    } catch { /* best effort */ }
     const sessionDir = this.sessionDirFor(cwd);
     try {
       for (const name of readdirSync(sessionDir)) {

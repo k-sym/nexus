@@ -93,6 +93,7 @@ const TOOL_CATEGORIES: Readonly<Record<string, ToolCategory>> = {
   monday_post_update: 'network',
 
   bash: 'exec',
+  docker_service: 'services',
 };
 
 /** Categories whose tools can affect something outside the model's context —
@@ -102,16 +103,26 @@ const SIDE_EFFECTFUL: ReadonlySet<ToolCategory> = new Set<ToolCategory>([
 ]);
 
 /**
- * Phase 1 defaults: everything allowed, so introducing the policy layer changes
- * no existing thread's behaviour. Later phases tighten `services`/`network` and
- * make this configurable per project.
+ * Built-in defaults.
+ *
+ * Everything Nexus shipped before the policy layer is `allow`, so introducing
+ * it changed no existing thread's behaviour.
+ *
+ * `services` is the exception, and the first use of what the layer was built
+ * for: starting containers binds host ports and can mount host paths, so
+ * `docker_service` asks before it acts. This is not a behaviour change either —
+ * nothing was in `services` until #264 added the tool — and it costs an
+ * unsupervised thread nothing, because the tool is omitted entirely unless
+ * Docker is reachable and the project opted in.
+ *
+ * A later phase makes this configurable per project.
  */
 export const DEFAULT_CATEGORY_POLICY: CategoryPolicy = {
   interactive: 'allow',
   read: 'allow',
   write: 'allow',
   exec: 'allow',
-  services: 'allow',
+  services: 'confirm',
   network: 'allow',
   unknown: 'allow',
 };

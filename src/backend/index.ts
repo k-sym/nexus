@@ -29,6 +29,7 @@ import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerApprovalRoutes } from './routes/approvals.js';
+import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from './docker/session-deps.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -55,10 +56,16 @@ async function main() {
   writeLocalModelsFile(config);
 
   const db = getDb(getDbPath());
+  // One probe at startup so the first sessions know whether Docker is there;
+  // it refreshes itself on a TTL after that (see docker/session-deps.ts).
+  const dockerAvailability = new DockerAvailability();
+  void dockerAvailability.refresh();
   const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
     recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
     mondayContext: (threadId) => buildMondayContext(db, threadId),
     mondayTools: (threadId) => buildMondayToolDeps(db, threadId),
+    dockerTools: buildDockerToolDeps(dockerAvailability),
+    tearDownServices: buildTearDownServices(dockerAvailability),
   });
 
   const openRouterKey = resolveOpenRouterKey(config);

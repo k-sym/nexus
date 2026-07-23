@@ -93,12 +93,10 @@ test('an unknown action is treated as allow, never as an unhandled 500', async (
   }
 });
 
-test('toPendingDto classifies an unknown tool rather than dropping the field', () => {
-  const dto = toPendingDto({
-    threadId: 't', toolCallId: 'c', toolName: 'docker_service',
-    input: {}, cwd: '/repo', requestedAt: 1,
-  });
-  assert.equal(dto.category, 'unknown');
+test('toPendingDto carries the category, including for an unclassified tool', () => {
+  const base = { threadId: 't', toolCallId: 'c', input: {}, cwd: '/repo', requestedAt: 1 };
+  assert.equal(toPendingDto({ ...base, toolName: 'docker_service' }).category, 'services');
+  assert.equal(toPendingDto({ ...base, toolName: 'not_a_real_tool' }).category, 'unknown');
 });
 
 // ── presence-aware timeouts ───────────────────────────────────────────────────

@@ -107,6 +107,13 @@ function defaultConfig(): NexusConfig {
       // written before this block existed (deepMerge backfills it on load).
       enabled: true,
     },
+    docker: {
+      // Off by default: the tool starts containers that bind host ports, so it
+      // is opt-in even on a machine where Docker is running. Turning it on
+      // still doesn't make it silent — `services` defaults to `confirm` in the
+      // tool policy (see pi/tool-policy.ts).
+      enabled: false,
+    },
     monday: {
       enabled: false,
       // '2024-10' was deprecated 2026-02-15; pinned to '2026-07', the current
