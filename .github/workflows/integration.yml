@@ -1,0 +1,103 @@
+name: Integration (live tools)
+
+# The Docker and browser tools (#264, #265) can only be fully proven against a
+# real Docker daemon and a real Chromium — a fake `exec` can prove the argv and
+# the branching, but not that `up` is genuinely detached or that `readTree`
+# returns anything (an AXValue-shape bug shipped precisely because the mocked
+# tests could not see it). Those live suites live in src/backend/test/live and
+# are NOT in the default `npm test` glob, so backend-quality stays fast and
+# deterministic; this workflow is where they actually run.
+#
+# NEXUS_REQUIRE_LIVE=1 turns "tool not available" from a skip into a failure, so
+# a broken browser install or a stopped daemon on the runner goes red instead of
+# quietly green. A silent skip is the one outcome an integration gate must not
+# produce.
+
+on:
+  pull_request:
+    paths:
+      - package.json
+      - package-lock.json
+      - src/shared/**
+      - src/backend/browser/**
+      - src/backend/docker/**
+      - src/backend/pi/docker-tool.ts
+      - src/backend/pi/browser-tool.ts
+      - src/backend/text/**
+      - src/backend/test/live/**
+      - .github/workflows/integration.yml
+  push:
+    branches:
+      - main
+    paths:
+      - package.json
+      - package-lock.json
+      - src/shared/**
+      - src/backend/browser/**
+      - src/backend/docker/**
+      - src/backend/pi/docker-tool.ts
+      - src/backend/pi/browser-tool.ts
+      - src/backend/text/**
+      - src/backend/test/live/**
+      - .github/workflows/integration.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live:
+    name: Live Docker and browser tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # A missing tool fails the suite instead of skipping it (see ./gate.ts).
+      NEXUS_REQUIRE_LIVE: "1"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build shared package
+        run: npm run --workspace=src/shared build
+
+      # ubuntu-latest ships Docker (daemon running) and Google Chrome. Confirm
+      # both up front so a missing tool is an obvious, early failure rather than
+      # a confusing one inside a test — and so the logs record exactly which
+      # binary the browser suite will discover.
+      - name: Confirm Docker is available
+        run: docker version
+
+      - name: Confirm a browser is discoverable
+        run: |
+          echo "Discoverable browsers:"
+          ls -l /usr/bin/google-chrome /usr/bin/google-chrome-stable /usr/bin/chromium-browser /usr/bin/chromium 2>/dev/null || true
+          command -v google-chrome || command -v chromium-browser || command -v chromium \
+            || { echo "No Chromium-family browser found on the runner"; exit 1; }
+
+      # Chrome keeps its sandbox on in production on purpose (the tool never
+      # passes --no-sandbox — there is a unit test asserting that). The sandbox
+      # uses an unprivileged user namespace, which Ubuntu 24.04's AppArmor
+      # restricts by default. Lift that restriction so the SANDBOXED browser can
+      # launch as the non-root runner user — this keeps the sandbox on, it does
+      # not disable it.
+      - name: Allow unprivileged user namespaces (for the Chrome sandbox)
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Run live integration tests
+        run: npm run --workspace=src/backend test:live
