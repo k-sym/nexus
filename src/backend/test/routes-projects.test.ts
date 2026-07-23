@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
 import { registerProjectRoutes } from '../routes/projects';
 import { loadConfig, saveConfig } from '../config';
+import { getDb } from '../db';
+import { upsertItems, linkTask, getLinkForTask } from '../monday/store';
 
 // The github-sync test below flips github.enabled via saveConfig(). Relocate
 // the ~/.nexus tree to a scratch dir so that write never lands in the
@@ -392,5 +394,149 @@ test('POST /api/projects/:id/github/sync no-ops when github is disabled in confi
     await app.close();
     db.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// DELETE /api/tasks/:id must not leave an orphaned task_monday_links row
+// behind, and must recompute the roll-up for the item the deleted task was
+// linked to — otherwise the item's Monday column keeps counting a task that
+// no longer exists until some sibling task happens to move. Uses getDb()
+// (the real schema) rather than this file's hand-rolled makeApp(), since that
+// schema predates the Monday tables and this route is what proves they're
+// wired together.
+test('DELETE /api/tasks/:id recomputes the linked item roll-up and removes the orphaned link', async () => {
+  const db = getDb(':memory:');
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','','', ?, 0, '', ?, ?)`)
+    .run(JSON.stringify({
+      monday: {
+        board_id: 'b1', group_id: null,
+        rollup: { enabled: true, column_id: 'text_1', column_type: 'text' },
+        updates: { enabled: false, min_interval_minutes: 30 },
+      },
+    }), now, now);
+  // Two tasks linked to the same item: t1 (deploy → counts as done) is the
+  // one that gets deleted, t2 (todo → not done) is the sibling left behind.
+  // That makes the recomputed value ("0/1 done") provably reflect the
+  // POST-delete state rather than a stale value that still includes t1.
+  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
+              VALUES ('t1','p1','Deployed','','deploy','medium', ?, ?)`).run(now, now);
+  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
+              VALUES ('t2','p1','Still open','','todo','medium', ?, ?)`).run(now, now);
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
+    name: 'Initiative', state: 'active', status_label: null, status_color: null,
+    owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
+  }]);
+  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: now });
+  linkTask(db, { task_id: 't2', item_id: '1', project_id: 'p1', created_at: now });
+
+  const app = Fastify({ logger: false });
+  app.decorate('db', db);
+  await app.register(registerProjectRoutes);
+
+  const original = loadConfig();
+  process.env.MONDAY_TOKEN = 'tok';
+  saveConfig({ ...original, monday: { ...original.monday, enabled: true } });
+
+  // The route's recompute is fire-and-forget (void, not awaited), so the only
+  // way to observe it deterministically is to intercept the transport it
+  // eventually reaches and wait on that, rather than on the HTTP response.
+  let resolveCalled = () => {};
+  const whenCalled = new Promise<void>((resolve) => { resolveCalled = resolve; });
+  const calls: { query: string; variables: Record<string, unknown> }[] = [];
+  const realFetch = globalThis.fetch;
+  (globalThis as any).fetch = async (_url: string, init: RequestInit) => {
+    const body = JSON.parse(init.body as string) as { query: string; variables: Record<string, unknown> };
+    calls.push(body);
+    resolveCalled();
+    return new Response(JSON.stringify({ data: { change_simple_column_value: { id: '1' } } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  try {
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/t1' });
+    assert.equal(res.statusCode, 200);
+
+    // The orphan link row is removed synchronously as part of the delete —
+    // this must hold regardless of whether the fire-and-forget network call
+    // below ever completes.
+    assert.equal(getLinkForTask(db, 't1'), undefined, 'the orphaned link row must be gone');
+    assert.equal((db.prepare('SELECT COUNT(*) AS c FROM tasks WHERE id = ?').get('t1') as { c: number }).c, 0);
+
+    await whenCalled;
+    assert.equal(calls.length, 1, 'the recompute must reach Monday exactly once');
+    assert.match(calls[0].query, /change_simple_column_value/);
+    assert.equal(calls[0].variables.itemId, '1');
+    assert.equal(calls[0].variables.value, '0/1 done', 'must reflect t2 only, not a stale count that still includes deleted t1');
+  } finally {
+    (globalThis as any).fetch = realFetch;
+    delete process.env.MONDAY_TOKEN;
+    saveConfig(original);
+    await app.close();
+    db.close();
+  }
+});
+
+// DELETE /api/tasks/:id's roll-up recompute previously called
+// scheduleRollupForItem WITHOUT an emit argument — only the Kanban
+// status-change path in this same file reached the ActivityManager, so a
+// task delete's write was invisible in the Activity Console.
+test('DELETE /api/tasks/:id emits a monday_write activity operation for its roll-up recompute', async () => {
+  const db = getDb(':memory:');
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','','', ?, 0, '', ?, ?)`)
+    .run(JSON.stringify({
+      monday: {
+        board_id: 'b1', group_id: null,
+        rollup: { enabled: true, column_id: 'text_1', column_type: 'text' },
+        updates: { enabled: false, min_interval_minutes: 30 },
+      },
+    }), now, now);
+  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
+              VALUES ('t1','p1','Deployed','','deploy','medium', ?, ?)`).run(now, now);
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
+    name: 'Initiative', state: 'active', status_label: null, status_color: null,
+    owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
+  }]);
+  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: now });
+
+  const app = Fastify({ logger: false });
+  app.decorate('db', db);
+  const events: { kind: string }[] = [];
+  (app as any).decorate('activity', { bus: { emit: (e: { kind: string }) => events.push(e) } });
+  await app.register(registerProjectRoutes);
+
+  const original = loadConfig();
+  process.env.MONDAY_TOKEN = 'tok';
+  saveConfig({ ...original, monday: { ...original.monday, enabled: true } });
+
+  const realFetch = globalThis.fetch;
+  (globalThis as any).fetch = async () => new Response(
+    JSON.stringify({ data: { change_simple_column_value: { id: '1' } } }),
+    { status: 200, headers: { 'content-type': 'application/json' } },
+  );
+
+  try {
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/t1' });
+    assert.equal(res.statusCode, 200);
+
+    const start = Date.now();
+    while (events.length === 0) {
+      if (Date.now() - start > 2000) throw new Error('timed out waiting for a monday_write activity event');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.ok(events.some((e) => e.kind === 'monday_write'), 'a task delete\'s roll-up recompute must produce a monday_write operation');
+  } finally {
+    (globalThis as any).fetch = realFetch;
+    delete process.env.MONDAY_TOKEN;
+    saveConfig(original);
+    await app.close();
+    db.close();
   }
 });

@@ -1,7 +1,8 @@
-import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { describe, expect, it, vi, beforeEach } from 'vitest';
 import KanbanBoard from './KanbanBoard';
 import { Task } from '@nexus/shared';
+import * as api from '../api';
 
 const task: Task = {
   id: 'task-1',
@@ -21,6 +22,43 @@ const task: Task = {
 };
 
 describe('KanbanBoard', () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it('keeps the board usable — cards still render, drag/drop and add-task still work — when the Monday badge fetch rejects (e.g. an expired token)', async () => {
+    const fetchMondayItems = vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(new Error('Monday token expired'));
+    const onOpenTask = vi.fn();
+    const onAddTask = vi.fn();
+
+    render(
+      <KanbanBoard
+        tasks={[task]}
+        columns={['triage']}
+        columnLabels={{ triage: 'Triage' } as Record<string, string>}
+        projectId="project-1"
+        onMoveTask={vi.fn()}
+        onAddTask={onAddTask}
+        onOpenTask={onOpenTask}
+        onDeleteTask={vi.fn()}
+      />,
+    );
+
+    // The rejected fetch is real — confirm the board actually attempted it —
+    // then confirm the board itself never surfaces the failure or blocks.
+    await waitFor(() => expect(fetchMondayItems).toHaveBeenCalledWith('project-1'));
+
+    const card = screen.getByText('Design ambient board').closest('[data-kanban-card]');
+    expect(card).toBeInTheDocument();
+    expect(screen.queryByText(/monday token expired/i)).toBeNull();
+
+    // The board stays interactive: clicking a card and adding a task both
+    // still fire their callbacks, and no badge is rendered for the task.
+    fireEvent.click(screen.getByText('Design ambient board'));
+    expect(onOpenTask).toHaveBeenCalledWith(task);
+    fireEvent.click(screen.getByText('+'));
+    expect(onAddTask).toHaveBeenCalledWith('triage');
+    expect(card?.querySelector('[title*="no longer in Monday"]')).toBeNull();
+  });
+
   it('renders tasks in open ambient lanes instead of hard glass columns', () => {
     render(
       <KanbanBoard

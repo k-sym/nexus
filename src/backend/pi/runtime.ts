@@ -21,6 +21,8 @@ import { QuestionBroker, createQuestionExtension } from './questions.js';
 import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
+import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
+import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
 import { defaultLocalModelsFile } from './local-models.js';
 import { getNexusDir } from '../config.js';
 
@@ -30,6 +32,11 @@ type ResourceLoaderOptions = {
   settingsManager: unknown;
   noExtensions?: boolean;
   extensionFactories?: ExtensionFactory[];
+  /** Re-evaluated on every session create AND resume (unlike the transcript),
+   *  so a thread reopened later sees current state rather than a stale line
+   *  frozen in message history. Matches pi's DefaultResourceLoaderOptions
+   *  shape exactly (verified against resource-loader.d.ts). */
+  systemPromptOverride?: (base: string | undefined) => string | undefined;
 };
 
 type SessionInfoLike = {
@@ -79,7 +86,7 @@ export function cwdSlug(repoPath: string): string {
 }
 
 export function buildResourceLoaderOptions(
-  options: Pick<ResourceLoaderOptions, 'cwd' | 'agentDir' | 'settingsManager' | 'extensionFactories'>,
+  options: Pick<ResourceLoaderOptions, 'cwd' | 'agentDir' | 'settingsManager' | 'extensionFactories' | 'systemPromptOverride'>,
 ): ResourceLoaderOptions {
   return {
     ...options,
@@ -96,7 +103,21 @@ export function buildSessionExtensionFactories(
   isSupervised: () => boolean,
   signalFactoryBuilder: (cwd: string) => ExtensionFactory = createSignalFilterExtension,
   recallMemories?: MemoryRecallFn,
+  mondayTools?: (threadId: string) => MondayToolDeps | null,
 ): ExtensionFactory[] {
+  // Mirrors the mondayContext guard in createSession below. Unlike that call,
+  // this one has no try/catch at its call site (it's part of the
+  // extensionFactories: buildSessionExtensionFactories(...) argument to an
+  // object literal, not a statement that could wrap it) — so the guard has
+  // to live here. buildMondayToolDeps() already guards its own body, but
+  // this must not depend on that: a throw here today means an unopenable,
+  // permanently broken thread (MINOR 6).
+  let monday: MondayToolDeps | null = null;
+  try {
+    monday = mondayTools?.(threadId) ?? null;
+  } catch {
+    monday = null;
+  }
   return [
     createQuestionExtension(threadId, questions),
     createApprovalExtension(threadId, cwd, approvals, isSupervised),
@@ -104,6 +125,9 @@ export function buildSessionExtensionFactories(
     // Omitted when the runtime was built without a recall backend (tests,
     // headless callers) so sessions don't advertise a tool that can't run.
     ...(recallMemories ? [createMemoryExtension(cwd, recallMemories)] : []),
+    // Same contract for Monday: omitted wholesale when the feature is off,
+    // unconfigured, or this thread's task has no linked item.
+    ...(monday ? [createMondayExtension(monday)] : []),
   ];
 }
 
@@ -134,21 +158,36 @@ export class PiRuntime {
   private readonly supervised = new Set<string>();
   /** Backend for the `memory_recall` tool. Undefined = the tool isn't registered. */
   private readonly recallMemories?: MemoryRecallFn;
+  /** Resolves the linked-item snapshot for a thread's system prompt, or null
+   *  when the thread's task has no linked item (or the feature is off).
+   *  Undefined = no resolver supplied, e.g. tests and other headless callers. */
+  private readonly mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null;
+  /** Resolves the Monday tool deps for a thread, or null to omit the tools
+   *  entirely. Same "omit when absent" contract as recallMemories. */
+  private readonly mondayTools?: (threadId: string) => MondayToolDeps | null;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
     modelRuntime: ModelRuntime,
     recallMemories?: MemoryRecallFn,
+    mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null,
+    mondayTools?: (threadId: string) => MondayToolDeps | null,
   ) {
     this.paths = paths;
     this.auth = modelRuntime;
     this.models = new ModelRegistry(modelRuntime);
     this.recallMemories = recallMemories;
+    this.mondayContext = mondayContext;
+    this.mondayTools = mondayTools;
   }
 
   static async create(
     paths: Partial<PiRuntimePaths> = defaultPiRuntimePaths(),
-    deps: { recallMemories?: MemoryRecallFn } = {},
+    deps: {
+      recallMemories?: MemoryRecallFn;
+      mondayContext?: (threadId: string, cwd: string) => MondayContextInput | null;
+      mondayTools?: (threadId: string) => MondayToolDeps | null;
+    } = {},
   ): Promise<PiRuntime> {
     const defaults = defaultPiRuntimePaths();
     const resolvedPaths = {
@@ -163,7 +202,7 @@ export class PiRuntime {
       modelsPath: resolvedPaths.modelsFile,
       allowModelNetwork: false,
     });
-    return new PiRuntime(resolvedPaths, modelRuntime, deps.recallMemories);
+    return new PiRuntime(resolvedPaths, modelRuntime, deps.recallMemories, deps.mondayContext, deps.mondayTools);
   }
 
   /**
@@ -270,14 +309,45 @@ export class PiRuntime {
       sessionManager = SessionManager.create(cwd, sessionDir, { id: threadId });
     }
     const settingsManager = SettingsManager.inMemory();
+    // Resolving Monday context must never be able to fail session creation.
+    // resourceLoader.reload() below is awaited with no guard, so a throw from
+    // this.mondayContext (e.g. a real DB-backed resolver hitting a bad row)
+    // would reject createSession entirely, bricking the thread until the
+    // underlying data is fixed by hand. Degrade to "no Monday context"
+    // instead — a session without its Monday block is a small loss; a
+    // session that cannot open at all is a serious one.
+    let resolvedMondayContext: MondayContextInput | null = null;
+    try {
+      resolvedMondayContext = this.mondayContext?.(threadId, cwd) ?? null;
+    } catch {
+      resolvedMondayContext = null;
+    }
+    // Bind to a const so the ternary/closure below narrows to non-null
+    // permanently, rather than re-checking a mutable `let` at closure-call
+    // time.
+    const mondayContext = resolvedMondayContext;
     const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
       extensionFactories: buildSessionExtensionFactories(
         threadId, cwd, this.questions, this.approvals, () => this.isSupervised(threadId),
-        createSignalFilterExtension, this.recallMemories,
+        createSignalFilterExtension, this.recallMemories, this.mondayTools,
       ),
+      // Re-evaluated on every session create AND resume, so a thread reopened
+      // later sees current item state rather than a stale frozen line. Also
+      // guarded: buildMondayContextBlock is pure and defensively parses its
+      // input, but if it were ever to throw, the base prompt must still come
+      // through unmodified rather than the whole session failing to create.
+      systemPromptOverride: mondayContext
+        ? (base: string | undefined) => {
+            try {
+              return `${base ?? ''}\n\n${buildMondayContextBlock(mondayContext)}`;
+            } catch {
+              return base;
+            }
+          }
+        : undefined,
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({

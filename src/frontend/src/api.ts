@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput, MondayItem, MondayItemWithLinks, TaskMondayLink, MondayProjectConfig } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -181,6 +181,15 @@ function qs(params: Record<string, string | number | undefined>): string {
   return s ? `?${s}` : '';
 }
 
+/** An Error thrown by `fetchJson` for a non-ok response. `code`/`retryable` are
+ *  attached only when the backend's error body carried them (e.g. Monday's
+ *  502 `{ error, code, retryable }`) — callers that don't care can keep
+ *  treating this as a plain `Error`. */
+export interface FetchJsonError extends Error {
+  code?: string;
+  retryable?: boolean;
+}
+
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
   // Only send a JSON content-type when there's actually a body — otherwise
   // Fastify rejects no-body DELETE/POST requests with 400 ("body cannot be empty").
@@ -191,9 +200,80 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
   const res = await apiFetch(url, { ...options, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).error || res.statusText);
+    const err: FetchJsonError = new Error((body as any).error || res.statusText);
+    if (typeof (body as any).code === 'string') err.code = (body as any).code;
+    if (typeof (body as any).retryable === 'boolean') err.retryable = (body as any).retryable;
+    throw err;
   }
   return res.json() as Promise<T>;
+}
+
+// Monday.com — the Project Management view's read paths and link CRUD.
+// Free-standing exports (not nested under `api`) so ProjectManagementView can
+// import and mock them directly, matching the Task 11 brief's client surface.
+export async function fetchMondayItems(projectId: string, refresh = false): Promise<MondayItemWithLinks[]> {
+  const query = refresh ? '?refresh=1' : '';
+  const data = await fetchJson<{ items: MondayItemWithLinks[] }>(`/api/monday/projects/${projectId}/items${query}`);
+  return data.items;
+}
+
+export async function searchMondayItems(projectId: string, query: string): Promise<MondayItem[]> {
+  const data = await fetchJson<{ items: MondayItem[] }>(
+    `/api/monday/projects/${projectId}/search?q=${encodeURIComponent(query)}`,
+  );
+  return data.items;
+}
+
+export async function fetchMondayLinks(projectId: string): Promise<TaskMondayLink[]> {
+  const data = await fetchJson<{ links: TaskMondayLink[] }>(`/api/monday/projects/${projectId}/links`);
+  return data.links;
+}
+
+export async function linkTaskToMondayItem(projectId: string, taskId: string, itemId: string): Promise<void> {
+  await fetchJson(`/api/monday/links`, {
+    method: 'POST',
+    body: JSON.stringify({ project_id: projectId, task_id: taskId, item_id: itemId }),
+  });
+}
+
+export async function unlinkTaskFromMondayItem(taskId: string): Promise<void> {
+  await fetchJson(`/api/monday/links/${taskId}`, { method: 'DELETE' });
+}
+
+// Task 15 — per-project Monday scope configuration. Free-standing exports
+// for the same reason as the block above: MondayScopeSettings imports and
+// mocks these directly.
+export interface MondayBoardSummary {
+  id: string;
+  name: string;
+  workspace: string | null;
+}
+
+export interface MondayBoardMetaResult {
+  groups: Array<{ id: string; title: string }>;
+  columns: Array<{ id: string; title: string; type: string }>;
+}
+
+export async function fetchMondayBoards(): Promise<MondayBoardSummary[]> {
+  const data = await fetchJson<{ boards: MondayBoardSummary[] }>(`/api/monday/boards`);
+  return data.boards;
+}
+
+export async function fetchMondayBoardMeta(boardId: string): Promise<MondayBoardMetaResult> {
+  return fetchJson<MondayBoardMetaResult>(`/api/monday/boards/${encodeURIComponent(boardId)}/meta`);
+}
+
+export async function fetchMondayProjectConfig(projectId: string): Promise<MondayProjectConfig | null> {
+  const data = await fetchJson<{ config: MondayProjectConfig | null }>(`/api/monday/projects/${projectId}/config`);
+  return data.config;
+}
+
+export async function saveMondayProjectConfig(projectId: string, config: MondayProjectConfig): Promise<MondayProjectConfig> {
+  const data = await fetchJson<{ config: MondayProjectConfig }>(`/api/monday/projects/${projectId}/config`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+  return data.config;
 }
 
 export const api = {

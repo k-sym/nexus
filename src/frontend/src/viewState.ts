@@ -14,12 +14,25 @@ export interface PersistedView {
   activeThreadId: string | null;
 }
 
+/** Every valid SubView, kept in sync with the type above so a stale/foreign
+ *  value from an older or newer client build can be recognized at runtime
+ *  (the type itself vanishes at compile time). */
+const KNOWN_SUB_VIEWS: readonly SubView[] = ['kanban', 'memory', 'chat', 'projectManagement'];
+
 export function loadViewState(): Partial<PersistedView> {
   try {
     const raw = localStorage.getItem(VIEW_STATE_KEY);
     if (!raw) return {};
     const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === 'object' ? (parsed as Partial<PersistedView>) : {};
+    if (!parsed || typeof parsed !== 'object') return {};
+    const result = { ...(parsed as Partial<PersistedView>) };
+    // Drop an unrecognized persisted subView (e.g. left over from a client
+    // version whose sub-views differ) instead of handing an invalid value to
+    // React state — callers fall back to a safe default when this key is absent.
+    if (result.subView !== undefined && !KNOWN_SUB_VIEWS.includes(result.subView)) {
+      delete result.subView;
+    }
+    return result;
   } catch {
     return {};
   }

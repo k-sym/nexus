@@ -5,7 +5,9 @@
  * CREATE TABLE statements plus guarded ALTER TABLE migrations for columns
  * added after a table's original creation. Tables: projects, tasks,
  * chat_threads, chat_messages, agent_runs, tickets (a disposable mirror of
- * Jira tickets assigned to the user; Jira stays canonical).
+ * Jira tickets assigned to the user; Jira stays canonical), monday_items
+ * (a disposable mirror of Monday.com items; Monday stays canonical) and
+ * task_monday_links (the durable task→item link, one item per task).
  * (Memory lives in the standalone @nexus/memory-daemon, not here.)
  *
  * Note: the legacy `personas` and `providers` tables are still referenced
@@ -126,6 +128,30 @@ function runMigrations(db: Database.Database) {
       synced_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS monday_items (
+      item_id            TEXT PRIMARY KEY,
+      board_id           TEXT NOT NULL,
+      board_name         TEXT NOT NULL DEFAULT '',
+      group_id           TEXT,
+      group_title        TEXT,
+      name               TEXT NOT NULL DEFAULT '',
+      state              TEXT NOT NULL DEFAULT 'active',
+      status_label       TEXT,
+      status_color       TEXT,
+      owners_json        TEXT NOT NULL DEFAULT '[]',
+      url                TEXT,
+      column_values_json TEXT NOT NULL DEFAULT '{}',
+      monday_updated_at  TEXT,
+      synced_at          TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS task_monday_links (
+      task_id    TEXT PRIMARY KEY,
+      item_id    TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS braindump_ideas (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
@@ -219,6 +245,9 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id);
     CREATE INDEX IF NOT EXISTS idx_agent_runs_status ON agent_runs(status);
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
+    CREATE INDEX IF NOT EXISTS idx_monday_items_board ON monday_items(board_id);
+    CREATE INDEX IF NOT EXISTS idx_task_monday_links_item ON task_monday_links(item_id);
+    CREATE INDEX IF NOT EXISTS idx_task_monday_links_project ON task_monday_links(project_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
     CREATE INDEX IF NOT EXISTS idx_braindump_status ON braindump_ideas(status);
     CREATE INDEX IF NOT EXISTS idx_assistant_messages_created ON assistant_messages(created_at);

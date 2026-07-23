@@ -1,20 +1,61 @@
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Task } from '@nexus/shared';
+import type { MondayItemWithLinks } from '@nexus/shared';
+import { fetchMondayItems } from '../api';
+import { MondayBadge } from './MondayBadge';
+import { MondayItemPicker } from './MondayItemPicker';
 
 interface TaskModalProps {
   /** Label of the column being added to (create mode). */
   columnLabel?: string;
   /** When provided, the modal edits this task instead of creating a new one. */
   task?: Task;
+  /** Owning project. Only used to power the "Monday initiative" section below,
+   *  which only renders in edit mode — a task not yet created has no id to
+   *  link. Optional so create-mode call sites (and any test that doesn't care
+   *  about Monday) are unaffected. */
+  projectId?: string;
   onClose: () => void;
   onSubmit: (data: { title: string; description: string; priority: string }) => void;
+  /** Fired after a successful link/unlink so a parent holding independent
+   *  Monday state (e.g. the Kanban board's card badges) can refresh itself. */
+  onMondayLinkChanged?: () => void;
 }
 
-export default function TaskModal({ columnLabel, task, onClose, onSubmit }: TaskModalProps) {
+export default function TaskModal({ columnLabel, task, projectId, onClose, onSubmit, onMondayLinkChanged }: TaskModalProps) {
   const isEdit = Boolean(task);
   const [title, setTitle] = useState(task?.title ?? '');
   const [description, setDescription] = useState(task?.description ?? '');
   const [priority, setPriority] = useState(task?.priority ?? 'medium');
+  const [mondayItem, setMondayItem] = useState<MondayItemWithLinks | null>(null);
+
+  const taskId = task?.id;
+  // Track active effects so we don't update state after component unmount.
+  // Multiple calls to loadCurrentLink may happen (on mount, on onLinked), and
+  // only the most recent one's result should update state — older ones get
+  // cancelled. Using a generation counter ensures only the latest settles.
+  const loadGenerationRef = useRef(0);
+
+  // Loaded (and reloaded on link/unlink) to show the current link, if any.
+  // A failure here must never block editing the task itself: Monday unavailable
+  // just means the section shows no current link, same tolerant contract as the badge.
+  // Use per-call tracking to avoid stale state updates (if the effect unmounts
+  // before resolution, or if loadCurrentLink is called multiple times rapidly).
+  const loadCurrentLink = useCallback(async () => {
+    if (!taskId || !projectId) return;
+    const generation = ++loadGenerationRef.current;
+    try {
+      const items = await fetchMondayItems(projectId);
+      if (loadGenerationRef.current !== generation) return; // superseded
+      setMondayItem(items.find((item) => item.task_ids.includes(taskId)) ?? null);
+    } catch {
+      if (loadGenerationRef.current === generation) setMondayItem(null);
+    }
+  }, [taskId, projectId]);
+
+  useEffect(() => {
+    void loadCurrentLink();
+  }, [loadCurrentLink]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -66,6 +107,25 @@ export default function TaskModal({ columnLabel, task, onClose, onSubmit }: Task
               ))}
             </div>
           </div>
+          {taskId && projectId ? (
+            <div>
+              <label className="block text-xs text-faint mb-1">Monday initiative</label>
+              {mondayItem ? (
+                <div className="mb-2">
+                  <MondayBadge item={mondayItem} />
+                </div>
+              ) : null}
+              <MondayItemPicker
+                projectId={projectId}
+                taskId={taskId}
+                currentItemId={mondayItem?.item_id ?? null}
+                onLinked={() => {
+                  void loadCurrentLink();
+                  onMondayLinkChanged?.();
+                }}
+              />
+            </div>
+          ) : null}
           <div className="flex justify-end gap-2 pt-2">
             <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-muted hover:text-[var(--text-primary)] transition-colors">
               Cancel

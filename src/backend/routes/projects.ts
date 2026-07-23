@@ -12,6 +12,8 @@ import { detectGitRemote } from '../github/repo.js';
 import { syncGitHubIssues, ensureProjectGitRemote, noteSyncError, clearSyncError } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
 import { loadConfig } from '../config.js';
+import { scheduleRollup, scheduleRollupForItem } from '../monday/trigger.js';
+import { getLinkForTask, unlinkTask } from '../monday/store.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
 function expandHome(p: string): string {
@@ -561,6 +563,15 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
     const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task;
 
+    // Recompute this task's Monday roll-up whenever a Kanban move actually
+    // changes its status. Fire-and-forget (void, no await): the Kanban move
+    // already committed above, and a slow or failing Monday call must never
+    // delay or fail it. Uses the same `fastify.activity?.bus.emit` seam the
+    // GitHub sync call above already reaches the ActivityManager through.
+    if (body.status != null && body.status !== existing.status) {
+      void scheduleRollup(db, id, `task moved to ${body.status}`, fastify.activity?.bus.emit.bind(fastify.activity.bus));
+    }
+
     // Summarize a completed task-chat into memory + Obsidian when its card is
     // advanced into Review/Deploy. Fires only on the transition *into* a done
     // state (so Review→Deploy doesn't re-summarize), and only for thread-linked
@@ -590,7 +601,29 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
 
   fastify.delete('/api/tasks/:id', async (request) => {
     const { id } = request.params as { id: string };
+    // Capture the link BEFORE deleting the task: task_monday_links has no FK
+    // or cascade tying it to the task row, so once the task is gone there is
+    // no way back to the item id it was rolled up into. Same shape as the
+    // unlink handler in routes/monday.ts.
+    const existing = getLinkForTask(db, id);
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
+    if (existing) {
+      // The link row is just as orphan-prone as the task row was: remove it
+      // now, or it accumulates forever and keeps counting toward a roll-up
+      // for a task that no longer exists.
+      unlinkTask(db, id);
+      // Recompute the item this task was linked to, or its roll-up keeps a
+      // count that still includes the deleted task until some sibling task
+      // happens to move. Fire-and-forget (void, no await): the delete above
+      // already committed and a slow or failing Monday call must never delay
+      // or fail it. Same `fastify.activity?.bus.emit` seam the Kanban
+      // status-change path above uses, so this write shows up in the
+      // Activity Console too.
+      void scheduleRollupForItem(
+        db, existing.item_id, existing.project_id, null,
+        fastify.activity?.bus.emit.bind(fastify.activity.bus),
+      );
+    }
     return { success: true };
   });
 }

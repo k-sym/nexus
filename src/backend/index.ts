@@ -30,9 +30,12 @@ import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
+import { registerMondayRoutes } from './routes/monday.js';
 import { registerNextMessageRoutes } from './routes/next-message.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
+import { startMondayPoll } from './monday/poll.js';
+import { buildMondayContext, buildMondayToolDeps } from './monday/session-deps.js';
 import { startMissionScheduler } from './missions/runner.js';
 import { ActivityManager } from './activity/manager.js';
 import { PiRuntime, defaultPiRuntimePaths } from './pi/runtime.js';
@@ -53,6 +56,8 @@ async function main() {
   const db = getDb(getDbPath());
   const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
     recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
+    mondayContext: (threadId) => buildMondayContext(db, threadId),
+    mondayTools: (threadId) => buildMondayToolDeps(db, threadId),
   });
 
   const openRouterKey = resolveOpenRouterKey(config);
@@ -64,6 +69,7 @@ async function main() {
   const activityManager = new ActivityManager(db);
   const stopActivityListening = activityManager.startListening();
   startJiraSync(db, activityManager);
+  startMondayPoll(db, activityManager.bus.emit.bind(activityManager.bus));
   // Shared between chat routes and the mission scheduler so an assistant_turn
   // mission claims the per-project/model slot the same way a chat turn does.
   // Created here (before the scheduler), then decorated onto the app below.
@@ -119,6 +125,7 @@ async function main() {
   app.register(registerActivityRoutes);
   app.register(registerTrustRoutes);
   app.register(registerMissionRoutes);
+  app.register(registerMondayRoutes);
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 

@@ -107,6 +107,14 @@ function defaultConfig(): NexusConfig {
       // written before this block existed (deepMerge backfills it on load).
       enabled: true,
     },
+    monday: {
+      enabled: false,
+      // '2024-10' was deprecated 2026-02-15; pinned to '2026-07', the current
+      // stable version as of 2026-07-22 (confirmed against
+      // developer.monday.com/api-reference/docs/api-versioning).
+      api_version: '2026-07',
+      poll_minutes: 10,
+    },
   };
 }
 

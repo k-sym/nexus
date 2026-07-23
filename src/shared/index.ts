@@ -415,10 +415,81 @@ export interface NexusConfig {
      *  behaviour is preserved. The token is read from GITHUB_TOKEN only. */
     enabled: boolean;
   };
+  monday: {
+    /** When false the poll loop stays dormant and no tools are registered. */
+    enabled: boolean;
+    /** Pinned Monday API version. Monday dates its API; an unpinned client
+     *  shifts under you. */
+    api_version: string;
+    /** Linked-item refresh cadence in minutes while Nexus is running. */
+    poll_minutes: number;
+  };
+}
+
+/** Which roll-up bucket each Kanban column contributes to. */
+export const MONDAY_ROLLUP_BUCKETS: Record<TaskStatus, 'open' | 'inProgress' | 'inReview' | 'done'> = {
+  triage: 'open',
+  todo: 'open',
+  in_progress: 'inProgress',
+  review: 'inReview',
+  deploy: 'done',
+};
+
+/** A mirrored Monday item. Disposable — Monday stays canonical. */
+export interface MondayItem {
+  item_id: string;
+  board_id: string;
+  board_name: string;
+  group_id: string | null;
+  group_title: string | null;
+  name: string;
+  /** 'missing' is Nexus-local: the item vanished from Monday but a link survives. */
+  state: 'active' | 'archived' | 'deleted' | 'missing';
+  status_label: string | null;
+  status_color: string | null;
+  /** JSON array of owner display names. */
+  owners_json: string;
+  url: string | null;
+  /** Raw column values, keyed by column id. Context injection and the read
+   *  tools need fields this schema does not model. */
+  column_values_json: string;
+  monday_updated_at: string | null;
+  synced_at: string;
+}
+
+/** A mirrored item enriched with its Nexus roll-up, as returned by the API. */
+export interface MondayItemWithLinks extends MondayItem {
+  rollup: { total: number; open: number; inProgress: number; inReview: number; done: number };
+  rollup_text: string;
+  task_ids: string[];
+}
+
+/** A task→item link. NOT disposable: user intent, survives a mirror wipe. */
+export interface TaskMondayLink {
+  task_id: string;
+  item_id: string;
+  project_id: string;
+  created_at: string;
+}
+
+/** Per-project Monday scope and opt-ins, stored in projects.config_json. */
+export interface MondayProjectConfig {
+  board_id: string;
+  /** Optional narrowing to a single group on the board. */
+  group_id?: string | null;
+  rollup: {
+    enabled: boolean;
+    column_id: string | null;
+    /** Resolved when the column is chosen, not inferred per write: Monday
+     *  column ids are user-renamable, so the id is not a reliable type hint. */
+    column_type: 'text' | 'numeric';
+  };
+  updates: { enabled: boolean; min_interval_minutes: number };
 }
 
 export interface ProjectConfig {
   column_defaults: Record<TaskStatus, string | null>;
+  monday?: MondayProjectConfig;
 }
 
 export const KANBAN_COLUMNS: TaskStatus[] = ['triage', 'todo', 'in_progress', 'review', 'deploy'];

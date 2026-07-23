@@ -30,6 +30,7 @@ function config(root: string): NexusConfig {
     obsidian: { vault_path: join(root, 'vault'), sync_interval_seconds: 30 },
     jira: { enabled: true, user: 'user@example.com', instance: 'acme.atlassian.net', project: 'SUP', poll_minutes: 15, content_rules: [] },
     github: { enabled: true },
+    monday: { enabled: false, api_version: '2026-07', poll_minutes: 10 },
   };
 }
 
@@ -259,6 +260,49 @@ test('trust snapshot namespaces Pi providers and fails soft when auth metadata i
   } finally {
     await collision.app.close();
     rmSync(collision.root, { recursive: true, force: true });
+  }
+});
+
+test('trust snapshot reports Monday secret source, outbound destination, and mirror storage', async () => {
+  delete process.env.MONDAY_TOKEN;
+  process.env.MONDAY_TOKEN = 'monday-secret';
+  const root = mkdtempSync(join(tmpdir(), 'nexus-trust-monday-'));
+  const configured = config(root);
+  configured.monday = { enabled: true, api_version: '2026-07', poll_minutes: 10 };
+  const { app, root: fixtureRoot } = await fixture({ config: configured });
+  try {
+    const response = await app.inject({ method: 'GET', url: '/api/trust' });
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.deepEqual(body.secrets.monday, { configured: true, source: 'environment' });
+    assert.deepEqual(body.outbound.find((item: any) => item.name === 'Monday.com'), {
+      name: 'Monday.com',
+      destination: 'https://api.monday.com/v2',
+      sends: ['account identity', 'item queries'],
+      enabled: true,
+    });
+    assert.equal(body.storage.some((item: any) => item.name === 'Monday item mirror' && item.role === 'rebuildable'), true);
+    assert.equal(response.body.includes('monday-secret'), false);
+  } finally {
+    delete process.env.MONDAY_TOKEN;
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
+    rmSync(fixtureRoot, { recursive: true, force: true });
+  }
+});
+
+test('trust snapshot reports Monday as absent and disabled when unconfigured', async () => {
+  delete process.env.MONDAY_TOKEN;
+  const { app, root } = await fixture(); // config() helper's monday block defaults to { enabled: false }
+  try {
+    const response = await app.inject({ method: 'GET', url: '/api/trust' });
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.deepEqual(body.secrets.monday, { configured: false, source: 'absent' });
+    assert.equal(body.outbound.find((item: any) => item.name === 'Monday.com').enabled, false);
+  } finally {
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 

@@ -95,6 +95,9 @@ export async function buildTrustSnapshot(
       ? { configured: true, source: 'environment' }
       : { configured: false, source: 'absent' },
     github: githubStatus,
+    monday: process.env.MONDAY_TOKEN
+      ? { configured: true, source: 'environment' }
+      : { configured: false, source: 'absent' },
   };
   const piProviderIds: string[] = [];
   try {
@@ -131,6 +134,10 @@ export async function buildTrustSnapshot(
       { name: 'Memory index', path: indexPath, role: 'rebuildable' },
       { name: 'Nexus configuration', path: join(nexusDir, 'config.yaml'), role: 'configuration' },
       { name: 'Pi credentials', path: pi.paths.authFile, role: 'credentials' },
+      // Disposable mirror of Monday.com items (table `monday_items` inside the
+      // Nexus database) — Monday stays canonical, so this is safe to clear
+      // and rebuild from a resync, unlike the durable task↔item links.
+      { name: 'Monday item mirror', path: join(nexusDir, 'nexus.db'), role: 'rebuildable' },
     ],
     secrets,
     memory: {
@@ -180,6 +187,11 @@ export async function buildTrustSnapshot(
       { name: 'Assistant', destination: safeUrl(config.assistant.url), sends: ['prompts', 'conversation content'], enabled: Boolean(config.assistant.url) },
       { name: 'Jira', destination: safeUrl(config.jira.instance), sends: ['account identity', 'ticket queries'], enabled: config.jira.enabled },
       { name: 'GitHub', destination: 'https://api.github.com', sends: ['repository identity', 'issue queries'], enabled: config.github.enabled },
+      // config.monday is a required NexusConfig field — loadConfig always
+      // deep-merges over DEFAULT_CONFIG, which defines it — so it is never
+      // absent at runtime. No optional chaining: a config that genuinely
+      // lacks this field is a type-level bug and should surface as one.
+      { name: 'Monday.com', destination: 'https://api.monday.com/v2', sends: ['account identity', 'item queries'], enabled: Boolean(config.monday.enabled) },
     ],
     telemetry: {
       applicationTelemetry: false,

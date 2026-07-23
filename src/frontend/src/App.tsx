@@ -17,6 +17,7 @@ import AssistantView from './components/AssistantView';
 import MissionsView from './components/MissionsView';
 import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
+import { ProjectManagementView } from './components/ProjectManagementView';
 import ProjectModal from './components/ProjectModal';
 import TaskModal from './components/TaskModal';
 import { TaskModelPicker } from './components/TaskModelPicker';
@@ -66,6 +67,10 @@ export default function App() {
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  // Bumped whenever TaskModal reports a Monday link/unlink, so the Kanban
+  // board (which loads its own badge map once per projectId) refetches and
+  // stops showing a stale link after the modal closes.
+  const [mondayRefreshKey, setMondayRefreshKey] = useState(0);
   const [diffReviewTask, setDiffReviewTask] = useState<Task | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
@@ -681,10 +686,11 @@ export default function App() {
       { id: 'view-braindump', label: 'Braindump', hint: 'View', keywords: 'ideas capture', run: () => selectGlobal('braindump') },
       { id: 'view-assistant', label: 'Assistant', hint: 'View', keywords: 'hermes openclaw remote chat', run: () => selectGlobal('assistant') },
     ];
-    (['kanban', 'memory', 'chat'] as const).forEach((sub) => {
-      const label = sub === 'chat' ? 'Sessions' : sub.charAt(0).toUpperCase() + sub.slice(1);
+    (['kanban', 'memory', 'chat', 'projectManagement'] as const).forEach((sub) => {
+      const label = sub === 'chat' ? 'Sessions' : sub === 'projectManagement' ? 'Project Management' : sub.charAt(0).toUpperCase() + sub.slice(1);
+      const keywords = sub === 'projectManagement' ? 'open project monday initiatives' : 'open project';
       const pid = activeProjectId ?? projects[0]?.id;
-      if (pid) cmds.push({ id: `view-${sub}`, label, hint: 'View', keywords: 'open project', run: () => selectSubView(pid, sub) });
+      if (pid) cmds.push({ id: `view-${sub}`, label, hint: 'View', keywords, run: () => selectSubView(pid, sub) });
     });
     projects.forEach((p) => cmds.push({ id: `proj-${p.id}`, label: p.name, hint: 'Project', keywords: p.repo_path, run: () => focusProject(p.id) }));
     cmds.push({ id: 'act-new-project', label: 'New project…', hint: 'Action', run: openNewProjectModal });
@@ -748,7 +754,7 @@ export default function App() {
       );
     }
 
-    const viewLabel = subView === 'chat' ? 'Sessions' : subView.charAt(0).toUpperCase() + subView.slice(1);
+    const viewLabel = subView === 'chat' ? 'Sessions' : subView === 'projectManagement' ? 'Project Management' : subView.charAt(0).toUpperCase() + subView.slice(1);
 
     return (
       <>
@@ -766,6 +772,8 @@ export default function App() {
               tasks={tasks}
               columns={KANBAN_COLUMNS}
               columnLabels={KANBAN_COLUMN_LABELS}
+              projectId={activeProject.id}
+              mondayRefreshKey={mondayRefreshKey}
               onMoveTask={handleMoveTask}
               onAddTask={(status) => setTaskModalColumn(status)}
               onOpenTask={handleOpenTask}
@@ -794,6 +802,8 @@ export default function App() {
             </div>
           ) : subView === 'memory' ? (
             <MemoryView projectId={activeProject.id} />
+          ) : subView === 'projectManagement' ? (
+            <ProjectManagementView projectId={activeProject.id} />
           ) : null}
         </div>
       </>
@@ -898,16 +908,20 @@ export default function App() {
       {taskModalColumn && (
         <TaskModal
           columnLabel={KANBAN_COLUMN_LABELS[taskModalColumn]}
+          projectId={activeProject?.id}
           onClose={() => setTaskModalColumn(null)}
           onSubmit={handleCreateTask}
+          onMondayLinkChanged={() => setMondayRefreshKey((k) => k + 1)}
         />
       )}
 
       {editingTask && (
         <TaskModal
           task={editingTask}
+          projectId={activeProject?.id}
           onClose={() => setEditingTask(null)}
           onSubmit={handleEditTask}
+          onMondayLinkChanged={() => setMondayRefreshKey((k) => k + 1)}
         />
       )}
 
