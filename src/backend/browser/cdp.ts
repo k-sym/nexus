@@ -78,6 +78,29 @@ export function launchFlags(userDataDir: string, port = 0): string[] {
   ];
 }
 
+/**
+ * Remove the ephemeral profile directory, tolerating the teardown race.
+ *
+ * A browser's main process exits promptly, but its child processes (renderer,
+ * GPU, zygote) can still be flushing into the profile when we start deleting it
+ * — so a plain recursive remove intermittently hits `ENOTEMPTY` as Chrome
+ * writes a file into a directory between our unlink of its contents and our
+ * rmdir of it. Observed on CI, not locally, which is exactly how a filesystem-
+ * timing race shows up.
+ *
+ * `rmSync`'s own `maxRetries`/`retryDelay` retries precisely this class of error
+ * (ENOTEMPTY/EBUSY/EPERM/…) with a linear backoff, which covers the short window
+ * while the children finish exiting. Best-effort: a profile we ultimately can't
+ * delete is a stray temp directory, never a reason to fail a close.
+ */
+function removeProfileDir(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  } catch {
+    /* a leftover temp profile is not worth throwing over */
+  }
+}
+
 /** Pull the endpoint out of the browser's startup chatter. */
 export function parseDevToolsUrl(line: string): string | null {
   const match = /DevTools listening on (ws:\/\/\S+)/.exec(line);
@@ -128,7 +151,7 @@ export class CdpConnection {
       wsUrl = await waitForDevToolsUrl(child, options.launchTimeoutMs ?? LAUNCH_TIMEOUT_MS);
     } catch (error) {
       child.kill('SIGKILL');
-      rmSync(userDataDir, { recursive: true, force: true });
+      removeProfileDir(userDataDir);
       throw error;
     }
 
@@ -140,7 +163,7 @@ export class CdpConnection {
       });
     } catch (error) {
       child.kill('SIGKILL');
-      rmSync(userDataDir, { recursive: true, force: true });
+      removeProfileDir(userDataDir);
       throw error;
     }
 
@@ -192,7 +215,7 @@ export class CdpConnection {
       timer.unref?.();
       this.child.once('exit', () => { clearTimeout(timer); resolve(); });
     });
-    rmSync(this.userDataDir, { recursive: true, force: true });
+    removeProfileDir(this.userDataDir);
   }
 
   private onMessage(raw: string): void {
