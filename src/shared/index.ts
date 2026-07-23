@@ -415,6 +415,16 @@ export interface NexusConfig {
      *  behaviour is preserved. The token is read from GITHUB_TOKEN only. */
     enabled: boolean;
   };
+  browser: {
+    /** When false the browser tools are not registered at all. Off by default:
+     *  a browser is a general-purpose fetch-and-execute engine, and the tools
+     *  are omitted anyway when the machine has no Chromium-family browser. */
+    enabled: boolean;
+    /** Hosts the browser may reach beyond loopback, which is always allowed.
+     *  `.example.com` matches subdomains; `example.com` matches exactly. Empty
+     *  ⇒ this machine only, which is all "look at my dev server" needs. */
+    allow_hosts: string[];
+  };
   docker: {
     /** When false the `docker_service` tool is not registered at all — no
      *  session advertises it. Off by default: starting containers binds host

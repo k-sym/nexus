@@ -94,6 +94,13 @@ const TOOL_CATEGORIES: Readonly<Record<string, ToolCategory>> = {
 
   bash: 'exec',
   docker_service: 'services',
+
+  // Navigation is the act with an external effect; reading a page already
+  // loaded is just a read. Splitting them means a policy can gate where the
+  // browser may GO without gating every look at the result.
+  browser_navigate: 'network',
+  browser_read: 'read',
+  browser_diagnostics: 'read',
 };
 
 /** Categories whose tools can affect something outside the model's context —

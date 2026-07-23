@@ -26,6 +26,7 @@
 import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { isAbsolute, resolve, relative, sep } from 'node:path';
+import { boundTailText } from '../text/bound.js';
 
 /** Hard ceiling on any docker invocation. `up` pulling a cold image is the slow
  *  case; past this something is wrong and the turn should get an error rather
@@ -163,25 +164,12 @@ export async function resolveComposeFile(
   return candidate;
 }
 
-/** Trim captured output to something a context window can hold. */
+/** Trim captured output to something a context window can hold. Keeps the tail:
+ *  for docker output the interesting part (the error, the last log lines) is at
+ *  the end. Shared with the browser tool — see text/bound.ts for why the
+ *  character-boundary handling matters. */
 export function boundOutput(text: string, maxBytes = MAX_OUTPUT_BYTES): string {
-  if (Buffer.byteLength(text, 'utf8') <= maxBytes) return text;
-  // Keep the tail: for docker output the interesting part (the error, the last
-  // log lines) is at the end.
-  let buf = Buffer.from(text, 'utf8').subarray(-maxBytes);
-  // A byte-wise cut can land inside a multi-byte character, which decodes to a
-  // replacement char. Skip leading UTF-8 continuation bytes (0b10xxxxxx) so the
-  // slice starts on a character boundary. Docker output is routinely non-ASCII
-  // — compose's own progress uses ✔ and ⠿.
-  let start = 0;
-  while (start < buf.length && (buf[start] & 0xc0) === 0x80) start += 1;
-  buf = buf.subarray(start);
-
-  const truncated = buf.toString('utf8');
-  // Drop a partial first line so the model isn't handed half a log entry.
-  const firstNewline = truncated.indexOf('\n');
-  const clean = firstNewline >= 0 ? truncated.slice(firstNewline + 1) : truncated;
-  return `[earlier output truncated]\n${clean}`;
+  return boundTailText(text, maxBytes);
 }
 
 export interface ComposeCommandOptions {

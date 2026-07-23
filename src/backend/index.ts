@@ -31,6 +31,7 @@ import { registerActivityRoutes } from './routes/activity.js';
 import { registerApprovalRoutes } from './routes/approvals.js';
 import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from './docker/session-deps.js';
 import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
+import { createBrowserSupport } from './browser/session-deps.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -70,12 +71,28 @@ async function main() {
       if (line) console.log(line);
     } catch { /* the next start sweeps again */ }
   });
+  // Located once at startup: unlike a Docker daemon, a browser binary does not
+  // come and go. Null when the machine has none — the tools are then omitted.
+  const browserSupport = createBrowserSupport();
+  if (browserSupport) {
+    // A browser is a real OS process; a backend that exits without closing its
+    // browsers leaves them running headless with nothing driving them. Both
+    // signals, and `once` so a second Ctrl-C still kills us promptly rather
+    // than queueing another close.
+    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+      process.once(signal, () => {
+        void browserSupport.pool.closeAll().finally(() => process.exit(0));
+      });
+    }
+  }
   const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
     recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
     mondayContext: (threadId) => buildMondayContext(db, threadId),
     mondayTools: (threadId) => buildMondayToolDeps(db, threadId),
     dockerTools: buildDockerToolDeps(dockerAvailability),
     tearDownServices: buildTearDownServices(dockerAvailability),
+    browserTools: browserSupport?.browserTools,
+    closeBrowser: browserSupport?.closeBrowser,
   });
 
   const openRouterKey = resolveOpenRouterKey(config);

@@ -107,6 +107,13 @@ function defaultConfig(): NexusConfig {
       // written before this block existed (deepMerge backfills it on load).
       enabled: true,
     },
+    browser: {
+      // Off by default for the same reason as docker: an agent-driven browser
+      // reaches out to the network and executes whatever it is served.
+      enabled: false,
+      // Loopback is always permitted; this widens it and nothing else.
+      allow_hosts: [],
+    },
     docker: {
       // Off by default: the tool starts containers that bind host ports, so it
       // is opt-in even on a machine where Docker is running. Turning it on
