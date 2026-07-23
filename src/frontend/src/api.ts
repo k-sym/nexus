@@ -62,8 +62,11 @@ export interface LocalModelTestResponse {
   modelFound?: boolean;
 }
 
-export type OperationKind = 'chat_turn' | 'assistant_stream' | 'jira_sync' | 'github_sync' | 'memory_archive' | 'memory_index';
-export type OperationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+// Re-exported, not restated: this list and the backend's used to be separate
+// copies, and both went stale when the Monday kinds landed.
+import type { OperationKind, OperationStatus } from '@nexus/shared';
+export { OPERATION_KINDS, OPERATION_STATUSES } from '@nexus/shared';
+export type { OperationKind, OperationStatus } from '@nexus/shared';
 
 export interface Operation {
   id: string;

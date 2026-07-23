@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getDb } from '../db.js';
 import { ActivityManager } from '../activity/manager.js';
+import { OPERATION_KINDS } from '../activity/events.js';
 import { registerActivityRoutes } from '../routes/activity.js';
 
 function makeApp() {
@@ -61,6 +62,31 @@ test('GET /api/activity applies status filter before limiting recent operations'
     assert.equal(body.recent.length, 1);
     assert.equal(body.recent[0].id, 'op-failed');
     assert.deepEqual(body.counts, { failed: 1 });
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The route used to hand-maintain its own list of filterable kinds, which
+// silently fell out of step when monday_sync/monday_write/mission_tick were
+// added: an unrecognised kind is treated as "no filter", so ?kind=monday_sync
+// returned every operation instead of erroring. Deriving both sides from
+// OPERATION_KINDS makes that drift impossible; this pins it.
+test('GET /api/activity filters by every declared operation kind', async () => {
+  const { app, dir, activity } = makeApp();
+  try {
+    for (const [i, kind] of OPERATION_KINDS.entries()) {
+      activity.bus.emit({ type: 'start', operationId: `op-${i}`, kind, title: kind });
+      activity.bus.emit({ type: 'stop', operationId: `op-${i}`, kind, title: kind, status: 'succeeded' });
+    }
+
+    for (const kind of OPERATION_KINDS) {
+      const res = await app.inject({ method: 'GET', url: `/api/activity?kind=${kind}` });
+      assert.equal(res.statusCode, 200);
+      const kinds = [...new Set(res.json().recent.map((r: { kind: string }) => r.kind))];
+      assert.deepEqual(kinds, [kind], `?kind=${kind} should return only ${kind}`);
+    }
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });

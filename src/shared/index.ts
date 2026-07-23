@@ -510,4 +510,33 @@ export const KANBAN_COLUMN_LABELS: Record<TaskStatus, string> = {
   review: 'Review',
   deploy: 'Deploy',
 };
+
+/** Kinds of long-running operation the activity bus tracks.
+ *
+ *  Lives in shared because both ends validate against it — the backend's
+ *  /api/activity kind filter and the frontend's Activity Console labels — and
+ *  they used to keep separate copies. Both copies then missed the Monday and
+ *  mission kinds, so a monday_sync operation was unfilterable server-side and
+ *  rendered with a blank label client-side. One list, no drift.
+ *
+ *  `as const` rather than a bare union: the values are needed at runtime for
+ *  validation, and the type is derived from them rather than restated. */
+export const OPERATION_KINDS = [
+  'chat_turn',
+  'assistant_stream',
+  'jira_sync',
+  'github_sync',
+  'monday_sync',
+  'monday_write',
+  'memory_archive',
+  'memory_index',
+  'mission_tick',
+] as const;
+
+export type OperationKind = (typeof OPERATION_KINDS)[number];
+
+export const OPERATION_STATUSES = ['running', 'succeeded', 'failed', 'cancelled'] as const;
+
+export type OperationStatus = (typeof OPERATION_STATUSES)[number];
+
 export * from './agent-run.js';
