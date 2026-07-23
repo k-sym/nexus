@@ -1,3 +1,5 @@
+import './support/nexus-test-dir';
+
 delete process.env.MONDAY_TOKEN;
 
 import { test, beforeEach } from 'node:test';
@@ -16,7 +18,9 @@ import { loadConfig, saveConfig } from '../config';
  * test that expects `buildMondayToolDeps` to hand back a non-null deps object
  * must flip it first — the same workaround test/monday-routes.test.ts already
  * uses for this exact gate. Always restored in `finally` so it can't leak
- * into later tests or this machine's real config.
+ * into later tests in this file (loadConfig/saveConfig here target the
+ * private per-file directory set up by support/nexus-test-dir, never the
+ * developer's real ~/.nexus/config.yaml).
  */
 async function withMondayEnabled<T>(fn: () => T | Promise<T>): Promise<T> {
   const original = loadConfig();

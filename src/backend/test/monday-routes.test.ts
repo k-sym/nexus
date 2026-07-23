@@ -1,3 +1,5 @@
+import './support/nexus-test-dir';
+
 delete process.env.MONDAY_TOKEN;
 
 import { test } from 'node:test';
@@ -44,11 +46,13 @@ async function buildApp(db: ReturnType<typeof getDb>) {
  * resolveMondayToken() (MONDAY_TOKEN) directly — there is no fetchImpl seam
  * exposed at the route layer the way syncScope/mondayGraphql expose one to
  * their own unit tests. To drive a real Monday call through the route we
- * therefore have to (a) flip monday.enabled on the real on-disk config the
- * same way test/routes-settings.test.ts and test/routes-projects.test.ts
- * already do, restoring it in `finally`, and (b) set MONDAY_TOKEN so
+ * therefore have to (a) flip monday.enabled on the on-disk config the same
+ * way test/routes-settings.test.ts and test/routes-projects.test.ts already
+ * do, restoring it in `finally`, and (b) set MONDAY_TOKEN so
  * resolveMondayToken() returns truthy, deleting it after. Both are undone
- * unconditionally so they can't leak into later tests.
+ * unconditionally so they can't leak into later tests. loadConfig/saveConfig
+ * here target the private per-file directory set up by
+ * support/nexus-test-dir, never the developer's real ~/.nexus/config.yaml.
  */
 async function withMondayEnabled<T>(fn: () => Promise<T>): Promise<T> {
   const original = loadConfig();

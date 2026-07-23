@@ -4,6 +4,13 @@
  * Reads/writes ~/.nexus/config.yaml (creating defaults on first run),
  * ensures the ~/.nexus directory tree exists, seeds the four default
  * persona YAML files, and provides ${ENV_VAR} interpolation.
+ *
+ * The `~/.nexus` root can be overridden via the NEXUS_DIR environment
+ * variable, resolved once here at module load — same as the rest of this
+ * file's paths. This exists solely so tests can point the whole module at a
+ * private tmpdir instead of mutating the developer's real config; production
+ * never sets this, so with it unset every path below resolves exactly as it
+ * did before the override existed.
  */
 import fs from 'fs';
 import os from 'os';
@@ -13,7 +20,10 @@ import path from 'path';
 import * as yaml from 'js-yaml';
 import { NexusConfig } from '@nexus/shared';
 
-const NEXUS_DIR = path.join(os.homedir(), '.nexus');
+const NEXUS_DIR_OVERRIDE = process.env.NEXUS_DIR;
+const NEXUS_DIR = NEXUS_DIR_OVERRIDE
+  ? path.resolve(NEXUS_DIR_OVERRIDE)
+  : path.join(os.homedir(), '.nexus');
 const CONFIG_PATH = path.join(NEXUS_DIR, 'config.yaml');
 
 const DEFAULT_CONFIG: NexusConfig = {
@@ -70,7 +80,12 @@ const DEFAULT_CONFIG: NexusConfig = {
     // Visible location so the vault shows up in Obsidian's "Open folder as
     // vault" picker. A dot-prefixed path like ~/.nexus/obsidian is hidden and
     // unselectable there. App state (config.yaml, db, logs) stays in ~/.nexus.
-    vault_path: path.join(os.homedir(), 'Obsidian', 'Nexus'),
+    // Under NEXUS_DIR_OVERRIDE (tests only) there's no real Obsidian app to
+    // discover the vault, so it's kept inside the sandboxed NEXUS_DIR instead
+    // of touching the developer's real ~/Obsidian tree.
+    vault_path: NEXUS_DIR_OVERRIDE
+      ? path.join(NEXUS_DIR, 'obsidian')
+      : path.join(os.homedir(), 'Obsidian', 'Nexus'),
     sync_interval_seconds: 30,
   },
   jira: {
