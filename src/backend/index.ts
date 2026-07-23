@@ -28,6 +28,7 @@ import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
+import { registerApprovalRoutes } from './routes/approvals.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -123,6 +124,7 @@ async function main() {
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
   app.register(registerActivityRoutes);
+  app.register(registerApprovalRoutes);
   app.register(registerTrustRoutes);
   app.register(registerMissionRoutes);
   app.register(registerMondayRoutes);
