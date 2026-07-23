@@ -1,9 +1,11 @@
 /**
- * Tool-permission "Supervise" gate.
+ * Tool-permission gate.
  *
- * When a chat session is supervised, each of its tool calls is intercepted
- * before it executes (via the agent SDK's `beforeToolCall` → extension
- * `tool_call` hook) and parked here as a pending approval. The glasses cockpit
+ * Each tool call is intercepted before it executes (via the agent SDK's
+ * `beforeToolCall` → extension `tool_call` hook) and put to the session's tool
+ * policy (see ./tool-policy.ts). Calls the policy answers `confirm` — which is
+ * every gateable call when the thread is supervised — are parked here as a
+ * pending approval; `allow` runs, `deny` blocks outright. The glasses cockpit
  * gateway surfaces it as an `Approval{kind:'approval'}`; the user taps Allow or
  * Deny on the G2, which resolves the parked promise:
  *
@@ -20,6 +22,9 @@
  * session never executes an unreviewed tool and never wedges forever.
  */
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent';
+import { resolveToolDecision, type ToolPolicyResolver } from './tool-policy.js';
+
+export { UNGATED_TOOL_NAMES } from './tool-policy.js';
 
 /** The value returned to the SDK's `beforeToolCall`. `block:false` lets the
  *  tool run; `block:true` skips it and surfaces `reason` as the tool result. */
@@ -224,29 +229,37 @@ export class ApprovalBroker {
   }
 }
 
-/** The built-in `question` tool has its own interactive glasses approval path
- *  (see ./questions.ts). Gating it here would double-prompt / deadlock, so it is
- *  always excluded from the Supervise gate. */
-export const UNGATED_TOOL_NAMES = new Set(['question']);
-
 /**
- * Extension that gates a chat session's tool calls behind the Supervise
- * approval flow. Registered per session; `isSupervised()` is read live at each
- * tool call so toggling Supervise mid-session takes effect immediately without
- * rebuilding the session. Returns `undefined` (allow) when the session isn't
- * supervised or the tool is exempt, so an unsupervised session pays nothing.
+ * Extension that applies the session's tool policy to each tool call.
+ *
+ * The policy resolver is consulted live at every call — never captured at
+ * session build — so a policy change (including toggling Supervise) takes
+ * effect on the next tool call without rebuilding the session.
+ *
+ *   - `allow`   → `undefined`, the SDK runs the tool. An allowed call pays
+ *                 nothing beyond the resolver, which is the common path.
+ *   - `confirm` → park on the broker and await a human decision.
+ *   - `deny`    → block immediately. No gate is registered and nothing waits,
+ *                 so a denied capability costs no round trip and cannot sit
+ *                 there until the 5-minute default-deny timeout fires.
  */
 export function createApprovalExtension(
   threadId: string,
   cwd: string,
   broker: ApprovalBroker,
-  isSupervised: () => boolean,
+  policy: ToolPolicyResolver,
   timeoutMs: number = DEFAULT_APPROVAL_TIMEOUT_MS,
 ): ExtensionFactory {
   return (pi) => {
     pi.on('tool_call', async (event, ctx) => {
-      if (!isSupervised()) return undefined;
-      if (UNGATED_TOOL_NAMES.has(event.toolName)) return undefined;
+      // resolveToolDecision owns the fail-closed behaviour: a resolver that
+      // throws or returns nonsense degrades to `confirm` for side-effectful
+      // tools rather than falling through to allow.
+      const decision = resolveToolDecision(policy, { toolName: event.toolName, input: event.input });
+      if (decision === 'allow') return undefined;
+      if (decision === 'deny') {
+        return { block: true, reason: `Blocked by policy: \`${event.toolName}\` is not permitted in this session.` };
+      }
       // ctx.signal aborts the gate if the run is cancelled while awaiting.
       return broker.register(threadId, event.toolCallId, event.toolName, event.input, cwd, ctx.signal, timeoutMs);
     });

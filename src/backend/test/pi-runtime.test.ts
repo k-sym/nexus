@@ -7,7 +7,11 @@ import { PiRuntime, buildResourceLoaderOptions, buildSessionExtensionFactories, 
 import { QuestionBroker } from '../pi/questions';
 import { ApprovalBroker } from '../pi/approvals';
 import type { MemoryRecallFn } from '../pi/memory-tool';
+import type { ToolPolicyResolver } from '../pi/tool-policy';
 import { buildModelCatalog } from '../routes/pi';
+
+/** Stand-in policy for tests that only care about extension wiring, not gating. */
+const allowAll: ToolPolicyResolver = () => 'allow';
 
 test('cwdSlug encodes repo paths safely', () => {
   assert.equal(cwdSlug('/Users/me/Projects/foo'), 'Users_me_Projects_foo');
@@ -251,7 +255,7 @@ test('question and approval extensions install after the Anthropic bridge and be
   const approvals = new ApprovalBroker();
   const signalFactory = () => {};
   const sessionFactories = buildSessionExtensionFactories(
-    'thread-1', '/tmp/project', questions, approvals, () => false, () => signalFactory,
+    'thread-1', '/tmp/project', questions, approvals, allowAll, () => signalFactory,
   );
   const options = buildResourceLoaderOptions({
     cwd: '/tmp/project',
@@ -278,7 +282,7 @@ test('question and approval extensions install after the Anthropic bridge and be
 /** Register the session's memory_recall tool and hand back its definition. */
 async function registerMemoryTool(cwd: string, recall: MemoryRecallFn) {
   const factories = buildSessionExtensionFactories(
-    'thread-1', cwd, new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {}, recall,
+    'thread-1', cwd, new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {}, recall,
   );
   assert.equal(factories.length, 4, 'memory extension is appended when a recall backend is supplied');
   let tool: any;
@@ -288,7 +292,7 @@ async function registerMemoryTool(cwd: string, recall: MemoryRecallFn) {
 
 test('sessions omit the memory tool when the runtime has no recall backend', () => {
   const factories = buildSessionExtensionFactories(
-    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
   );
   assert.equal(factories.length, 3, 'no memory_recall tool without a backend to serve it');
 });
@@ -335,12 +339,12 @@ const MONDAY_DEPS = {
 
 test('sessions omit the monday tools when no resolver is supplied, and when the resolver returns null', async () => {
   const noResolver = buildSessionExtensionFactories(
-    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
   );
   assert.equal(noResolver.length, 3, 'no monday tools without a resolver to serve them');
 
   const resolverReturnsNull = buildSessionExtensionFactories(
-    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
     undefined, () => null,
   );
   assert.equal(resolverReturnsNull.length, 3, 'no monday tools when the resolver has nothing for this thread');
@@ -348,7 +352,7 @@ test('sessions omit the monday tools when no resolver is supplied, and when the 
 
 test('monday tools are registered when the resolver returns deps for the thread', async () => {
   const factories = buildSessionExtensionFactories(
-    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
     undefined, () => MONDAY_DEPS as any,
   );
   assert.equal(factories.length, 4, 'monday tool extension appended when the resolver supplies deps');
@@ -366,7 +370,7 @@ test('sessions omit the monday tools (without throwing) when the resolver itself
   // buildSessionExtensionFactories.
   assert.doesNotThrow(() => {
     const factories = buildSessionExtensionFactories(
-      'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), () => false, () => () => {},
+      'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
       undefined,
       () => { throw new Error('boom: bad row in monday_items'); },
     );
