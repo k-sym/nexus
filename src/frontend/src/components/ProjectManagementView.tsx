@@ -7,8 +7,9 @@
  * rejected our token" and "this board has no items" must not look alike.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MondayItemWithLinks } from '@nexus/shared';
-import { fetchMondayItems, unlinkTaskFromMondayItem, type FetchJsonError } from '../api';
+import type { MondayItemWithLinks, MondayProjectConfig } from '@nexus/shared';
+import { fetchMondayItems, fetchMondayProjectConfig, unlinkTaskFromMondayItem, type FetchJsonError } from '../api';
+import { MondayScopeSettings } from './MondayScopeSettings';
 
 interface Props {
   projectId: string;
@@ -58,6 +59,13 @@ export function ProjectManagementView({ projectId }: Props) {
   const [unlinkingTaskIds, setUnlinkingTaskIds] = useState<Set<string>>(new Set());
   const [unlinkError, setUnlinkError] = useState<string | null>(null);
 
+  // Not-yet-configured (backend 409 `code: 'unconfigured'`) and "reopened via
+  // the header's Configure control" both render the same setup panel, keyed
+  // off the config it should pre-fill from: null for the former (there is
+  // nothing to pre-fill), the fetched MondayProjectConfig for the latter.
+  const [configPanel, setConfigPanel] = useState<{ current: MondayProjectConfig | null } | null>(null);
+  const [configOpenError, setConfigOpenError] = useState<string | null>(null);
+
   const load = useCallback(async (refresh: boolean) => {
     const generation = ++generationRef.current;
     setError(null);
@@ -69,11 +77,38 @@ export function ProjectManagementView({ projectId }: Props) {
     } catch (err) {
       if (generationRef.current !== generation) return; // superseded
       const e = err as FetchJsonError;
+      // The backend distinguishes "no scope configured yet" from every other
+      // failure (disabled Monday, expired token, rate limit, ...) via this
+      // code, specifically so the setup panel — not the error screen — is
+      // the response to the one case that's actually fixable here.
+      if (e.code === 'unconfigured') {
+        setConfigPanel({ current: null });
+        return;
+      }
       setError({ message: e.message, code: e.code, retryable: e.retryable });
     } finally {
       if (generationRef.current === generation) setRefreshing(false);
     }
   }, [projectId]);
+
+  // Fetches the project's current Monday scope and opens the setup panel
+  // pre-filled with it — the header's Configure control. A failure here
+  // surfaces inline rather than opening the panel with a silently-blank
+  // (and therefore misleading, given a config does exist) state.
+  const openConfig = useCallback(async () => {
+    setConfigOpenError(null);
+    try {
+      const current = await fetchMondayProjectConfig(projectId);
+      setConfigPanel({ current });
+    } catch (err) {
+      setConfigOpenError((err as FetchJsonError).message);
+    }
+  }, [projectId]);
+
+  const handleConfigSaved = useCallback(() => {
+    setConfigPanel(null);
+    void load(true);
+  }, [load]);
 
   // Opening the view syncs from Monday, same as the manual Refresh button —
   // the mirror-only read (`load(false)`) is reserved for internal reloads
@@ -101,6 +136,23 @@ export function ProjectManagementView({ projectId }: Props) {
       });
     }
   }, [load]);
+
+  // Rendered both for a genuinely unconfigured project (no already-loaded
+  // view exists, so no Cancel) and for a reopened Configure (items !== null,
+  // so Cancel returns to it) — checked before the error/loading branches
+  // below so an unconfigured 409 never reaches the error screen.
+  if (configPanel) {
+    return (
+      <div className="p-6">
+        <MondayScopeSettings
+          projectId={projectId}
+          current={configPanel.current}
+          onSaved={handleConfigSaved}
+          onCancel={items !== null ? () => setConfigPanel(null) : undefined}
+        />
+      </div>
+    );
+  }
 
   // No data has ever loaded successfully and the load failed — full-screen
   // error. This is the only state that must never look like an empty board.
@@ -142,15 +194,37 @@ export function ProjectManagementView({ projectId }: Props) {
           <h1 className="text-xl font-semibold">Project Management</h1>
           <p className="text-xs text-zinc-500">Monday.com initiatives in this project&apos;s scope, with roll-up from linked tasks.</p>
         </div>
-        <button
-          type="button"
-          disabled={refreshing}
-          className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 border border-zinc-800 rounded-md hover:border-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          onClick={() => void load(true)}
-        >
-          {refreshing ? 'Refreshing…' : '↻ Refresh from Monday'}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 border border-zinc-800 rounded-md hover:border-zinc-700 transition-colors"
+            onClick={() => void openConfig()}
+          >
+            Configure
+          </button>
+          <button
+            type="button"
+            disabled={refreshing}
+            className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 border border-zinc-800 rounded-md hover:border-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={() => void load(true)}
+          >
+            {refreshing ? 'Refreshing…' : '↻ Refresh from Monday'}
+          </button>
+        </div>
       </header>
+
+      {configOpenError ? (
+        <div role="alert" className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <span>{configOpenError}</span>
+          <button
+            type="button"
+            className="text-xs text-red-300 underline shrink-0"
+            onClick={() => setConfigOpenError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
 
       {/* A refresh that fails after a successful load must not throw away
           still-valid data — keep the items and surface the error inline. */}

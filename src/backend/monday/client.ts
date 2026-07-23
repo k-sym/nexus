@@ -251,6 +251,76 @@ export async function fetchItemsByIds(
   return data.items ?? [];
 }
 
+export interface MondayBoardSummary {
+  id: string;
+  name: string;
+  workspace: string | null;
+}
+
+const BOARDS_QUERY = `
+  query Boards($limit: Int!) {
+    boards(limit: $limit, order_by: used_at) {
+      id
+      name
+      workspace { name }
+    }
+  }
+`;
+
+/**
+ * Boards the token can see, for the project-config picker. Monday's public
+ * schema exposes no field distinguishing a template or a subitems board from
+ * a regular one (board_kind is public/private/share, unrelated to either) —
+ * per the brief's explicit fallback, every board the token can see is
+ * returned and the user chooses, rather than guessing at a name-prefix
+ * heuristic that would misfire on a real board someone happened to name
+ * "Subitems of...".
+ */
+export async function fetchBoards(opts: MondayClientOptions): Promise<MondayBoardSummary[]> {
+  const data = await mondayGraphql<{ boards?: Array<{ id: string; name: string; workspace?: { name?: string } | null }> }>(
+    opts, BOARDS_QUERY, { limit: 200 },
+  );
+  return (data.boards ?? []).map((b) => ({ id: b.id, name: b.name, workspace: b.workspace?.name ?? null }));
+}
+
+export interface MondayBoardMeta {
+  groups: Array<{ id: string; title: string }>;
+  columns: Array<{ id: string; title: string; type: string }>;
+}
+
+const BOARD_META_QUERY = `
+  query BoardMeta($boardId: ID!) {
+    boards(ids: [$boardId]) {
+      groups { id title }
+      columns { id title type }
+    }
+  }
+`;
+
+/**
+ * One board's groups and columns, for the project-config picker. `type` here
+ * is Monday's own reported column type (e.g. "numbers", "status", "text") —
+ * this is the one place that value is available, which is why column_type in
+ * MondayProjectConfig is captured at selection time rather than re-derived
+ * later from the (user-renamable) column id.
+ */
+export async function fetchBoardMeta(opts: MondayClientOptions, boardId: string): Promise<MondayBoardMeta> {
+  const data = await mondayGraphql<{
+    boards?: Array<{
+      groups?: Array<{ id: string; title: string }>;
+      columns?: Array<{ id: string; title: string; type: string }>;
+    }>;
+  }>(opts, BOARD_META_QUERY, { boardId });
+  const board = data.boards?.[0];
+  if (!board) {
+    // Same defensive shape as fetchBoardItems: no boards[] entry means the
+    // token can't see this board, or it doesn't exist. Never let that look
+    // like "a board with no groups or columns".
+    throw new MondayError(`Monday returned no board for id ${boardId} — the board may not exist or the token cannot see it`);
+  }
+  return { groups: board.groups ?? [], columns: board.columns ?? [] };
+}
+
 const SET_COLUMN_MUTATION = `
   mutation SetColumn($boardId: ID!, $itemId: ID!, $columnId: String!, $value: String!) {
     change_simple_column_value(board_id: $boardId, item_id: $itemId, column_id: $columnId, value: $value) { id }

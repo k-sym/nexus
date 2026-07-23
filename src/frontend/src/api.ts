@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput, MondayItem, MondayItemWithLinks, TaskMondayLink } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput, MondayItem, MondayItemWithLinks, TaskMondayLink, MondayProjectConfig } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -238,6 +238,42 @@ export async function linkTaskToMondayItem(projectId: string, taskId: string, it
 
 export async function unlinkTaskFromMondayItem(taskId: string): Promise<void> {
   await fetchJson(`/api/monday/links/${taskId}`, { method: 'DELETE' });
+}
+
+// Task 15 — per-project Monday scope configuration. Free-standing exports
+// for the same reason as the block above: MondayScopeSettings imports and
+// mocks these directly.
+export interface MondayBoardSummary {
+  id: string;
+  name: string;
+  workspace: string | null;
+}
+
+export interface MondayBoardMetaResult {
+  groups: Array<{ id: string; title: string }>;
+  columns: Array<{ id: string; title: string; type: string }>;
+}
+
+export async function fetchMondayBoards(): Promise<MondayBoardSummary[]> {
+  const data = await fetchJson<{ boards: MondayBoardSummary[] }>(`/api/monday/boards`);
+  return data.boards;
+}
+
+export async function fetchMondayBoardMeta(boardId: string): Promise<MondayBoardMetaResult> {
+  return fetchJson<MondayBoardMetaResult>(`/api/monday/boards/${encodeURIComponent(boardId)}/meta`);
+}
+
+export async function fetchMondayProjectConfig(projectId: string): Promise<MondayProjectConfig | null> {
+  const data = await fetchJson<{ config: MondayProjectConfig | null }>(`/api/monday/projects/${projectId}/config`);
+  return data.config;
+}
+
+export async function saveMondayProjectConfig(projectId: string, config: MondayProjectConfig): Promise<MondayProjectConfig> {
+  const data = await fetchJson<{ config: MondayProjectConfig }>(`/api/monday/projects/${projectId}/config`, {
+    method: 'PUT',
+    body: JSON.stringify(config),
+  });
+  return data.config;
 }
 
 export const api = {

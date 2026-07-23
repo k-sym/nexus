@@ -4,6 +4,8 @@ import {
   mondayGraphql,
   fetchItemsByIds,
   fetchBoardItems,
+  fetchBoards,
+  fetchBoardMeta,
   setSimpleColumnValue,
   createUpdate,
   MondayError,
@@ -277,6 +279,86 @@ test('createUpdate sends the exact GraphQL variables', async () => {
   await createUpdate({ ...OPTS, fetchImpl: fakeFetch as any }, 'item-900', 'Synced from Nexus');
   assert.deepEqual(seenVariables, { itemId: 'item-900', body: 'Synced from Nexus' });
   assert.match(seenQuery!, /create_update/);
+});
+
+test('fetchBoards returns id, name, and workspace name where available', async () => {
+  let seenQuery: string | undefined;
+  const fakeFetch = async (_url: string, init?: RequestInit) => {
+    const parsed = JSON.parse(init!.body as string);
+    seenQuery = parsed.query;
+    return jsonResponse({
+      data: {
+        boards: [
+          { id: '1', name: 'Portfolio', workspace: { name: 'Product' } },
+          { id: '2', name: 'Ops', workspace: null },
+        ],
+      },
+    });
+  };
+  const boards = await fetchBoards({ ...OPTS, fetchImpl: fakeFetch as any });
+  assert.deepEqual(boards, [
+    { id: '1', name: 'Portfolio', workspace: 'Product' },
+    { id: '2', name: 'Ops', workspace: null },
+  ]);
+  assert.match(seenQuery!, /boards/);
+});
+
+test('fetchBoards tolerates a missing boards array instead of throwing', async () => {
+  const fakeFetch = async () => jsonResponse({ data: {} });
+  const boards = await fetchBoards({ ...OPTS, fetchImpl: fakeFetch as any });
+  assert.deepEqual(boards, []);
+});
+
+test('fetchBoards propagates a Monday failure (never silently empty)', async () => {
+  const fakeFetch = async () => jsonResponse({
+    errors: [{ message: 'Not Authenticated', extensions: { code: 'UserUnauthorizedException' } }],
+  });
+  await assert.rejects(
+    () => fetchBoards({ ...OPTS, fetchImpl: fakeFetch as any }),
+    (err: unknown) => {
+      assert.ok(err instanceof MondayError);
+      assert.equal(err.code, 'UserUnauthorizedException');
+      return true;
+    },
+  );
+});
+
+test('fetchBoardMeta returns groups and columns for one board', async () => {
+  let seenVariables: unknown;
+  const fakeFetch = async (_url: string, init?: RequestInit) => {
+    const parsed = JSON.parse(init!.body as string);
+    seenVariables = parsed.variables;
+    return jsonResponse({
+      data: {
+        boards: [{
+          groups: [{ id: 'g1', title: 'Q3' }],
+          columns: [
+            { id: 'text_1', title: 'Points', type: 'numbers' },
+            { id: 'status', title: 'Status', type: 'status' },
+          ],
+        }],
+      },
+    });
+  };
+  const meta = await fetchBoardMeta({ ...OPTS, fetchImpl: fakeFetch as any }, 'board-1');
+  assert.deepEqual(seenVariables, { boardId: 'board-1' });
+  assert.deepEqual(meta.groups, [{ id: 'g1', title: 'Q3' }]);
+  assert.deepEqual(meta.columns, [
+    { id: 'text_1', title: 'Points', type: 'numbers' },
+    { id: 'status', title: 'Status', type: 'status' },
+  ]);
+});
+
+test('fetchBoardMeta throws instead of returning empty when boards[] comes back empty', async () => {
+  const fakeFetch = async () => jsonResponse({ data: { boards: [] } });
+  await assert.rejects(
+    () => fetchBoardMeta({ ...OPTS, fetchImpl: fakeFetch as any }, 'ghost-board'),
+    (err: unknown) => {
+      assert.ok(err instanceof MondayError);
+      assert.match(err.message, /ghost-board/);
+      return true;
+    },
+  );
 });
 
 const RAW = {

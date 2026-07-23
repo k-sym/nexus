@@ -302,4 +302,106 @@ describe('ProjectManagementView', () => {
       expect(t3Button).not.toBeDisabled();
     });
   });
+
+  // --- Task 15: per-project Monday scope configuration --------------------
+
+  it('renders the Monday scope settings panel instead of the error screen when the project is unconfigured', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(
+      Object.assign(new Error('no Monday scope configured for this project'), { code: 'unconfigured' }),
+    );
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText(/configure monday scope/i)).toBeTruthy();
+    // Never the error screen's banner for this specific, expected case.
+    expect(screen.queryByText(/no monday scope configured/i)).toBeNull();
+  });
+
+  it('does not offer a Cancel control when there is no already-loaded view to fall back to', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(
+      Object.assign(new Error('no Monday scope configured for this project'), { code: 'unconfigured' }),
+    );
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    await screen.findByText(/configure monday scope/i);
+    expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull();
+  });
+
+  it('still renders the error screen (not the config panel) for a distinct, non-unconfigured 409 like monday_disabled', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(
+      Object.assign(new Error('Monday is disabled or MONDAY_TOKEN is not set'), { code: 'monday_disabled' }),
+    );
+    render(<ProjectManagementView projectId="p1" />);
+    await waitFor(() => expect(screen.getByText(/MONDAY_TOKEN is not set/)).toBeTruthy());
+    expect(screen.queryByText(/configure monday scope/i)).toBeNull();
+  });
+
+  it('shows a Configure control once configured, and reopens the panel pre-filled with the current config', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    const getConfig = vi.spyOn(api, 'fetchMondayProjectConfig').mockResolvedValue({
+      board_id: 'b1', group_id: null,
+      rollup: { enabled: false, column_id: null, column_type: 'text' },
+      updates: { enabled: false, min_interval_minutes: 30 },
+    } as never);
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([{ id: 'b1', name: 'Portfolio', workspace: null }] as never);
+
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^configure$/i }));
+    await waitFor(() => expect(getConfig).toHaveBeenCalledWith('p1'));
+    expect(await screen.findByText(/configure monday scope/i)).toBeTruthy();
+  });
+
+  it('surfaces an inline error, without opening the panel, when fetching the current config for Configure fails', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    vi.spyOn(api, 'fetchMondayProjectConfig').mockRejectedValue(new Error('Failed to load config'));
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /^configure$/i }));
+    expect(await screen.findByText('Failed to load config')).toBeTruthy();
+    // Never silently opens the panel on a blank/misleading state.
+    expect(screen.queryByText(/configure monday scope/i)).toBeNull();
+    // The already-loaded row must still be there too.
+    expect(screen.getByText('Ship the thing')).toBeTruthy();
+  });
+
+  it('Cancel from a reopened Configure panel returns to the still-loaded items view', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    vi.spyOn(api, 'fetchMondayProjectConfig').mockResolvedValue({
+      board_id: 'b1', group_id: null,
+      rollup: { enabled: false, column_id: null, column_type: 'text' },
+      updates: { enabled: false, min_interval_minutes: 30 },
+    } as never);
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([] as never);
+
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /^configure$/i }));
+    await screen.findByText(/configure monday scope/i);
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel/i }));
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+  });
+
+  it('reloads items after a successful save from the (unconfigured-triggered) config panel', async () => {
+    const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
+    fetchSpy.mockRejectedValueOnce(
+      Object.assign(new Error('no Monday scope configured for this project'), { code: 'unconfigured' }),
+    );
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([{ id: 'b1', name: 'Portfolio', workspace: null }] as never);
+    const save = vi.spyOn(api, 'saveMondayProjectConfig').mockResolvedValue({} as never);
+    fetchSpy.mockResolvedValueOnce([ITEM] as never);
+
+    render(<ProjectManagementView projectId="p1" />);
+    await screen.findByText(/configure monday scope/i);
+
+    fireEvent.change(screen.getByLabelText(/^board$/i), { target: { value: 'b1' } });
+    await waitFor(() => expect((screen.getByLabelText(/^board$/i) as HTMLSelectElement).value).toBe('b1'));
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
 });
