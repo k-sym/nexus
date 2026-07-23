@@ -487,3 +487,75 @@ test('mapItem tolerates an item with no group, status, or owners', () => {
   assert.deepEqual(JSON.parse(row.owners_json), []);
   assert.equal(row.board_id, '');
 });
+
+// --- The item's updates thread (Monday's per-item comments). ------------
+// The mirror can only ever show what the query asked for, so the assertions
+// that matter here are on the OUTGOING query, not just on parsing a canned
+// response: a response fixture containing `updates` would round-trip fine
+// through a client that never requests the field.
+
+function captureQuery(): { body: () => string; fetchImpl: typeof fetch } {
+  let sent = '';
+  const fetchImpl = (async (_url: string, init?: RequestInit) => {
+    sent = JSON.parse(String(init?.body)).query as string;
+    return jsonResponse({ data: { items: [], boards: [{ items_page: { cursor: null, items: [] } }] } });
+  }) as unknown as typeof fetch;
+  return { body: () => sent, fetchImpl };
+}
+
+test('the item query asks for the item updates thread, in plain text with timestamps', async () => {
+  const cap = captureQuery();
+  await fetchItemsByIds({ ...OPTS, fetchImpl: cap.fetchImpl }, ['1']);
+  const query = cap.body();
+  assert.match(query, /updates\s*\(/, 'ITEM_FIELDS must request the updates connection');
+  // text_body is the plain-text rendering; `body` is HTML, which we never want
+  // to hand to the model.
+  assert.match(query, /text_body/);
+  assert.match(query, /created_at/);
+  assert.doesNotMatch(query, /updates\s*\([^)]*\)\s*\{[^}]*\bbody\b/, 'never fetch the HTML body');
+});
+
+test('the updates request is bounded to a handful — this query runs over every item on a board', async () => {
+  const cap = captureQuery();
+  await fetchBoardItems({ ...OPTS, fetchImpl: cap.fetchImpl }, 'b1', null);
+  const limit = /updates\s*\(\s*limit:\s*(\d+)\s*\)/.exec(cap.body());
+  assert.ok(limit, 'the updates connection must carry an explicit limit — unbounded blows the complexity budget');
+  assert.ok(Number(limit[1]) > 0 && Number(limit[1]) <= 5, `limit must be small, got ${limit[1]}`);
+});
+
+test('mapItem carries the updates thread into updates_json, newest-entry text and time preserved', () => {
+  const row = mapItem({
+    ...RAW,
+    updates: [
+      { text_body: 'Blocked on infra', created_at: '2026-07-21T09:00:00Z' },
+      { text_body: 'Kicked off', created_at: '2026-07-19T09:00:00Z' },
+    ],
+  } as any, 'now');
+  assert.deepEqual(JSON.parse(row.updates_json!), [
+    { text: 'Blocked on infra', created_at: '2026-07-21T09:00:00Z' },
+    { text: 'Kicked off', created_at: '2026-07-19T09:00:00Z' },
+  ]);
+});
+
+test('mapItem stays pure and total when updates are absent or malformed', () => {
+  assert.deepEqual(JSON.parse(mapItem({ id: '5', column_values: [] } as any, 'now').updates_json!), []);
+  assert.deepEqual(JSON.parse(mapItem({ id: '5', updates: null } as any, 'now').updates_json!), []);
+  // Monday is external data: a non-array, or entries of the wrong shape, must
+  // normalize rather than throw or leak `undefined` into the stored JSON.
+  assert.deepEqual(JSON.parse(mapItem({ id: '5', updates: 'nope' } as any, 'now').updates_json!), []);
+  assert.deepEqual(
+    JSON.parse(mapItem({ id: '5', updates: [{}, { text_body: 7 }, null] } as any, 'now').updates_json!),
+    [{ text: '', created_at: null }, { text: '', created_at: null }, { text: '', created_at: null }],
+  );
+});
+
+test('mapItem never reads updates out of column_values', () => {
+  // column_values_json holds COLUMN VALUES keyed by column id. A board with a
+  // column whose id is literally "updates" must not have that column's value
+  // promoted into the updates mirror.
+  const row = mapItem({
+    id: '6',
+    column_values: [{ id: 'updates', type: 'text', text: 'Not a real update — a column value' }],
+  } as any, 'now');
+  assert.deepEqual(JSON.parse(row.updates_json!), []);
+});

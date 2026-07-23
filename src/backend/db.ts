@@ -466,6 +466,24 @@ function runMigrations(db: Database.Database) {
     );
   `);
   db.exec('CREATE INDEX IF NOT EXISTS idx_mission_runs_mission ON mission_runs(mission_id, run_number)');
+
+  // Monday item updates mirror: the most recent entries from the item's own
+  // update thread (see monday/client.ts's ITEM_FIELDS and monday/map.ts).
+  //
+  // Added after monday_items already shipped, so it is a guarded ALTER and is
+  // deliberately NOT in the CREATE TABLE block above — a column declared in
+  // both places is a column whose two definitions can drift. Fresh and
+  // existing databases take the same single path.
+  //
+  // No index: this column is never filtered or sorted on, only read back with
+  // the row. If one is ever needed it must be created AFTER this guard, never
+  // in the schema block above — creating an index for a migrated-in column
+  // ahead of the ALTER that adds it is exactly the "no such column" bug that
+  // previously took the backend down on every existing database.
+  const mondayItemCols = db.pragma('table_info(monday_items)') as { name: string }[];
+  if (!mondayItemCols.some((c) => c.name === 'updates_json')) {
+    db.exec("ALTER TABLE monday_items ADD COLUMN updates_json TEXT NOT NULL DEFAULT '[]'");
+  }
 }
 
 function migrateLegacyAssistantMessages(db: Database.Database): void {

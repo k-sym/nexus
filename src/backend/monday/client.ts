@@ -84,6 +84,14 @@ export interface RawMondayColumnValue {
   value?: string | null;
 }
 
+/** One entry from an item's `updates` connection — Monday's per-item comment
+ *  thread. `text_body` is the plain-text rendering; the sibling `body` field
+ *  is HTML, which is never what we want to store or show a model. */
+export interface RawMondayUpdate {
+  text_body?: string | null;
+  created_at?: string | null;
+}
+
 export interface RawMondayItem {
   id: string;
   name?: string;
@@ -93,6 +101,9 @@ export interface RawMondayItem {
   board?: { id?: string; name?: string } | null;
   group?: { id?: string; title?: string } | null;
   column_values?: RawMondayColumnValue[];
+  /** The most recent entries in the item's update thread — bounded in
+   *  ITEM_FIELDS, since this selection runs against every item on a board. */
+  updates?: RawMondayUpdate[] | null;
 }
 
 /** Single transport entry point. Every query and mutation goes through here. */
@@ -160,6 +171,14 @@ export async function mondayGraphql<T>(
   return body.data;
 }
 
+/**
+ * Selected for every item of every page of a board sync, so each field added
+ * here is multiplied by the board size against Monday's complexity budget
+ * (exceeding it is the ComplexityException handled above). The updates
+ * connection is capped at 5 and asks only for what the context block and the
+ * read tool render — enough to show the thread's recent shape, not a mirror
+ * of the whole conversation.
+ */
 const ITEM_FIELDS = `
   id
   name
@@ -169,6 +188,7 @@ const ITEM_FIELDS = `
   board { id name }
   group { id title }
   column_values { id type text value }
+  updates(limit: 5) { text_body created_at }
 `;
 
 const BOARD_ITEMS_QUERY = `

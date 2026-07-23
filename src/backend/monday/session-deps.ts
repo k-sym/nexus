@@ -56,25 +56,50 @@ export function resolveThreadItem(db: Database.Database, threadId: string): Reso
 }
 
 /**
- * The item's recently-mirrored updates. Always empty for now.
+ * The item's recently-mirrored updates — Monday's per-item comment thread —
+ * newest first.
  *
- * Monday's updates feed (the item's own comment/activity thread) is not
- * mirrored at all: the GraphQL query in client.ts never fetches the item's
- * `updates` connection, and there is nowhere else it could be read from —
- * `column_values_json` holds COLUMN VALUES keyed by column id (map.ts), a
- * different thing entirely. Reading `cols.updates` out of that blob (as this
- * function used to) would, on a board with a column literally named
- * "updates", surface that column's value to the model mislabelled as an
- * update — worse than showing nothing. Deleted rather than fixed in place.
+ * Reads `updates_json`, written by mapItem from the `updates` connection
+ * client.ts fetches. Never `column_values_json`: that blob holds COLUMN
+ * VALUES keyed by column id, so on a board with a column whose id is
+ * literally "updates" reading it here (as this function once did) would show
+ * the model that column's value dressed up as a comment — worse than showing
+ * nothing.
  *
- * Real support requires fetching the item's `updates` connection in
- * client.ts and carrying it through `mapItem` into a stored field — a client
- * change plus a schema migration, tracked separately and not done here.
- * Kept as a function, with both call sites still calling it, so that
- * follow-up is a one-place change.
+ * Total by construction. This runs during agent session creation, where a
+ * throw means a chat thread that can never be opened again, so every
+ * malformed shape a stored blob could hold — absent, non-JSON, not an array,
+ * entries of the wrong shape — degrades to an empty list. That is also why
+ * the field is re-validated here rather than trusted: rows written by any
+ * past version of mapItem are still in the mirror.
  */
-function recentUpdates(_item: MondayItem): string[] {
-  return [];
+function recentUpdates(item: MondayItem): string[] {
+  try {
+    const parsed: unknown = JSON.parse(item.updates_json || '[]');
+    // The catch below would also cover a non-array (`.filter` would throw),
+    // but handling it here states the rule — "not a list, no updates" — as a
+    // decision rather than leaving it to an incidental TypeError.
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((u): u is Record<string, unknown> => typeof u === 'object' && u !== null)
+      .map((u) => ({
+        text: typeof u.text === 'string' ? u.text.trim() : '',
+        created_at: typeof u.created_at === 'string' ? u.created_at : null,
+      }))
+      .filter((u) => u.text.length > 0)
+      // Newest first. Monday's timestamps are ISO-8601, which compares
+      // correctly as plain strings; entries with no timestamp sort to the end
+      // rather than disturbing the order of the ones that have one.
+      .sort((a, b) => {
+        if (a.created_at && b.created_at) return b.created_at.localeCompare(a.created_at);
+        if (a.created_at) return -1;
+        if (b.created_at) return 1;
+        return 0;
+      })
+      .map((u) => u.text);
+  } catch {
+    return [];
+  }
 }
 
 /** The global Monday kill switch (`monday.enabled` in config_json) AND the
