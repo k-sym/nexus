@@ -1,15 +1,13 @@
-export type OperationKind =
-  | 'chat_turn'
-  | 'assistant_stream'
-  | 'jira_sync'
-  | 'github_sync'
-  | 'monday_sync'
-  | 'monday_write'
-  | 'memory_archive'
-  | 'memory_index'
-  | 'mission_tick';
-
-export type OperationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
+// Operation kinds/statuses are declared in @nexus/shared so the frontend
+// validates against the same list; re-exported here because backend callers
+// have always imported them from this module.
+export {
+  OPERATION_KINDS,
+  OPERATION_STATUSES,
+  type OperationKind,
+  type OperationStatus,
+} from '@nexus/shared';
+import type { OperationKind, OperationStatus } from '@nexus/shared';
 
 export interface ActivityEvent {
   type: 'start' | 'update' | 'stop';

@@ -25,13 +25,18 @@ interface ActivityFilters {
   status: OperationStatus | '';
 }
 
+// Exhaustive over OperationKind by type, so a new kind fails the build here
+// rather than rendering as a blank label and missing from the filter dropdown.
 const KIND_LABELS: Record<OperationKind, string> = {
   chat_turn: 'Chat turn',
   assistant_stream: 'Assistant stream',
   jira_sync: 'Jira sync',
   github_sync: 'GitHub sync',
+  monday_sync: 'Monday refresh',
+  monday_write: 'Monday write',
   memory_archive: 'Memory archive',
   memory_index: 'Memory index',
+  mission_tick: 'Mission tick',
 };
 
 const STATUS_COLORS: Record<OperationStatus, string> = {

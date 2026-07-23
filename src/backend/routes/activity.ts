@@ -1,15 +1,13 @@
 import { FastifyInstance } from 'fastify';
-import { OperationKind, OperationStatus } from '../activity/events.js';
+import {
+  OPERATION_KINDS,
+  OPERATION_STATUSES,
+  type OperationKind,
+  type OperationStatus,
+} from '../activity/events.js';
 
-const VALID_KINDS: OperationKind[] = [
-  'chat_turn',
-  'assistant_stream',
-  'jira_sync',
-  'github_sync',
-  'memory_archive',
-  'memory_index',
-];
-const VALID_STATUSES: OperationStatus[] = ['running', 'succeeded', 'failed', 'cancelled'];
+const VALID_KINDS: readonly OperationKind[] = OPERATION_KINDS;
+const VALID_STATUSES: readonly OperationStatus[] = OPERATION_STATUSES;
 
 export async function registerActivityRoutes(fastify: FastifyInstance) {
   const db = fastify.db;
