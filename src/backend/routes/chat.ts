@@ -1262,7 +1262,23 @@ function extractChatAttachments(message: any): ChatAttachment[] {
   if (Array.isArray(message?.attachments)) candidates.push(...message.attachments);
   if (Array.isArray(message?.images)) candidates.push(...message.images);
   if (Array.isArray(message?.content)) {
-    candidates.push(...message.content.filter((block: any) => block?.type === 'image'));
+    // Extract image blocks from content and transform Anthropic format to ChatAttachment format
+    for (const block of message.content) {
+      if (block?.type === 'image') {
+        // Handle Anthropic image block format: { type: 'image', source: { type: 'base64', media_type: '...', data: '...' } }
+        if (block.source?.type === 'base64' && block.source?.data && block.source?.media_type) {
+          candidates.push({
+            type: 'image',
+            data: block.source.data,
+            mimeType: block.source.media_type,
+          });
+        }
+        // Handle already-formatted ChatAttachment
+        else if (block.data && block.mimeType) {
+          candidates.push(block);
+        }
+      }
+    }
   }
   const validated = validateChatAttachments(candidates);
   return validated.ok ? validated.attachments : [];
