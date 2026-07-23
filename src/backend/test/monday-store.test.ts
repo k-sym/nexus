@@ -214,3 +214,32 @@ test('pruneScope marks linked row missing when multiple tasks link to same item'
   assert.equal(link2!.item_id, '2', 'second link should still point to item 2');
   db.close();
 });
+
+// --- The mirrored updates thread. ---------------------------------------
+
+test('upsertItems round-trips updates_json and getItem reads it back', () => {
+  const db = getDb(':memory:');
+  const updates = JSON.stringify([{ text: 'Kicked off', created_at: '2026-07-19T09:00:00Z' }]);
+  upsertItems(db, [item('1', { updates_json: updates })]);
+  assert.equal(getItem(db, '1')!.updates_json, updates);
+  assert.equal(listItemsForBoard(db, 'b1', null)[0].updates_json, updates);
+  db.close();
+});
+
+test('a later sync replaces the stored updates rather than keeping the old thread', () => {
+  const db = getDb(':memory:');
+  upsertItems(db, [item('1', { updates_json: JSON.stringify([{ text: 'Old', created_at: null }]) })]);
+  upsertItems(db, [item('1', { updates_json: JSON.stringify([{ text: 'New', created_at: null }]) })]);
+  assert.deepEqual(JSON.parse(getItem(db, '1')!.updates_json!), [{ text: 'New', created_at: null }]);
+  db.close();
+});
+
+test('upsertItems accepts a row with no updates_json at all', () => {
+  // updates_json is optional on MondayItem — fixtures and callers predating
+  // the field omit it entirely — but the bound INSERT needs every named
+  // parameter present or better-sqlite3 throws on the missing binding.
+  const db = getDb(':memory:');
+  upsertItems(db, [item('1')]);
+  assert.equal(getItem(db, '1')!.updates_json, '[]');
+  db.close();
+});

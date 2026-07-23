@@ -1,6 +1,6 @@
 /** Pure Monday item → mirror row. No I/O, no clock — syncedAt is passed in. */
 import type { MondayItem } from '@nexus/shared';
-import type { RawMondayItem, RawMondayColumnValue } from './client.js';
+import type { RawMondayItem, RawMondayColumnValue, RawMondayUpdate } from './client.js';
 
 /** The first status-type column is the item's headline status. */
 function statusColumn(cols: RawMondayColumnValue[]): RawMondayColumnValue | undefined {
@@ -61,6 +61,32 @@ function statusColor(col: RawMondayColumnValue | undefined): string | null {
   }
 }
 
+/**
+ * Normalizes the item's update thread into the shape the mirror stores.
+ *
+ * Read from `raw.updates` — the `updates` connection in client.ts's
+ * ITEM_FIELDS — and never from `column_values`, which holds column values
+ * keyed by column id. A board with a column whose id is literally "updates"
+ * would otherwise have that column's value stored, and later shown to a
+ * model, mislabelled as a comment from the item's thread.
+ *
+ * Structural only: no sorting and no filtering, so this stays pure and the
+ * stored blob keeps whatever order Monday sent. Presentation order is a
+ * read-time concern (session-deps.ts's recentUpdates), which has to cope with
+ * rows written by every past version of this function regardless.
+ *
+ * Defensive despite the types: this is external API data, so a null, a
+ * non-array, or entries of the wrong shape are all reachable and must
+ * normalize rather than throw or leak `undefined` into the JSON.
+ */
+function normalizedUpdates(raw: RawMondayItem): { text: string; created_at: string | null }[] {
+  const list: RawMondayUpdate[] = Array.isArray(raw.updates) ? raw.updates : [];
+  return list.map((u) => ({
+    text: typeof u?.text_body === 'string' ? u.text_body : '',
+    created_at: typeof u?.created_at === 'string' ? u.created_at : null,
+  }));
+}
+
 /** 'missing' is Nexus-local (set by the sync layer when an item vanishes
  *  from Monday while a link survives) — mapItem must never produce it, so
  *  the predicate's return type excludes it rather than merely happening to
@@ -88,6 +114,7 @@ export function mapItem(raw: RawMondayItem, syncedAt: string): MondayItem {
     owners_json: JSON.stringify(owners(cols)),
     url: raw.url ?? null,
     column_values_json: JSON.stringify(byId),
+    updates_json: JSON.stringify(normalizedUpdates(raw)),
     monday_updated_at: raw.updated_at ?? null,
     synced_at: syncedAt,
   };
