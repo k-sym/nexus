@@ -1007,7 +1007,14 @@ function MessageBubble({
                 Model context: {msg.signal_filter.saved_percent}% smaller
               </span>
             )}
-            {detailsExpanded && msg.content && (
+            {/* Ordinary tool output waits behind Ctrl+O; a failure is the one
+                thing you always want on screen, so it shows unprompted. */}
+            {msg.isError && msg.content && (
+              <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-[11px] text-red-300">
+                {msg.content}
+              </pre>
+            )}
+            {detailsExpanded && !msg.isError && msg.content && (
               <pre className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap text-[11px] text-zinc-400/80">
                 {msg.content}
               </pre>

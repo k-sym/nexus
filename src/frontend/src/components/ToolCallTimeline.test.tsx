@@ -42,6 +42,54 @@ describe('ToolCallTimeline', () => {
     expect(screen.queryByText('Pick one?')).not.toBeInTheDocument();
     expect(screen.queryByText('Choose')).not.toBeInTheDocument();
   });
+
+  // Providers disagree on tool-name casing: pi emits 'Read', others 'read'.
+  // Matching on the raw name lost the header formatting AND — worse — sent a
+  // failed read down the "reads render nothing" path, hiding the error.
+  it('formats lower-case tool names the same as capitalised ones', () => {
+    render(<ToolCallTimeline
+      toolCalls={[{
+        id: 'read-1',
+        name: 'read',
+        args: { path: '/Users/k-sym/Projects/nexus/src/shared' },
+        status: 'succeeded',
+        result: 'file contents',
+      }]}
+      detailsExpanded
+    />);
+
+    expect(screen.getByText('read ~/Projects/nexus/src/shared')).toBeVisible();
+  });
+
+  it.each(['Read', 'read'])('shows the output of a failed %s instead of swallowing it', (name) => {
+    render(<ToolCallTimeline
+      toolCalls={[{
+        id: 'read-1',
+        name,
+        args: { path: '/Users/k-sym/Projects/nexus/src/shared' },
+        status: 'error',
+        result: 'EISDIR: illegal operation on a directory, read',
+      }]}
+      detailsExpanded
+    />);
+
+    expect(screen.getByText('EISDIR: illegal operation on a directory, read')).toBeVisible();
+  });
+
+  it('still hides the body of a successful read', () => {
+    render(<ToolCallTimeline
+      toolCalls={[{
+        id: 'read-1',
+        name: 'Read',
+        args: { path: '/a/b.ts' },
+        status: 'succeeded',
+        result: 'the whole file',
+      }]}
+      detailsExpanded
+    />);
+
+    expect(screen.queryByText('the whole file')).not.toBeInTheDocument();
+  });
 });
 
 describe('QuestionCards', () => {
