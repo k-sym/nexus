@@ -626,16 +626,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setAttachmentWarning(null);
   }, []);
 
-  if (!threadId) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-faint text-sm">Select a session, or use “+ New Session” in the tree to start one.</p>
-        </div>
-      </div>
-    );
-  }
-
   // Merge persisted history with the optimistic in-flight turn. Once persisted
   // history has grown past the baseline captured at turn start, the turn has
   // been written, so the optimistic copy is dropped (no duplicate). Until then
@@ -656,14 +646,28 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     !isRunning && lastMessage?.role === 'assistant' && lastMessage.content.trim()
       ? lastMessage.id
       : null;
+  // Above the no-thread guard below: a hook may not sit behind an early return,
+  // or deleting the open session (threadId → null) renders fewer hooks than the
+  // previous pass and React tears the tree down.
   const { suggestion, dismiss: dismissSuggestion } = useNextSuggestion({
     sessionKey: threadId ?? null,
     turnKey: completedTurnKey,
     messages: visible,
     // Only ever offered into an empty composer — which is also the only time a
     // placeholder renders, and why this needs no ghost-text overlay.
-    enabled: !isRunning && !input.trim() && state.status !== 'error',
+    enabled: !!threadId && !isRunning && !input.trim() && state.status !== 'error',
   });
+
+  if (!threadId) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <div className="text-center">
+          <p className="text-faint text-sm">Select a session, or use “+ New Session” in the tree to start one.</p>
+        </div>
+      </div>
+    );
+  }
+
   // Persistent status pinned above the composer so "is it still working?" is
   // always visible without scrolling back up to the run card's header, which
   // climbs out of view as tool output streams in.

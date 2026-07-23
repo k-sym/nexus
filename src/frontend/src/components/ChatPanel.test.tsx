@@ -1235,4 +1235,33 @@ describe('ChatPanel', () => {
     fireEvent.change(box, { target: { value: 'my own words' } });
     expect(box).toHaveAttribute('placeholder', 'Type a message… (Enter to send, Shift+Enter for newline)');
   });
+
+  it('survives the open session being deleted (threadId → null)', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({
+            thread: { id: 't1' },
+            messages: [
+              { id: 'm1', role: 'user', content: 'add a test', timestamp: 1 },
+              { id: 'm2', role: 'assistant', content: 'done', timestamp: 2 },
+            ],
+          }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    const { rerender } = render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await screen.findByTestId('chat-input');
+
+    // Every hook must run on this pass too, or React tears the tree down with
+    // "Rendered fewer hooks than expected".
+    rerender(<ChatPanel projectId="p1" threadId={null} onBusyConflict={noop} />);
+
+    expect(await screen.findByText(/Select a session/)).toBeInTheDocument();
+    expect(screen.queryByTestId('chat-input')).not.toBeInTheDocument();
+  });
 });
