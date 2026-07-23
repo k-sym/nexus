@@ -30,6 +30,7 @@ import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerApprovalRoutes } from './routes/approvals.js';
 import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from './docker/session-deps.js';
+import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -59,7 +60,16 @@ async function main() {
   // One probe at startup so the first sessions know whether Docker is there;
   // it refreshes itself on a TTL after that (see docker/session-deps.ts).
   const dockerAvailability = new DockerAvailability();
-  void dockerAvailability.refresh();
+  // Then sweep containers orphaned by a crash or a kill -9, which dropSession()
+  // never got to clean up. Chained onto the probe rather than awaited: a slow
+  // or hung daemon must not delay the backend coming up.
+  void dockerAvailability.refresh().then(async (available) => {
+    if (!available) return;
+    try {
+      const line = describeSweep(await sweepOrphanedProjects(db, { isAvailable: () => true }));
+      if (line) console.log(line);
+    } catch { /* the next start sweeps again */ }
+  });
   const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
     recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
     mondayContext: (threadId) => buildMondayContext(db, threadId),

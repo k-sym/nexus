@@ -185,7 +185,11 @@ export function boundOutput(text: string, maxBytes = MAX_OUTPUT_BYTES): string {
 }
 
 export interface ComposeCommandOptions {
-  cwd: string;
+  /** Where Compose runs. Required in practice for `up`/`logs`/`status`, which
+   *  need to find a compose file. `down` works without it: Compose reconstructs
+   *  the project from container labels, which is what lets the orphan sweep
+   *  clean up projects whose repo has since been deleted. */
+  cwd?: string;
   projectName: string;
   composeFile?: string;
   exec?: DockerExec;
