@@ -265,6 +265,10 @@ test('PUT project config rejects a missing board_id', async () => {
     payload: { ...VALID_CONFIG, board_id: '' },
   });
   assert.equal(res.statusCode, 400);
+  // Assert the specific message, not just the status code: a 400 for the
+  // WRONG reason (e.g. a bug that rejects every payload) would otherwise
+  // still pass this test.
+  assert.equal(res.json().error, 'board_id is required');
   await app.close();
   db.close();
 });
@@ -278,6 +282,7 @@ test('PUT project config rejects rollup.enabled true with no column_id — the m
     payload: { ...VALID_CONFIG, rollup: { enabled: true, column_id: '', column_type: 'text' } },
   });
   assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error, 'rollup.column_id is required when rollup.enabled is true');
   await app.close();
   db.close();
 });
@@ -291,6 +296,7 @@ test('PUT project config rejects a bad column_type', async () => {
     payload: { ...VALID_CONFIG, rollup: { enabled: true, column_id: 'text_1', column_type: 'boolean' } },
   });
   assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error, "rollup.column_type must be 'text' or 'numeric'");
   await app.close();
   db.close();
 });
@@ -304,12 +310,14 @@ test('PUT project config rejects a non-positive min_interval_minutes', async () 
     payload: { ...VALID_CONFIG, updates: { enabled: true, min_interval_minutes: 0 } },
   });
   assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error, 'updates.min_interval_minutes must be a positive number');
 
   const negative = await app.inject({
     method: 'PUT', url: '/api/monday/projects/p1/config',
     payload: { ...VALID_CONFIG, updates: { enabled: true, min_interval_minutes: -5 } },
   });
   assert.equal(negative.statusCode, 400);
+  assert.equal(negative.json().error, 'updates.min_interval_minutes must be a positive number');
   await app.close();
   db.close();
 });
@@ -361,6 +369,43 @@ test('PUT project config drops unknown keys in the monday block rather than pers
   assert.equal(parsed.monday.unexpected_field, undefined);
   assert.equal(parsed.monday.token, undefined);
   assert.equal(JSON.stringify(row.config_json).includes('should-never-be-stored'), false);
+  await app.close();
+  db.close();
+});
+
+test('PUT project config refuses to clobber sibling data when config_json is unparseable', async () => {
+  const db = getDb(':memory:');
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES (?, ?, 'P', 'P', '', '', ?, 0, '', 'now', 'now')`)
+    .run('p1', 'p1', '{not-json');
+  const app = await buildApp(db);
+  const res = await app.inject({ method: 'PUT', url: '/api/monday/projects/p1/config', payload: VALID_CONFIG });
+  // Never a 500 (opaque crash) and never a 200 (which would mean the write
+  // went through and silently dropped whatever else was in the blob).
+  assert.notEqual(res.statusCode, 500);
+  assert.notEqual(res.statusCode, 200);
+
+  const row = db.prepare('SELECT config_json FROM projects WHERE id = ?').get('p1') as { config_json: string };
+  // Untouched — nothing was silently destroyed.
+  assert.equal(row.config_json, '{not-json');
+  await app.close();
+  db.close();
+});
+
+test('PUT project config refuses rather than crashing when config_json is the literal string "null"', async () => {
+  const db = getDb(':memory:');
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES (?, ?, 'P', 'P', '', '', ?, 0, '', 'now', 'now')`)
+    .run('p1', 'p1', 'null');
+  const app = await buildApp(db);
+  const res = await app.inject({ method: 'PUT', url: '/api/monday/projects/p1/config', payload: VALID_CONFIG });
+  // `JSON.parse('null')` succeeds and returns `null`, which passes a naive
+  // `typeof === 'object'` check and then crashes assigning `.monday` — this
+  // must not reach the generic framework 500.
+  assert.notEqual(res.statusCode, 500);
+
+  const row = db.prepare('SELECT config_json FROM projects WHERE id = ?').get('p1') as { config_json: string };
+  assert.equal(row.config_json, 'null');
   await app.close();
   db.close();
 });

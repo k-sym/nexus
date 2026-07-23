@@ -160,9 +160,28 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     // save from this panel can never clobber them.
     let parsed: Record<string, unknown>;
     try {
-      parsed = JSON.parse(project.config_json || '{}') as Record<string, unknown>;
+      const rawParsed: unknown = JSON.parse(project.config_json || '{}');
+      // JSON.parse('null') succeeds and returns the value `null`, which
+      // satisfies `typeof x === 'object'` (a long-standing JS quirk) and
+      // would then crash on `parsed.monday = ...` below — turning a
+      // corrupted row into a generic framework 500. An array passes the
+      // same naive check and would silently gain a `monday` string key.
+      // Reject every non-plain-object shape here, in the same branch as an
+      // unparseable string, so both holes get one deliberate response.
+      if (rawParsed === null || typeof rawParsed !== 'object' || Array.isArray(rawParsed)) {
+        throw new Error('config_json did not parse to a JSON object');
+      }
+      parsed = rawParsed as Record<string, unknown>;
     } catch {
-      parsed = {};
+      // Never fall back to `{}` and proceed with the write: that would
+      // still succeed, permanently dropping every sibling key
+      // (column_defaults, etc.) still sitting in the corrupted row. Refuse
+      // instead — the row is left completely untouched — with a stable,
+      // sensible status rather than an opaque 500.
+      return reply.code(409).send({
+        error: 'project config_json is corrupted and cannot be safely updated',
+        code: 'config_corrupted',
+      });
     }
     parsed.monday = validated.config;
 

@@ -23,6 +23,12 @@ interface Props {
 
 const DEFAULT_MIN_INTERVAL_MINUTES = 30;
 
+/** Must match MIN_UPDATE_INTERVAL_MINUTES in backend/routes/monday.ts — the
+ *  server clamps up to this floor silently, so the client shows the same
+ *  number rather than letting a smaller value look accepted and then land
+ *  on something else. */
+const MIN_UPDATE_INTERVAL_MINUTES = 5;
+
 /** Monday's own reported column type, never the (user-renamable) column id —
  *  see the column_type doc comment on MondayProjectConfig in shared/index.ts.
  *  '2026-07' has reported "numbers" for every numeric column seen so far;
@@ -47,8 +53,11 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
   const [rollupColumnType, setRollupColumnType] = useState<'text' | 'numeric'>(current?.rollup.column_type ?? 'text');
 
   const [updatesEnabled, setUpdatesEnabled] = useState(current?.updates.enabled ?? false);
+  // Kept as the raw text the user typed, not a number: `Number('')` is `0`,
+  // not NaN, so a number-typed state would let an emptied field silently
+  // become a "valid" 0 and sail past validation. See minIntervalIsValid below.
   const [minIntervalMinutes, setMinIntervalMinutes] = useState(
-    current?.updates.min_interval_minutes ?? DEFAULT_MIN_INTERVAL_MINUTES,
+    String(current?.updates.min_interval_minutes ?? DEFAULT_MIN_INTERVAL_MINUTES),
   );
 
   const [saving, setSaving] = useState(false);
@@ -105,6 +114,12 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
     setBoardId(id);
     setGroupId(null);
     setRollupColumnId(null);
+    // The column and its type are derived together from one board's meta
+    // (see columnTypeFor above) — resetting only the id would leave the
+    // PREVIOUS board's column_type behind, associated with no column. Only
+    // harmless today because a null column_id blocks saving roll-up enabled;
+    // reset both so there is never a dangling stale type.
+    setRollupColumnType('text');
     setMeta(null);
     setMetaError(null);
     if (id) void loadMeta(id);
@@ -117,6 +132,15 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
     if (column) setRollupColumnType(columnTypeFor(column.type));
   }
 
+  // `Number('')` is 0, not NaN, so the empty-string case is checked
+  // explicitly rather than relying on Number.isFinite alone — an emptied
+  // field must never look like a valid 0-minute interval (the server treats
+  // <= 0 as a hard rejection, not something it clamps).
+  const parsedMinInterval = Number(minIntervalMinutes);
+  const minIntervalIsValid = minIntervalMinutes.trim() !== ''
+    && Number.isFinite(parsedMinInterval)
+    && parsedMinInterval > 0;
+
   async function handleSave() {
     setSaveError(null);
     setSaving(true);
@@ -125,9 +149,23 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
         board_id: boardId,
         group_id: groupId,
         rollup: { enabled: rollupEnabled, column_id: rollupColumnId, column_type: rollupColumnType },
-        updates: { enabled: updatesEnabled, min_interval_minutes: minIntervalMinutes },
+        updates: { enabled: updatesEnabled, min_interval_minutes: parsedMinInterval },
       };
-      await saveMondayProjectConfig(projectId, config);
+      const saved = await saveMondayProjectConfig(projectId, config);
+      // The PUT returns the clamped, canonical config it actually stored
+      // (e.g. min_interval_minutes floored to MIN_UPDATE_INTERVAL_MINUTES).
+      // Adopt it so the panel reflects exactly what was saved rather than
+      // the pre-clamp value the user typed. Guarded, not assumed present:
+      // some tests (and any future caller) may resolve with a partial stub.
+      if (saved && saved.rollup && saved.updates) {
+        setBoardId(saved.board_id);
+        setGroupId(saved.group_id ?? null);
+        setRollupEnabled(saved.rollup.enabled);
+        setRollupColumnId(saved.rollup.column_id);
+        setRollupColumnType(saved.rollup.column_type);
+        setUpdatesEnabled(saved.updates.enabled);
+        setMinIntervalMinutes(String(saved.updates.min_interval_minutes));
+      }
       onSaved();
     } catch (err) {
       setSaveError((err as FetchJsonError).message);
@@ -136,7 +174,22 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
     }
   }
 
-  const canSave = Boolean(boardId) && (!rollupEnabled || Boolean(rollupColumnId)) && !saving;
+  const canSave = Boolean(boardId)
+    && (!rollupEnabled || Boolean(rollupColumnId))
+    && minIntervalIsValid
+    && !saving;
+
+  // The roll-up column picker has nothing to show before a board is chosen,
+  // and nothing trustworthy to show after its metadata failed to load — both
+  // would otherwise render as a plain empty <select>, which reads as "this
+  // board has no columns" rather than "columns aren't available yet/at all".
+  const rollupColumnsUnavailable = Boolean(metaError);
+  const rollupSelectDisabled = !rollupEnabled || !boardId || rollupColumnsUnavailable;
+  const rollupPlaceholder = !boardId
+    ? 'Select a board first'
+    : rollupColumnsUnavailable
+      ? 'Columns unavailable — board metadata failed to load'
+      : 'Select a column…';
 
   return (
     <div className="space-y-4 max-w-lg">
@@ -212,11 +265,11 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
         <select
           aria-label="Roll-up column"
           value={rollupColumnId ?? ''}
-          disabled={!rollupEnabled}
+          disabled={rollupSelectDisabled}
           onChange={(event) => handleColumnChange(event.target.value)}
           className="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-sm disabled:opacity-50"
         >
-          <option value="">Select a column…</option>
+          <option value="">{rollupPlaceholder}</option>
           {(meta?.columns ?? []).map((column) => (
             <option key={column.id} value={column.id}>{column.title} ({column.type})</option>
           ))}
@@ -228,22 +281,34 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
           <input
             type="checkbox"
             checked={updatesEnabled}
-            onChange={(event) => setUpdatesEnabled(event.target.checked)}
+            onChange={(event) => {
+              const checked = event.target.checked;
+              setUpdatesEnabled(checked);
+              // Turning updates off while the interval field holds an
+              // invalid value (e.g. emptied while it was still editable)
+              // would otherwise leave Save permanently disabled with no
+              // visible input to fix, since the field is greyed out whenever
+              // the toggle is off. Restore a sane value instead.
+              if (!checked && !minIntervalIsValid) setMinIntervalMinutes(String(DEFAULT_MIN_INTERVAL_MINUTES));
+            }}
           />
           Post progress to the item&apos;s updates feed
         </label>
         <div className="flex items-center gap-2">
           <input
             type="number"
-            min={1}
+            min={MIN_UPDATE_INTERVAL_MINUTES}
             aria-label="Update interval (minutes)"
             disabled={!updatesEnabled}
             value={minIntervalMinutes}
-            onChange={(event) => setMinIntervalMinutes(Number(event.target.value))}
+            onChange={(event) => setMinIntervalMinutes(event.target.value)}
             className="w-24 rounded border border-white/10 bg-transparent px-2 py-1 text-sm disabled:opacity-50"
           />
-          <span className="text-sm text-zinc-500">minutes between updates</span>
+          <span className="text-sm text-zinc-500">minutes between updates (minimum {MIN_UPDATE_INTERVAL_MINUTES})</span>
         </div>
+        {updatesEnabled && !minIntervalIsValid ? (
+          <p role="alert" className="text-xs text-red-400">Enter a positive number of minutes.</p>
+        ) : null}
       </div>
 
       {saveError ? <p role="alert" className="text-sm text-red-400">{saveError}</p> : null}

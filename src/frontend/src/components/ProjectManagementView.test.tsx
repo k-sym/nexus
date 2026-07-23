@@ -396,7 +396,11 @@ describe('ProjectManagementView', () => {
     render(<ProjectManagementView projectId="p1" />);
     await screen.findByText(/configure monday scope/i);
 
-    fireEvent.change(screen.getByLabelText(/^board$/i), { target: { value: 'b1' } });
+    // The panel's heading renders before its own `fetchMondayBoards()` call
+    // resolves — the <select> itself only appears once that settles. A plain
+    // getByLabelText here is a pre-existing race (it can fire while the board
+    // picker is still "Loading boards…"); findByLabelText waits for it.
+    fireEvent.change(await screen.findByLabelText(/^board$/i), { target: { value: 'b1' } });
     await waitFor(() => expect((screen.getByLabelText(/^board$/i) as HTMLSelectElement).value).toBe('b1'));
     fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
 

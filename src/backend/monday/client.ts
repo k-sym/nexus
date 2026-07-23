@@ -262,25 +262,42 @@ const BOARDS_QUERY = `
     boards(limit: $limit, order_by: used_at) {
       id
       name
+      type
       workspace { name }
     }
   }
 `;
 
+/** Board object types that can never be a useful project scope:
+ *  `sub_items_board` is Monday's auto-generated shadow board holding another
+ *  board's subitems (surfaces as a "Subitems of X" pick that never resolves
+ *  to real project items and burns a slot in the 200-board cap below);
+ *  `document` is a Monday Doc, not an item board, at all. Anything else —
+ *  including a type this list doesn't know about yet — is kept, so a future
+ *  addition to BoardObjectType can never silently hide a real board. */
+const EXCLUDED_BOARD_TYPES = new Set(['sub_items_board', 'document']);
+
 /**
- * Boards the token can see, for the project-config picker. Monday's public
- * schema exposes no field distinguishing a template or a subitems board from
- * a regular one (board_kind is public/private/share, unrelated to either) —
- * per the brief's explicit fallback, every board the token can see is
- * returned and the user chooses, rather than guessing at a name-prefix
- * heuristic that would misfire on a real board someone happened to name
- * "Subitems of...".
+ * Boards the token can see, for the project-config picker. Requests Monday's
+ * `type` field (`BoardObjectType`) and filters out `sub_items_board` and
+ * `document` boards — confirmed against Monday's current reference docs
+ * (developer.monday.com/api-reference/reference/boards) for the pinned
+ * api_version ('2026-07', the "Current" version as of this writing): the
+ * `Board` type documents a `type: BoardObjectType` field with enum values
+ * `board`, `custom_object`, `document`, `sub_items_board`, undated and with
+ * no version-gated notice, distinct from `board_kind` (public/private/share).
+ * A missing `type` (e.g. an older API version, or a mocked response) is
+ * treated as "keep it" rather than "exclude it" — the earlier claim that no
+ * such field existed was simply wrong, but failing open here still avoids
+ * hiding a real board if some future response ever omits the field.
  */
 export async function fetchBoards(opts: MondayClientOptions): Promise<MondayBoardSummary[]> {
-  const data = await mondayGraphql<{ boards?: Array<{ id: string; name: string; workspace?: { name?: string } | null }> }>(
-    opts, BOARDS_QUERY, { limit: 200 },
-  );
-  return (data.boards ?? []).map((b) => ({ id: b.id, name: b.name, workspace: b.workspace?.name ?? null }));
+  const data = await mondayGraphql<{
+    boards?: Array<{ id: string; name: string; type?: string | null; workspace?: { name?: string } | null }>;
+  }>(opts, BOARDS_QUERY, { limit: 200 });
+  return (data.boards ?? [])
+    .filter((b) => !b.type || !EXCLUDED_BOARD_TYPES.has(b.type))
+    .map((b) => ({ id: b.id, name: b.name, workspace: b.workspace?.name ?? null }));
 }
 
 export interface MondayBoardMeta {

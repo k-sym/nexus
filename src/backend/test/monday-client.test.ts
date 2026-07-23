@@ -309,6 +309,50 @@ test('fetchBoards tolerates a missing boards array instead of throwing', async (
   assert.deepEqual(boards, []);
 });
 
+test('fetchBoards requests the type field so subitem/document boards can be filtered', async () => {
+  let seenQuery: string | undefined;
+  const fakeFetch = async (_url: string, init?: RequestInit) => {
+    seenQuery = JSON.parse(init!.body as string).query;
+    return jsonResponse({ data: { boards: [] } });
+  };
+  await fetchBoards({ ...OPTS, fetchImpl: fakeFetch as any });
+  assert.match(seenQuery!, /\btype\b/);
+});
+
+test('fetchBoards excludes a sub_items_board entry and keeps a normal board', async () => {
+  const fakeFetch = async () => jsonResponse({
+    data: {
+      boards: [
+        { id: '1', name: 'Portfolio', type: 'board', workspace: { name: 'Product' } },
+        { id: '2', name: 'Subitems of Portfolio', type: 'sub_items_board', workspace: { name: 'Product' } },
+      ],
+    },
+  });
+  const boards = await fetchBoards({ ...OPTS, fetchImpl: fakeFetch as any });
+  assert.deepEqual(boards, [{ id: '1', name: 'Portfolio', workspace: 'Product' }]);
+});
+
+test('fetchBoards also excludes a document board', async () => {
+  const fakeFetch = async () => jsonResponse({
+    data: {
+      boards: [
+        { id: '1', name: 'Portfolio', type: 'board', workspace: null },
+        { id: '3', name: 'Some Doc', type: 'document', workspace: null },
+      ],
+    },
+  });
+  const boards = await fetchBoards({ ...OPTS, fetchImpl: fakeFetch as any });
+  assert.deepEqual(boards, [{ id: '1', name: 'Portfolio', workspace: null }]);
+});
+
+test('fetchBoards keeps a board when the type field is absent (fail open, not closed)', async () => {
+  const fakeFetch = async () => jsonResponse({
+    data: { boards: [{ id: '1', name: 'Legacy', workspace: null }] },
+  });
+  const boards = await fetchBoards({ ...OPTS, fetchImpl: fakeFetch as any });
+  assert.deepEqual(boards, [{ id: '1', name: 'Legacy', workspace: null }]);
+});
+
 test('fetchBoards propagates a Monday failure (never silently empty)', async () => {
   const fakeFetch = async () => jsonResponse({
     errors: [{ message: 'Not Authenticated', extensions: { code: 'UserUnauthorizedException' } }],
