@@ -47,6 +47,38 @@ describe('ProjectManagementView', () => {
     expect(await screen.findByText(/unavailable/i)).toBeTruthy();
   });
 
+  it('flags an archived item as degraded, not as a healthy initiative', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([{ ...ITEM, state: 'archived' }] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText(/archived/i)).toBeTruthy();
+  });
+
+  it('flags a deleted item as degraded, not as a healthy initiative', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([{ ...ITEM, state: 'deleted' }] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText(/deleted/i)).toBeTruthy();
+  });
+
+  it('does not flag an active item as degraded', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    expect(await screen.findByText('Ship the thing')).toBeTruthy();
+    expect(screen.queryByText(/unavailable/i)).toBeNull();
+    expect(screen.queryByText(/archived/i)).toBeNull();
+    expect(screen.queryByText(/deleted/i)).toBeNull();
+  });
+
+  it('syncs from Monday when the view opens, the same way the manual Refresh control does', async () => {
+    // The spec: scope sync is lazy, "on Project Management view open and on
+    // manual refresh". Before this fix, mount called load(false) — a
+    // mirror-only read — so the first open of a correctly-configured project
+    // showed the empty-board message until the user noticed Refresh.
+    const spy = vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    await screen.findByText('Ship the thing');
+    expect(spy).toHaveBeenCalledWith('p1', true);
+  });
+
   it('surfaces a load failure instead of rendering an empty board', async () => {
     vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(new Error('Not Authenticated'));
     render(<ProjectManagementView projectId="p1" />);

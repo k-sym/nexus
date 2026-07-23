@@ -311,6 +311,49 @@ test('mapItem flattens status, owners, and keeps raw column values', () => {
   assert.equal(cols.text_mkxyz.type, 'text');
 });
 
+test('mapItem does not split a display name containing a comma into two owners', () => {
+  // "Symmonds, Keith" is ONE person's display name (surname-first). Naively
+  // splitting the people column's comma-joined `text` on "," reads this as
+  // two separate owners. With no structured `value` to fall back on, the
+  // whole text must survive as a single unsplit owner string.
+  const raw = {
+    ...RAW,
+    column_values: [
+      { id: 'person', type: 'people', text: 'Symmonds, Keith', value: null },
+    ],
+  };
+  const row = mapItem(raw as any, '2026-07-22T10:00:00.000Z');
+  assert.deepEqual(JSON.parse(row.owners_json), ['Symmonds, Keith']);
+});
+
+test('mapItem prefers structured names from the people column\'s JSON value when present', () => {
+  const raw = {
+    ...RAW,
+    column_values: [
+      {
+        id: 'person', type: 'people', text: 'Symmonds, Keith, Jane Doe',
+        value: JSON.stringify({ personsAndTeams: [{ id: 1, kind: 'person', name: 'Symmonds, Keith' }, { id: 2, kind: 'person', name: 'Jane Doe' }] }),
+      },
+    ],
+  };
+  const row = mapItem(raw as any, '2026-07-22T10:00:00.000Z');
+  // Two real, individually-scoped names — including one that itself
+  // contains a comma — recovered correctly because they came from the
+  // structured value, never from splitting the joined text.
+  assert.deepEqual(JSON.parse(row.owners_json), ['Symmonds, Keith', 'Jane Doe']);
+});
+
+test('mapItem falls back to the unsplit text when the people column value is malformed JSON', () => {
+  const raw = {
+    ...RAW,
+    column_values: [
+      { id: 'person', type: 'people', text: 'Symmonds, Keith', value: '{not json' },
+    ],
+  };
+  const row = mapItem(raw as any, '2026-07-22T10:00:00.000Z');
+  assert.deepEqual(JSON.parse(row.owners_json), ['Symmonds, Keith']);
+});
+
 test('mapItem tolerates an item with no group, status, or owners', () => {
   const row = mapItem({ id: '5', name: 'Bare', state: 'active', column_values: [] } as any, 'now');
   assert.equal(row.group_id, null);

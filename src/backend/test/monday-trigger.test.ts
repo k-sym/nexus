@@ -169,6 +169,55 @@ test('disableRollupForProject is idempotent — calling it twice notifies exactl
   db.close();
 });
 
+test('scheduleRollup degrades to a no-op, not a throw, on a project config with no rollup sub-key at all', async () => {
+  // There is currently no UI that writes projects.config_json — a
+  // hand-written partial `monday` block (board_id present, `rollup` entirely
+  // absent) is real, reachable input. Before the optional-chain fix,
+  // `!projectCfg.rollup.enabled` threw a TypeError here, swallowed by the
+  // outer catch and mislogged as "failed unexpectedly" instead of degrading
+  // to "roll-up not enabled".
+  const db = getDb(':memory:');
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','','', ?, 0, '', 'now','now')`)
+    .run(JSON.stringify({ monday: { board_id: 'b1', group_id: null } }));
+  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
+              VALUES ('t1','p1','A','','deploy','medium','now','now')`).run();
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
+    name: 'Initiative', state: 'active', status_label: null, status_color: null,
+    owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
+  }]);
+  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  process.env.MONDAY_TOKEN = 'tok';
+
+  // A bare `!projectCfg.rollup.enabled` throw and a guarded early `return`
+  // are otherwise indistinguishable from the events array alone: the throw
+  // happens before the `start` event is ever emitted, so both paths leave
+  // `events` empty. The one place they differ is the outer catch's
+  // console.error — only the throw-then-catch path logs "failed
+  // unexpectedly". Capture it to actually discriminate the two.
+  const loggedErrors: unknown[][] = [];
+  const originalConsoleError = console.error;
+  console.error = (...args: unknown[]) => { loggedErrors.push(args); };
+
+  const events: ActivityEvent[] = [];
+  try {
+    await withMondayEnabled(() =>
+      scheduleRollup(db, 't1', null, (e) => events.push(e), { setColumn: async () => { throw new Error('must not be called'); }, postUpdate: async () => {} } as never),
+    );
+  } finally {
+    console.error = originalConsoleError;
+  }
+  // Degrades quietly: no monday_write operation is emitted (matches the
+  // existing "roll-up disabled" no-op shape), AND — the real proof this
+  // isn't the outer catch's error path — nothing was logged as an
+  // unexpected failure.
+  assert.equal(events.length, 0);
+  assert.equal(loggedErrors.length, 0, 'a guarded no-op must not be logged as "failed unexpectedly"');
+  delete process.env.MONDAY_TOKEN;
+  db.close();
+});
+
 test('disableRollupForProject preserves the rest of the project config', () => {
   const db = getDb(':memory:');
   seed(db);

@@ -7,12 +7,47 @@ function statusColumn(cols: RawMondayColumnValue[]): RawMondayColumnValue | unde
   return cols.find((c) => c.type === 'status');
 }
 
-/** People columns render as a comma-joined display-name list in `text`. */
+/** Monday's people-column `value` JSON, when the account/API version includes
+ *  a display name per person (not guaranteed — see the comment in `owners`
+ *  below). Shape: `{ personsAndTeams: [{ id, kind, name? }] }`. */
+interface RawPeopleColumnValue {
+  personsAndTeams?: { name?: string }[];
+}
+
+/**
+ * People columns render as a comma-joined display-name list in `text` —
+ * naively splitting that on "," corrupts any display name that itself
+ * contains a comma (e.g. "Symmonds, Keith" reads as two owners: "Symmonds"
+ * and "Keith"). There is no separator that can distinguish "a comma inside
+ * one name" from "a comma between two names" once the names have already
+ * been joined into one string, so splitting the text is never safe.
+ *
+ * Prefer the column's structured JSON `value` instead: when it carries a
+ * `name` per person, those are real, individually-scoped names — no
+ * splitting needed or possible to get wrong. When `value` is absent, isn't
+ * parseable, or doesn't carry names (Monday's API does not always include
+ * them there), fall back to the whole `text` as ONE unsplit string rather
+ * than inventing owners by guessing where one name ends and the next
+ * begins.
+ */
 function owners(cols: RawMondayColumnValue[]): string[] {
   const people = cols.find((c) => c.type === 'people');
-  const text = people?.text?.trim();
-  if (!text) return [];
-  return text.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!people) return [];
+
+  if (people.value) {
+    try {
+      const parsed = JSON.parse(people.value) as RawPeopleColumnValue | null;
+      const named = parsed?.personsAndTeams
+        ?.map((p) => p.name?.trim())
+        .filter((n): n is string => Boolean(n));
+      if (named && named.length > 0) return named;
+    } catch {
+      // Malformed JSON — fall through to the text-based fallback below.
+    }
+  }
+
+  const text = people.text?.trim();
+  return text ? [text] : [];
 }
 
 /** Status colour lives in the column's JSON value, when present. */

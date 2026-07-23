@@ -214,6 +214,20 @@ test('writeRollup restores the roll-up after the mirror refreshes and shows a hu
   db.close();
 });
 
+test('writeRollup is skipped, not thrown, when the config has no rollup sub-key at all', async () => {
+  // There is currently no UI that writes projects.config_json — a
+  // hand-written partial `monday` block with no `rollup` key at all is real,
+  // reachable input. Before the optional-chain fix, `cfg.rollup.enabled`
+  // threw a TypeError instead of degrading to 'skipped'.
+  const db = getDb(':memory:');
+  seedItem(db);
+  seedTasks(db, ['deploy']);
+  const deps = { setColumn: async () => { throw new Error('must not write'); }, postUpdate: async () => {} } as any;
+  const partial = { board_id: 'b1', group_id: null, updates: { enabled: true, min_interval_minutes: 30 } } as any;
+  assert.equal(await writeRollup(db, OPTS, partial, '1', deps), 'skipped');
+  db.close();
+});
+
 test('writeRollup is skipped when roll-up is disabled or has no column', async () => {
   const db = getDb(':memory:');
   seedItem(db);

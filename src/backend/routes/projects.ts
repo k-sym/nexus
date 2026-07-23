@@ -616,8 +616,13 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       // count that still includes the deleted task until some sibling task
       // happens to move. Fire-and-forget (void, no await): the delete above
       // already committed and a slow or failing Monday call must never delay
-      // or fail it.
-      void scheduleRollupForItem(db, existing.item_id, existing.project_id, null);
+      // or fail it. Same `fastify.activity?.bus.emit` seam the Kanban
+      // status-change path above uses, so this write shows up in the
+      // Activity Console too.
+      void scheduleRollupForItem(
+        db, existing.item_id, existing.project_id, null,
+        fastify.activity?.bus.emit.bind(fastify.activity.bus),
+      );
     }
     return { success: true };
   });

@@ -14,6 +14,19 @@ interface Props {
   projectId: string;
 }
 
+/** Any non-'active' state means the initiative should not read as healthy in
+ *  the row — an archived or deleted item is just as stale/misleading to
+ *  present as a missing one, so all three degrade the same way here, worded
+ *  for the state (mirrors MondayBadge.tsx's Kanban-card equivalent). */
+function degradedLabel(state: MondayItemWithLinks['state']): string | null {
+  switch (state) {
+    case 'missing': return 'item unavailable in Monday';
+    case 'archived': return 'item archived in Monday';
+    case 'deleted': return 'item deleted in Monday';
+    default: return null;
+  }
+}
+
 interface LoadError {
   message: string;
   code?: string;
@@ -62,7 +75,13 @@ export function ProjectManagementView({ projectId }: Props) {
     }
   }, [projectId]);
 
-  useEffect(() => { void load(false); }, [load]);
+  // Opening the view syncs from Monday, same as the manual Refresh button —
+  // the mirror-only read (`load(false)`) is reserved for internal reloads
+  // that don't need a fresh scope sync (e.g. after an unlink). Without this,
+  // the very first open of a correctly-configured project reads a mirror
+  // that scope sync has never populated, and "No Monday items in this
+  // project's scope" is indistinguishable from a genuinely empty board.
+  useEffect(() => { void load(true); }, [load]);
 
   // Unlink a task from an item row, then refresh so the roll-up (and this
   // row's task_ids) reflects the change — no stale state left on screen.
@@ -184,8 +203,8 @@ export function ProjectManagementView({ projectId }: Props) {
                     <div className="mt-1 flex items-center gap-3 text-xs text-zinc-500">
                       {item.status_label ? <span>{item.status_label}</span> : null}
                       <span>{item.task_ids.length} linked task{item.task_ids.length === 1 ? '' : 's'}</span>
-                      {item.state === 'missing' ? (
-                        <span className="text-amber-300">item unavailable in Monday</span>
+                      {degradedLabel(item.state) ? (
+                        <span className="text-amber-300">{degradedLabel(item.state)}</span>
                       ) : null}
                     </div>
                     {item.task_ids.length > 0 ? (

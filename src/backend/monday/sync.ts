@@ -17,7 +17,7 @@ import {
   type MondayClientOptions, type RawMondayItem,
 } from './client.js';
 import { mapItem } from './map.js';
-import { upsertItems, pruneScope, listLinkedItemIds, getItem } from './store.js';
+import { upsertItems, pruneScope, listLinkedItemIds, markItemsMissing } from './store.js';
 
 export interface MondaySyncResult {
   fetched: number;
@@ -67,9 +67,10 @@ export async function refreshLinkedItems(
 
   const returned = new Set(rows.map((r) => r.item_id));
   const missing = ids.filter((id) => !returned.has(id));
-  const markMissing = db.prepare("UPDATE monday_items SET state = 'missing', synced_at = ? WHERE item_id = ?");
-  for (const id of missing) {
-    if (getItem(db, id)) markMissing.run(now, id);
-  }
+  // Shared with pruneScope's identical UPDATE (store.ts's markItemsMissing),
+  // wrapped in a transaction there so the two call sites cannot drift apart
+  // — this one previously ran the same UPDATE one row at a time, outside any
+  // transaction.
+  markItemsMissing(db, missing, now);
   return rows.length;
 }

@@ -31,4 +31,20 @@ describe('MondayBadge', () => {
     const { container } = render(<MondayBadge item={undefined} />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('distinguishes an archived item with amber styling and an explanatory title', () => {
+    render(<MondayBadge item={{ ...ITEM, state: 'archived' }} />);
+    const badge = screen.getByText('Ship the thing');
+    expect(badge.className).toContain('bg-amber-500/15');
+    expect(badge.className).not.toContain('bg-sky-500/15');
+    expect(badge.title).toBe('Ship the thing — archived in Monday');
+  });
+
+  it('distinguishes a deleted item with amber styling and an explanatory title', () => {
+    render(<MondayBadge item={{ ...ITEM, state: 'deleted' }} />);
+    const badge = screen.getByText('Ship the thing');
+    expect(badge.className).toContain('bg-amber-500/15');
+    expect(badge.className).not.toContain('bg-sky-500/15');
+    expect(badge.title).toBe('Ship the thing — deleted in Monday');
+  });
 });

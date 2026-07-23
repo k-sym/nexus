@@ -7,8 +7,9 @@ import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { getDb } from '../db';
 import { registerMondayRoutes } from '../routes/monday';
-import { upsertItems, getLinkForTask } from '../monday/store';
+import { upsertItems, getLinkForTask, getItem } from '../monday/store';
 import { loadConfig, saveConfig } from '../config';
+import type { ActivityEvent } from '../activity/events';
 
 function seed(db: ReturnType<typeof getDb>) {
   db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
@@ -39,6 +40,35 @@ async function buildApp(db: ReturnType<typeof getDb>) {
   app.decorate('db', db);
   await app.register(registerMondayRoutes);
   return app;
+}
+
+/**
+ * A minimal stand-in for the real ActivityManager, matching the same shape
+ * test/routes-missions.test.ts already decorates with — `{ bus: { emit } }`
+ * is all routes/monday.ts reads (`fastify.activity?.bus.emit`).
+ */
+async function buildAppWithActivity(db: ReturnType<typeof getDb>): Promise<{ app: Awaited<ReturnType<typeof buildApp>>; events: ActivityEvent[] }> {
+  const events: ActivityEvent[] = [];
+  const app = Fastify();
+  app.decorate('db', db);
+  (app as any).decorate('activity', { bus: { emit: (e: ActivityEvent) => events.push(e) } });
+  await app.register(registerMondayRoutes);
+  return { app: app as any, events };
+}
+
+/**
+ * scheduleRollup/scheduleRollupForItem are fired without awaiting (void) —
+ * the route responds before the background write settles. Poll briefly for
+ * the expected event count rather than a fixed sleep.
+ */
+async function waitForEvents(events: ActivityEvent[], minCount: number, timeoutMs = 2000): Promise<void> {
+  const start = Date.now();
+  while (events.length < minCount) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`timed out waiting for ${minCount} activity events; got ${events.length}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 /**
@@ -81,6 +111,33 @@ function stubMondayAuthFailure(): () => void {
   return () => { globalThis.fetch = original; };
 }
 
+/**
+ * Answers the `items(ids: [...])` query (fetchItemsByIds, used by POST
+ * /links to mirror an item the picker found live but that has never been
+ * through a scope sync) with one item, and answers anything else — notably
+ * the roll-up write mutation POST /links also fires fire-and-forget
+ * afterwards — with an empty success so it doesn't throw and pollute the
+ * test with an unrelated unhandled rejection.
+ */
+function stubMondayItemFetch(itemId: string, name: string): () => void {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+    const parsed = JSON.parse((init?.body as string) ?? '{}');
+    if (typeof parsed.query === 'string' && parsed.query.includes('ItemsByIds')) {
+      return new Response(JSON.stringify({
+        data: {
+          items: [{
+            id: itemId, name, state: 'active', updated_at: null, url: null,
+            board: { id: 'b1', name: 'Portfolio' }, group: null, column_values: [],
+          }],
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response(JSON.stringify({ data: {} }), { status: 200, headers: { 'content-type': 'application/json' } });
+  }) as typeof fetch;
+  return () => { globalThis.fetch = original; };
+}
+
 test('GET items returns mirrored items with roll-up and linked task ids', async () => {
   const db = getDb(':memory:');
   seed(db);
@@ -119,6 +176,81 @@ test('POST links creates a link and replaces an existing one', async () => {
 
   await app.close();
   db.close();
+});
+
+test('POST links mirrors an item the picker found live but that has no mirror row yet', async () => {
+  // The picker searches Monday LIVE, so it can hand back an item id that has
+  // never been through a scope sync — no row in monday_items. Before this
+  // fix, writeRollup's getItem(db, itemId) found nothing and silently
+  // returned 'skipped': no roll-up write, no badge, no agent context, until
+  // some unrelated task on the same item happened to move.
+  const db = getDb(':memory:');
+  seed(db);
+  const app = await buildApp(db);
+  assert.equal(getItem(db, '5'), undefined, 'item 5 must start unmirrored — the exact gap this test covers');
+  const unstub = stubMondayItemFetch('5', 'Fresh from Monday');
+  try {
+    await withMondayEnabled(async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '5', project_id: 'p1' } });
+      assert.equal(res.statusCode, 200);
+    });
+    assert.equal(getLinkForTask(db, 't1')!.item_id, '5');
+    assert.equal(
+      getItem(db, '5')?.name, 'Fresh from Monday',
+      'the item must be mirrored by the time the link exists, so the roll-up write and badge do not silently no-op',
+    );
+  } finally {
+    unstub();
+    await app.close();
+    db.close();
+  }
+});
+
+test('POST links surfaces a Monday mirror-fetch failure and creates no link (no half-created state)', async () => {
+  const db = getDb(':memory:');
+  seed(db);
+  const app = await buildApp(db);
+  const unstub = stubMondayAuthFailure();
+  try {
+    await withMondayEnabled(async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '5', project_id: 'p1' } });
+      assert.equal(res.statusCode, 502);
+      const body = res.json() as { error?: string; code?: string; retryable?: boolean };
+      assert.match(body.error ?? '', /Not Authenticated/);
+      assert.equal(body.code, 'UserUnauthorizedException');
+    });
+    // Keep the handler's existing failure behaviour: a Monday error must
+    // surface (asserted above) and must not leave a half-created state —
+    // no link row for a fetch that never completed.
+    assert.equal(getLinkForTask(db, 't1'), undefined, 'a failed mirror fetch must not leave a half-created link');
+    assert.equal(getItem(db, '5'), undefined);
+  } finally {
+    unstub();
+    await app.close();
+    db.close();
+  }
+});
+
+test('POST links skips the mirror fetch (and still links) when an item is already mirrored', async () => {
+  // seed() already upserts item '1'. This proves the fetch-before-link step
+  // is conditional on absence, not an unconditional extra live call on every
+  // link — the auth-failure stub below would 502 the request if the route
+  // fetched regardless of mirror state.
+  const db = getDb(':memory:');
+  seed(db);
+  const app = await buildApp(db);
+  const unstub = stubMondayAuthFailure();
+  try {
+    await withMondayEnabled(async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+      assert.equal(res.statusCode, 200);
+    });
+    assert.equal(getLinkForTask(db, 't1')!.item_id, '1');
+  } finally {
+    unstub();
+    await app.close();
+    db.close();
+  }
 });
 
 test('POST links rejects a missing field', async () => {
@@ -166,6 +298,53 @@ test('POST links 400s when the task belongs to a different project than supplied
   assert.equal(getLinkForTask(db, 't1'), undefined);
   await app.close();
   db.close();
+});
+
+test('POST links emits a monday_write activity operation, not just Kanban moves', async () => {
+  // Before this fix, link/unlink/task-delete called scheduleRollup /
+  // scheduleRollupForItem WITHOUT an emit argument — only the Kanban
+  // status-change path in routes/projects.ts produced a monday_write
+  // operation, so these writes were invisible in the Activity Console.
+  const db = getDb(':memory:');
+  seed(db);
+  const { app, events } = await buildAppWithActivity(db);
+  const unstub = stubMondayItemFetch('1', 'Initiative');
+  try {
+    await withMondayEnabled(async () => {
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+      assert.equal(res.statusCode, 200);
+      await waitForEvents(events, 2);
+    });
+    assert.ok(events.some((e) => e.kind === 'monday_write'), 'a link must produce a monday_write operation');
+  } finally {
+    unstub();
+    await app.close();
+    db.close();
+  }
+});
+
+test('DELETE links emits a monday_write activity operation', async () => {
+  const db = getDb(':memory:');
+  seed(db);
+  const { app, events } = await buildAppWithActivity(db);
+  const unstub = stubMondayItemFetch('1', 'Initiative');
+  try {
+    await withMondayEnabled(async () => {
+      const link = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+      assert.equal(link.statusCode, 200);
+      await waitForEvents(events, 2);
+      events.length = 0; // isolate the unlink's own events from the link's
+
+      const res = await app.inject({ method: 'DELETE', url: '/api/monday/links/t1' });
+      assert.equal(res.statusCode, 200);
+      await waitForEvents(events, 2);
+    });
+    assert.ok(events.some((e) => e.kind === 'monday_write'), 'an unlink must produce a monday_write operation');
+  } finally {
+    unstub();
+    await app.close();
+    db.close();
+  }
 });
 
 test('DELETE links removes the link', async () => {

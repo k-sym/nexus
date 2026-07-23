@@ -77,7 +77,13 @@ export async function scheduleRollupForItem(
 
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
     const projectCfg = projectMondayConfig(project);
-    if (!projectCfg || !projectCfg.rollup.enabled || !projectCfg.rollup.column_id) return;
+    // Optional chain deliberately, same as session-deps.ts's `cfg.updates?.enabled`:
+    // there is currently no UI that writes this config, so a hand-written
+    // partial `monday` block with a `board_id` but no `rollup` sub-key at all
+    // is real, reachable input, not a programmer error. `.rollup.enabled`
+    // would throw on it — caught by the outer try/catch below, but mislogged
+    // as "failed unexpectedly" instead of degrading to "roll-up not enabled".
+    if (!projectCfg || !projectCfg.rollup?.enabled || !projectCfg.rollup?.column_id) return;
 
     const opts: MondayClientOptions = { token, apiVersion: cfg.api_version };
     const operationId = crypto.randomUUID();

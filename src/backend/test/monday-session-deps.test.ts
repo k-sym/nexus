@@ -75,11 +75,13 @@ test('resolveThreadItem returns null for a thread with no linked task', () => {
 test('buildMondayContext counts siblings and formats the roll-up', async () => {
   const db = getDb(':memory:');
   seed(db, false);
+  process.env.MONDAY_TOKEN = 'tok';
   await withMondayEnabled(() => {
     const ctx = buildMondayContext(db, 'thread-1')!;
     assert.equal(ctx.siblingCount, 2);
     assert.equal(ctx.rollupText, '1/2 done · 1 in review');
   });
+  delete process.env.MONDAY_TOKEN;
   db.close();
 });
 
@@ -104,6 +106,29 @@ test('buildMondayContext returns null when Monday is globally disabled', () => {
   const db = getDb(':memory:');
   seed(db, false);
   assert.equal(buildMondayContext(db, 'thread-1'), null);
+  db.close();
+});
+
+test('buildMondayContext returns null when Monday is enabled but MONDAY_TOKEN is unset', async () => {
+  // The same class of defect already fixed for the `enabled` flag (the test
+  // above): buildMondayContext gated only on monday.enabled, while
+  // buildMondayToolDeps (via clientOptions()) also gated on
+  // resolveMondayToken(). With enabled:true and no token — e.g. the app
+  // relaunched outside the shell that exported MONDAY_TOKEN — a linked
+  // thread got a context block ending "Call monday_get_item for current
+  // state" while that tool was never registered. Both halves must now agree.
+  const db = getDb(':memory:');
+  seed(db, false);
+  delete process.env.MONDAY_TOKEN;
+  await withMondayEnabled(() => {
+    assert.equal(buildMondayContext(db, 'thread-1'), null);
+    // Prove this is genuinely the token gate, not the enabled gate: tool
+    // deps are ALSO null under the identical conditions (the gate this test
+    // exists to keep in parity with), and the config itself is otherwise
+    // enough to resolve a thread (resolveThreadItem alone succeeds).
+    assert.equal(buildMondayToolDeps(db, 'thread-1'), null);
+    assert.ok(resolveThreadItem(db, 'thread-1'), 'the thread itself resolves fine — only the token gate should block context/tools');
+  });
   db.close();
 });
 
@@ -183,10 +208,12 @@ test('buildMondayContext never surfaces a column literally named "updates" as an
     column_values_json: JSON.stringify({ updates: { id: 'updates', type: 'text', text: 'Not a real update — a column value' } }),
     monday_updated_at: null, synced_at: 'later',
   }]);
+  process.env.MONDAY_TOKEN = 'tok';
   await withMondayEnabled(() => {
     const ctx = buildMondayContext(db, 'thread-1')!;
     assert.deepEqual(ctx.updates, []);
   });
+  delete process.env.MONDAY_TOKEN;
   db.close();
 });
 

@@ -40,6 +40,24 @@ export function upsertItems(db: Database.Database, items: MondayItem[]): void {
 }
 
 /**
+ * Mark the given item ids 'missing' in one transaction. Shared by pruneScope
+ * (a linked row that vanished from a synced scope) and refreshLinkedItems in
+ * sync.ts (a linked item Monday no longer returns for a direct id lookup) so
+ * the two call sites cannot drift apart on the SQL or the atomicity: an id
+ * with no matching row is simply a no-op UPDATE, so callers don't need to
+ * pre-check existence. No-op for an empty list (`db.transaction` still opens
+ * and closes an empty transaction otherwise).
+ */
+export function markItemsMissing(db: Database.Database, itemIds: string[], syncedAt: string): void {
+  if (itemIds.length === 0) return;
+  const markMissing = db.prepare("UPDATE monday_items SET state = 'missing', synced_at = ? WHERE item_id = ?");
+  const run = db.transaction((ids: string[]) => {
+    for (const id of ids) markMissing.run(syncedAt, id);
+  });
+  run(itemIds);
+}
+
+/**
  * Reconcile the mirror against what the board just returned. Confined to the
  * synced board (and group, when scoped) so other scopes are untouched.
  *
@@ -69,16 +87,16 @@ export function pruneScope(
     ).all(...stale) as { item_id: string }[]).map((r) => r.item_id),
   );
 
-  const markMissing = db.prepare(
-    "UPDATE monday_items SET state = 'missing', synced_at = ? WHERE item_id = ?",
-  );
+  const toMarkMissing = stale.filter((id) => linked.has(id));
+  const toDelete = stale.filter((id) => !linked.has(id));
   const remove = db.prepare('DELETE FROM monday_items WHERE item_id = ?');
 
+  // markItemsMissing opens its own db.transaction(); better-sqlite3 nests
+  // that as a SAVEPOINT inside this outer one, so the delete and the
+  // mark-missing stay one atomic unit exactly as before the extraction.
   const run = db.transaction(() => {
-    for (const id of stale) {
-      if (linked.has(id)) markMissing.run(syncedAt, id);
-      else remove.run(id);
-    }
+    for (const id of toDelete) remove.run(id);
+    markItemsMissing(db, toMarkMissing, syncedAt);
   });
   run();
   return stale.length;

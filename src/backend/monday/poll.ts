@@ -65,11 +65,19 @@ export async function runMondayRefreshOnce(
     });
     if (lastErrorMessage !== message) {
       lastErrorMessage = message;
-      insertNotification(db, {
-        level: 'error',
-        title: 'Monday refresh failed',
-        message: `${message}. Check MONDAY_TOKEN and the configured board.`,
-      });
+      // Guarded: this function's documented contract is "never throws" (it
+      // runs on an unawaited setInterval tick in startMondayPoll). A DB error
+      // here (e.g. a locked file) must degrade to a skipped notification, not
+      // escape this catch block and violate that contract.
+      try {
+        insertNotification(db, {
+          level: 'error',
+          title: 'Monday refresh failed',
+          message: `${message}. Check MONDAY_TOKEN and the configured board.`,
+        });
+      } catch (notifyErr) {
+        console.error('[monday] failed to record refresh-failure notification:', (notifyErr as Error)?.message ?? notifyErr);
+      }
     }
     return null;
   }

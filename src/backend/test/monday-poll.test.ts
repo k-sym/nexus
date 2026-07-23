@@ -4,6 +4,7 @@ delete process.env.MONDAY_TOKEN;
 
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
+import Database from 'better-sqlite3';
 import { getDb } from '../db';
 import { runMondayRefreshOnce, resolveMondayToken, __resetPollErrorState } from '../monday/poll';
 import { MondayError } from '../monday/client';
@@ -98,6 +99,27 @@ test('success resets dedup state so recurrence of prior error notifies again', a
   const count = (db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c;
   assert.equal(count, 2);
   db.close();
+});
+
+test('a failed refresh never throws even when recording the failure notification itself fails', async () => {
+  // runMondayRefreshOnce's documented contract is "never throws" — it runs on
+  // an unawaited setInterval tick in startMondayPoll. insertNotification was
+  // called inside the catch block unguarded, so a DB error there (a locked
+  // file, a schema that predates the notifications table, etc.) would escape
+  // past the very catch block meant to contain the ORIGINAL failure. A bare
+  // Database with no schema at all reproduces that: the notifications table
+  // doesn't exist, so insertNotification's INSERT throws.
+  const bareDb = new Database(':memory:');
+  const events: ActivityEvent[] = [];
+  const result = await runMondayRefreshOnce(bareDb, CFG, 'tok', async () => {
+    throw new MondayError('Not Authenticated', 'UserUnauthorizedException', 200);
+  }, (e) => events.push(e));
+  // Still resolves (doesn't reject), still reports the original failure via
+  // the activity event and a null return — the notification-recording
+  // failure is swallowed, not the refresh failure itself.
+  assert.equal(result, null);
+  assert.equal(events.at(-1)!.status, 'failed');
+  bareDb.close();
 });
 
 test('resolveMondayToken treats whitespace-only value as absent', () => {

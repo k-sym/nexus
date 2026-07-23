@@ -5,6 +5,7 @@ import { getDb } from '../db';
 import {
   upsertItems, pruneScope, getItem, listItemsForBoard,
   linkTask, unlinkTask, getLinkForTask, listLinkedItemIds, listLinkedTaskStatuses,
+  markItemsMissing,
 } from '../monday/store';
 
 function item(id: string, over: Partial<MondayItem> = {}): MondayItem {
@@ -155,6 +156,39 @@ test('upsertItems updates all 13 updatable columns on conflict', () => {
   assert.equal(row.column_values_json, '{"col2":"val2"}', 'column_values_json should update');
   assert.equal(row.monday_updated_at, '2026-07-22T12:00:00.000Z', 'monday_updated_at should update');
   assert.equal(row.synced_at, '2026-07-22T12:00:00.000Z', 'synced_at should update');
+  db.close();
+});
+
+// --- markItemsMissing: extracted so pruneScope and sync.ts's
+// refreshLinkedItems share the exact same UPDATE and cannot drift apart.
+
+test('markItemsMissing marks every given id missing and stamps the passed synced_at', () => {
+  const db = getDb(':memory:');
+  upsertItems(db, [item('1'), item('2'), item('3')]);
+  markItemsMissing(db, ['1', '3'], '2026-07-22T02:00:00.000Z');
+  assert.equal(getItem(db, '1')!.state, 'missing');
+  assert.equal(getItem(db, '1')!.synced_at, '2026-07-22T02:00:00.000Z');
+  assert.equal(getItem(db, '2')!.state, 'active', 'an id not in the list must be untouched');
+  assert.equal(getItem(db, '3')!.state, 'missing');
+  db.close();
+});
+
+test('markItemsMissing is a no-op for an id with no mirror row (mirrors the UPDATE\'s own WHERE, no pre-check needed)', () => {
+  const db = getDb(':memory:');
+  upsertItems(db, [item('1')]);
+  // 'ghost' was never mirrored at all — sync.ts's refreshLinkedItems can
+  // reach this with ids that never had a monday_items row.
+  markItemsMissing(db, ['1', 'ghost'], 'now');
+  assert.equal(getItem(db, '1')!.state, 'missing');
+  assert.equal(getItem(db, 'ghost'), undefined);
+  db.close();
+});
+
+test('markItemsMissing does nothing for an empty list', () => {
+  const db = getDb(':memory:');
+  upsertItems(db, [item('1')]);
+  markItemsMissing(db, [], 'now');
+  assert.equal(getItem(db, '1')!.state, 'active');
   db.close();
 });
 

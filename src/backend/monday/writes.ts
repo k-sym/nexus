@@ -127,7 +127,12 @@ export async function writeRollup(
   itemId: string,
   deps: RollupWriteDeps = DEFAULT_DEPS,
 ): Promise<'written' | 'unchanged' | 'skipped'> {
-  if (!cfg.rollup.enabled || !cfg.rollup.column_id) return 'skipped';
+  // Optional chain deliberately: `cfg` comes from JSON parsed out of
+  // projects.config_json, and there is currently no UI that writes it — a
+  // hand-written partial `monday` block with no `rollup` sub-key at all is
+  // real, reachable input. `.rollup.enabled` would throw on it instead of
+  // degrading to "roll-up not enabled" (mirrors trigger.ts's same guard).
+  if (!cfg.rollup?.enabled || !cfg.rollup?.column_id) return 'skipped';
 
   const item = getItem(db, itemId);
   if (!item) return 'skipped';

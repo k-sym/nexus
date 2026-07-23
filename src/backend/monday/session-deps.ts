@@ -77,15 +77,18 @@ function recentUpdates(_item: MondayItem): string[] {
   return [];
 }
 
-/** The global Monday kill switch (`monday.enabled` in config_json) — the
- *  same gate `clientOptions()` uses below for buildMondayToolDeps, and the
- *  one routes/monday.ts already enforces. Both halves of a thread's Monday
- *  integration must agree: with the switch off, a linked thread gets
- *  neither the context block nor the tools (IMPORTANT 2) — a context block
- *  that tells the model to "Call monday_get_item" when that tool was never
- *  registered is worse than no block at all. */
-function mondayEnabled(): boolean {
-  return loadConfig().monday.enabled;
+/** The global Monday kill switch (`monday.enabled` in config_json) AND the
+ *  MONDAY_TOKEN check — the same two gates `clientOptions()` uses below for
+ *  buildMondayToolDeps, and the ones routes/monday.ts already enforces. Both
+ *  halves of a thread's Monday integration must agree: with the switch off,
+ *  OR with no MONDAY_TOKEN (e.g. the app relaunched outside the shell that
+ *  exported it), a linked thread gets neither the context block nor the
+ *  tools — a context block that tells the model to "Call monday_get_item"
+ *  when that tool was never registered is worse than no block at all. This
+ *  mirrors the fix already made for the `enabled` half alone; the token half
+ *  had the identical gap. */
+function mondayReady(): boolean {
+  return loadConfig().monday.enabled && Boolean(resolveMondayToken());
 }
 
 /**
@@ -98,7 +101,7 @@ function mondayEnabled(): boolean {
  */
 export function buildMondayContext(db: Database.Database, threadId: string): MondayContextInput | null {
   try {
-    if (!mondayEnabled()) return null;
+    if (!mondayReady()) return null;
     const resolved = resolveThreadItem(db, threadId);
     if (!resolved) return null;
     const counts = computeRollup(listLinkedTaskStatuses(db, resolved.item.item_id));
@@ -115,7 +118,7 @@ export function buildMondayContext(db: Database.Database, threadId: string): Mon
 }
 
 function clientOptions(): MondayClientOptions | null {
-  if (!mondayEnabled()) return null;
+  if (!mondayReady()) return null;
   const cfg = loadConfig().monday;
   const token = resolveMondayToken();
   if (!token) return null;

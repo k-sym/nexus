@@ -14,10 +14,11 @@ import type { MondayProjectConfig, MondayItemWithLinks, Project, Task } from '@n
 import { loadConfig } from '../config.js';
 import { resolveMondayToken } from '../monday/poll.js';
 import { syncScope } from '../monday/sync.js';
-import { fetchBoardItems, MondayError, type MondayClientOptions } from '../monday/client.js';
+import { fetchBoardItems, fetchItemsByIds, MondayError, type MondayClientOptions } from '../monday/client.js';
 import { mapItem } from '../monday/map.js';
 import {
   listItemsForBoard, listLinksForProject, linkTask, unlinkTask, getLinkForTask, listLinkedTaskStatuses,
+  getItem, upsertItems,
 } from '../monday/store.js';
 import { computeRollup, formatRollupText } from '../monday/rollup.js';
 import { scheduleRollup, scheduleRollupForItem } from '../monday/trigger.js';
@@ -136,9 +137,40 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
       return reply.code(400).send({ error: 'task does not belong to that project' });
     }
 
+    // The picker searches Monday LIVE (see the module docblock), so it can
+    // hand back an item that has never been through a scope sync and has no
+    // row in monday_items yet. writeRollup reads the item via
+    // getItem(db, itemId); with no row it silently returns 'skipped' — no
+    // roll-up write, no badge, no agent context — and self-heals only on the
+    // NEXT background poll, which does not itself re-trigger the roll-up
+    // (poll.ts only refreshes; it never calls scheduleRollup). Mirror the
+    // item now, before the link is created, so a fresh link reflects
+    // immediately rather than staying stale until some other task on the
+    // same item happens to move.
+    if (!getItem(db, itemId)) {
+      const opts = clientOptions();
+      if (opts) {
+        try {
+          const raw = await fetchItemsByIds(opts, [itemId]);
+          if (raw.length > 0) upsertItems(db, raw.map((r) => mapItem(r, new Date().toISOString())));
+        } catch (err) {
+          const monday = err as MondayError;
+          // Surface exactly like the sibling live-call routes (GET
+          // items?refresh=1, GET search) do, and leave no half-created
+          // state: the link row below is only ever inserted after this
+          // succeeds (or is skipped because no live client is available).
+          return reply.code(502).send({ error: monday.message, code: monday.code, retryable: monday.retryable ?? false });
+        }
+      }
+    }
+
     const link = { task_id: taskId, item_id: itemId, project_id: projectId, created_at: new Date().toISOString() };
     linkTask(db, link);
-    void scheduleRollup(db, taskId, 'task linked');
+    // Same `fastify.activity?.bus.emit` seam the Kanban status-change path in
+    // routes/projects.ts already reaches the ActivityManager through — without
+    // it this write was invisible in the Activity Console (only Kanban moves
+    // produced a monday_write operation).
+    void scheduleRollup(db, taskId, 'task linked', fastify.activity?.bus.emit.bind(fastify.activity.bus));
     return { link };
   });
 
@@ -148,8 +180,11 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     unlinkTask(db, taskId);
     if (existing) {
       // Recompute the item we just detached from, or it keeps a count that
-      // still includes this task.
-      void scheduleRollupForItem(db, existing.item_id, existing.project_id, null);
+      // still includes this task. Same emitter seam as the link handler above.
+      void scheduleRollupForItem(
+        db, existing.item_id, existing.project_id, null,
+        fastify.activity?.bus.emit.bind(fastify.activity.bus),
+      );
     }
     return { ok: true };
   });
