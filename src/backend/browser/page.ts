@@ -29,6 +29,23 @@ export const NAVIGATION_TIMEOUT_MS = 30_000;
 /** Cap on a full-page screenshot's height, so a very long page can't produce an
  *  enormous image. Screenshots skip the text projection, so this is the bound. */
 export const MAX_SCREENSHOT_HEIGHT = 4_000;
+/** JPEG quality for the human-facing preview (`captureView`). Lower than a
+ *  model screenshot's lossless PNG on purpose: the preview is polled on a timer
+ *  and shipped to the client (over Tailscale in thin-client mode), so it trades
+ *  a little fidelity for a much smaller frame. */
+export const PREVIEW_JPEG_QUALITY = 55;
+
+/** Bounds on an emulated viewport dimension (CSS px). Below 1 the browser
+ *  rejects it; the ceiling keeps a responsive check from asking for an absurd
+ *  canvas that would also make any subsequent full-page screenshot enormous. */
+export const MIN_VIEWPORT_DIMENSION = 1;
+export const MAX_VIEWPORT_DIMENSION = 4_096;
+
+/** The `prefers-color-scheme` values `setColorScheme` accepts. `no-preference`
+ *  emulates a user who has expressed neither, which some pages treat distinctly
+ *  from light. */
+export type ColorScheme = 'light' | 'dark' | 'no-preference';
+export const SUPPORTED_COLOR_SCHEMES: readonly ColorScheme[] = ['light', 'dark', 'no-preference'];
 
 /** Marks "querySelector found nothing" in an evaluated expression's result. */
 const MISSING_SENTINEL = '__nexus_no_such_element__';
@@ -50,6 +67,32 @@ export interface NavigationResult {
   url: string;
   title: string;
   status?: number;
+}
+
+/**
+ * A snapshot of the page for the human watching the thread — the shared view
+ * the model's headless browser otherwise never surfaces (#283).
+ *
+ * The image is a JPEG (see `PREVIEW_JPEG_QUALITY`), not the lossless PNG a model
+ * screenshot returns, because this is polled on a timer and shipped to the UI.
+ * `version` increments only when the captured bytes actually change, so a static
+ * page can be polled indefinitely without re-sending the same frame.
+ */
+export interface BrowserView {
+  /** Base64 JPEG of the current viewport, with its mime type. */
+  image: { data: string; mimeType: string };
+  url: string;
+  title: string;
+  /** The live CSS viewport (`innerWidth`/`innerHeight`), reflecting any
+   *  emulation override in effect. */
+  viewport: { width: number; height: number };
+  /** The effective `prefers-color-scheme`, read from the page — 'dark' or
+   *  'light', whether emulated or the browser's own default. */
+  colorScheme: 'dark' | 'light';
+  /** Bumped only when `image.data` differs from the previous capture. */
+  version: number;
+  /** Epoch ms of this capture. */
+  capturedAt: number;
 }
 
 /** Push onto a ring buffer, dropping the oldest when full. */
@@ -81,6 +124,12 @@ export class BrowserPage {
    *  `act`. Cleared on navigation: a ref points at a node in the page that was
    *  loaded when it was read, and after navigating that node is gone. */
   private refs = new Map<string, number>();
+  /** The most recent human-facing preview, kept so a transient capture failure
+   *  falls back to the last good frame rather than a blank panel. */
+  private lastView?: BrowserView;
+  /** Monotonic, bumped only when a capture's bytes differ — the dedup handle
+   *  the view route uses to avoid re-sending an unchanged frame. */
+  private viewVersion = 0;
 
   private constructor(
     private readonly connection: CdpConnection,
@@ -361,6 +410,41 @@ export class BrowserPage {
   }
 
   /**
+   * Emulate a viewport size (CSS px), for responsive checks (#283 Phase 3).
+   *
+   * `deviceScaleFactor: 0` leaves the scale factor at the device default rather
+   * than overriding it — we're changing how much the page can see, not its DPI.
+   * The override persists across navigations in this tab until cleared, so a
+   * later `navigate` renders at the same size and a screenshot captures it.
+   */
+  async setViewport(width: number, height: number): Promise<string> {
+    await this.connection.send('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 0, mobile: false,
+    }, this.sessionId);
+    return `Viewport set to ${width}×${height}.`;
+  }
+
+  /**
+   * Emulate `prefers-color-scheme`, for theme checks. Without this the headless
+   * browser follows the host OS's setting, so a dark-mode check on a server
+   * whose OS is in light mode would silently test the wrong theme.
+   */
+  async setColorScheme(scheme: ColorScheme): Promise<string> {
+    await this.connection.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: scheme }],
+    }, this.sessionId);
+    return `Color scheme set to ${scheme}.`;
+  }
+
+  /** Drop every emulation override, back to the browser's own defaults. */
+  async resetEmulation(): Promise<string> {
+    await this.connection.send('Emulation.clearDeviceMetricsOverride', {}, this.sessionId);
+    // An empty feature list clears the prefers-color-scheme override we set.
+    await this.connection.send('Emulation.setEmulatedMedia', { features: [] }, this.sessionId);
+    return 'Cleared viewport and color-scheme emulation.';
+  }
+
+  /**
    * A PNG screenshot, base64-encoded, as image content for a vision model.
    *
    * Defaults to the viewport. `ref` clips to one element; `fullPage` captures
@@ -401,6 +485,73 @@ export class BrowserPage {
       ...(captureBeyondViewport ? { captureBeyondViewport: true } : {}),
     }, this.sessionId);
     return { data: String(result.data ?? ''), mimeType: 'image/png' };
+  }
+
+  /**
+   * A viewport snapshot for the human watching the thread (#283).
+   *
+   * Distinct from `screenshot`: this is the polled, human-facing preview, so it
+   * is a compact JPEG rather than a model's lossless PNG, and it carries the
+   * page's url/title/viewport/color-scheme so the panel can label it. It reads
+   * the effective viewport and `prefers-color-scheme` from the page itself, so
+   * an emulation override (viewport size, dark mode) shows up truthfully.
+   *
+   * Deliberately side-effect free beyond the read: it never navigates and never
+   * launches anything (the pool only ever calls it on an already-open page), so
+   * it is safe to call on a timer while the model may also be driving the page —
+   * CDP multiplexes the commands. A capture that fails mid-navigation falls back
+   * to the last good frame rather than blanking the panel. Returns null only
+   * when there has never been a successful capture.
+   */
+  async captureView(): Promise<BrowserView | null> {
+    try {
+      const meta = await this.readViewMeta();
+      const shot = await this.connection.send('Page.captureScreenshot', {
+        format: 'jpeg', quality: PREVIEW_JPEG_QUALITY,
+      }, this.sessionId);
+      const data = String(shot.data ?? '');
+      if (!data) return this.lastView ?? null;
+
+      // Bump the version only when the bytes actually changed, so a static page
+      // polled every few seconds re-sends nothing after the first frame.
+      if (!this.lastView || this.lastView.image.data !== data) this.viewVersion += 1;
+      this.lastView = {
+        image: { data, mimeType: 'image/jpeg' },
+        url: meta.href,
+        title: meta.title,
+        viewport: { width: meta.w, height: meta.h },
+        colorScheme: meta.dark ? 'dark' : 'light',
+        version: this.viewVersion,
+        capturedAt: Date.now(),
+      };
+      return this.lastView;
+    } catch {
+      // A wedged or navigating page shouldn't blank the panel — show the last
+      // frame we did get, if any.
+      return this.lastView ?? null;
+    }
+  }
+
+  /** Read the page facts the preview labels itself with, in one round trip. */
+  private async readViewMeta(): Promise<{ href: string; title: string; w: number; h: number; dark: boolean }> {
+    const raw = await this.evaluateString(
+      '(() => JSON.stringify({'
+      + ' href: location.href, title: document.title,'
+      + ' w: window.innerWidth, h: window.innerHeight,'
+      + " dark: matchMedia('(prefers-color-scheme: dark)').matches }))()",
+    );
+    try {
+      const parsed = JSON.parse(raw) as Partial<{ href: string; title: string; w: number; h: number; dark: boolean }>;
+      return {
+        href: typeof parsed.href === 'string' ? parsed.href : '',
+        title: typeof parsed.title === 'string' ? parsed.title : '',
+        w: Number.isFinite(parsed.w) ? Number(parsed.w) : 0,
+        h: Number.isFinite(parsed.h) ? Number(parsed.h) : 0,
+        dark: parsed.dark === true,
+      };
+    } catch {
+      return { href: '', title: '', w: 0, h: 0, dark: false };
+    }
   }
 
   consoleEntries(limit = DEFAULT_DIAGNOSTIC_LIMIT): ConsoleEntry[] {

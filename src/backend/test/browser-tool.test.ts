@@ -41,6 +41,9 @@ function fakePage(overrides: Partial<Record<string, unknown>> = {}) {
       calls.push({ op: 'screenshot', args: [opts] });
       return { data: 'iVBORw0KGgoAAAANS', mimeType: 'image/png' };
     },
+    setViewport: async (w: number, h: number) => { calls.push({ op: 'setViewport', args: [w, h] }); return `Viewport set to ${w}×${h}.`; },
+    setColorScheme: async (scheme: string) => { calls.push({ op: 'setColorScheme', args: [scheme] }); return `Color scheme set to ${scheme}.`; },
+    resetEmulation: async () => { calls.push({ op: 'resetEmulation', args: [] }); return 'Cleared viewport and color-scheme emulation.'; },
     ...overrides,
   } as unknown as BrowserPage;
   return { page, calls };
@@ -56,10 +59,10 @@ async function registerTools(allowedHosts: string[] = [], pageOverrides = {}) {
   return { tools, calls };
 }
 
-test('the extension registers the full navigate/read/diagnostics/act/screenshot surface', async () => {
+test('the extension registers the full navigate/read/diagnostics/act/screenshot/emulate surface', async () => {
   const { tools } = await registerTools();
   assert.deepEqual([...tools.keys()].sort(), [
-    'browser_act', 'browser_diagnostics', 'browser_navigate', 'browser_read', 'browser_screenshot',
+    'browser_act', 'browser_diagnostics', 'browser_emulate', 'browser_navigate', 'browser_read', 'browser_screenshot',
   ]);
 });
 
@@ -209,6 +212,47 @@ test('screenshot passes ref and full_page through, and labels the scope', async 
   assert.match(full.details.scope, /full page/);
 });
 
+// ── emulate ─────────────────────────────────────────────────────────────────────
+
+test('emulate sets the viewport and the color scheme, reporting what it applied', async () => {
+  const { tools, calls } = await registerTools();
+  const emulate = tools.get('browser_emulate');
+
+  const both = await emulate.execute('c', { width: 375, height: 812, color_scheme: 'dark' });
+  assert.deepEqual(calls, [
+    { op: 'setViewport', args: [375, 812] },
+    { op: 'setColorScheme', args: ['dark'] },
+  ]);
+  assert.match(both.content[0].text, /Viewport set to 375×812\./);
+  assert.match(both.content[0].text, /Color scheme set to dark\./);
+  assert.deepEqual(both.details.applied.length, 2);
+});
+
+test('emulate reset clears on its own', async () => {
+  const { tools, calls } = await registerTools();
+  await tools.get('browser_emulate').execute('c', { reset: true });
+  assert.deepEqual(calls, [{ op: 'resetEmulation', args: [] }]);
+});
+
+test('emulate reset combined with a viewport clears FIRST, then applies', async () => {
+  const { tools, calls } = await registerTools();
+  await tools.get('browser_emulate').execute('c', { reset: true, width: 800, height: 600 });
+  assert.deepEqual(calls, [
+    { op: 'resetEmulation', args: [] },
+    { op: 'setViewport', args: [800, 600] },
+  ], 'clear then set, so the new viewport survives the reset');
+});
+
+test('emulate rejects width without height, and a call that does nothing', async () => {
+  const { tools, calls } = await registerTools();
+  const emulate = tools.get('browser_emulate');
+
+  await assert.rejects(emulate.execute('c', { width: 400 }), /width and height together/);
+  await assert.rejects(emulate.execute('c', { height: 400 }), /width and height together/);
+  await assert.rejects(emulate.execute('c', {}), /Nothing to emulate/);
+  assert.deepEqual(calls, [], 'a rejected call never touches the page');
+});
+
 // ── launch plumbing ───────────────────────────────────────────────────────────
 
 test('the DevTools endpoint is parsed out of startup chatter', () => {
@@ -280,4 +324,53 @@ test('the concurrent-browser cap is a real number, not unbounded', () => {
   // Each browser is a real Chromium; without a cap a runaway takes the machine
   // down with it.
   assert.ok(MAX_CONCURRENT_BROWSERS > 0 && MAX_CONCURRENT_BROWSERS <= 8);
+});
+
+// ── the human-facing view (#283) ────────────────────────────────────────────────
+
+test('peek never launches a browser — a thread that never navigated has none', () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  assert.equal(support.pool.peek('never-used'), undefined);
+  assert.equal(support.pool.size(), 0, 'peeking did not spin one up');
+});
+
+test('viewFor is null for a thread with no browser open — polling never launches one', async () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  assert.equal(await support.viewFor('idle-thread'), null);
+  assert.equal(support.pool.size(), 0);
+});
+
+test('viewFor is null when the feature is off, even mid-peek', async () => {
+  const support = createBrowserSupport({
+    getConfig: () => ({ browser: { enabled: false, allow_hosts: [] } }) as unknown as NexusConfig,
+    findBrowserBinary: fakeBinary,
+  })!;
+  assert.equal(await support.viewFor('t'), null);
+});
+
+test('isEnabled tracks the live config', () => {
+  let enabled = true;
+  const support = createBrowserSupport({
+    getConfig: () => ({ browser: { enabled, allow_hosts: [] } }) as unknown as NexusConfig,
+    findBrowserBinary: fakeBinary,
+  })!;
+  assert.equal(support.isEnabled(), true);
+  enabled = false;
+  assert.equal(support.isEnabled(), false, 'read live, not frozen at construction');
+});
+
+test('viewFor returns the page\'s captured frame when a browser is open', async () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  const frame = {
+    image: { data: 'ZZZ', mimeType: 'image/jpeg' },
+    url: 'http://localhost:3000/', title: 'Home',
+    viewport: { width: 1024, height: 768 }, colorScheme: 'dark' as const,
+    version: 2, capturedAt: 1,
+  };
+  // Stand a fake page into the pool so viewFor peeks it without a real browser.
+  (support.pool as unknown as { browsers: Map<string, unknown> }).browsers.set('t', {
+    connection: {},
+    page: { captureView: async () => frame },
+  });
+  assert.deepEqual(await support.viewFor('t'), frame);
 });

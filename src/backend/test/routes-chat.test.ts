@@ -2783,6 +2783,153 @@ test('archiveThreadToMemory keeps the thread when memory storage fails', async (
   }
 });
 
+test('POST /api/threads/:id/messages/stream applies thinkingLevel before prompt', async () => {
+  const calls: string[] = [];
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    setThinkingLevel: (level: string) => { calls.push(`think:${level}`); },
+    supportsThinking: () => true,
+    prompt: async () => { calls.push('prompt'); },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: {
+      find: () => ({
+        provider: 'anthropic',
+        id: 'sonnet',
+        reasoning: true,
+        input: ['text'],
+        contextWindow: 1,
+        maxTokens: 1,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }),
+    },
+  };
+  const { app, db, dir } = await makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet', thinkingLevel: 'high' },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.deepEqual(calls, ['think:high', 'prompt']);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream rejects invalid thinkingLevel with 400', async () => {
+  let prompted = false;
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    setThinkingLevel: () => {},
+    supportsThinking: () => true,
+    prompt: async () => { prompted = true; },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet', reasoning: true }) },
+  };
+  const { app, db, dir } = await makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet', thinkingLevel: 'plan' },
+    });
+    assert.equal(res.statusCode, 400);
+    assert.match(JSON.parse(res.body).error, /Invalid thinkingLevel/);
+    assert.equal(prompted, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream ignores thinkingLevel when model lacks thinking', async () => {
+  const calls: string[] = [];
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    setThinkingLevel: (level: string) => { calls.push(`think:${level}`); },
+    supportsThinking: () => false,
+    prompt: async () => { calls.push('prompt'); },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet', reasoning: false }) },
+  };
+  const { app, db, dir } = await makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet', thinkingLevel: 'high' },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.deepEqual(calls, ['prompt']);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/threads/:id/messages/stream leaves thinking unchanged when thinkingLevel is omitted', async () => {
+  const calls: string[] = [];
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    setThinkingLevel: (level: string) => { calls.push(`think:${level}`); },
+    supportsThinking: () => true,
+    prompt: async () => { calls.push('prompt'); },
+    abort: async () => {},
+  };
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => session,
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet', reasoning: true }) },
+  };
+  const { app, db, dir } = await makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
+    });
+    assert.equal(res.statusCode, 200, res.body);
+    assert.deepEqual(calls, ['prompt']);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('archiveThreadToMemory rejects empty sessions without deleting', async () => {
   const { archiveThreadToMemory, ArchiveThreadError } = await import('../sessions/archive');
   const { app, db, dir } = await makeApp({

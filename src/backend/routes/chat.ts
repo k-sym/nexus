@@ -22,6 +22,7 @@ import {
   type AgentRunTerminalStatus,
   type ChatThread,
 } from '@nexus/shared';
+import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
 import { autoTitleSession, NEW_THREAD_TITLE } from '../sessions/auto-title.js';
@@ -29,6 +30,7 @@ import { loadConfig } from '../config.js';
 import { resolveSignalFilterConfig } from '../signal-filters/config.js';
 import { projectToolResultMessages, type SignalProjection } from '../signal-filters/messages.js';
 import { detectGitBranch as detectProjectGitBranch } from '../github/repo.js';
+import { isThinkingLevel, type ThinkingLevel } from '../pi/thinking.js';
 
 const ABORT_GRACE_MS = 200;
 
@@ -38,7 +40,10 @@ interface ActiveStream {
   abortSource?: AgentRunAbortSource;
 }
 
-type ChatSession = Pick<AgentSession, 'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage'> & {
+type ChatSession = Pick<
+  AgentSession,
+  'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage' | 'setThinkingLevel' | 'supportsThinking'
+> & {
   sessionManager?: Pick<AgentSession['sessionManager'], 'appendCustomEntry' | 'getLeafId' | 'getLeafEntry' | 'getEntries'>;
 };
 
@@ -327,7 +332,13 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
 
   fastify.post('/api/threads/:threadId/messages/stream', { bodyLimit: CHAT_STREAM_BODY_LIMIT_BYTES }, async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
-    const body = request.body as { content: string; modelKey?: string; images?: unknown; attachments?: unknown };
+    const body = request.body as {
+      content: string;
+      modelKey?: string;
+      images?: unknown;
+      attachments?: unknown;
+      thinkingLevel?: unknown;
+    };
     const confirmCancel = request.headers['x-confirm-cancel'] === 'true';
 
     const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
@@ -339,6 +350,16 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       | { name: string; repo_path: string }
       | undefined;
     const cwd = project?.repo_path || process.cwd();
+
+    let requestedThinkingLevel: ThinkingLevel | undefined;
+    if (body.thinkingLevel !== undefined) {
+      if (!isThinkingLevel(body.thinkingLevel)) {
+        reply.code(400);
+        return { error: `Invalid thinkingLevel: ${String(body.thinkingLevel)}` };
+      }
+      requestedThinkingLevel = body.thinkingLevel;
+    }
+
     const attachmentsResult = validateChatAttachments(body.attachments, body.images);
     if (!attachmentsResult.ok) {
       reply.code(400);
@@ -525,6 +546,14 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
           }
           if (clientDisconnected) return;
         }
+      }
+
+      if (
+        requestedThinkingLevel !== undefined
+        && selectedModel
+        && session.supportsThinking?.()
+      ) {
+        session.setThinkingLevel(clampThinkingLevel(selectedModel, requestedThinkingLevel));
       }
 
       db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(

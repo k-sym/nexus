@@ -550,7 +550,7 @@ export function usePiStream() {
     async (
       threadId: string,
       text: string,
-      opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[]; onError?: (message: string) => void; onTitle?: (title: string) => void } = {},
+      opts: { confirmCancel?: boolean; modelKey?: string; thinkingLevel?: string; attachments?: ChatAttachment[]; images?: ChatImageAttachment[]; onError?: (message: string) => void; onTitle?: (title: string) => void } = {},
     ): Promise<ContextUsage | null> => {
       activeThreadRef.current = threadId;
       streamingThreadRef.current = threadId;
@@ -568,6 +568,7 @@ export function usePiStream() {
       const requestBody = {
         content: text,
         modelKey: opts.modelKey,
+        ...(opts.thinkingLevel !== undefined ? { thinkingLevel: opts.thinkingLevel } : {}),
         ...(files.length > 0 ? { attachments } : images.length > 0 ? { images } : {}),
       };
       let res: Response;

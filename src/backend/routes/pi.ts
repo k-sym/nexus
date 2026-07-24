@@ -6,22 +6,30 @@
  * and the orchestrator's "pick a model" picker.
  */
 import { FastifyInstance } from 'fastify';
+import { getSupportedThinkingLevels } from '@earendil-works/pi-ai';
 import type { AppliedModelCuration } from '../pi/model-curation.js';
+import type { ThinkingLevel } from '../pi/thinking.js';
 
 export function buildModelCatalog(fastify: FastifyInstance) {
   const all = fastify.pi.models.getAll();
   const available = fastify.pi.models.getAvailable();
   const configuredKeys = new Set(available.map((m) => `${m.provider}/${m.id}`));
-  return all.map((m) => ({
-    provider: m.provider,
-    id: m.id,
-    name: m.name,
-    reasoning: m.reasoning,
-    contextWindow: m.contextWindow,
-    maxTokens: m.maxTokens,
-    input: (m as any).input,
-    configured: configuredKeys.has(`${m.provider}/${m.id}`),
-  }));
+  return all.map((m) => {
+    const thinkingLevels: ThinkingLevel[] = m.reasoning
+      ? (getSupportedThinkingLevels(m) as ThinkingLevel[])
+      : [];
+    return {
+      provider: m.provider,
+      id: m.id,
+      name: m.name,
+      reasoning: m.reasoning,
+      contextWindow: m.contextWindow,
+      maxTokens: m.maxTokens,
+      input: (m as any).input,
+      configured: configuredKeys.has(`${m.provider}/${m.id}`),
+      thinkingLevels,
+    };
+  });
 }
 
 function toModelsResponse(applied: AppliedModelCuration) {

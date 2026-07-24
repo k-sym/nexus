@@ -15,7 +15,11 @@ import type { AgentToolResult, ExtensionFactory } from '@earendil-works/pi-codin
 import { Type } from 'typebox';
 import { checkUrl } from '../browser/policy.js';
 import { SUPPORTED_KEYS } from '../browser/input.js';
-import { DEFAULT_DIAGNOSTIC_LIMIT, MAX_DIAGNOSTIC_ENTRIES, type BrowserPage } from '../browser/page.js';
+import {
+  DEFAULT_DIAGNOSTIC_LIMIT, MAX_DIAGNOSTIC_ENTRIES,
+  MIN_VIEWPORT_DIMENSION, MAX_VIEWPORT_DIMENSION, SUPPORTED_COLOR_SCHEMES,
+  type BrowserPage,
+} from '../browser/page.js';
 
 export interface BrowserToolDeps {
   /** Resolve this thread's page, launching the browser on first use. */
@@ -76,12 +80,31 @@ const ScreenshotSchema = Type.Object({
   full_page: Type.Optional(Type.Boolean({ description: 'Capture the whole page, not just the viewport.' })),
 });
 
+const EmulateSchema = Type.Object({
+  width: Type.Optional(Type.Integer({
+    minimum: MIN_VIEWPORT_DIMENSION, maximum: MAX_VIEWPORT_DIMENSION,
+    description: 'Viewport width in CSS pixels. Set width and height together.',
+  })),
+  height: Type.Optional(Type.Integer({
+    minimum: MIN_VIEWPORT_DIMENSION, maximum: MAX_VIEWPORT_DIMENSION,
+    description: 'Viewport height in CSS pixels. Set width and height together.',
+  })),
+  color_scheme: Type.Optional(Type.Union(
+    SUPPORTED_COLOR_SCHEMES.map((s) => Type.Literal(s)),
+    { description: 'Emulate prefers-color-scheme for a theme check: light, dark, or no-preference.' },
+  )),
+  reset: Type.Optional(Type.Boolean({
+    description: 'Clear all emulation (viewport and color-scheme) back to the browser defaults.',
+  })),
+});
+
 export interface BrowserToolNames {
   navigate: 'browser_navigate';
   read: 'browser_read';
   diagnostics: 'browser_diagnostics';
   act: 'browser_act';
   screenshot: 'browser_screenshot';
+  emulate: 'browser_emulate';
 }
 
 export function createBrowserExtension(deps: BrowserToolDeps): ExtensionFactory {
@@ -231,6 +254,41 @@ export function createBrowserExtension(deps: BrowserToolDeps): ExtensionFactory 
             { type: 'text', text: `Screenshot (${scope}).` },
           ],
           details: { status: 'ok', scope },
+        };
+      },
+    });
+
+    pi.registerTool({
+      name: 'browser_emulate',
+      label: 'Emulate viewport / theme',
+      description:
+        'Set the browser\'s viewport size and/or emulated color scheme, for responsive and dark-mode '
+        + 'checks. Give width and height together to resize the viewport (CSS pixels); set color_scheme '
+        + 'to light, dark, or no-preference to override prefers-color-scheme. Overrides persist across '
+        + 'navigations until you change them or pass reset:true. Follow with browser_read or '
+        + 'browser_screenshot to see the page at the new size or theme.',
+      promptSnippet: 'browser_emulate: set the viewport size or emulated color scheme (responsive/theme checks)',
+      parameters: EmulateSchema,
+      async execute(_toolCallId, params): Promise<AgentToolResult<{ status: string; applied: string[] }>> {
+        const hasWidth = params.width !== undefined;
+        const hasHeight = params.height !== undefined;
+        if (hasWidth !== hasHeight) throw new Error('Set width and height together to resize the viewport.');
+        if (!params.reset && !hasWidth && params.color_scheme === undefined) {
+          throw new Error('Nothing to emulate — pass width+height, color_scheme, or reset:true.');
+        }
+
+        const page = await deps.getPage();
+        const applied: string[] = [];
+
+        // reset first, so `reset:true` with a new viewport/scheme means "clear,
+        // then apply these" rather than clearing what was just set.
+        if (params.reset) applied.push(await page.resetEmulation());
+        if (hasWidth) applied.push(await page.setViewport(params.width!, params.height!));
+        if (params.color_scheme !== undefined) applied.push(await page.setColorScheme(params.color_scheme));
+
+        return {
+          content: [{ type: 'text', text: applied.join(' ') }],
+          details: { status: 'ok', applied },
         };
       },
     });
