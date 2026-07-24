@@ -33,6 +33,7 @@ import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from '
 import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
 import { createBrowserSupport } from './browser/session-deps.js';
 import { registerDockerRoutes } from './routes/docker.js';
+import { resolveToolPolicy, EMPTY_TOOL_POLICY } from './pi/tool-policy-config.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -104,6 +105,15 @@ async function main() {
         return row?.last_model_key ?? undefined;
       } catch {
         return undefined;
+      }
+    },
+    // Read config fresh per tool call so a `tool_policy` edit lands without a
+    // session rebuild; degrade to built-in defaults if config can't be read.
+    toolPolicy: (cwd) => {
+      try {
+        return resolveToolPolicy(loadConfig(), cwd);
+      } catch {
+        return EMPTY_TOOL_POLICY;
       }
     },
   });

@@ -22,6 +22,7 @@ import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
 import { createToolPolicyResolver, type ToolPolicyResolver } from './tool-policy.js';
+import type { ResolvedToolPolicy } from './tool-policy-config.js';
 import { createDockerExtension, type DockerToolDeps } from './docker-tool.js';
 import { buildOrientationBlock, modelKeyHasVision } from './orientation.js';
 import { createBrowserExtension, type BrowserToolDeps } from './browser-tool.js';
@@ -91,6 +92,9 @@ export interface PiRuntimeDeps {
    *  block's vision line. Read from the DB so it survives a restart, unlike the
    *  in-memory session model. Undefined resolver ⇒ vision is never asserted. */
   sessionModelKey?: (threadId: string, cwd: string) => string | undefined;
+  /** Resolves the `tool_policy` config for a repo, read fresh per tool call so
+   *  a config edit lands without a session rebuild. Absent ⇒ built-in defaults. */
+  toolPolicy?: (cwd: string) => ResolvedToolPolicy;
 }
 
 export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
@@ -222,6 +226,8 @@ export class PiRuntime {
   private readonly closeBrowser?: (threadId: string) => void;
   /** Resolves a thread's persisted model key, for the orientation vision line. */
   private readonly sessionModelKey?: (threadId: string, cwd: string) => string | undefined;
+  /** Resolves the tool policy config for a repo, read live per tool call. */
+  private readonly toolPolicy?: (cwd: string) => ResolvedToolPolicy;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
@@ -241,6 +247,7 @@ export class PiRuntime {
     this.browserTools = deps.browserTools;
     this.closeBrowser = deps.closeBrowser;
     this.sessionModelKey = deps.sessionModelKey;
+    this.toolPolicy = deps.toolPolicy;
   }
 
   /** Whether this session would get the Docker tool — used to decide if the
@@ -326,13 +333,18 @@ export class PiRuntime {
 
   /**
    * The tool policy for a thread. Built once per session, but every input it
-   * reads is a getter evaluated at tool-call time — so toggling Supervise (or,
-   * later, editing project policy) lands on the next tool call without
+   * reads is a getter evaluated at tool-call time — so toggling Supervise AND
+   * editing project policy in config both land on the next tool call without
    * rebuilding the session. That liveness is load-bearing; do not resolve
-   * these into values here.
+   * these into values here. `toolPolicy` (when supplied) reads config fresh for
+   * this repo per call; absent ⇒ built-in category defaults only.
    */
-  policyFor(threadId: string): ToolPolicyResolver {
-    return createToolPolicyResolver({ isSupervised: () => this.isSupervised(threadId) });
+  policyFor(threadId: string, cwd: string): ToolPolicyResolver {
+    return createToolPolicyResolver({
+      isSupervised: () => this.isSupervised(threadId),
+      categoryPolicy: () => this.toolPolicy?.(cwd).categories ?? {},
+      rules: () => this.toolPolicy?.(cwd).rules ?? [],
+    });
   }
 
   /**
@@ -424,7 +436,7 @@ export class PiRuntime {
       agentDir: this.paths.sessionsDir,
       settingsManager,
       extensionFactories: buildSessionExtensionFactories(
-        threadId, cwd, this.questions, this.approvals, this.policyFor(threadId),
+        threadId, cwd, this.questions, this.approvals, this.policyFor(threadId, cwd),
         createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
         this.browserTools,
       ),
