@@ -251,11 +251,56 @@ test('screenshot returns valid PNGs — viewport, element, and full page', { ski
   }
 });
 
+test('captureView returns a JPEG plus the page url, title and viewport (#283)', { skip }, async () => {
+  const isJpeg = (b64: string) => Buffer.from(b64, 'base64').subarray(0, 3).toString('hex') === 'ffd8ff';
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+
+    const view = await page.captureView();
+    assert.ok(view, 'a loaded page yields a view');
+    assert.ok(isJpeg(view!.image.data), 'the preview is a JPEG, not the model PNG');
+    assert.equal(view!.image.mimeType, 'image/jpeg');
+    assert.equal(view!.url, `${base}/`, 'the view carries the page URL');
+    assert.equal(view!.title, 'Nexus Live', 'and its title');
+    assert.ok(view!.viewport.width > 0 && view!.viewport.height > 0, 'and a real viewport');
+    assert.ok(view!.colorScheme === 'light' || view!.colorScheme === 'dark');
+    assert.ok(view!.version >= 1, 'a captured frame has a version');
+  } finally {
+    await connection.close();
+  }
+});
+
+test('captureView bumps its version only when the page actually changes (#283)', { skip }, async () => {
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+
+    const first = await page.captureView();
+    const again = await page.captureView();
+    assert.equal(again!.version, first!.version, 'an unchanged static page holds its version');
+
+    await page.navigate(`${base}/gone`);
+    const changed = await page.captureView();
+    assert.ok(changed!.version > first!.version, 'a different page bumps the version');
+  } finally {
+    await connection.close();
+  }
+});
+
 test('the pool gives one browser per thread and closes them on drop', { skip }, async () => {
   const pool = new BrowserPool(binary!);
   try {
+    // peek never launches: a thread with no browser is undefined, and asking
+    // doesn't spin one up.
+    assert.equal(pool.peek('thread-1'), undefined, 'peek is undefined before a launch');
+    assert.equal(pool.size(), 0, 'peeking launched nothing');
+
     const p1 = await pool.pageFor('thread-1');
     assert.equal(await pool.pageFor('thread-1'), p1, 'a thread reuses its browser');
+    assert.equal(pool.peek('thread-1'), p1, 'peek returns the open page');
 
     const p2 = await pool.pageFor('thread-2');
     assert.notEqual(p2, p1, 'a second thread gets its own');

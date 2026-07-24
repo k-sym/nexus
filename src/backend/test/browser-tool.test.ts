@@ -281,3 +281,52 @@ test('the concurrent-browser cap is a real number, not unbounded', () => {
   // down with it.
   assert.ok(MAX_CONCURRENT_BROWSERS > 0 && MAX_CONCURRENT_BROWSERS <= 8);
 });
+
+// ── the human-facing view (#283) ────────────────────────────────────────────────
+
+test('peek never launches a browser — a thread that never navigated has none', () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  assert.equal(support.pool.peek('never-used'), undefined);
+  assert.equal(support.pool.size(), 0, 'peeking did not spin one up');
+});
+
+test('viewFor is null for a thread with no browser open — polling never launches one', async () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  assert.equal(await support.viewFor('idle-thread'), null);
+  assert.equal(support.pool.size(), 0);
+});
+
+test('viewFor is null when the feature is off, even mid-peek', async () => {
+  const support = createBrowserSupport({
+    getConfig: () => ({ browser: { enabled: false, allow_hosts: [] } }) as unknown as NexusConfig,
+    findBrowserBinary: fakeBinary,
+  })!;
+  assert.equal(await support.viewFor('t'), null);
+});
+
+test('isEnabled tracks the live config', () => {
+  let enabled = true;
+  const support = createBrowserSupport({
+    getConfig: () => ({ browser: { enabled, allow_hosts: [] } }) as unknown as NexusConfig,
+    findBrowserBinary: fakeBinary,
+  })!;
+  assert.equal(support.isEnabled(), true);
+  enabled = false;
+  assert.equal(support.isEnabled(), false, 'read live, not frozen at construction');
+});
+
+test('viewFor returns the page\'s captured frame when a browser is open', async () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  const frame = {
+    image: { data: 'ZZZ', mimeType: 'image/jpeg' },
+    url: 'http://localhost:3000/', title: 'Home',
+    viewport: { width: 1024, height: 768 }, colorScheme: 'dark' as const,
+    version: 2, capturedAt: 1,
+  };
+  // Stand a fake page into the pool so viewFor peeks it without a real browser.
+  (support.pool as unknown as { browsers: Map<string, unknown> }).browsers.set('t', {
+    connection: {},
+    page: { captureView: async () => frame },
+  });
+  assert.deepEqual(await support.viewFor('t'), frame);
+});
