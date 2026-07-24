@@ -53,7 +53,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Agents pull it on demand via a `memory_recall` tool; exposed over HTTP + MCP. |
 | **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, image + PDF/document attachments, and manual archival into memory. |
 | **Local services (Docker)** | Agents can bring a project's Docker Compose stack up/down to actually run and test it — always detached, namespaced per session so two threads on one repo can't collide, torn down with the session, plus a startup sweep for anything a crash orphaned. Off by default; the `docker_service` tool only appears when a Docker daemon is reachable. |
-| **Browser** | Agents can drive a headless Chromium-family browser to verify front-end work — navigate, read the rendered page as text or an accessibility tree, and read console/network output. Localhost-only by default; ephemeral profile, never your real one. Off by default; the tools only appear when a browser is installed. |
+| **Browser** | Agents can drive a headless Chromium-family browser to verify front-end work — navigate, read the rendered page as text or an accessibility tree, interact with it, and read console/network output. The current page is mirrored back into the chat session as a live preview, so you can watch what the agent's browser is doing (and see it at all, in thin-client mode, where the browser runs on the server). Localhost-only by default; ephemeral profile, never your real one. Off by default; the tools only appear when a browser is installed. |
 | **Tool approvals** | A per-tool approval policy decides — before each tool call runs — whether it's allowed, confirmed, or denied. Side-effectful categories (e.g. starting containers) default to *confirm*; pending gates are answerable from the Nexus UI or the glasses. Read live, so a change lands mid-session. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
 | **GitHub triage** | Open issues on a project's GitHub remote are mirrored into the Triage column on Kanban open (token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. |
@@ -391,6 +391,15 @@ curl https://<host>.ts.net:8444/api/projects                                    
 curl -H "Authorization: Bearer <token>" https://<host>.ts.net:8444/api/projects  # 200
 ```
 
+**The agent browser runs on the server.** When a thin client drives a browsing thread, the headless
+browser launches wherever the backend is — i.e. on the server, not the client. This is deliberate:
+the browser is a verification tool for the project's own dev server, which lives with the backend, so
+"look at localhost" has to mean the server's localhost. The client never has a window onto that
+process directly, so the current page is mirrored back into the chat session as a live preview (a
+JPEG the UI polls over the same authenticated `/api/*` path) — that preview *is* the shared view.
+The browser is **not** refused when the backend is remote; the preview is what makes the server-side
+headless case usable rather than blind.
+
 **Limitations.** A thin client needs the tailnet reachable — there's no offline mode (use the glasses
 when out). Two clients can't watch the *same in-flight* turn's token stream (the run continues
 server-side but isn't re-broadcast); resume-after and next-turn work fine.
@@ -647,6 +656,9 @@ browser:                         # let agents drive a headless browser to verify
                                  #   Chromium-family browser (Chrome/Edge/Chromium/Brave) is found
   allow_hosts: []                # hosts the browser may reach beyond loopback (always allowed);
                                  #   ".example.com" matches subdomains, "example.com" is exact
+                                 # The browser launches wherever the backend runs — including on the
+                                 #   server in thin-client mode (see "Server + thin clients"), where
+                                 #   its live preview in the chat session is your only view of it.
 
 tool_policy:                     # optional per-tool approval policy (omit ⇒ built-in defaults:
                                  #   read-only allowed, `services` (Docker) confirmed). Read live —
@@ -754,7 +766,7 @@ On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `g
 |---|---|---|
 | `memory_recall` | Pull relevant memories for this project on demand (see [Memory](#memory)). | The memory daemon is configured. |
 | `docker_service` | Start/stop/inspect the project's Docker Compose services — `up` (always detached), `down`, `status`, `logs`. Namespaced to `nexus-<threadId>` so sessions can't collide; torn down on session drop, with a startup sweep for crash-orphaned projects. Both the compose file *and what it bind-mounts* are contained to the repo — a file that mounts a host path outside the project is refused before `up` starts anything, unless the path is in `docker.allow_host_mounts`. | `docker.enabled` **and** a Docker daemon answers. |
-| `browser_navigate` / `browser_read` / `browser_diagnostics` | Load a URL in a headless browser, read the rendered page (text or accessibility tree), and read its console/network output. One ephemeral-profile browser per thread, launched lazily and closed with the session. | `browser.enabled` **and** a Chromium-family browser is found. |
+| `browser_navigate` / `browser_read` / `browser_diagnostics` / `browser_act` / `browser_screenshot` | Load a URL in a headless browser, read the rendered page (text or accessibility tree), interact with it (click/type/press/scroll by ref), read its console/network output, and capture a screenshot. One ephemeral-profile browser per thread, launched lazily and closed with the session. The current page is also mirrored back into the chat UI as a live preview (`GET /api/browser/view`), polled while the session is open — the panel appears only while a browser is open and renders nothing otherwise. | `browser.enabled` **and** a Chromium-family browser is found. |
 | `monday_search` / `monday_get_item` / `monday_post_update` | Read (and, if opted in, post updates to) the Monday.com initiative a task is linked to. | Monday is configured and the task has a linked item. |
 | `question` | Emit a structured question card and wait for your answer. | Always. |
 

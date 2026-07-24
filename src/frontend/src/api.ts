@@ -263,6 +263,35 @@ export async function dockerServiceDown(project: string): Promise<void> {
   await fetchJson(`/api/docker/services/${encodeURIComponent(project)}/down`, { method: 'POST' });
 }
 
+// Agent browser — the human-facing preview of a thread's headless page (#283).
+export interface BrowserView {
+  image: { data: string; mimeType: string };
+  url: string;
+  title: string;
+  viewport: { width: number; height: number };
+  colorScheme: 'dark' | 'light';
+  version: number;
+  capturedAt: number;
+}
+export interface BrowserViewResponse {
+  /** The feature is on and a browser binary exists. */
+  available: boolean;
+  /** This thread has a browser open with a frame to show. */
+  present: boolean;
+  /** The client's `known` version is current — no new bytes are sent. */
+  unchanged?: boolean;
+  version?: number;
+  view?: BrowserView;
+}
+
+/** The thread's current browser preview. `known` is the last version the client
+ *  holds, so an unchanged static page comes back without re-sending the frame. */
+export async function fetchBrowserView(threadId: string, known?: number): Promise<BrowserViewResponse> {
+  const params = new URLSearchParams({ thread: threadId });
+  if (known !== undefined) params.set('known', String(known));
+  return fetchJson<BrowserViewResponse>(`/api/browser/view?${params.toString()}`);
+}
+
 // Monday.com — the Project Management view's read paths and link CRUD.
 // Free-standing exports (not nested under `api`) so ProjectManagementView can
 // import and mock them directly, matching the Task 11 brief's client surface.

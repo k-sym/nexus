@@ -33,6 +33,7 @@ import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from '
 import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
 import { createBrowserSupport } from './browser/session-deps.js';
 import { registerDockerRoutes } from './routes/docker.js';
+import { registerBrowserRoutes } from './routes/browser.js';
 import { resolveToolPolicy, EMPTY_TOOL_POLICY } from './pi/tool-policy-config.js';
 import { DbApprovalAudit } from './approvals/audit.js';
 import { registerTrustRoutes } from './routes/trust.js';
@@ -190,6 +191,15 @@ async function main() {
   app.register(registerActivityRoutes);
   app.register(registerApprovalRoutes);
   app.register(async (f) => { await registerDockerRoutes(f, { isAvailable: () => dockerAvailability.isAvailable() }); });
+  // The human-facing view of a thread's headless browser. Wired to the same
+  // browser support the tools use, so the panel reports available only when the
+  // feature is on AND a browser was found. Peeks — polling never launches one.
+  app.register(async (f) => {
+    await registerBrowserRoutes(f, {
+      enabled: () => browserSupport != null && browserSupport.isEnabled(),
+      view: browserSupport ? (threadId) => browserSupport.viewFor(threadId) : undefined,
+    });
+  });
   app.register(registerTrustRoutes);
   app.register(registerMissionRoutes);
   app.register(registerMondayRoutes);
