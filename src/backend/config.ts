@@ -129,6 +129,16 @@ function defaultConfig(): NexusConfig {
       api_version: '2026-07',
       poll_minutes: 10,
     },
+    helpers: {
+      // All off by default: each reaches the network with a paid key, so it's
+      // opt-in like docker/browser/monday. deepMerge backfills this block onto
+      // configs written before it existed, so no migration is needed.
+      brave: { enabled: false, api_key: '${BRAVE_API_KEY}' },
+      exa: { enabled: false, api_key: '${EXA_API_KEY}' },
+      perplexity: { enabled: false, api_key: '${PERPLEXITY_API_KEY}' },
+      context7: { enabled: false, api_key: '${CONTEXT7_API_KEY}' },
+      search_default: 'exa',
+    },
   };
 }
 

@@ -13,6 +13,13 @@ vi.mock('../api', () => ({
         models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '', supports_images: false } },
         jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
         monday: { enabled: false, api_version: '2026-07', poll_minutes: 10 },
+        helpers: {
+          brave: { enabled: false, api_key: '' },
+          exa: { enabled: false, api_key: '' },
+          perplexity: { enabled: false, api_key: '' },
+          context7: { enabled: false, api_key: '' },
+          search_default: 'exa',
+        },
       })),
       update: vi.fn(async (config) => config),
       testLocalModel: vi.fn(async () => ({
@@ -21,6 +28,7 @@ vi.mock('../api', () => ({
         models: ['qwen2.5-coder:7b'],
         modelFound: true,
       })),
+      testHelper: vi.fn(async () => ({ ok: true, message: 'Key verified.' })),
     },
     trust: {
       get: vi.fn(async () => ({
@@ -179,6 +187,68 @@ describe('SettingsPage', () => {
           local: expect.objectContaining({
             supports_images: true,
           }),
+        }),
+      }));
+    });
+  });
+
+  it('gates enabling an API helper on a passing key Test', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    // The provider can't be enabled until its key is verified.
+    const toggle = await screen.findByRole('button', { name: 'Exa Disabled' });
+    expect(toggle).toBeDisabled();
+
+    await user.type(screen.getByLabelText('Exa API key'), 'exa-abc');
+    await user.click(screen.getByRole('button', { name: 'Test Exa' }));
+
+    await waitFor(() => {
+      expect(api.settings.testHelper).toHaveBeenCalledWith('exa', 'exa-abc');
+    });
+    expect(await screen.findByText('Key verified.')).toBeInTheDocument();
+
+    // Now it can be enabled and saved.
+    await user.click(screen.getByRole('button', { name: 'Exa Disabled' }));
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(api.settings.update).toHaveBeenCalledWith(expect.objectContaining({
+        helpers: expect.objectContaining({
+          exa: expect.objectContaining({ enabled: true, api_key: 'exa-abc' }),
+        }),
+      }));
+    });
+  });
+
+  it('preserves a masked helper key on save when it is not retyped', async () => {
+    vi.mocked(api.settings.get).mockResolvedValueOnce({
+      server: { port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
+      assistant: { url: '', api_key: '${ASSISTANT_API_KEY}' },
+      models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '', supports_images: false } },
+      jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
+      monday: { enabled: false, api_version: '2026-07', poll_minutes: 10 },
+      helpers: {
+        brave: { enabled: true, api_key: '••••••••' },
+        exa: { enabled: false, api_key: '' },
+        perplexity: { enabled: false, api_key: '' },
+        context7: { enabled: false, api_key: '' },
+        search_default: 'exa',
+      },
+    });
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    // The masked key is shown and an already-enabled provider reads as Enabled.
+    expect(await screen.findByDisplayValue('••••••••')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Brave Search Enabled' })).toBeInTheDocument();
+
+    // Saving without retyping echoes the mask back; the backend then preserves the real key.
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => {
+      expect(api.settings.update).toHaveBeenCalledWith(expect.objectContaining({
+        helpers: expect.objectContaining({
+          brave: expect.objectContaining({ enabled: true, api_key: '••••••••' }),
         }),
       }));
     });

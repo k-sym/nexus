@@ -448,6 +448,42 @@ test('sessions omit the monday tools (without throwing) when the resolver itself
   });
 });
 
+/** Same "omit when absent" contract for the API-helper tools (#291): the new
+ *  helpersTools parameter (positional slot after browserTools) needs its own
+ *  coverage, exactly as mondayTools did. */
+const HELPERS_DEPS = {
+  searchProviders: ['exa'],
+  search: async () => ({ provider: 'exa', results: [] }),
+};
+
+test('helper tools register when the resolver returns deps, and are omitted with no resolver', async () => {
+  const none = buildSessionExtensionFactories(
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
+  );
+  assert.equal(none.length, 3, 'no helper tools without a resolver to serve them');
+
+  // Positional: recallMemories, mondayTools, dockerTools, browserTools all undefined, then helpersTools.
+  const factories = buildSessionExtensionFactories(
+    'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
+    undefined, undefined, undefined, undefined, () => HELPERS_DEPS as any,
+  );
+  assert.equal(factories.length, 4, 'helper extension appended when the resolver supplies deps');
+  const tools: Array<{ name: string }> = [];
+  await factories[3]?.({ registerTool(value: unknown) { tools.push(value as { name: string }); } } as any);
+  assert.deepEqual(tools.map((t) => t.name), ['web_search']);
+});
+
+test('sessions omit the helper tools (without throwing) when the resolver itself throws', () => {
+  assert.doesNotThrow(() => {
+    const factories = buildSessionExtensionFactories(
+      'thread-1', '/tmp/project', new QuestionBroker(), new ApprovalBroker(), allowAll, () => () => {},
+      undefined, undefined, undefined, undefined,
+      () => { throw new Error('boom: bad helpers config'); },
+    );
+    assert.equal(factories.length, 3, 'no helper tools when the resolver throws — degrades like a null return');
+  });
+});
+
 test('PiRuntime.sessionFor does not reject when the mondayContext resolver throws', async () => {
   // IMPORTANT 1(b) regression: createSession awaits resourceLoader.reload()
   // with no guard. Before the fix, a throw from the mondayContext resolver

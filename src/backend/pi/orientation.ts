@@ -30,6 +30,8 @@ export interface OrientationInput {
   hasDocker: boolean;
   /** The browser tools are registered — enabled and a browser was found. */
   hasBrowser: boolean;
+  /** At least one API helper is live — web_search / web_answer / docs_lookup. */
+  hasHelpers: boolean;
   /** The session's model accepts image input — so a screenshot is worth taking. */
   hasVision: boolean;
 }
@@ -90,6 +92,14 @@ export function buildOrientationBlock(input: OrientationInput): string {
       + 'to check responsive and dark-mode states — instead of shipping UI blind. Whatever page the '
       + 'browser is on is mirrored live into this chat for the person watching, so front-end work is '
       + 'visible as it happens.',
+    );
+  }
+
+  if (input.hasHelpers) {
+    lines.push(
+      '- **You can search the live web and look up current docs** with the helper tools '
+      + '(`web_search`/`web_answer`/`docs_lookup`, whichever are enabled). Reach for them when a fact '
+      + 'could be current or version-specific, rather than answering from memory or shipping stale API knowledge.',
     );
   }
 

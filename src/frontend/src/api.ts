@@ -62,6 +62,11 @@ export interface LocalModelTestResponse {
   modelFound?: boolean;
 }
 
+export interface HelperTestResponse {
+  ok: boolean;
+  message: string;
+}
+
 // Re-exported, not restated: this list and the backend's used to be separate
 // copies, and both went stale when the Monday kinds landed.
 import type { OperationKind, OperationStatus } from '@nexus/shared';
@@ -432,6 +437,11 @@ export const api = {
       fetchJson<LocalModelTestResponse>(`/api/settings/local-model/test`, {
         method: 'POST',
         body: JSON.stringify(data),
+      }),
+    testHelper: (provider: string, api_key?: string) =>
+      fetchJson<HelperTestResponse>(`/api/settings/helpers/${encodeURIComponent(provider)}/test`, {
+        method: 'POST',
+        body: JSON.stringify({ api_key }),
       }),
   },
   trust: {

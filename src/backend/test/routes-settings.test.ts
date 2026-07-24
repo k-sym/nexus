@@ -337,3 +337,86 @@ test('PUT /api/settings marks configured local chat model as image-capable when 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ── API helpers (#291) ──────────────────────────────────────────────────────
+
+test('helper keys are masked on GET and preserved on PUT unless retyped', async () => {
+  const original = loadConfig();
+  const app = makeApp();
+  try {
+    const base = loadConfig();
+    base.helpers.brave = { enabled: true, api_key: 'sk-brave-secret' };
+    base.helpers.exa = { enabled: false, api_key: '${EXA_API_KEY}' };
+    base.helpers.search_default = 'brave';
+    saveConfig(base);
+
+    const got = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    assert.equal(got.helpers.brave.api_key, '••••••••', 'a literal key is masked');
+    assert.equal(got.helpers.exa.api_key, '${EXA_API_KEY}', 'an env-ref is shown as-is');
+    assert.equal(got.helpers.brave.enabled, true);
+    assert.equal(got.helpers.search_default, 'brave');
+    assert.equal(JSON.stringify(got).includes('sk-brave-secret'), false, 'raw secret never shipped');
+
+    // Echoing the masked payload back must preserve the stored secret.
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: got });
+    let stored = loadConfig();
+    assert.equal(stored.helpers.brave.api_key, 'sk-brave-secret', 'masked echo preserves the key');
+    assert.equal(stored.helpers.search_default, 'brave', 'search_default round-trips');
+
+    // A newly-typed key overwrites; a toggled enable is honoured.
+    got.helpers.brave.api_key = 'sk-new-key';
+    got.helpers.exa.enabled = true;
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: got });
+    stored = loadConfig();
+    assert.equal(stored.helpers.brave.api_key, 'sk-new-key', 'a retyped key overwrites');
+    assert.equal(stored.helpers.exa.enabled, true, 'enable toggle persists');
+    assert.equal(stored.helpers.exa.api_key, '${EXA_API_KEY}', 'exa env-ref intact');
+  } finally {
+    saveConfig(original);
+  }
+});
+
+test('POST /api/settings/helpers/:provider/test verifies keys and maps failures', async () => {
+  const original = loadConfig();
+  const app = makeApp();
+  const realFetch = globalThis.fetch;
+  try {
+    // Unknown provider → 400, ok:false.
+    const unknown = await app.inject({ method: 'POST', url: '/api/settings/helpers/nope/test', payload: {} });
+    assert.equal(unknown.statusCode, 400);
+    assert.equal(unknown.json().ok, false);
+
+    // No key stored or typed → ok:false, no network call.
+    const cfg = loadConfig();
+    cfg.helpers.brave = { enabled: false, api_key: '' };
+    saveConfig(cfg);
+    const noKey = await app.inject({ method: 'POST', url: '/api/settings/helpers/brave/test', payload: {} });
+    assert.equal(noKey.json().ok, false);
+    assert.match(noKey.json().message, /enter one/i);
+
+    // Provider 401 → ok:false, message names the status, typed key never echoed.
+    globalThis.fetch = (async () => new Response('denied', { status: 401 })) as unknown as typeof fetch;
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/api/settings/helpers/brave/test',
+      payload: { api_key: 'sk-typed' },
+    });
+    assert.equal(bad.json().ok, false);
+    assert.match(bad.json().message, /HTTP 401/);
+    assert.equal(JSON.stringify(bad.json()).includes('sk-typed'), false);
+
+    // Provider 200 → ok:true.
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ web: { results: [] } }), { status: 200 })) as unknown as typeof fetch;
+    const good = await app.inject({
+      method: 'POST',
+      url: '/api/settings/helpers/brave/test',
+      payload: { api_key: 'sk-typed' },
+    });
+    assert.equal(good.json().ok, true);
+    assert.match(good.json().message, /verified/i);
+  } finally {
+    globalThis.fetch = realFetch;
+    saveConfig(original);
+  }
+});

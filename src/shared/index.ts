@@ -358,6 +358,20 @@ export interface ToolPolicyConfig extends ToolPolicyOverride {
   projects?: Record<string, ToolPolicyOverride>;
 }
 
+/** The external API helpers a user can enable (#291). Curated set: each has a
+ *  hand-written request/verify/normalise path (src/backend/helpers/) rather than
+ *  a generic "any REST API" form, so results reach the model clean and typed. */
+export type HelperProvider = 'brave' | 'exa' | 'perplexity' | 'context7';
+
+/** One helper provider's config. `api_key` supports ${ENV} interpolation and is
+ *  masked by the settings routes; an empty/unresolvable key makes the provider
+ *  unusable even when `enabled`, so its backing tool is omitted from the
+ *  session (the same "never advertise a tool that can't run" rule Monday uses). */
+export interface HelperConfig {
+  enabled: boolean;
+  api_key: string;
+}
+
 export interface NexusConfig {
   server: {
     /** Local port the backend binds (loopback). */
@@ -483,6 +497,21 @@ export interface NexusConfig {
     api_version: string;
     /** Linked-item refresh cadence in minutes while Nexus is running. */
     poll_minutes: number;
+  };
+  /** User-enabled external API helpers (#291). Each provider is off by default
+   *  and reaches the network with a paid key, so nothing is registered until the
+   *  user opts in. When a provider is enabled with a resolvable key, its
+   *  capability tool is registered for every session: web_search (Brave/Exa),
+   *  web_answer (Perplexity), docs_lookup (Context7). Keys resolve server-side
+   *  and never enter the prompt, transcript, or agent shell. */
+  helpers: {
+    brave: HelperConfig;
+    exa: HelperConfig;
+    perplexity: HelperConfig;
+    context7: HelperConfig;
+    /** Which provider `web_search` prefers when both Brave and Exa are enabled.
+     *  Ignored when only one (or neither) search provider is on. */
+    search_default: 'brave' | 'exa';
   };
 }
 

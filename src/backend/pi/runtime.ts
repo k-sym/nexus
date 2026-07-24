@@ -28,6 +28,8 @@ import { buildOrientationBlock, modelKeyHasVision } from './orientation.js';
 import { NULL_APPROVAL_AUDIT, type ApprovalAudit } from '../approvals/audit.js';
 import { createBrowserExtension, type BrowserToolDeps } from './browser-tool.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
+import { createHelpersExtension } from './helpers-tool.js';
+import type { HelpersToolDeps } from '../helpers/resolve.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
 import { defaultLocalModelsFile } from './local-models.js';
 import { getNexusDir } from '../config.js';
@@ -85,6 +87,10 @@ export interface PiRuntimeDeps {
   mondayTools?: (threadId: string) => MondayToolDeps | null;
   dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null;
   browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null;
+  /** Resolves the API-helper tool deps for a thread, or null to omit them.
+   *  Same "omit when absent" contract as the others. The args are ignored —
+   *  helpers are global config, not per-thread — but kept for signature parity. */
+  helpersTools?: (threadId: string, cwd: string) => HelpersToolDeps | null;
   /** Fire-and-forget teardown of a thread's compose project on session drop. */
   tearDownServices?: (threadId: string, cwd: string) => void;
   /** Fire-and-forget close of a thread's browser on session drop. */
@@ -136,6 +142,7 @@ export function buildSessionExtensionFactories(
   mondayTools?: (threadId: string) => MondayToolDeps | null,
   dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null,
   browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null,
+  helpersTools?: (threadId: string, cwd: string) => HelpersToolDeps | null,
   audit: ApprovalAudit = NULL_APPROVAL_AUDIT,
 ): ExtensionFactory[] {
   // Mirrors the mondayContext guard in createSession below. Unlike that call,
@@ -165,6 +172,14 @@ export function buildSessionExtensionFactories(
   } catch {
     browser = null;
   }
+  // Same guard, same reason: a resolver that throws costs the thread its helper
+  // tools, not its ability to open at all.
+  let helpers: HelpersToolDeps | null = null;
+  try {
+    helpers = helpersTools?.(threadId, cwd) ?? null;
+  } catch {
+    helpers = null;
+  }
   return [
     createQuestionExtension(threadId, questions),
     createApprovalExtension(threadId, cwd, approvals, policy, undefined, audit),
@@ -181,6 +196,9 @@ export function buildSessionExtensionFactories(
     // And for the browser: omitted when the feature is off or the machine has
     // no Chromium-family browser to drive.
     ...(browser ? [createBrowserExtension(browser)] : []),
+    // And for the API helpers: omitted when no provider is enabled with a
+    // resolvable key, so a session never advertises search/docs it can't run.
+    ...(helpers ? [createHelpersExtension(helpers)] : []),
   ];
 }
 
@@ -226,6 +244,8 @@ export class PiRuntime {
   private readonly tearDownServices?: (threadId: string, cwd: string) => void;
   /** Resolves the browser tool deps for a thread, or null to omit them. */
   private readonly browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null;
+  /** Resolves the API-helper tool deps for a thread, or null to omit them. */
+  private readonly helpersTools?: (threadId: string, cwd: string) => HelpersToolDeps | null;
   /** Closes a thread's browser on session drop. */
   private readonly closeBrowser?: (threadId: string) => void;
   /** Resolves a thread's persisted model key, for the orientation vision line. */
@@ -251,6 +271,7 @@ export class PiRuntime {
     this.dockerTools = deps.dockerTools;
     this.tearDownServices = deps.tearDownServices;
     this.browserTools = deps.browserTools;
+    this.helpersTools = deps.helpersTools;
     this.closeBrowser = deps.closeBrowser;
     this.sessionModelKey = deps.sessionModelKey;
     this.toolPolicy = deps.toolPolicy;
@@ -267,6 +288,12 @@ export class PiRuntime {
   /** Whether this session would get the browser tools. */
   private hasBrowserFor(threadId: string, cwd: string): boolean {
     try { return (this.browserTools?.(threadId, cwd) ?? null) != null; } catch { return false; }
+  }
+
+  /** Whether this session would get the API-helper tools — so the orientation
+   *  block mentions web search/docs only when they're actually available. */
+  private hasHelpersFor(threadId: string, cwd: string): boolean {
+    try { return (this.helpersTools?.(threadId, cwd) ?? null) != null; } catch { return false; }
   }
 
   /** Whether this thread's model can see images — so the orientation block can
@@ -445,7 +472,7 @@ export class PiRuntime {
       extensionFactories: buildSessionExtensionFactories(
         threadId, cwd, this.questions, this.approvals, this.policyFor(threadId, cwd),
         createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
-        this.browserTools, this.approvalAudit ?? NULL_APPROVAL_AUDIT,
+        this.browserTools, this.helpersTools, this.approvalAudit ?? NULL_APPROVAL_AUDIT,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened
       // later reflects the capabilities and item state it has THEN, not a line
@@ -462,6 +489,7 @@ export class PiRuntime {
             hasMemory: !!this.recallMemories,
             hasDocker: this.hasDockerFor(threadId, cwd),
             hasBrowser: this.hasBrowserFor(threadId, cwd),
+            hasHelpers: this.hasHelpersFor(threadId, cwd),
             hasVision: this.hasVisionFor(threadId, cwd),
           }));
         } catch { /* orientation is a nicety; never fail a session over it */ }
