@@ -638,6 +638,9 @@ github:                          # GitHub issue triage (Settings -> GitHub). Tok
 docker:                          # let agents run a project's local Docker Compose services
   enabled: false                 # off by default; the docker_service tool is also omitted entirely
                                  #   unless a Docker daemon is reachable
+  allow_host_mounts: []          # host path prefixes a compose file may bind-mount despite being
+                                 #   outside the repo (e.g. /var/run/docker.sock). Empty ⇒ any
+                                 #   escaping bind mount is refused before `up` starts anything.
 
 browser:                         # let agents drive a headless browser to verify front-end work
   enabled: false                 # off by default; the browser tools are also omitted unless a
@@ -750,7 +753,7 @@ On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `g
 | Tool | What it does | Registered when |
 |---|---|---|
 | `memory_recall` | Pull relevant memories for this project on demand (see [Memory](#memory)). | The memory daemon is configured. |
-| `docker_service` | Start/stop/inspect the project's Docker Compose services — `up` (always detached), `down`, `status`, `logs`. Namespaced to `nexus-<threadId>` so sessions can't collide; torn down on session drop, with a startup sweep for crash-orphaned projects. Compose files are contained to the repo. | `docker.enabled` **and** a Docker daemon answers. |
+| `docker_service` | Start/stop/inspect the project's Docker Compose services — `up` (always detached), `down`, `status`, `logs`. Namespaced to `nexus-<threadId>` so sessions can't collide; torn down on session drop, with a startup sweep for crash-orphaned projects. Both the compose file *and what it bind-mounts* are contained to the repo — a file that mounts a host path outside the project is refused before `up` starts anything, unless the path is in `docker.allow_host_mounts`. | `docker.enabled` **and** a Docker daemon answers. |
 | `browser_navigate` / `browser_read` / `browser_diagnostics` | Load a URL in a headless browser, read the rendered page (text or accessibility tree), and read its console/network output. One ephemeral-profile browser per thread, launched lazily and closed with the session. | `browser.enabled` **and** a Chromium-family browser is found. |
 | `monday_search` / `monday_get_item` / `monday_post_update` | Read (and, if opted in, post updates to) the Monday.com initiative a task is linked to. | Monday is configured and the task has a linked item. |
 | `question` | Emit a structured question card and wait for your answer. | Always. |
