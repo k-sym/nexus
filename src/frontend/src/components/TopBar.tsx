@@ -1,6 +1,6 @@
-import { ChatCircle, Gauge, Ticket, Gear, Brain, Pulse, Rocket, HardDrives } from '@phosphor-icons/react';
+import { ChatCircle, Gauge, Ticket, Gear, Brain, Pulse, Rocket, HardDrives, ShieldCheck } from '@phosphor-icons/react';
 
-export type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'services';
+export type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'services' | 'decisions';
 export type ManageView = 'settings';
 
 interface TopBarProps {
@@ -45,6 +45,7 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
       <button onClick={() => onSelectGlobal('activity')} className={item(view === 'activity')}><Pulse size={16} weight={view === 'activity' ? 'fill' : 'regular'} /> Activity</button>
       <button onClick={() => onSelectGlobal('missions')} className={item(view === 'missions')}><Rocket size={16} weight={view === 'missions' ? 'fill' : 'regular'} /> Missions</button>
       <button onClick={() => onSelectGlobal('services')} className={item(view === 'services')}><HardDrives size={16} weight={view === 'services' ? 'fill' : 'regular'} /> Services</button>
+      <button onClick={() => onSelectGlobal('decisions')} className={item(view === 'decisions')}><ShieldCheck size={16} weight={view === 'decisions' ? 'fill' : 'regular'} /> Decisions</button>
       <button onClick={() => onSelectGlobal('tickets')} className={item(view === 'tickets')}><Ticket size={16} weight={view === 'tickets' ? 'fill' : 'regular'} /> Tickets</button>
       <button onClick={() => onSelectGlobal('braindump')} className={item(view === 'braindump')}><Brain size={16} weight={view === 'braindump' ? 'fill' : 'regular'} /> Braindump</button>
       <button onClick={() => onSelectGlobal('assistant')} className={item(view === 'assistant')}>

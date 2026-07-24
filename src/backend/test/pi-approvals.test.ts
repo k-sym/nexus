@@ -26,7 +26,7 @@ test('approval broker stays pending until allow resolves it to {block:false}', a
   assert.equal(settled, false);
 
   assert.deepEqual(broker.decide('thread-1', 'call-1', 'allow'), { ok: true });
-  assert.deepEqual(await pending, { block: false });
+  assert.deepEqual(await pending, { block: false, answeredBy: 'human' });
   // Resolved once — a second decide is a 404.
   assert.equal(broker.decide('thread-1', 'call-1', 'allow').ok, false);
 });
@@ -35,14 +35,14 @@ test('approval broker deny resolves to {block:true} with the reason', async () =
   const broker = new ApprovalBroker();
   const pending = broker.register('t', 'a', 'bash', INPUT, '/repo');
   assert.deepEqual(broker.decide('t', 'a', 'deny', '  too risky  '), { ok: true });
-  assert.deepEqual(await pending, { block: true, reason: 'too risky' });
+  assert.deepEqual(await pending, { block: true, reason: 'too risky', answeredBy: 'human' });
 });
 
 test('approval broker deny without a reason uses a default', async () => {
   const broker = new ApprovalBroker();
   const pending = broker.register('t', 'a', 'bash', INPUT, '/repo');
   broker.decide('t', 'a', 'deny');
-  assert.deepEqual(await pending, { block: true, reason: 'Denied from glasses' });
+  assert.deepEqual(await pending, { block: true, reason: 'Denied from glasses', answeredBy: 'human' });
 });
 
 test('approval broker pushes pending then resolved to subscribers', async () => {
@@ -76,16 +76,16 @@ test('approval broker emits resolved (default-deny) on cancel, cancelThread and 
 
   const p1 = broker.register('t', 'a', 'bash', INPUT, '/repo');
   assert.equal(broker.cancel('t', 'a', 'denied'), true);
-  assert.deepEqual(await p1, { block: true, reason: 'denied' });
+  assert.deepEqual(await p1, { block: true, reason: 'denied', answeredBy: 'aborted' });
 
   const p2 = broker.register('t', 'b', 'bash', INPUT, '/repo');
   broker.cancelThread('t', 'dropped');
-  assert.deepEqual(await p2, { block: true, reason: 'dropped' });
+  assert.deepEqual(await p2, { block: true, reason: 'dropped', answeredBy: 'aborted' });
 
   const controller = new AbortController();
   const p3 = broker.register('t', 'c', 'bash', INPUT, '/repo', controller.signal);
   controller.abort('client gone');
-  assert.deepEqual(await p3, { block: true, reason: 'client gone' });
+  assert.deepEqual(await p3, { block: true, reason: 'client gone', answeredBy: 'aborted' });
 
   assert.deepEqual([...resolved].sort(), ['a', 'b', 'c']);
 });
@@ -117,7 +117,7 @@ test('approval broker isolates a throwing subscriber from resolution', async () 
   broker.subscribe(() => { throw new Error('boom'); });
   const pending = broker.register('t', 'call-1', 'bash', INPUT, '/repo');
   assert.deepEqual(broker.decide('t', 'call-1', 'allow'), { ok: true });
-  assert.deepEqual(await pending, { block: false });
+  assert.deepEqual(await pending, { block: false, answeredBy: 'human' });
 });
 
 test('approval broker rejects duplicate registration', async () => {
@@ -135,8 +135,8 @@ test('approval broker cancelThread resolves and removes all thread entries', asy
   const other = broker.register('thread-2', 'call-1', 'bash', INPUT, '/repo');
 
   broker.cancelThread('thread-1', 'Run aborted');
-  assert.deepEqual(await first, { block: true, reason: 'Run aborted' });
-  assert.deepEqual(await second, { block: true, reason: 'Run aborted' });
+  assert.deepEqual(await first, { block: true, reason: 'Run aborted', answeredBy: 'aborted' });
+  assert.deepEqual(await second, { block: true, reason: 'Run aborted', answeredBy: 'aborted' });
   assert.equal(broker.decide('thread-1', 'call-1', 'allow').ok, false);
 
   broker.cancelThread('thread-2', 'cleanup');
@@ -180,7 +180,7 @@ test('approval extension gates a confirm decision and allows it on decide', asyn
   assert.equal(broker.hasPending('thread-1'), true);
 
   broker.decide('thread-1', 'call-1', 'allow');
-  assert.deepEqual(await gate, { block: false });
+  assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
 });
 
 test('approval extension passes through when not supervised or tool is exempt', async () => {

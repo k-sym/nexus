@@ -22,15 +22,25 @@
  * session never executes an unreviewed tool and never wedges forever.
  */
 import type { ExtensionFactory } from '@earendil-works/pi-coding-agent';
-import { resolveToolDecision, type ToolPolicyResolver } from './tool-policy.js';
+import { categorizeTool, isSideEffectful, resolveToolDecision, type ToolPolicyResolver } from './tool-policy.js';
+import { NULL_APPROVAL_AUDIT, summarizeToolInput, type ApprovalAudit, type ToolDecisionRecord } from '../approvals/audit.js';
 
 export { UNGATED_TOOL_NAMES } from './tool-policy.js';
 
+/** How a parked gate was settled — for the audit trail. `human` = a person
+ *  allowed/denied it (from the UI or the glasses); `timeout` = the default-deny
+ *  fired; `aborted` = the run was cancelled, the thread dropped, or the signal
+ *  aborted. */
+export type ApprovalAnsweredBy = 'human' | 'timeout' | 'aborted';
+
 /** The value returned to the SDK's `beforeToolCall`. `block:false` lets the
- *  tool run; `block:true` skips it and surfaces `reason` as the tool result. */
+ *  tool run; `block:true` skips it and surfaces `reason` as the tool result.
+ *  `answeredBy` records how a parked gate resolved (absent for gates that never
+ *  parked). */
 export interface ApprovalDecision {
   block: boolean;
   reason?: string;
+  answeredBy?: ApprovalAnsweredBy;
 }
 
 /** Read-only view of a pending tool-gate, for enumerating across threads
@@ -150,11 +160,11 @@ export class ApprovalBroker {
       entry.timer = undefined;
       const remaining = entry.requestedAt + timeoutMs - Date.now();
       if (remaining <= 0) {
-        this.denyEntry(key, `Approval timed out after ${Math.round(timeoutMs / 1000)}s — auto-denied`);
+        this.denyEntry(key, `Approval timed out after ${Math.round(timeoutMs / 1000)}s — auto-denied`, 'timeout');
         continue;
       }
       entry.timer = setTimeout(() => {
-        this.denyEntry(key, `Approval timed out after ${Math.round(timeoutMs / 1000)}s — auto-denied`);
+        this.denyEntry(key, `Approval timed out after ${Math.round(timeoutMs / 1000)}s — auto-denied`, 'timeout');
       }, remaining);
       entry.timer.unref?.();
     }
@@ -198,7 +208,7 @@ export class ApprovalBroker {
       };
       if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
         entry.timer = setTimeout(() => {
-          this.denyEntry(key, `Approval timed out after ${Math.round(timeoutMs / 1000)}s — auto-denied`);
+          this.denyEntry(key, `Approval timed out after ${Math.round(timeoutMs / 1000)}s — auto-denied`, 'timeout');
         }, timeoutMs);
         // Don't keep the process alive purely to fire a pending gate's timeout.
         entry.timer.unref?.();
@@ -228,9 +238,9 @@ export class ApprovalBroker {
 
     if (action === 'allow') {
       this.remove(key, entry);
-      entry.resolve({ block: false });
+      entry.resolve({ block: false, answeredBy: 'human' });
     } else {
-      this.denyEntry(key, reason?.trim() || 'Denied from glasses');
+      this.denyEntry(key, reason?.trim() || 'Denied from glasses', 'human');
     }
     return { ok: true };
   }
@@ -286,11 +296,14 @@ export class ApprovalBroker {
     }
   }
 
-  private denyEntry(key: string, reason: string): void {
+  /** `answeredBy` defaults to `aborted` — the reason most callers (cancel,
+   *  cancelThread, abort, drop) pass through this path. Timeout and human deny
+   *  pass their own. */
+  private denyEntry(key: string, reason: string, answeredBy: ApprovalAnsweredBy = 'aborted'): void {
     const entry = this.pending.get(key);
     if (!entry) return;
     this.remove(key, entry);
-    entry.resolve({ block: true, reason });
+    entry.resolve({ block: true, reason, answeredBy });
   }
 
   private remove(key: string, entry: PendingApproval): void {
@@ -335,19 +348,57 @@ export function createApprovalExtension(
   policy: ToolPolicyResolver,
   /** Tests pin this; production omits it so gates follow client presence. */
   timeoutMs?: number,
+  /** Records decisions for the audit trail (#281). Defaults to a no-op sink. */
+  audit: ApprovalAudit = NULL_APPROVAL_AUDIT,
 ): ExtensionFactory {
   return (pi) => {
     pi.on('tool_call', async (event, ctx) => {
+      const request = { toolName: event.toolName, input: event.input };
       // resolveToolDecision owns the fail-closed behaviour: a resolver that
       // throws or returns nonsense degrades to `confirm` for side-effectful
       // tools rather than falling through to allow.
-      const decision = resolveToolDecision(policy, { toolName: event.toolName, input: event.input });
-      if (decision === 'allow') return undefined;
+      const decision = resolveToolDecision(policy, request);
+
+      // The source is best-effort — a throwing/absent explainer must not affect
+      // the call, only leave the record less specific.
+      let trace;
+      try { trace = policy.explain?.(request); } catch { trace = undefined; }
+
+      const base = {
+        threadId,
+        cwd,
+        toolName: event.toolName,
+        category: categorizeTool(event.toolName),
+        inputSummary: summarizeToolInput(event.input),
+        decision,
+        source: trace?.source ?? 'default',
+        ...(trace?.rule?.tool ? { ruleTool: trace.rule.tool } : {}),
+        ...(trace?.rule?.when ? { ruleWhen: trace.rule.when } : {}),
+      } satisfies Omit<ToolDecisionRecord, 'outcome' | 'answeredBy'>;
+
+      // Skip the noise: a plain allow of a read-only tool with no rule is not a
+      // "gated decision" worth a row. Everything else — confirms, denies, and
+      // allows that a rule drove or that touch the host — is recorded.
+      const worthRecording = decision !== 'allow' || trace?.source === 'rule' || isSideEffectful(event.toolName);
+
+      if (decision === 'allow') {
+        if (worthRecording) audit.record({ ...base, outcome: 'allowed', answeredBy: 'policy' });
+        return undefined;
+      }
       if (decision === 'deny') {
+        audit.record({ ...base, outcome: 'denied', answeredBy: 'policy' });
         return { block: true, reason: `Blocked by policy: \`${event.toolName}\` is not permitted in this session.` };
       }
-      // ctx.signal aborts the gate if the run is cancelled while awaiting.
-      return broker.register(threadId, event.toolCallId, event.toolName, event.input, cwd, ctx.signal, timeoutMs);
+
+      // confirm: park on the broker (ctx.signal aborts the gate on cancel), then
+      // record how it resolved — allowed/denied and by whom.
+      const result = await broker.register(threadId, event.toolCallId, event.toolName, event.input, cwd, ctx.signal, timeoutMs);
+      audit.record({
+        ...base,
+        outcome: result.block ? 'denied' : 'allowed',
+        answeredBy: result.answeredBy ?? 'human',
+      });
+      return result;
     });
   };
 }

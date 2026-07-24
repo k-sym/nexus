@@ -211,6 +211,28 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
   return res.json() as Promise<T>;
 }
 
+// Tool decisions — the audit trail read path (#281 part 2).
+export interface ToolDecisionEntry {
+  id: number;
+  thread_id: string;
+  cwd: string;
+  tool_name: string;
+  category: string;
+  input_summary: string;
+  decision: 'allow' | 'confirm' | 'deny';
+  source: string;
+  rule_tool: string | null;
+  rule_when: string | null;
+  outcome: 'allowed' | 'denied';
+  answered_by: string;
+  created_at: string;
+}
+
+export async function fetchToolDecisions(limit = 100): Promise<ToolDecisionEntry[]> {
+  const data = await fetchJson<{ decisions: ToolDecisionEntry[] }>(`/api/approvals/audit?limit=${limit}`);
+  return data.decisions;
+}
+
 // Docker services — the Services view's read path and teardown (#264 Phase 2).
 export interface ServiceContainer {
   name: string;

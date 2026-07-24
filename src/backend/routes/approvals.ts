@@ -63,6 +63,14 @@ export async function registerApprovalRoutes(fastify: FastifyInstance): Promise<
     approvals: broker().listPending().map(toPendingDto),
   }));
 
+  // The decision audit trail (#281 part 2): most-recent gated decisions first.
+  fastify.get('/api/approvals/audit', async (request) => {
+    const raw = (request.query as { limit?: string } | undefined)?.limit;
+    const limit = raw ? Number.parseInt(raw, 10) : 100;
+    const decisions = fastify.approvalAudit?.list(Number.isFinite(limit) ? limit : 100) ?? [];
+    return { decisions };
+  });
+
   fastify.post('/api/approvals/:id/decision', async (request, reply) => {
     const { id: toolCallId } = request.params as { id: string };
     const body = (request.body ?? {}) as { action?: string; reason?: string };
