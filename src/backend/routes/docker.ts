@@ -7,7 +7,7 @@
  * the endpoint can never take down a stack Nexus didn't start.
  */
 import type { FastifyInstance } from 'fastify';
-import { composeDown, isNexusProject, realDockerExec, type DockerExec } from '../docker/compose.js';
+import { composeDown, composeProjectName, isNexusProject, realDockerExec, type DockerExec } from '../docker/compose.js';
 import { listServiceGroups, type ServiceGroup } from '../docker/services.js';
 
 export interface DockerRouteOptions {
@@ -24,10 +24,19 @@ export async function registerDockerRoutes(fastify: FastifyInstance, options: Do
   const exec = options.exec ?? realDockerExec;
   const listGroups = options.listGroups ?? ((e: DockerExec) => listServiceGroups(fastify.db, e));
 
-  fastify.get('/api/docker/services', async () => {
+  fastify.get('/api/docker/services', async (request) => {
     if (!isAvailable()) return { available: false, groups: [] };
+    // `?thread=<id>` narrows to one thread's project — for the inline panel in a
+    // chat session. The thread → project mapping is the derived compose name, so
+    // the filter is computed here rather than trusted from the client.
+    const thread = (request.query as { thread?: string } | undefined)?.thread?.trim();
     try {
-      return { available: true, groups: await listGroups(exec) };
+      const groups = await listGroups(exec);
+      if (thread) {
+        const project = composeProjectName(thread);
+        return { available: true, groups: groups.filter((g) => g.project === project) };
+      }
+      return { available: true, groups };
     } catch {
       // A daemon that hiccups mid-request shouldn't 500 the panel.
       return { available: true, groups: [] };
