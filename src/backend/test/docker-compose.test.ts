@@ -20,6 +20,7 @@ import {
   MAX_LOG_TAIL,
   type DockerExec,
   type ExecResult,
+  findHostMountEscapes,
 } from '../docker/compose';
 
 const OK: ExecResult = { stdout: '', stderr: '', code: 0 };
@@ -221,4 +222,49 @@ test('listNexusProjects degrades to empty rather than throwing on odd output', a
   }
   const failing: DockerExec = async () => ({ stdout: '', stderr: 'boom', code: 1 });
   assert.deepEqual(await listNexusProjects(failing), []);
+});
+
+// ── host-mount containment ────────────────────────────────────────────────────
+
+/** Build a resolved-config object like `docker compose config --format json`. */
+const config = (volumes: Array<Record<string, unknown>>) => ({ services: { web: { volumes } } });
+
+test('findHostMountEscapes flags bind mounts whose source escapes the repo', () => {
+  const cfg = config([
+    { type: 'bind', source: '/repo/local-data', target: '/data' },      // inside → fine
+    { type: 'bind', source: '/etc', target: '/host-etc' },              // escape
+    { type: 'bind', source: '/repo/../secrets', target: '/s' },        // escape (normalizes out of repo)
+    { type: 'volume', source: 'named-vol', target: '/v' },             // named volume → never an escape
+  ]);
+  const escapes = findHostMountEscapes(cfg, '/repo');
+  assert.deepEqual(escapes.map((e) => e.source).sort(), ['/etc', '/repo/../secrets'].sort());
+  assert.equal(escapes[0].service, 'web');
+});
+
+test('the repo itself and paths under it are not escapes', () => {
+  const cfg = config([
+    { type: 'bind', source: '/repo', target: '/app' },
+    { type: 'bind', source: '/repo/sub/dir', target: '/x' },
+    { type: 'bind', source: '/repo/', target: '/y' }, // trailing slash
+  ]);
+  assert.deepEqual(findHostMountEscapes(cfg, '/repo'), []);
+});
+
+test('an allowlisted host path (and paths under it) is permitted', () => {
+  const cfg = config([
+    { type: 'bind', source: '/var/run/docker.sock', target: '/var/run/docker.sock' },
+    { type: 'bind', source: '/opt/shared/data', target: '/data' },
+    { type: 'bind', source: '/etc', target: '/e' }, // not allowlisted → still an escape
+  ]);
+  const escapes = findHostMountEscapes(cfg, '/repo', ['/var/run/docker.sock', '/opt/shared']);
+  assert.deepEqual(escapes.map((e) => e.source), ['/etc']);
+});
+
+test('findHostMountEscapes is empty and never throws on odd/absent config', () => {
+  assert.deepEqual(findHostMountEscapes(null, '/repo'), []);
+  assert.deepEqual(findHostMountEscapes({}, '/repo'), []);
+  assert.deepEqual(findHostMountEscapes({ services: 'nope' }, '/repo'), []);
+  assert.deepEqual(findHostMountEscapes({ services: { web: {} } }, '/repo'), []);
+  // A bind with no source string is ignored, not treated as an escape.
+  assert.deepEqual(findHostMountEscapes(config([{ type: 'bind', target: '/x' }]), '/repo'), []);
 });

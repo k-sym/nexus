@@ -93,6 +93,35 @@ test('up starts services detached and returns while they keep running', { skip }
   assert.equal((await runningContainers(ALPHA)).length, 2);
 });
 
+test('a compose file that bind-mounts a host path outside the repo is refused', { skip }, async () => {
+  // The real-Docker check of the mount containment: `docker compose config`
+  // resolves the source to an absolute (symlink-resolved) host path, which the
+  // check compares against the repo. A separate repo so it can't disturb ALPHA.
+  const escapeRepo = mkdtempSync(join(tmpdir(), 'nexus-live-mount-'));
+  writeFileSync(join(escapeRepo, 'docker-compose.yml'),
+    'services:\n  web:\n    image: alpine:3\n    command: ["sh","-c","sleep 3600"]\n    volumes:\n      - /etc:/host-etc:ro\n');
+  const ESCAPE = 'livemount-escape';
+  try {
+    await assert.rejects(
+      toolFor(ESCAPE, escapeRepo).execute('c', { action: 'up' }),
+      (e: Error) => /bind-mounts host paths outside the project/.test(e.message),
+    );
+    assert.equal((await runningContainers(ESCAPE)).length, 0, 'nothing started');
+
+    // The same file with /etc allowlisted starts.
+    let tool: any;
+    createDockerExtension({ threadId: ESCAPE, cwd: escapeRepo, exec: realDockerExec, allowHostMounts: ['/etc'] })(
+      { registerTool(v: unknown) { tool = v; } } as never,
+    );
+    const ok = await tool.execute('c', { action: 'up' });
+    assert.equal(ok.details.status, 'ok');
+    assert.equal((await runningContainers(ESCAPE)).length, 1);
+  } finally {
+    await composeDown({ projectName: composeProjectName(ESCAPE), cwd: escapeRepo, exec: realDockerExec }).catch(() => {});
+    rmSync(escapeRepo, { recursive: true, force: true });
+  }
+});
+
 test('status and logs reflect the running services', { skip }, async () => {
   const tool = toolFor(ALPHA, repo);
   const status = await tool.execute('c2', { action: 'status' });

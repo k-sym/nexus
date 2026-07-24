@@ -44,7 +44,8 @@ test('up runs detached under the thread project and reports it started', async (
   const { tool, calls, started } = await registerTool();
   const result = await tool.execute('call-1', { action: 'up', services: ['db'] });
 
-  assert.deepEqual(calls[0], ['compose', '--project-name', 'nexus-thread-1', 'up', '--detach', 'db']);
+  // `up` is preceded by a `config` mount-check call, so find the up invocation.
+  assert.deepEqual(calls.find((c) => c.includes('up')), ['compose', '--project-name', 'nexus-thread-1', 'up', '--detach', 'db']);
   assert.equal(result.details.status, 'ok');
   assert.equal(result.details.projectName, 'nexus-thread-1');
   // Recorded so the session can be torn down even if the model never says `down`.
@@ -62,7 +63,7 @@ test('only up records a start', async () => {
 test('blank service names are dropped rather than passed through', async () => {
   const { tool, calls } = await registerTool();
   await tool.execute('c', { action: 'up', services: ['db', '  ', '', ' cache '] });
-  assert.deepEqual(calls[0].slice(-2), ['db', 'cache']);
+  assert.deepEqual(calls.find((c) => c.includes('up'))!.slice(-2), ['db', 'cache']);
 });
 
 test('a failing compose command throws with its output, not a bare exit code', async () => {
@@ -116,6 +117,77 @@ test('two threads on one repo get separate compose projects', async () => {
   assert.equal(b.calls[0][2], 'nexus-thread-b');
 });
 
+// ── host-mount containment on `up` ────────────────────────────────────────────
+
+/** A tool whose exec serves a `compose config` JSON for the mount check and OK
+ *  for everything else, recording the argv of each call. */
+async function toolWithConfig(configJson: unknown, over: Partial<DockerToolDeps> = {}) {
+  const calls: string[][] = [];
+  const exec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args.includes('config')) return { ...OK, stdout: JSON.stringify(configJson) };
+    return OK;
+  };
+  let tool: any;
+  await createDockerExtension({ threadId: 'thread-1', cwd: '/repo', exec, ...over })(
+    { registerTool(v: unknown) { tool = v; } } as never,
+  );
+  return { tool, calls };
+}
+
+const bind = (source: string, target = '/x') => ({ type: 'bind', source, target });
+const svcConfig = (volumes: unknown[]) => ({ services: { web: { volumes } } });
+
+test('up runs the mount check and refuses a host path outside the repo', async () => {
+  const { tool, calls } = await toolWithConfig(svcConfig([bind('/etc', '/host-etc')]));
+  await assert.rejects(
+    tool.execute('c', { action: 'up' }),
+    (e: Error) => /bind-mounts host paths outside the project/.test(e.message) && /\/etc/.test(e.message),
+  );
+  // The mount check ran; the `up` never did.
+  assert.ok(calls.some((c) => c.includes('config')));
+  assert.equal(calls.some((c) => c.includes('up')), false, 'nothing was started');
+});
+
+test('up proceeds when all mounts are inside the repo', async () => {
+  const { tool, calls } = await toolWithConfig(svcConfig([bind('/repo/data', '/data')]));
+  const result = await tool.execute('c', { action: 'up' });
+  assert.equal(result.details.status, 'ok');
+  assert.ok(calls.some((c) => c.includes('up')));
+});
+
+test('an allowlisted host mount is permitted', async () => {
+  const { tool } = await toolWithConfig(svcConfig([bind('/var/run/docker.sock', '/var/run/docker.sock')]), {
+    allowHostMounts: ['/var/run/docker.sock'],
+  });
+  const result = await tool.execute('c', { action: 'up' });
+  assert.equal(result.details.status, 'ok');
+});
+
+test('up fails closed when the compose config cannot be resolved', async () => {
+  const calls: string[][] = [];
+  const exec: DockerExec = async (args) => {
+    calls.push(args);
+    if (args.includes('config')) return { stdout: '', stderr: 'yaml: line 3: mapping values not allowed', code: 1 };
+    return OK;
+  };
+  let tool: any;
+  await createDockerExtension({ threadId: 'thread-1', cwd: '/repo', exec })(
+    { registerTool(v: unknown) { tool = v; } } as never,
+  );
+  // Can't verify the mounts → refuse, surfacing the config error; don't start.
+  await assert.rejects(tool.execute('c', { action: 'up' }), /mapping values not allowed/);
+  assert.equal(calls.some((c) => c.includes('up')), false);
+});
+
+test('down/status/logs skip the mount check entirely', async () => {
+  const { tool, calls } = await toolWithConfig(svcConfig([bind('/etc')]));
+  await tool.execute('c', { action: 'down' });
+  await tool.execute('c', { action: 'status' });
+  // No `config` call for non-up actions — the check is an up-only concern.
+  assert.equal(calls.some((c) => c.includes('config')), false);
+});
+
 // ── session deps ──────────────────────────────────────────────────────────────
 
 const configWith = (enabled: boolean) => () => ({ docker: { enabled } }) as unknown as NexusConfig;
@@ -131,6 +203,23 @@ test('the tool is omitted when the feature is off, and offered when it is on', a
   const availability = await availabilityFor(true);
   assert.equal(buildDockerToolDeps(availability, { getConfig: configWith(false) })('t', '/repo'), null);
   assert.ok(buildDockerToolDeps(availability, { getConfig: configWith(true) })('t', '/repo'));
+});
+
+test('the tool carries the configured allow_host_mounts, read live', async () => {
+  const availability = await availabilityFor(true);
+  let hosts: unknown = ['/var/run/docker.sock'];
+  const getConfig = () => ({ docker: { enabled: true, allow_host_mounts: hosts } }) as unknown as NexusConfig;
+
+  const deps = buildDockerToolDeps(availability, { getConfig })('t', '/repo');
+  assert.deepEqual(deps?.allowHostMounts, ['/var/run/docker.sock']);
+
+  // Non-string / bad entries are filtered; a change lands on the next resolve.
+  hosts = ['/opt/x', 42, '', '  '];
+  assert.deepEqual(buildDockerToolDeps(availability, { getConfig })('t', '/repo')?.allowHostMounts, ['/opt/x']);
+
+  // Absent list ⇒ empty (fail closed: nothing permitted).
+  const noList = () => ({ docker: { enabled: true } }) as unknown as NexusConfig;
+  assert.deepEqual(buildDockerToolDeps(availability, { getConfig: noList })('t', '/repo')?.allowHostMounts, []);
 });
 
 test('the tool is omitted when no daemon answered the probe', async () => {

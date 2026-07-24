@@ -466,6 +466,10 @@ export interface NexusConfig {
      *  Enabling it does not make it silent; the tool policy defaults the
      *  `services` category to `confirm`. */
     enabled: boolean;
+    /** Host path prefixes a compose file may bind-mount even though they're
+     *  outside the project directory (e.g. a Docker socket). Empty/absent ⇒ a
+     *  compose file that mounts any host path outside the repo is refused. */
+    allow_host_mounts?: string[];
   };
   /** Optional per-tool approval policy (see src/backend/pi/tool-policy.ts).
    *  Absent ⇒ built-in defaults (read-only allowed, `services` confirmed).
