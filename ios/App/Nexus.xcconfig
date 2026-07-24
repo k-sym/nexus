@@ -1,0 +1,26 @@
+// Shared build settings for the Nexus iOS app target.
+// Local, per-machine overrides (signing team, dev backend URL) belong in
+// Local.xcconfig — git-ignored and optionally included at the bottom.
+
+PRODUCT_NAME = Nexus
+PRODUCT_BUNDLE_IDENTIFIER = it.resolve.nexus
+MARKETING_VERSION = 0.1.0
+CURRENT_PROJECT_VERSION = 1
+
+IPHONEOS_DEPLOYMENT_TARGET = 17.0
+TARGETED_DEVICE_FAMILY = 1,2
+SWIFT_VERSION = 5.0
+
+GENERATE_INFOPLIST_FILE = NO
+INFOPLIST_FILE = Nexus/Info.plist
+PRODUCT_BUNDLE_PACKAGE_TYPE = APPL
+
+CODE_SIGN_STYLE = Automatic
+SWIFT_EMIT_LOC_STRINGS = YES
+ENABLE_USER_SCRIPT_SANDBOXING = YES
+
+// Prefilled into the onboarding screen in DEBUG builds only (see BuildConfig).
+// Empty by default; set a real tailnet/LAN URL in Local.xcconfig.
+DEV_BASE_URL =
+
+#include? "Local.xcconfig"

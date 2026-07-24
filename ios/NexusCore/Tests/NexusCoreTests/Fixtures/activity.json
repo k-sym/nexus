@@ -1,0 +1,10 @@
+{
+  "running": [
+    { "id": "op1", "kind": "chat_turn", "status": "running", "title": "Refactor auth", "project_id": "proj_nexus", "task_id": null, "thread_id": "t_1", "provider": "anthropic", "model": "claude-opus-4-8", "started_at": "2026-07-24T12:00:00.000Z", "completed_at": null, "duration_ms": 4200, "last_event": "tool: Edit", "error": null }
+  ],
+  "recent": [
+    { "id": "op2", "kind": "jira_sync", "status": "succeeded", "title": "Jira sync", "project_id": null, "task_id": null, "thread_id": null, "provider": null, "model": null, "started_at": "2026-07-24T11:50:00.000Z", "completed_at": "2026-07-24T11:50:03.000Z", "duration_ms": 3000, "last_event": null, "error": null },
+    { "id": "op3", "kind": "mission_tick", "status": "failed", "title": "Mission tick", "project_id": "proj_nexus", "task_id": null, "thread_id": null, "provider": null, "model": null, "started_at": "2026-07-24T11:00:00.000Z", "completed_at": "2026-07-24T11:00:10.000Z", "duration_ms": 10000, "last_event": null, "error": "timeout", "usage": { "input": 12, "output": 34 }, "diagnostics": { "note": "ignored" } }
+  ],
+  "counts": { "running": 1, "succeeded": 5, "failed": 1 }
+}

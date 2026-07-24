@@ -1,0 +1,9 @@
+// Copy this file to `Local.xcconfig` (git-ignored) and fill in your values.
+//
+// Apple Developer team id — required for building to a device / TestFlight.
+// Find it in Xcode → Settings → Accounts, or the Apple Developer portal.
+// DEVELOPMENT_TEAM = ABCDE12345
+//
+// Backend URL prefilled into the onboarding screen in DEBUG builds. Point at
+// your tailnet host (or, for the Simulator, a `tailscale serve` URL or LAN IP).
+// DEV_BASE_URL = https://baker-pro.your-tailnet.ts.net:8444

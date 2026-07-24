@@ -1,0 +1,5 @@
+{"kind":"run_start","run":{"runId":"r3","threadId":"t1","startedAt":"2026-07-24T12:00:00.000Z"}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"Hmm, "}}
+{"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","delta":"let me think."}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"The answer is 42."}}
+{"kind":"run_end","run":{"runId":"r3","threadId":"t1","completedAt":"2026-07-24T12:00:05.000Z","status":"completed"}}

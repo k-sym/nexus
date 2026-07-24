@@ -1,0 +1,30 @@
+[
+  {
+    "id": "proj_nexus",
+    "slug": "nexus",
+    "name": "Nexus",
+    "badge": "NEX",
+    "description": "",
+    "repo_path": "/Users/k-sym/Projects/nexus",
+    "config_json": "{}",
+    "git_remote": "git@github.com:K-Sym/nexus.git",
+    "task_count": 7,
+    "chat_session_count": 12,
+    "created_at": "2026-01-01T00:00:00.000Z",
+    "updated_at": "2026-07-24T10:00:00.000Z"
+  },
+  {
+    "id": "proj_scratch",
+    "slug": "scratch",
+    "name": "Scratch",
+    "badge": "SCR",
+    "description": "",
+    "repo_path": "/Users/k-sym/Projects/scratch",
+    "config_json": "{}",
+    "git_remote": "",
+    "task_count": 0,
+    "chat_session_count": null,
+    "created_at": "2026-02-01T00:00:00.000Z",
+    "updated_at": "2026-07-20T10:00:00.000Z"
+  }
+]

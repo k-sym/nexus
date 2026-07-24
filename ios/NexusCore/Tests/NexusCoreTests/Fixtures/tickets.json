@@ -1,0 +1,4 @@
+[
+  { "key": "NEX-1", "summary": "Ship the iOS app", "status": "In Progress", "priority": "High", "assignee": "K-Sym", "created": "2026-07-01T00:00:00.000Z", "updated": "2026-07-24T00:00:00.000Z", "url": "https://jira.example/NEX-1", "source": "jira", "synced_at": "2026-07-24T12:00:00.000Z" },
+  { "key": "NEX-2", "summary": "Unassigned ticket", "status": "To Do", "priority": "Low", "assignee": null, "created": null, "updated": null, "url": null, "source": null, "synced_at": "2026-07-24T12:00:00.000Z" }
+]
