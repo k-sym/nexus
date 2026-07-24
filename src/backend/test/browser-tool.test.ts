@@ -41,6 +41,9 @@ function fakePage(overrides: Partial<Record<string, unknown>> = {}) {
       calls.push({ op: 'screenshot', args: [opts] });
       return { data: 'iVBORw0KGgoAAAANS', mimeType: 'image/png' };
     },
+    setViewport: async (w: number, h: number) => { calls.push({ op: 'setViewport', args: [w, h] }); return `Viewport set to ${w}×${h}.`; },
+    setColorScheme: async (scheme: string) => { calls.push({ op: 'setColorScheme', args: [scheme] }); return `Color scheme set to ${scheme}.`; },
+    resetEmulation: async () => { calls.push({ op: 'resetEmulation', args: [] }); return 'Cleared viewport and color-scheme emulation.'; },
     ...overrides,
   } as unknown as BrowserPage;
   return { page, calls };
@@ -56,10 +59,10 @@ async function registerTools(allowedHosts: string[] = [], pageOverrides = {}) {
   return { tools, calls };
 }
 
-test('the extension registers the full navigate/read/diagnostics/act/screenshot surface', async () => {
+test('the extension registers the full navigate/read/diagnostics/act/screenshot/emulate surface', async () => {
   const { tools } = await registerTools();
   assert.deepEqual([...tools.keys()].sort(), [
-    'browser_act', 'browser_diagnostics', 'browser_navigate', 'browser_read', 'browser_screenshot',
+    'browser_act', 'browser_diagnostics', 'browser_emulate', 'browser_navigate', 'browser_read', 'browser_screenshot',
   ]);
 });
 
@@ -207,6 +210,47 @@ test('screenshot passes ref and full_page through, and labels the scope', async 
   const full = await screenshot.execute('c', { full_page: true });
   assert.deepEqual(calls.at(-1), { op: 'screenshot', args: [{ ref: undefined, fullPage: true }] });
   assert.match(full.details.scope, /full page/);
+});
+
+// ── emulate ─────────────────────────────────────────────────────────────────────
+
+test('emulate sets the viewport and the color scheme, reporting what it applied', async () => {
+  const { tools, calls } = await registerTools();
+  const emulate = tools.get('browser_emulate');
+
+  const both = await emulate.execute('c', { width: 375, height: 812, color_scheme: 'dark' });
+  assert.deepEqual(calls, [
+    { op: 'setViewport', args: [375, 812] },
+    { op: 'setColorScheme', args: ['dark'] },
+  ]);
+  assert.match(both.content[0].text, /Viewport set to 375×812\./);
+  assert.match(both.content[0].text, /Color scheme set to dark\./);
+  assert.deepEqual(both.details.applied.length, 2);
+});
+
+test('emulate reset clears on its own', async () => {
+  const { tools, calls } = await registerTools();
+  await tools.get('browser_emulate').execute('c', { reset: true });
+  assert.deepEqual(calls, [{ op: 'resetEmulation', args: [] }]);
+});
+
+test('emulate reset combined with a viewport clears FIRST, then applies', async () => {
+  const { tools, calls } = await registerTools();
+  await tools.get('browser_emulate').execute('c', { reset: true, width: 800, height: 600 });
+  assert.deepEqual(calls, [
+    { op: 'resetEmulation', args: [] },
+    { op: 'setViewport', args: [800, 600] },
+  ], 'clear then set, so the new viewport survives the reset');
+});
+
+test('emulate rejects width without height, and a call that does nothing', async () => {
+  const { tools, calls } = await registerTools();
+  const emulate = tools.get('browser_emulate');
+
+  await assert.rejects(emulate.execute('c', { width: 400 }), /width and height together/);
+  await assert.rejects(emulate.execute('c', { height: 400 }), /width and height together/);
+  await assert.rejects(emulate.execute('c', {}), /Nothing to emulate/);
+  assert.deepEqual(calls, [], 'a rejected call never touches the page');
 });
 
 // ── launch plumbing ───────────────────────────────────────────────────────────

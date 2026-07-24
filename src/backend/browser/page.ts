@@ -35,6 +35,18 @@ export const MAX_SCREENSHOT_HEIGHT = 4_000;
  *  a little fidelity for a much smaller frame. */
 export const PREVIEW_JPEG_QUALITY = 55;
 
+/** Bounds on an emulated viewport dimension (CSS px). Below 1 the browser
+ *  rejects it; the ceiling keeps a responsive check from asking for an absurd
+ *  canvas that would also make any subsequent full-page screenshot enormous. */
+export const MIN_VIEWPORT_DIMENSION = 1;
+export const MAX_VIEWPORT_DIMENSION = 4_096;
+
+/** The `prefers-color-scheme` values `setColorScheme` accepts. `no-preference`
+ *  emulates a user who has expressed neither, which some pages treat distinctly
+ *  from light. */
+export type ColorScheme = 'light' | 'dark' | 'no-preference';
+export const SUPPORTED_COLOR_SCHEMES: readonly ColorScheme[] = ['light', 'dark', 'no-preference'];
+
 /** Marks "querySelector found nothing" in an evaluated expression's result. */
 const MISSING_SENTINEL = '__nexus_no_such_element__';
 
@@ -395,6 +407,41 @@ export class BrowserPage {
     const dy = direction === 'up' ? -600 : 600;
     await this.evaluateString(`(() => { window.scrollBy(0, ${dy}); return ''; })()`);
     return `Scrolled ${direction}.`;
+  }
+
+  /**
+   * Emulate a viewport size (CSS px), for responsive checks (#283 Phase 3).
+   *
+   * `deviceScaleFactor: 0` leaves the scale factor at the device default rather
+   * than overriding it — we're changing how much the page can see, not its DPI.
+   * The override persists across navigations in this tab until cleared, so a
+   * later `navigate` renders at the same size and a screenshot captures it.
+   */
+  async setViewport(width: number, height: number): Promise<string> {
+    await this.connection.send('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 0, mobile: false,
+    }, this.sessionId);
+    return `Viewport set to ${width}×${height}.`;
+  }
+
+  /**
+   * Emulate `prefers-color-scheme`, for theme checks. Without this the headless
+   * browser follows the host OS's setting, so a dark-mode check on a server
+   * whose OS is in light mode would silently test the wrong theme.
+   */
+  async setColorScheme(scheme: ColorScheme): Promise<string> {
+    await this.connection.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: scheme }],
+    }, this.sessionId);
+    return `Color scheme set to ${scheme}.`;
+  }
+
+  /** Drop every emulation override, back to the browser's own defaults. */
+  async resetEmulation(): Promise<string> {
+    await this.connection.send('Emulation.clearDeviceMetricsOverride', {}, this.sessionId);
+    // An empty feature list clears the prefers-color-scheme override we set.
+    await this.connection.send('Emulation.setEmulatedMedia', { features: [] }, this.sessionId);
+    return 'Cleared viewport and color-scheme emulation.';
   }
 
   /**

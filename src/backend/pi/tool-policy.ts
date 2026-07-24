@@ -111,6 +111,10 @@ const TOOL_CATEGORIES: Readonly<Record<string, ToolCategory>> = {
   browser_read: 'read',
   browser_diagnostics: 'read',
   browser_screenshot: 'read',
+  // Emulation only changes how the page renders for this tab — no network, no
+  // host effect — so it's a read, allowed by default like the other look-only
+  // browser tools.
+  browser_emulate: 'read',
 };
 
 /** Categories whose tools can affect something outside the model's context —

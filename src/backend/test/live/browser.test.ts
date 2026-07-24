@@ -33,8 +33,21 @@ const PAGE = `<!doctype html><html><head><title>Nexus Live</title><style>.tall{h
     <button id="go" type="button" onclick="document.getElementById('out').textContent='clicked:'+document.getElementById('name').value">Go</button>
   </form>
   <div id="out">idle</div>
+  <!-- #vp mirrors the live viewport + prefers-color-scheme so an emulation
+       change (which fires resize / media 'change') is observable via readText. -->
+  <div id="vp"></div>
   <div class="tall"></div>
   <script src="/missing.js"></script>
+  <script>
+    (function () {
+      var el = document.getElementById('vp');
+      var mq = matchMedia('(prefers-color-scheme: dark)');
+      var upd = function () { el.textContent = 'VP ' + window.innerWidth + 'x' + window.innerHeight + ' ' + (mq.matches ? 'dark' : 'light'); };
+      upd();
+      window.addEventListener('resize', upd);
+      mq.addEventListener('change', upd);
+    })();
+  </script>
   <script>console.log('MARKER_LOG'); console.error('MARKER_ERROR');</script>
 </body></html>`;
 
@@ -43,6 +56,19 @@ const PAGE = `<!doctype html><html><head><title>Nexus Live</title><style>.tall{h
 function refFor(tree: string, label: RegExp): string | undefined {
   const line = tree.split('\n').find((l) => /\[ref_\d+\]/.test(l) && label.test(l));
   return line?.match(/\[(ref_\d+)\]/)?.[1];
+}
+
+/** Poll #vp until it satisfies `pred`, so an emulation change has time to reach
+ *  the page's resize / media-change listener. Emulation is applied by CDP and
+ *  dispatched to the page asynchronously, so a bounded wait beats a fixed sleep. */
+async function waitForVp(page: BrowserPage, pred: (t: string) => boolean): Promise<string> {
+  let last = '';
+  for (let i = 0; i < 80; i++) {
+    last = await page.readText('#vp');
+    if (pred(last)) return last;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`#vp never satisfied the predicate; last was "${last}"`);
 }
 
 let server: Server;
@@ -285,6 +311,47 @@ test('captureView bumps its version only when the page actually changes (#283)',
     await page.navigate(`${base}/gone`);
     const changed = await page.captureView();
     assert.ok(changed!.version > first!.version, 'a different page bumps the version');
+  } finally {
+    await connection.close();
+  }
+});
+
+test('emulate: setViewport resizes the CSS viewport and persists across navigation (#283)', { skip }, async () => {
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+
+    await page.setViewport(390, 844); // an iPhone-ish viewport
+    assert.match(await waitForVp(page, (t) => t.includes('390x844')), /390x844/, 'innerWidth/Height reflect the override');
+
+    // The override belongs to the tab, so a later navigation keeps it.
+    await page.navigate(`${base}/`);
+    assert.match(await waitForVp(page, (t) => t.includes('390x844')), /390x844/, 'the viewport survives a navigation');
+
+    await page.resetEmulation();
+    assert.doesNotMatch(await waitForVp(page, (t) => !t.includes('390x844')), /390x844/, 'reset drops the override');
+  } finally {
+    await connection.close();
+  }
+});
+
+test('emulate: setColorScheme drives prefers-color-scheme, and reset restores it (#283)', { skip }, async () => {
+  const connection = await CdpConnection.launch({ binaryPath: binary!.path });
+  try {
+    const page = await BrowserPage.create(connection);
+    await page.navigate(`${base}/`);
+
+    await page.setColorScheme('dark');
+    assert.match(await waitForVp(page, (t) => t.endsWith('dark')), /dark$/, 'the page now matches dark');
+
+    await page.setColorScheme('light');
+    assert.match(await waitForVp(page, (t) => t.endsWith('light')), /light$/, 'and can be forced back to light');
+
+    // Reset restores the host default; assert only that it resolves to a real
+    // scheme (which one depends on the host OS), not to a specific value.
+    await page.resetEmulation();
+    assert.match(await page.readText('#vp'), /(dark|light)$/);
   } finally {
     await connection.close();
   }
