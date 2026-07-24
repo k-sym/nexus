@@ -256,6 +256,40 @@ public actor APIClient {
     public func missionAction(id: String, action: String) async throws {
         _ = try await requestData(.missionAction(id, action))
     }
+
+    // MARK: M4
+
+    /// Held NDJSON queue: one `snapshot`, then `pending`/`resolved`, with `\n`
+    /// heartbeats. Holding it open marks the client "attached" server-side.
+    public func approvalsStream() throws -> AsyncThrowingStream<JSONValue, Error> {
+        try events(.approvalsStream)
+    }
+
+    public func decideApproval(toolCallId: String, action: String, reason: String? = nil) async throws {
+        let body = try JSONEncoder().encode(ApprovalDecisionRequest(action: action, reason: reason))
+        _ = try await requestData(.decideApproval(toolCallId, body: body))
+    }
+
+    public func gitDiff(projectId: String) async throws -> GitDiffState {
+        try await request(.gitDiff(projectId))
+    }
+
+    public func mondayItems(projectId: String) async throws -> [MondayItem] {
+        let response: MondayItemsResponse = try await request(.mondayItems(projectId))
+        return response.items
+    }
+
+    /// Full config with secrets masked (`••••••••`). Kept as a raw tree so the
+    /// editor can PUT back only the leaves it changed.
+    public func settings() async throws -> JSONValue {
+        try await request(.settings, decoder: plainDecoder)
+    }
+
+    @discardableResult
+    public func updateSettings(_ config: JSONValue) async throws -> JSONValue {
+        let body = try JSONEncoder().encode(config)
+        return try await request(.updateSettings(body: body), decoder: plainDecoder)
+    }
 }
 
 public struct HealthResponse: Decodable, Sendable {

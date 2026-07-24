@@ -41,9 +41,9 @@ struct ProjectHubView: View {
             case .missions:
                 MissionsView(api: api, projectId: project.id)
             case .monday:
-                PlaceholderView(title: "Monday", systemImage: "square.grid.3x3.fill", note: "Monday items land in M4.")
+                MondayView(api: api, projectId: project.id)
             case .diff:
-                PlaceholderView(title: "Diff", systemImage: "plusminus", note: "Git diff lands in M4.")
+                DiffView(api: api, projectId: project.id)
             }
         }
         .navigationTitle(project.name)

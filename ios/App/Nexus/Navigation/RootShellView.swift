@@ -7,7 +7,9 @@ import NexusCore
 /// own the NavigationStack.
 struct RootShellView: View {
     @Environment(ConnectionStore.self) private var connection
+    @Environment(LiveHub.self) private var liveHub
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selection: AppSection? = .projects
     @State private var tabSelection: String = Self.initialTab
 
@@ -25,9 +27,17 @@ struct RootShellView: View {
     }
 
     var body: some View {
+        shell
+            .task { liveHub.start() }
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { liveHub.start() } else if phase == .background { liveHub.stop() }
+            }
+    }
+
+    @ViewBuilder
+    private var shell: some View {
         #if DEBUG
         // Verification hook: launch straight into a specific view.
-        // NEXUS_DEV_VIEW = chat:<threadId> | board:<pid> | memory:<pid> | missions:<pid> | braindump
         if let spec = ProcessInfo.processInfo.environment["NEXUS_DEV_VIEW"], !spec.isEmpty {
             NavigationStack { debugDestination(spec) }
         } else {
@@ -49,6 +59,10 @@ struct RootShellView: View {
         case "memory": MemoryView(api: api, projectId: arg).navigationTitle("Memory").navigationBarTitleDisplayMode(.inline)
         case "missions": MissionsView(api: api, projectId: arg).navigationTitle("Missions").navigationBarTitleDisplayMode(.inline)
         case "braindump": BraindumpView(api: api)
+        case "approvals": ApprovalsView()
+        case "monday": MondayView(api: api, projectId: arg).navigationTitle("Monday").navigationBarTitleDisplayMode(.inline)
+        case "diff": DiffView(api: api, projectId: arg).navigationTitle("Diff").navigationBarTitleDisplayMode(.inline)
+        case "settings": SettingsView()
         default: adaptiveBody
         }
     }
@@ -77,6 +91,7 @@ struct RootShellView: View {
 
             NavigationStack { destination(for: .approvals) }
                 .tabItem { Label(AppSection.approvals.title, systemImage: AppSection.approvals.systemImage) }
+                .badge(liveHub.pendingCount)
                 .tag("approvals")
 
             NavigationStack { destination(for: .pulse) }
@@ -131,7 +146,7 @@ struct RootShellView: View {
         case .projects:
             ProjectsListView(api: api)
         case .approvals:
-            PlaceholderView(title: "Approvals", systemImage: section.systemImage, note: "Live approvals land in M4.")
+            ApprovalsView()
         case .pulse:
             PulseView(api: api)
         case .tickets:

@@ -120,4 +120,25 @@ public struct Endpoint: Sendable {
     public static func missionAction(_ id: String, _ action: String) -> Endpoint {
         Endpoint(path: "/api/missions/\(id)/\(action)", method: "POST")
     }
+
+    // MARK: M4
+
+    public static let approvals = Endpoint(path: "/api/approvals")
+    public static let approvalsStream = Endpoint(path: "/api/approvals/stream")
+    public static func decideApproval(_ toolCallId: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/approvals/\(toolCallId)/decision", method: "POST", body: body)
+    }
+
+    public static func gitDiff(_ projectId: String) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/git/diff")
+    }
+
+    public static func mondayItems(_ projectId: String) -> Endpoint {
+        Endpoint(path: "/api/monday/projects/\(projectId)/items")
+    }
+
+    public static let settings = Endpoint(path: "/api/settings")
+    public static func updateSettings(body: Data) -> Endpoint {
+        Endpoint(path: "/api/settings", method: "PUT", body: body)
+    }
 }

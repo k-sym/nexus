@@ -6,13 +6,25 @@ import Foundation
 /// IMPORTANT: always decode this with a *plain* `JSONDecoder` (default key
 /// strategy). Decoding it through `.convertFromSnakeCase` would rewrite nested
 /// keys like `file_path` → `filePath` and corrupt the data.
-public enum JSONValue: Decodable, Hashable, Sendable {
+public enum JSONValue: Codable, Hashable, Sendable {
     case string(String)
     case number(Double)
     case bool(Bool)
     case object([String: JSONValue])
     case array([JSONValue])
     case null
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .string(let s): try container.encode(s)
+        case .number(let n): try container.encode(n)
+        case .bool(let b): try container.encode(b)
+        case .object(let o): try container.encode(o)
+        case .array(let a): try container.encode(a)
+        case .null: try container.encodeNil()
+        }
+    }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
