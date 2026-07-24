@@ -8,6 +8,7 @@ import { Project, Task, TaskStatus, normalizeProjectBadge, type ReviewActionRequ
 import { buildReviewActionPrompt, buildReviewActionTitle, getProjectGitDiff, reviewActionPlan } from '../git/diff.js';
 import { summarizeTaskThread } from '../memory/summarize.js';
 import { insertNotification } from '../notifications/index.js';
+import { scaffoldProjectDocs } from '../projects/scaffold.js';
 import { detectGitRemote } from '../github/repo.js';
 import { syncGitHubIssues, ensureProjectGitRemote, noteSyncError, clearSyncError } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
@@ -391,12 +392,13 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     db.prepare('INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
       .run(project.id, project.slug, project.name, project.badge, project.description, project.repo_path, project.config_json, project.sort_order, project.git_remote, project.created_at, project.updated_at);
 
-    const docsDir = path.join(repoPath, 'project_docs');
-    for (const sub of ['specs', 'plans', 'uploads']) {
-      const dir = path.join(docsDir, sub);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
+    // Scaffold the project_docs skeleton and a starter AGENTS.md so the pointers
+    // the orientation block gives the agent land somewhere real. Best-effort:
+    // a read-only or unusual repo dir must not fail project creation.
+    try {
+      scaffoldProjectDocs(repoPath, project.name);
+    } catch {
+      /* creating the project matters more than seeding its docs */
     }
 
     return project;
