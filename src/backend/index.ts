@@ -32,6 +32,7 @@ import { registerApprovalRoutes } from './routes/approvals.js';
 import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from './docker/session-deps.js';
 import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
 import { createBrowserSupport } from './browser/session-deps.js';
+import { registerDockerRoutes } from './routes/docker.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -159,6 +160,7 @@ async function main() {
   app.register(registerPiRoutes);
   app.register(registerActivityRoutes);
   app.register(registerApprovalRoutes);
+  app.register(async (f) => { await registerDockerRoutes(f, { isAvailable: () => dockerAvailability.isAvailable() }); });
   app.register(registerTrustRoutes);
   app.register(registerMissionRoutes);
   app.register(registerMondayRoutes);

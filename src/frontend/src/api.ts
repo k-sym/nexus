@@ -211,6 +211,34 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
   return res.json() as Promise<T>;
 }
 
+// Docker services — the Services view's read path and teardown (#264 Phase 2).
+export interface ServiceContainer {
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  ports: string;
+}
+export interface ServiceGroup {
+  project: string;
+  /** No live chat thread or mission owns this project — a leak. */
+  orphaned: boolean;
+  containers: ServiceContainer[];
+}
+export interface DockerServicesResponse {
+  available: boolean;
+  groups: ServiceGroup[];
+}
+
+export async function fetchDockerServices(): Promise<DockerServicesResponse> {
+  return fetchJson<DockerServicesResponse>('/api/docker/services');
+}
+
+/** Tear down one Nexus service group by project name. */
+export async function dockerServiceDown(project: string): Promise<void> {
+  await fetchJson(`/api/docker/services/${encodeURIComponent(project)}/down`, { method: 'POST' });
+}
+
 // Monday.com — the Project Management view's read paths and link CRUD.
 // Free-standing exports (not nested under `api`) so ProjectManagementView can
 // import and mock them directly, matching the Task 11 brief's client surface.
