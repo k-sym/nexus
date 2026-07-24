@@ -34,6 +34,7 @@ import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
 import { createBrowserSupport } from './browser/session-deps.js';
 import { registerDockerRoutes } from './routes/docker.js';
 import { resolveToolPolicy, EMPTY_TOOL_POLICY } from './pi/tool-policy-config.js';
+import { DbApprovalAudit } from './approvals/audit.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -73,6 +74,10 @@ async function main() {
       if (line) console.log(line);
     } catch { /* the next start sweeps again */ }
   });
+  // The tool-decision audit trail (#281). DB-backed so decisions survive a
+  // restart; created before the runtime so sessions record into it, and
+  // decorated onto the app below so the audit route can read it.
+  const approvalAudit = new DbApprovalAudit(db);
   // Located once at startup: unlike a Docker daemon, a browser binary does not
   // come and go. Null when the machine has none — the tools are then omitted.
   const browserSupport = createBrowserSupport();
@@ -116,6 +121,7 @@ async function main() {
         return EMPTY_TOOL_POLICY;
       }
     },
+    approvalAudit,
   });
 
   const openRouterKey = resolveOpenRouterKey(config);
@@ -166,6 +172,7 @@ async function main() {
   app.decorate('modelCuration', modelCuration);
   app.decorate('oauthFlows', new OAuthFlowManager(pi.auth));
   app.decorate('activity', activityManager);
+  app.decorate('approvalAudit', approvalAudit);
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);

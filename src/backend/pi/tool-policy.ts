@@ -53,10 +53,27 @@ export interface ToolPolicyRequest {
   input: unknown;
 }
 
+/** Where a decision came from, for the audit trail (#281 part 2). `supervise`
+ *  means the per-thread confirm-everything floor raised whatever the base was. */
+export type ToolDecisionSource = 'ungated' | 'rule' | 'category' | 'default' | 'supervise';
+
+/** A decision plus why — what layer produced it, and the rule when a rule did. */
+export interface ToolDecisionTrace {
+  decision: ToolDecision;
+  source: ToolDecisionSource;
+  /** Present when `source` is `rule` (or a rule was raised by `supervise`). */
+  rule?: { tool: string; when?: string };
+}
+
 /** Resolves a decision for one tool call. Read live at each call — never frozen
  *  into a session — so a policy change takes effect on the next tool call
- *  without rebuilding the session. */
-export type ToolPolicyResolver = (request: ToolPolicyRequest) => ToolDecision;
+ *  without rebuilding the session. `explain` returns the same decision with its
+ *  source, for auditing; it is optional so a plain function still satisfies the
+ *  type. */
+export interface ToolPolicyResolver {
+  (request: ToolPolicyRequest): ToolDecision;
+  explain?(request: ToolPolicyRequest): ToolDecisionTrace;
+}
 
 /** The built-in `question` tool has its own interactive glasses approval path
  *  (see ./questions.ts). Gating it here would double-prompt / deadlock, so it is
@@ -167,51 +184,66 @@ export interface ToolPolicyOptions {
 const DECISIONS: ReadonlySet<string> = new Set<ToolDecision>(['allow', 'confirm', 'deny']);
 
 /**
- * The decision of the first rule that applies to this request, or `undefined`
- * when none do. A rule applies when its `tool` matches and either it has no
- * `when` or its named condition evaluates true. Malformed rules and unknown
- * conditions are skipped — a rule never applies "blindly".
+ * The first rule that applies to this request, or `undefined` when none do. A
+ * rule applies when its `tool` matches and either it has no `when` or its named
+ * condition evaluates true. Malformed rules and unknown conditions are skipped —
+ * a rule never applies "blindly".
  */
-function ruleDecision(rules: ToolPolicyRule[], request: ToolPolicyRequest): ToolDecision | undefined {
+function matchingRule(rules: ToolPolicyRule[], request: ToolPolicyRequest): ToolPolicyRule | undefined {
   for (const rule of rules) {
     if (!rule || rule.tool !== request.toolName || !DECISIONS.has(rule.decision)) continue;
-    if (!rule.when) return rule.decision; // unconditional rule for this tool
+    if (!rule.when) return rule; // unconditional rule for this tool
     // Unknown condition (undefined) or false → this rule does not apply; try the next.
-    if (evaluateCondition(rule.when, request) === true) return rule.decision;
+    if (evaluateCondition(rule.when, request) === true) return rule;
   }
   return undefined;
+}
+
+/**
+ * Resolve a request to a decision AND its source.
+ *
+ * Precedence for the base decision, most specific first: a matching input-aware
+ * rule → the category policy → the fail-closed default. The Supervise override
+ * is then a floor that can only *raise* that base (allow→confirm), never lower
+ * it; when it does raise, the effective source is `supervise`. An explicit
+ * `deny` is never softened.
+ */
+function explainDecision(options: ToolPolicyOptions, request: ToolPolicyRequest): ToolDecisionTrace {
+  const { toolName } = request;
+  // Highest precedence and not overridable: gating this deadlocks the thread.
+  if (UNGATED_TOOL_NAMES.has(toolName)) return { decision: 'allow', source: 'ungated' };
+
+  const floor: ToolDecision | undefined = options.isSupervised?.() ? 'confirm' : undefined;
+
+  const rule = matchingRule(options.rules?.() ?? [], request);
+  const policy = { ...DEFAULT_CATEGORY_POLICY, ...(options.categoryPolicy?.() ?? {}) };
+  const category = categorizeTool(toolName);
+
+  let base: ToolDecision;
+  let source: ToolDecisionSource;
+  if (rule) { base = rule.decision; source = 'rule'; }
+  else if (policy[category] !== undefined) { base = policy[category] as ToolDecision; source = 'category'; }
+  else { base = failClosedDecision(toolName); source = 'default'; }
+
+  const decision = atLeast(base, floor);
+  const ruleInfo = rule ? { tool: rule.tool, ...(rule.when ? { when: rule.when } : {}) } : undefined;
+  // If the Supervise floor changed the outcome, that floor is what decided.
+  if (decision !== base) return { decision, source: 'supervise', ...(ruleInfo ? { rule: ruleInfo } : {}) };
+  return { decision, source, ...(ruleInfo ? { rule: ruleInfo } : {}) };
 }
 
 /**
  * Build the resolver a session's approval extension consults.
  *
  * Every input is a getter rather than a value, because the property that makes
- * mid-session Supervise toggling (and now a live config edit) work — the
- * decision is computed at tool-call time, not captured at session build — has to
- * survive this refactor.
- *
- * Precedence for the base decision, most specific first: a matching input-aware
- * rule → the category policy → the fail-closed default. The Supervise override
- * is then a floor that can only *raise* that base (allow→confirm), never lower
- * it, and an explicit `deny` is never softened.
+ * mid-session Supervise toggling (and a live config edit) work — the decision is
+ * computed at tool-call time, not captured at session build — has to survive.
+ * The returned resolver also carries `explain` for the audit trail.
  */
 export function createToolPolicyResolver(options: ToolPolicyOptions = {}): ToolPolicyResolver {
-  return (request) => {
-    const { toolName } = request;
-    // Highest precedence and not overridable: gating this deadlocks the thread.
-    if (UNGATED_TOOL_NAMES.has(toolName)) return 'allow';
-
-    let floor: ToolDecision | undefined;
-    if (options.isSupervised?.()) {
-      // Supervise's meaning is unchanged: confirm everything that can be gated.
-      floor = 'confirm';
-    }
-
-    const fromRule = ruleDecision(options.rules?.() ?? [], request);
-    const policy = { ...DEFAULT_CATEGORY_POLICY, ...(options.categoryPolicy?.() ?? {}) };
-    const base = fromRule ?? policy[categorizeTool(toolName)] ?? failClosedDecision(toolName);
-    return atLeast(base, floor);
-  };
+  const resolver = ((request) => explainDecision(options, request).decision) as ToolPolicyResolver;
+  resolver.explain = (request) => explainDecision(options, request);
+  return resolver;
 }
 
 /**

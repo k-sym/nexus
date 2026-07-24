@@ -1,11 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import {
   ApprovalBroker,
   ATTENDED_APPROVAL_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
 } from '../pi/approvals';
+import { DbApprovalAudit } from '../approvals/audit';
 import { registerApprovalRoutes, toPendingDto, type ApprovalStreamEvent } from '../routes/approvals';
 
 const INPUT = { command: 'docker compose up -d' };
@@ -17,6 +22,44 @@ async function buildApp(broker: ApprovalBroker): Promise<FastifyInstance> {
   await app.ready();
   return app;
 }
+
+test('GET /api/approvals/audit returns recorded decisions, newest first', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-audit-route-'));
+  const audit = new DbApprovalAudit(new Database(join(dir, 'nexus.db')));
+  const app = Fastify();
+  app.decorate('pi', { approvals: new ApprovalBroker() } as never);
+  app.decorate('approvalAudit', audit as never);
+  await app.register(registerApprovalRoutes);
+  await app.ready();
+  try {
+    audit.record({ threadId: 't', cwd: '/repo', toolName: 'bash', category: 'exec', inputSummary: 'ls', decision: 'confirm', source: 'supervise', outcome: 'allowed', answeredBy: 'human' });
+    audit.record({ threadId: 't', cwd: '/repo', toolName: 'docker_service', category: 'services', inputSummary: 'up', decision: 'deny', source: 'category', outcome: 'denied', answeredBy: 'policy' });
+
+    const res = await app.inject({ method: 'GET', url: '/api/approvals/audit' });
+    assert.equal(res.statusCode, 200);
+    const { decisions } = res.json() as { decisions: Array<Record<string, unknown>> };
+    assert.equal(decisions.length, 2);
+    assert.equal(decisions[0].tool_name, 'docker_service', 'newest first');
+    assert.equal(decisions[0].outcome, 'denied');
+
+    const limited = await app.inject({ method: 'GET', url: '/api/approvals/audit?limit=1' });
+    assert.equal((limited.json() as { decisions: unknown[] }).decisions.length, 1);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/approvals/audit is empty (not an error) when no audit sink is present', async () => {
+  const app = await buildApp(new ApprovalBroker());
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/approvals/audit' });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), { decisions: [] });
+  } finally {
+    await app.close();
+  }
+});
 
 test('GET /api/approvals lists pending gates with their category', async () => {
   const broker = new ApprovalBroker();
@@ -50,7 +93,7 @@ test('POST decision allows a gate and 404s once it is gone', async () => {
       method: 'POST', url: '/api/approvals/call-1/decision', payload: { action: 'allow' },
     });
     assert.equal(ok.statusCode, 200);
-    assert.deepEqual(await gate, { block: false });
+    assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
 
     // Same id again: the gate is resolved, so this is an honest 404 rather
     // than a silent no-op.
@@ -72,7 +115,7 @@ test('POST decision denies with the supplied reason', async () => {
       method: 'POST', url: '/api/approvals/call-1/decision', payload: { action: 'deny', reason: 'not on this repo' },
     });
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(await gate, { block: true, reason: 'not on this repo' });
+    assert.deepEqual(await gate, { block: true, reason: 'not on this repo', answeredBy: 'human' });
   } finally {
     await app.close();
   }
@@ -87,7 +130,7 @@ test('an unknown action is treated as allow, never as an unhandled 500', async (
       method: 'POST', url: '/api/approvals/call-1/decision', payload: { action: 'wat' },
     });
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(await gate, { block: false });
+    assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
   } finally {
     await app.close();
   }
@@ -133,7 +176,7 @@ test('a gate parked before the client attached is rescheduled onto the longer wi
 
   assert.equal(broker.hasPending('t'), true, 'still waiting for a human');
   broker.decide('t', 'c1', 'allow');
-  assert.deepEqual(await gate, { block: false });
+  assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
   detach();
 });
 
@@ -259,7 +302,7 @@ test('whoever decides first wins; the other surface sees it resolve', async () =
 
     // The "glasses" decide directly on the broker, not through these routes.
     assert.deepEqual(broker.decide('thread-1', 'call-1', 'allow'), { ok: true });
-    assert.deepEqual(await gate, { block: false });
+    assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
 
     // The in-app client is told, and its own attempt now 404s.
     const events = await collecting;

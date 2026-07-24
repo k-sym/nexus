@@ -157,7 +157,7 @@ test('pending tool-gate surfaces as a kind:approval and allow resolves {block:fa
     const decide = await handle.app.inject({ method: 'POST', url: '/api/approvals/tool1/decision', payload: { action: 'allow' } });
     assert.equal(decide.statusCode, 200);
     assert.deepEqual(decide.json(), { ok: true });
-    assert.deepEqual(await gate, { block: false });
+    assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
   } finally {
     await cleanup();
   }
@@ -169,7 +169,7 @@ test('deny on a tool-gate resolves {block:true} with the reason', async () => {
     const gate = approvals.register('t1', 'tool2', 'edit', { file_path: '/x.ts' }, '/repo');
     const res = await handle.app.inject({ method: 'POST', url: '/api/approvals/tool2/decision', payload: { action: 'deny', reason: 'nope' } });
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(await gate, { block: true, reason: 'nope' });
+    assert.deepEqual(await gate, { block: true, reason: 'nope', answeredBy: 'human' });
   } finally {
     await cleanup();
   }
@@ -181,7 +181,7 @@ test('a decision with no action defaults a tool-gate to allow', async () => {
     const gate = approvals.register('t1', 'tool3', 'bash', { command: 'ls' }, '/repo');
     const res = await handle.app.inject({ method: 'POST', url: '/api/approvals/tool3/decision', payload: {} });
     assert.equal(res.statusCode, 200);
-    assert.deepEqual(await gate, { block: false });
+    assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
   } finally {
     await cleanup();
   }
@@ -202,7 +202,7 @@ test('questions and tool-gates share the approval queue without id collision', a
     assert.equal((await q).status, 'answered');
     // A tool-gate decision routes to the ApprovalBroker.
     await handle.app.inject({ method: 'POST', url: '/api/approvals/g1/decision', payload: { action: 'allow' } });
-    assert.deepEqual(await gate, { block: false });
+    assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
   } finally {
     await cleanup();
   }
@@ -238,7 +238,7 @@ test('disabling supervise releases parked tool-gates (default-deny)', async () =
 
     const off = await handle.app.inject({ method: 'POST', url: '/api/supervise', payload: { session_id: 'thread-1', supervised: false } });
     assert.equal(off.statusCode, 200);
-    assert.deepEqual(await gate, { block: true, reason: 'Supervise disabled' });
+    assert.deepEqual(await gate, { block: true, reason: 'Supervise disabled', answeredBy: 'aborted' });
   } finally {
     await cleanup();
   }

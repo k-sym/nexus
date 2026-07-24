@@ -25,6 +25,7 @@ import { createToolPolicyResolver, type ToolPolicyResolver } from './tool-policy
 import type { ResolvedToolPolicy } from './tool-policy-config.js';
 import { createDockerExtension, type DockerToolDeps } from './docker-tool.js';
 import { buildOrientationBlock, modelKeyHasVision } from './orientation.js';
+import { NULL_APPROVAL_AUDIT, type ApprovalAudit } from '../approvals/audit.js';
 import { createBrowserExtension, type BrowserToolDeps } from './browser-tool.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
@@ -95,6 +96,8 @@ export interface PiRuntimeDeps {
   /** Resolves the `tool_policy` config for a repo, read fresh per tool call so
    *  a config edit lands without a session rebuild. Absent ⇒ built-in defaults. */
   toolPolicy?: (cwd: string) => ResolvedToolPolicy;
+  /** Sink for the tool-decision audit trail. Absent ⇒ decisions aren't recorded. */
+  approvalAudit?: ApprovalAudit;
 }
 
 export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
@@ -133,6 +136,7 @@ export function buildSessionExtensionFactories(
   mondayTools?: (threadId: string) => MondayToolDeps | null,
   dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null,
   browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null,
+  audit: ApprovalAudit = NULL_APPROVAL_AUDIT,
 ): ExtensionFactory[] {
   // Mirrors the mondayContext guard in createSession below. Unlike that call,
   // this one has no try/catch at its call site (it's part of the
@@ -163,7 +167,7 @@ export function buildSessionExtensionFactories(
   }
   return [
     createQuestionExtension(threadId, questions),
-    createApprovalExtension(threadId, cwd, approvals, policy),
+    createApprovalExtension(threadId, cwd, approvals, policy, undefined, audit),
     signalFactoryBuilder(cwd),
     // Omitted when the runtime was built without a recall backend (tests,
     // headless callers) so sessions don't advertise a tool that can't run.
@@ -228,6 +232,8 @@ export class PiRuntime {
   private readonly sessionModelKey?: (threadId: string, cwd: string) => string | undefined;
   /** Resolves the tool policy config for a repo, read live per tool call. */
   private readonly toolPolicy?: (cwd: string) => ResolvedToolPolicy;
+  /** Sink for the tool-decision audit trail. Undefined ⇒ a no-op sink is used. */
+  private readonly approvalAudit?: ApprovalAudit;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
@@ -248,6 +254,7 @@ export class PiRuntime {
     this.closeBrowser = deps.closeBrowser;
     this.sessionModelKey = deps.sessionModelKey;
     this.toolPolicy = deps.toolPolicy;
+    this.approvalAudit = deps.approvalAudit;
   }
 
   /** Whether this session would get the Docker tool — used to decide if the
@@ -438,7 +445,7 @@ export class PiRuntime {
       extensionFactories: buildSessionExtensionFactories(
         threadId, cwd, this.questions, this.approvals, this.policyFor(threadId, cwd),
         createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
-        this.browserTools,
+        this.browserTools, this.approvalAudit ?? NULL_APPROVAL_AUDIT,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened
       // later reflects the capabilities and item state it has THEN, not a line

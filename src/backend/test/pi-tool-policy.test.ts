@@ -182,6 +182,44 @@ test('a rule cannot escape the deny floor, and supervise still escalates over a 
   assert.equal(denying(call('browser_navigate', { url: 'https://x.com/' })), 'deny');
 });
 
+// ── explain (audit source) ────────────────────────────────────────────────────
+
+test('explain reports the source of each decision', () => {
+  const policy = createToolPolicyResolver({
+    isSupervised: () => false,
+    categoryPolicy: () => ({ services: 'deny' }),
+    rules: () => [{ tool: 'browser_navigate', when: 'remote_host', decision: 'confirm' }],
+  });
+
+  // Ungated tool.
+  assert.deepEqual(policy.explain!(call('question')), { decision: 'allow', source: 'ungated' });
+  // Category-driven.
+  assert.deepEqual(policy.explain!(call('docker_service', { action: 'up' })), { decision: 'deny', source: 'category' });
+  // Rule-driven, with the rule surfaced.
+  assert.deepEqual(policy.explain!(call('browser_navigate', { url: 'https://x.com/' })), {
+    decision: 'confirm', source: 'rule', rule: { tool: 'browser_navigate', when: 'remote_host' },
+  });
+  // A plain default (read tool, no rule): category `read` → allow.
+  assert.deepEqual(policy.explain!(call('grep')), { decision: 'allow', source: 'category' });
+});
+
+test('explain attributes a supervise-raised decision to supervise', () => {
+  const policy = createToolPolicyResolver({
+    isSupervised: () => true,
+    categoryPolicy: () => ({ read: 'allow' }),
+  });
+  // read would be allow, but the supervise floor raised it to confirm.
+  assert.deepEqual(policy.explain!(call('grep')), { decision: 'confirm', source: 'supervise' });
+
+  // A deny is above the confirm floor, so it stands as its own source.
+  const denying = createToolPolicyResolver({
+    isSupervised: () => true,
+    categoryPolicy: () => ({ exec: 'deny' }),
+  });
+  assert.equal(denying.explain!(call('bash')).source, 'category');
+  assert.equal(denying.explain!(call('bash')).decision, 'deny');
+});
+
 test('resolveToolDecision fails closed on a throwing policy', () => {
   const boom: ToolPolicyResolver = () => { throw new Error('bad rule'); };
   assert.equal(resolveToolDecision(boom, call('bash')), 'confirm');
