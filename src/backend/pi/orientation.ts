@@ -82,11 +82,14 @@ export function buildOrientationBlock(input: OrientationInput): string {
 
   if (input.hasBrowser) {
     const screenshot = input.hasVision
-      ? ', and screenshot it to see the result'
+      ? ', screenshot it to see the result yourself'
       : '';
     lines.push(
-      '- **You can verify front-end work in a real browser** — load a page, read what rendered, and '
-      + `interact with it${screenshot} — instead of shipping UI blind.`,
+      '- **You can verify front-end work in a real browser** — load a page, read what rendered, '
+      + `interact with it${screenshot}, and resize the viewport or switch \`prefers-color-scheme\` `
+      + 'to check responsive and dark-mode states — instead of shipping UI blind. Whatever page the '
+      + 'browser is on is mirrored live into this chat for the person watching, so front-end work is '
+      + 'visible as it happens.',
     );
   }
 

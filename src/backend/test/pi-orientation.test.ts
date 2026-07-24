@@ -35,6 +35,17 @@ test('screenshots are mentioned only for a vision-capable model', () => {
   assert.doesNotMatch(buildOrientationBlock({ ...NONE, hasVision: true }), /screenshot/i);
 });
 
+test('the browser line advertises the full surface — emulation and the live preview', () => {
+  // The tools self-advertise via their promptSnippets; the orientation framing
+  // should still point at the capabilities a model might not think to reach for.
+  const block = buildOrientationBlock({ ...NONE, hasBrowser: true });
+  assert.match(block, /resize the viewport/, 'responsive checks');
+  assert.match(block, /prefers-color-scheme/, 'theme checks');
+  assert.match(block, /responsive and dark-mode/);
+  // The page is shown to the human live, so the model knows the work is visible.
+  assert.match(block, /mirrored live/);
+});
+
 test('a fully-capable session gets every line', () => {
   const block = buildOrientationBlock({ hasMemory: true, hasDocker: true, hasBrowser: true, hasVision: true });
   assert.match(block, /memory_recall/);
