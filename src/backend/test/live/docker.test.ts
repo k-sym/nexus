@@ -18,8 +18,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { createDockerExtension } from '../../pi/docker-tool';
 import { probeDocker, realDockerExec, composeProjectName, composeDown, listNexusProjects } from '../../docker/compose';
+import { listServiceGroups } from '../../docker/services';
 import { liveSkip } from './gate';
 
 const probe = await probeDocker();
@@ -91,6 +93,35 @@ test('up starts services detached and returns while they keep running', { skip }
   assert.equal((await runningContainers(ALPHA)).length, 2);
 });
 
+test('a compose file that bind-mounts a host path outside the repo is refused', { skip }, async () => {
+  // The real-Docker check of the mount containment: `docker compose config`
+  // resolves the source to an absolute (symlink-resolved) host path, which the
+  // check compares against the repo. A separate repo so it can't disturb ALPHA.
+  const escapeRepo = mkdtempSync(join(tmpdir(), 'nexus-live-mount-'));
+  writeFileSync(join(escapeRepo, 'docker-compose.yml'),
+    'services:\n  web:\n    image: alpine:3\n    command: ["sh","-c","sleep 3600"]\n    volumes:\n      - /etc:/host-etc:ro\n');
+  const ESCAPE = 'livemount-escape';
+  try {
+    await assert.rejects(
+      toolFor(ESCAPE, escapeRepo).execute('c', { action: 'up' }),
+      (e: Error) => /bind-mounts host paths outside the project/.test(e.message),
+    );
+    assert.equal((await runningContainers(ESCAPE)).length, 0, 'nothing started');
+
+    // The same file with /etc allowlisted starts.
+    let tool: any;
+    createDockerExtension({ threadId: ESCAPE, cwd: escapeRepo, exec: realDockerExec, allowHostMounts: ['/etc'] })(
+      { registerTool(v: unknown) { tool = v; } } as never,
+    );
+    const ok = await tool.execute('c', { action: 'up' });
+    assert.equal(ok.details.status, 'ok');
+    assert.equal((await runningContainers(ESCAPE)).length, 1);
+  } finally {
+    await composeDown({ projectName: composeProjectName(ESCAPE), cwd: escapeRepo, exec: realDockerExec }).catch(() => {});
+    rmSync(escapeRepo, { recursive: true, force: true });
+  }
+});
+
 test('status and logs reflect the running services', { skip }, async () => {
   const tool = toolFor(ALPHA, repo);
   const status = await tool.execute('c2', { action: 'status' });
@@ -118,6 +149,32 @@ test('two threads on one repo get isolated container sets', { skip }, async () =
 test('an unknown service name surfaces as an error', { skip }, async () => {
   const tool = toolFor(ALPHA, repo);
   await assert.rejects(tool.execute('c5', { action: 'up', services: ['nope'] }));
+});
+
+test('listServiceGroups reads the running projects and flags ownership', { skip }, async () => {
+  // ALPHA (2 services) and BETA (1) are up from the tests above. Record ALPHA as
+  // a live thread; BETA is deliberately absent, so it reads as an orphan. This
+  // is the real-Docker check of the `docker ps` format string the UI depends on.
+  const dbDir = mkdtempSync(join(tmpdir(), 'nexus-live-svc-db-'));
+  const db = new Database(join(dbDir, 'nexus.db'));
+  db.exec("CREATE TABLE chat_threads (id TEXT PRIMARY KEY, project_id TEXT, agent_id TEXT, title TEXT, created_at TEXT, updated_at TEXT, archived_at TEXT); CREATE TABLE missions (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, config_json TEXT DEFAULT '{}', created_at TEXT, updated_at TEXT);");
+  db.prepare('INSERT INTO chat_threads (id, project_id, agent_id, title, created_at, updated_at) VALUES (?,?,?,?,?,?)')
+    .run(ALPHA, 'p1', 'agent', 'T', new Date().toISOString(), new Date().toISOString());
+
+  try {
+    const groups = await listServiceGroups(db, realDockerExec);
+    const alpha = groups.find((g) => g.project === composeProjectName(ALPHA));
+    const beta = groups.find((g) => g.project === composeProjectName(BETA));
+
+    assert.ok(alpha, 'the running project is listed');
+    assert.equal(alpha!.orphaned, false, 'the recorded thread is not flagged a leak');
+    assert.equal(alpha!.containers.length, 2, 'both services parsed');
+    assert.ok(alpha!.containers.every((c) => c.state && c.name), 'state and name parsed from docker ps');
+    assert.equal(beta?.orphaned, true, 'the unrecorded project reads as an orphan');
+  } finally {
+    db.close();
+    rmSync(dbDir, { recursive: true, force: true });
+  }
 });
 
 test('down removes only the calling thread\'s containers', { skip }, async () => {

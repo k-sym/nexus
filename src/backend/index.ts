@@ -32,6 +32,10 @@ import { registerApprovalRoutes } from './routes/approvals.js';
 import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from './docker/session-deps.js';
 import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
 import { createBrowserSupport } from './browser/session-deps.js';
+import { registerDockerRoutes } from './routes/docker.js';
+import { registerBrowserRoutes } from './routes/browser.js';
+import { resolveToolPolicy, EMPTY_TOOL_POLICY } from './pi/tool-policy-config.js';
+import { DbApprovalAudit } from './approvals/audit.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
@@ -71,6 +75,10 @@ async function main() {
       if (line) console.log(line);
     } catch { /* the next start sweeps again */ }
   });
+  // The tool-decision audit trail (#281). DB-backed so decisions survive a
+  // restart; created before the runtime so sessions record into it, and
+  // decorated onto the app below so the audit route can read it.
+  const approvalAudit = new DbApprovalAudit(db);
   // Located once at startup: unlike a Docker daemon, a browser binary does not
   // come and go. Null when the machine has none — the tools are then omitted.
   const browserSupport = createBrowserSupport();
@@ -93,6 +101,28 @@ async function main() {
     tearDownServices: buildTearDownServices(dockerAvailability),
     browserTools: browserSupport?.browserTools,
     closeBrowser: browserSupport?.closeBrowser,
+    // The thread's last-used model, persisted in the DB, so the orientation
+    // block's vision line survives a restart. Best-effort — a missing row or a
+    // read error just means "no vision asserted".
+    sessionModelKey: (threadId) => {
+      try {
+        const row = db.prepare('SELECT last_model_key FROM chat_threads WHERE id = ?').get(threadId) as
+          { last_model_key?: string } | undefined;
+        return row?.last_model_key ?? undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    // Read config fresh per tool call so a `tool_policy` edit lands without a
+    // session rebuild; degrade to built-in defaults if config can't be read.
+    toolPolicy: (cwd) => {
+      try {
+        return resolveToolPolicy(loadConfig(), cwd);
+      } catch {
+        return EMPTY_TOOL_POLICY;
+      }
+    },
+    approvalAudit,
   });
 
   const openRouterKey = resolveOpenRouterKey(config);
@@ -143,6 +173,7 @@ async function main() {
   app.decorate('modelCuration', modelCuration);
   app.decorate('oauthFlows', new OAuthFlowManager(pi.auth));
   app.decorate('activity', activityManager);
+  app.decorate('approvalAudit', approvalAudit);
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
@@ -159,6 +190,16 @@ async function main() {
   app.register(registerPiRoutes);
   app.register(registerActivityRoutes);
   app.register(registerApprovalRoutes);
+  app.register(async (f) => { await registerDockerRoutes(f, { isAvailable: () => dockerAvailability.isAvailable() }); });
+  // The human-facing view of a thread's headless browser. Wired to the same
+  // browser support the tools use, so the panel reports available only when the
+  // feature is on AND a browser was found. Peeks — polling never launches one.
+  app.register(async (f) => {
+    await registerBrowserRoutes(f, {
+      enabled: () => browserSupport != null && browserSupport.isEnabled(),
+      view: browserSupport ? (threadId) => browserSupport.viewFor(threadId) : undefined,
+    });
+  });
   app.register(registerTrustRoutes);
   app.register(registerMissionRoutes);
   app.register(registerMondayRoutes);

@@ -25,7 +25,8 @@
  */
 import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
-import { isAbsolute, resolve, relative, sep } from 'node:path';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, resolve, relative, sep, dirname, basename, join } from 'node:path';
 import { boundTailText } from '../text/bound.js';
 
 /** Hard ceiling on any docker invocation. `up` pulling a cold image is the slow
@@ -213,6 +214,90 @@ export function composeDown(options: ComposeCommandOptions): Promise<ExecResult>
 
 export function composeStatus(options: ComposeCommandOptions): Promise<ExecResult> {
   return runCompose(options, ['ps', '--format', 'json']);
+}
+
+/**
+ * The fully-resolved compose config as JSON. This is how the host-mount check
+ * sees what a compose file actually declares — Compose resolves every bind
+ * mount's `source` to an absolute host path, so escapes are visible even when
+ * the file wrote them as `./x` or `../y`. Throws with the compose error when the
+ * file is missing or malformed.
+ */
+export async function composeConfigJson(options: ComposeCommandOptions): Promise<unknown> {
+  const result = await runCompose(options, ['config', '--format', 'json']);
+  if (result.code !== 0) {
+    throw new ComposeFileError((result.stderr || result.stdout || 'docker compose config failed').trim());
+  }
+  return JSON.parse(result.stdout || '{}');
+}
+
+/** A bind mount whose host source is outside the project directory. */
+export interface HostMountEscape {
+  service: string;
+  source: string;
+  target: string;
+}
+
+/**
+ * Absolutize and resolve symlinks, so a source Compose reported as
+ * `/private/var/…` and a repo path of `/var/…` compare equal (macOS symlinks
+ * `/var` → `/private/var`). realpath needs the path to exist, and a mount source
+ * may not yet — so realpath the nearest existing ancestor and re-append the rest.
+ */
+function normalizeAbs(p: string): string {
+  let current = resolve(p);
+  const tail: string[] = [];
+  for (let i = 0; i < 64; i += 1) {
+    try {
+      const real = realpathSync(current);
+      const full = tail.length ? join(real, ...tail.reverse()) : real;
+      return full.replace(/[\\/]+$/, '') || full;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) break; // reached the root without an existing path
+      tail.push(basename(current));
+      current = parent;
+    }
+  }
+  const abs = resolve(p);
+  return abs.replace(/[\\/]+$/, '') || abs;
+}
+
+/** Whether `child` is the repo itself or lives under it. */
+function isInsideRepo(repo: string, child: string): boolean {
+  const rel = relative(repo, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel) && !rel.split(sep).includes('..'));
+}
+
+/**
+ * Bind mounts in a resolved compose config whose host source escapes the repo —
+ * unless the source is covered by an explicit allowlist entry (a path a project
+ * has said is OK to mount, e.g. a Docker socket).
+ *
+ * Named volumes (Docker-managed, `type: volume`) are never escapes — only real
+ * host bind mounts are. Pure and synchronous so it's trivially testable; the
+ * async `docker compose config` call is separate.
+ */
+export function findHostMountEscapes(config: unknown, repoPath: string, allowed: string[] = []): HostMountEscape[] {
+  const services = (config as { services?: Record<string, { volumes?: unknown[] }> } | null)?.services;
+  if (!services || typeof services !== 'object') return [];
+
+  const repo = normalizeAbs(repoPath);
+  const allowList = allowed.map(normalizeAbs);
+  const escapes: HostMountEscape[] = [];
+
+  for (const [service, def] of Object.entries(services)) {
+    for (const vol of def?.volumes ?? []) {
+      const v = vol as { type?: unknown; source?: unknown; target?: unknown };
+      if (v?.type !== 'bind' || typeof v.source !== 'string') continue;
+      const source = normalizeAbs(v.source);
+      if (isInsideRepo(repo, source)) continue;
+      // Allowed when the source is one of the permitted paths, or under one.
+      if (allowList.some((a) => source === a || source.startsWith(`${a}${sep}`))) continue;
+      escapes.push({ service, source: v.source, target: typeof v.target === 'string' ? v.target : '' });
+    }
+  }
+  return escapes;
 }
 
 export function composeLogs(

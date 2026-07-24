@@ -15,6 +15,7 @@
  * Part of #265.
  */
 import { boundTailText } from '../text/bound.js';
+import { isInteractiveRole, keyDefinition, quadCenter, SUPPORTED_KEYS } from './input.js';
 import type { CdpConnection } from './cdp.js';
 
 /** Cap on any single read handed back to the model. */
@@ -25,6 +26,26 @@ export const MAX_DIAGNOSTIC_ENTRIES = 200;
 export const DEFAULT_DIAGNOSTIC_LIMIT = 50;
 /** How long to wait for a navigation to reach its load event. */
 export const NAVIGATION_TIMEOUT_MS = 30_000;
+/** Cap on a full-page screenshot's height, so a very long page can't produce an
+ *  enormous image. Screenshots skip the text projection, so this is the bound. */
+export const MAX_SCREENSHOT_HEIGHT = 4_000;
+/** JPEG quality for the human-facing preview (`captureView`). Lower than a
+ *  model screenshot's lossless PNG on purpose: the preview is polled on a timer
+ *  and shipped to the client (over Tailscale in thin-client mode), so it trades
+ *  a little fidelity for a much smaller frame. */
+export const PREVIEW_JPEG_QUALITY = 55;
+
+/** Bounds on an emulated viewport dimension (CSS px). Below 1 the browser
+ *  rejects it; the ceiling keeps a responsive check from asking for an absurd
+ *  canvas that would also make any subsequent full-page screenshot enormous. */
+export const MIN_VIEWPORT_DIMENSION = 1;
+export const MAX_VIEWPORT_DIMENSION = 4_096;
+
+/** The `prefers-color-scheme` values `setColorScheme` accepts. `no-preference`
+ *  emulates a user who has expressed neither, which some pages treat distinctly
+ *  from light. */
+export type ColorScheme = 'light' | 'dark' | 'no-preference';
+export const SUPPORTED_COLOR_SCHEMES: readonly ColorScheme[] = ['light', 'dark', 'no-preference'];
 
 /** Marks "querySelector found nothing" in an evaluated expression's result. */
 const MISSING_SENTINEL = '__nexus_no_such_element__';
@@ -46,6 +67,32 @@ export interface NavigationResult {
   url: string;
   title: string;
   status?: number;
+}
+
+/**
+ * A snapshot of the page for the human watching the thread — the shared view
+ * the model's headless browser otherwise never surfaces (#283).
+ *
+ * The image is a JPEG (see `PREVIEW_JPEG_QUALITY`), not the lossless PNG a model
+ * screenshot returns, because this is polled on a timer and shipped to the UI.
+ * `version` increments only when the captured bytes actually change, so a static
+ * page can be polled indefinitely without re-sending the same frame.
+ */
+export interface BrowserView {
+  /** Base64 JPEG of the current viewport, with its mime type. */
+  image: { data: string; mimeType: string };
+  url: string;
+  title: string;
+  /** The live CSS viewport (`innerWidth`/`innerHeight`), reflecting any
+   *  emulation override in effect. */
+  viewport: { width: number; height: number };
+  /** The effective `prefers-color-scheme`, read from the page — 'dark' or
+   *  'light', whether emulated or the browser's own default. */
+  colorScheme: 'dark' | 'light';
+  /** Bumped only when `image.data` differs from the previous capture. */
+  version: number;
+  /** Epoch ms of this capture. */
+  capturedAt: number;
 }
 
 /** Push onto a ring buffer, dropping the oldest when full. */
@@ -73,6 +120,16 @@ export class BrowserPage {
   private readonly requestMethods = new Map<string, { method: string; url: string }>();
   private lastMainFrameStatus?: number;
   private mainFrameId?: string;
+  /** ref id → CDP backendDOMNodeId, populated by a tree read and consumed by
+   *  `act`. Cleared on navigation: a ref points at a node in the page that was
+   *  loaded when it was read, and after navigating that node is gone. */
+  private refs = new Map<string, number>();
+  /** The most recent human-facing preview, kept so a transient capture failure
+   *  falls back to the last good frame rather than a blank panel. */
+  private lastView?: BrowserView;
+  /** Monotonic, bumped only when a capture's bytes differ — the dedup handle
+   *  the view route uses to avoid re-sending an unchanged frame. */
+  private viewVersion = 0;
 
   private constructor(
     private readonly connection: CdpConnection,
@@ -89,9 +146,10 @@ export class BrowserPage {
     const page = new BrowserPage(connection, sessionId);
     connection.on((event) => page.onEvent(event.method, event.params, event.sessionId));
 
-    // Enable only what the Phase 1 surface reads. Each `enable` costs event
-    // traffic, and DOM/CSS in particular are firehoses we have no use for yet.
-    for (const domain of ['Page.enable', 'Runtime.enable', 'Log.enable', 'Network.enable']) {
+    // DOM is enabled for interaction (focus/box-model/scroll by backend node id).
+    // Accessibility is enabled lazily on the first tree read. CSS stays off — a
+    // firehose we have no use for.
+    for (const domain of ['Page.enable', 'Runtime.enable', 'Log.enable', 'Network.enable', 'DOM.enable']) {
       await connection.send(domain, {}, sessionId);
     }
     return page;
@@ -175,6 +233,9 @@ export class BrowserPage {
    */
   async navigate(url: string, timeoutMs = NAVIGATION_TIMEOUT_MS): Promise<NavigationResult> {
     this.lastMainFrameStatus = undefined;
+    // Refs belong to the page being left; the model must re-read to act on the
+    // new one.
+    this.refs.clear();
 
     const loaded = this.waitForEvent('Page.loadEventFired', timeoutMs);
     let result: Record<string, unknown>;
@@ -228,6 +289,12 @@ export class BrowserPage {
    * Roles and names only: it is a fraction of the size of the DOM and closer to
    * what a person perceives, which makes it both cheaper and more useful for
    * "what is on this page".
+   *
+   * Interactive elements are tagged with a `[ref_N]` handle and their backend
+   * node id is recorded, so `act` can click or type into them by ref. Reading
+   * the tree is therefore the prerequisite for interacting: the model reads to
+   * see what's there and to get the refs, then acts on them. Each read replaces
+   * the ref set — a ref is only valid until the next read or a navigation.
    */
   async readTree(): Promise<string> {
     await this.connection.send('Accessibility.enable', {}, this.sessionId);
@@ -244,6 +311,8 @@ export class BrowserPage {
       return v === undefined || v === null ? '' : String(v);
     };
 
+    this.refs.clear();
+    let refCounter = 0;
     const lines: string[] = [];
     const walk = (nodeId: string, depth: number): void => {
       if (depth > 25) return; // pathological nesting
@@ -253,7 +322,16 @@ export class BrowserPage {
       const role = valueOf(node.role);
       const name = valueOf(node.name);
       if (!ignored && role && role !== 'none' && role !== 'generic') {
-        lines.push(`${'  '.repeat(Math.min(depth, 12))}${role}${name ? ` "${name}"` : ''}`);
+        let line = `${'  '.repeat(Math.min(depth, 12))}${role}${name ? ` "${name}"` : ''}`;
+        // A ref only where the element is both actionable and addressable: a
+        // backend node id is what `act` resolves against.
+        const backendId = node.backendDOMNodeId;
+        if (isInteractiveRole(role) && typeof backendId === 'number') {
+          const ref = `ref_${++refCounter}`;
+          this.refs.set(ref, backendId);
+          line += ` [${ref}]`;
+        }
+        lines.push(line);
       }
       const children = Array.isArray(node.childIds) ? node.childIds as string[] : [];
       // Ignored/generic wrappers don't consume a level, so the output isn't a
@@ -264,6 +342,216 @@ export class BrowserPage {
 
     if (nodes.length > 0) walk(String(nodes[0].nodeId), 0);
     return boundTailText(lines.join('\n'), MAX_READ_BYTES, '[earlier tree content truncated]');
+  }
+
+  /** Resolve a ref to its backend node id, or throw a message that tells the
+   *  model how to recover — the common failure is acting on a stale page. */
+  private backendNodeFor(ref: string): number {
+    const id = this.refs.get(ref.trim());
+    if (id === undefined) {
+      throw new Error(
+        `Unknown or stale ref "${ref}". Refs come from a tree read and expire on the next read or a navigation — `
+        + 'call browser_read with mode "tree" to get current refs, then act on those.',
+      );
+    }
+    return id;
+  }
+
+  /** Click the element a ref points at, scrolling it into view first. */
+  async clickRef(ref: string): Promise<string> {
+    const backendNodeId = this.backendNodeFor(ref);
+    // Best-effort: an element already in view, or one CDP declines to scroll,
+    // is still clickable at whatever coordinates the box model reports.
+    await this.connection.send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, this.sessionId).catch(() => {});
+    const box = await this.connection.send('DOM.getBoxModel', { backendNodeId }, this.sessionId);
+    const quad = (box.model as { content?: number[] } | undefined)?.content;
+    const center = quadCenter(quad ?? []);
+    if (!center) throw new Error(`Element ${ref} has no layout box to click (it may be hidden).`);
+
+    for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'] as const) {
+      await this.connection.send('Input.dispatchMouseEvent', {
+        type, x: center.x, y: center.y, button: 'left', clickCount: 1,
+      }, this.sessionId);
+    }
+    return `Clicked ${ref}.`;
+  }
+
+  /** Focus the element a ref points at and type `text` into it. */
+  async typeIntoRef(ref: string, text: string): Promise<string> {
+    const backendNodeId = this.backendNodeFor(ref);
+    await this.connection.send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, this.sessionId).catch(() => {});
+    await this.connection.send('DOM.focus', { backendNodeId }, this.sessionId);
+    // insertText fires the real input/change events a framework listens for —
+    // unlike setting .value, which many controlled inputs ignore.
+    await this.connection.send('Input.insertText', { text }, this.sessionId);
+    return `Typed into ${ref}.`;
+  }
+
+  /** Press a named key. Focuses `ref` first when given, so "type then Enter"
+   *  lands on the right field. */
+  async pressKey(key: string, ref?: string): Promise<string> {
+    const def = keyDefinition(key);
+    if (!def) throw new Error(`Unsupported key "${key}". Supported: ${SUPPORTED_KEYS.join(', ')}.`);
+    if (ref) {
+      const backendNodeId = this.backendNodeFor(ref);
+      await this.connection.send('DOM.focus', { backendNodeId }, this.sessionId).catch(() => {});
+    }
+    const base = { key: def.key, code: def.code, windowsVirtualKeyCode: def.windowsVirtualKeyCode };
+    await this.connection.send('Input.dispatchKeyEvent', { type: 'keyDown', ...base, ...(def.text ? { text: def.text } : {}) }, this.sessionId);
+    await this.connection.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base }, this.sessionId);
+    return `Pressed ${def.key}.`;
+  }
+
+  /** Scroll the page a screenful in a direction. */
+  async scrollPage(direction: 'up' | 'down'): Promise<string> {
+    const dy = direction === 'up' ? -600 : 600;
+    await this.evaluateString(`(() => { window.scrollBy(0, ${dy}); return ''; })()`);
+    return `Scrolled ${direction}.`;
+  }
+
+  /**
+   * Emulate a viewport size (CSS px), for responsive checks (#283 Phase 3).
+   *
+   * `deviceScaleFactor: 0` leaves the scale factor at the device default rather
+   * than overriding it — we're changing how much the page can see, not its DPI.
+   * The override persists across navigations in this tab until cleared, so a
+   * later `navigate` renders at the same size and a screenshot captures it.
+   */
+  async setViewport(width: number, height: number): Promise<string> {
+    await this.connection.send('Emulation.setDeviceMetricsOverride', {
+      width, height, deviceScaleFactor: 0, mobile: false,
+    }, this.sessionId);
+    return `Viewport set to ${width}×${height}.`;
+  }
+
+  /**
+   * Emulate `prefers-color-scheme`, for theme checks. Without this the headless
+   * browser follows the host OS's setting, so a dark-mode check on a server
+   * whose OS is in light mode would silently test the wrong theme.
+   */
+  async setColorScheme(scheme: ColorScheme): Promise<string> {
+    await this.connection.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-color-scheme', value: scheme }],
+    }, this.sessionId);
+    return `Color scheme set to ${scheme}.`;
+  }
+
+  /** Drop every emulation override, back to the browser's own defaults. */
+  async resetEmulation(): Promise<string> {
+    await this.connection.send('Emulation.clearDeviceMetricsOverride', {}, this.sessionId);
+    // An empty feature list clears the prefers-color-scheme override we set.
+    await this.connection.send('Emulation.setEmulatedMedia', { features: [] }, this.sessionId);
+    return 'Cleared viewport and color-scheme emulation.';
+  }
+
+  /**
+   * A PNG screenshot, base64-encoded, as image content for a vision model.
+   *
+   * Defaults to the viewport. `ref` clips to one element; `fullPage` captures
+   * beyond the viewport, capped so a very long page can't produce an enormous
+   * image (screenshots skip the signal-filter text projection — they are the
+   * one unbounded thing the browser can return, so the cap lives here).
+   */
+  async screenshot(options: { ref?: string; fullPage?: boolean } = {}): Promise<{ data: string; mimeType: string }> {
+    let clip: { x: number; y: number; width: number; height: number; scale: number } | undefined;
+    let captureBeyondViewport = false;
+
+    if (options.ref) {
+      const backendNodeId = this.backendNodeFor(options.ref);
+      await this.connection.send('DOM.scrollIntoViewIfNeeded', { backendNodeId }, this.sessionId).catch(() => {});
+      const box = await this.connection.send('DOM.getBoxModel', { backendNodeId }, this.sessionId);
+      const quad = (box.model as { content?: number[] } | undefined)?.content ?? [];
+      const xs = [quad[0], quad[2], quad[4], quad[6]];
+      const ys = [quad[1], quad[3], quad[5], quad[7]];
+      if (xs.some((n) => n === undefined)) throw new Error(`Element ${options.ref} has no layout box to capture.`);
+      const x = Math.min(...xs);
+      const y = Math.min(...ys);
+      clip = { x, y, width: Math.max(1, Math.max(...xs) - x), height: Math.max(1, Math.max(...ys) - y), scale: 1 };
+    } else if (options.fullPage) {
+      const metrics = await this.connection.send('Page.getLayoutMetrics', {}, this.sessionId);
+      const size = (metrics.cssContentSize ?? metrics.contentSize) as { width?: number; height?: number } | undefined;
+      captureBeyondViewport = true;
+      clip = {
+        x: 0, y: 0,
+        width: Math.max(1, Math.round(size?.width ?? 1280)),
+        height: Math.min(MAX_SCREENSHOT_HEIGHT, Math.max(1, Math.round(size?.height ?? 720))),
+        scale: 1,
+      };
+    }
+
+    const result = await this.connection.send('Page.captureScreenshot', {
+      format: 'png',
+      ...(clip ? { clip } : {}),
+      ...(captureBeyondViewport ? { captureBeyondViewport: true } : {}),
+    }, this.sessionId);
+    return { data: String(result.data ?? ''), mimeType: 'image/png' };
+  }
+
+  /**
+   * A viewport snapshot for the human watching the thread (#283).
+   *
+   * Distinct from `screenshot`: this is the polled, human-facing preview, so it
+   * is a compact JPEG rather than a model's lossless PNG, and it carries the
+   * page's url/title/viewport/color-scheme so the panel can label it. It reads
+   * the effective viewport and `prefers-color-scheme` from the page itself, so
+   * an emulation override (viewport size, dark mode) shows up truthfully.
+   *
+   * Deliberately side-effect free beyond the read: it never navigates and never
+   * launches anything (the pool only ever calls it on an already-open page), so
+   * it is safe to call on a timer while the model may also be driving the page —
+   * CDP multiplexes the commands. A capture that fails mid-navigation falls back
+   * to the last good frame rather than blanking the panel. Returns null only
+   * when there has never been a successful capture.
+   */
+  async captureView(): Promise<BrowserView | null> {
+    try {
+      const meta = await this.readViewMeta();
+      const shot = await this.connection.send('Page.captureScreenshot', {
+        format: 'jpeg', quality: PREVIEW_JPEG_QUALITY,
+      }, this.sessionId);
+      const data = String(shot.data ?? '');
+      if (!data) return this.lastView ?? null;
+
+      // Bump the version only when the bytes actually changed, so a static page
+      // polled every few seconds re-sends nothing after the first frame.
+      if (!this.lastView || this.lastView.image.data !== data) this.viewVersion += 1;
+      this.lastView = {
+        image: { data, mimeType: 'image/jpeg' },
+        url: meta.href,
+        title: meta.title,
+        viewport: { width: meta.w, height: meta.h },
+        colorScheme: meta.dark ? 'dark' : 'light',
+        version: this.viewVersion,
+        capturedAt: Date.now(),
+      };
+      return this.lastView;
+    } catch {
+      // A wedged or navigating page shouldn't blank the panel — show the last
+      // frame we did get, if any.
+      return this.lastView ?? null;
+    }
+  }
+
+  /** Read the page facts the preview labels itself with, in one round trip. */
+  private async readViewMeta(): Promise<{ href: string; title: string; w: number; h: number; dark: boolean }> {
+    const raw = await this.evaluateString(
+      '(() => JSON.stringify({'
+      + ' href: location.href, title: document.title,'
+      + ' w: window.innerWidth, h: window.innerHeight,'
+      + " dark: matchMedia('(prefers-color-scheme: dark)').matches }))()",
+    );
+    try {
+      const parsed = JSON.parse(raw) as Partial<{ href: string; title: string; w: number; h: number; dark: boolean }>;
+      return {
+        href: typeof parsed.href === 'string' ? parsed.href : '',
+        title: typeof parsed.title === 'string' ? parsed.title : '',
+        w: Number.isFinite(parsed.w) ? Number(parsed.w) : 0,
+        h: Number.isFinite(parsed.h) ? Number(parsed.h) : 0,
+        dark: parsed.dark === true,
+      };
+    } catch {
+      return { href: '', title: '', w: 0, h: 0, dark: false };
+    }
   }
 
   consoleEntries(limit = DEFAULT_DIAGNOSTIC_LIMIT): ConsoleEntry[] {

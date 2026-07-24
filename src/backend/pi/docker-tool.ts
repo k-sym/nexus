@@ -16,11 +16,13 @@ import type { AgentToolResult, ExtensionFactory } from '@earendil-works/pi-codin
 import { Type } from 'typebox';
 import {
   ComposeFileError,
+  composeConfigJson,
   composeDown,
   composeLogs,
   composeProjectName,
   composeStatus,
   composeUp,
+  findHostMountEscapes,
   resolveComposeFile,
   DEFAULT_LOG_TAIL,
   MAX_LOG_TAIL,
@@ -36,6 +38,9 @@ export interface DockerToolDeps {
   /** Called after a successful `up`, so the session's services can be torn
    *  down later even if the model never calls `down` itself. */
   onStarted?: (projectName: string, cwd: string) => void;
+  /** Host path prefixes a compose file is allowed to bind-mount despite being
+   *  outside the repo (e.g. a Docker socket). Empty ⇒ no escapes permitted. */
+  allowHostMounts?: string[];
 }
 
 const DockerServiceSchema = Type.Object({
@@ -106,6 +111,28 @@ export function createDockerExtension(deps: DockerToolDeps): ExtensionFactory {
 
         const options = { cwd: deps.cwd, projectName, composeFile, exec: deps.exec };
         const services = (params.services ?? []).map((s) => s.trim()).filter(Boolean);
+
+        // Before starting anything, verify the compose file doesn't bind-mount
+        // host paths outside the repo (`resolveComposeFile` contains *which*
+        // file; this contains *what it mounts*). Fail closed: if the config
+        // can't be resolved we refuse rather than start something unvetted.
+        if (params.action === 'up') {
+          let config: unknown;
+          try {
+            config = await composeConfigJson(options);
+          } catch (error) {
+            if (error instanceof ComposeFileError) throw error;
+            throw new Error('Could not resolve the compose config to check its mounts.');
+          }
+          const escapes = findHostMountEscapes(config, deps.cwd, deps.allowHostMounts ?? []);
+          if (escapes.length > 0) {
+            const list = escapes.map((e) => `${e.source} → ${e.target || '(container path)'} in "${e.service}"`).join('; ');
+            throw new Error(
+              `Refused: this compose file bind-mounts host paths outside the project — ${list}. `
+              + 'Move the data inside the project, or add the path to docker.allow_host_mounts to permit it.',
+            );
+          }
+        }
 
         const result = await (() => {
           switch (params.action) {

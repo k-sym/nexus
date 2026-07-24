@@ -96,6 +96,18 @@ function dockerEnabled(getConfig: () => NexusConfig): boolean {
   }
 }
 
+/** Host paths a compose file may bind-mount despite escaping the repo. Read
+ *  live and defensively — a bad config yields an empty allowlist (fail closed),
+ *  not a crash. */
+function allowedHostMounts(getConfig: () => NexusConfig): string[] {
+  try {
+    const list = getConfig().docker?.allow_host_mounts;
+    return Array.isArray(list) ? list.filter((p): p is string => typeof p === 'string' && !!p.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Build the session resolver. Returns `null` — omitting the tool — when the
  * feature is off or no daemon answered the last probe.
@@ -109,7 +121,8 @@ export function buildDockerToolDeps(
     if (!cwd) return null;
     if (!dockerEnabled(getConfig)) return null;
     if (!availability.isAvailable()) return null;
-    return { threadId, cwd, exec: options.exec };
+    // Read live so a config edit to the allowlist lands on the next session.
+    return { threadId, cwd, exec: options.exec, allowHostMounts: allowedHostMounts(getConfig) };
   };
 }
 

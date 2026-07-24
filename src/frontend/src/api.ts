@@ -211,6 +211,87 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
   return res.json() as Promise<T>;
 }
 
+// Tool decisions — the audit trail read path (#281 part 2).
+export interface ToolDecisionEntry {
+  id: number;
+  thread_id: string;
+  cwd: string;
+  tool_name: string;
+  category: string;
+  input_summary: string;
+  decision: 'allow' | 'confirm' | 'deny';
+  source: string;
+  rule_tool: string | null;
+  rule_when: string | null;
+  outcome: 'allowed' | 'denied';
+  answered_by: string;
+  created_at: string;
+}
+
+export async function fetchToolDecisions(limit = 100): Promise<ToolDecisionEntry[]> {
+  const data = await fetchJson<{ decisions: ToolDecisionEntry[] }>(`/api/approvals/audit?limit=${limit}`);
+  return data.decisions;
+}
+
+// Docker services — the Services view's read path and teardown (#264 Phase 2).
+export interface ServiceContainer {
+  name: string;
+  image: string;
+  state: string;
+  status: string;
+  ports: string;
+}
+export interface ServiceGroup {
+  project: string;
+  /** No live chat thread or mission owns this project — a leak. */
+  orphaned: boolean;
+  containers: ServiceContainer[];
+}
+export interface DockerServicesResponse {
+  available: boolean;
+  groups: ServiceGroup[];
+}
+
+/** All Nexus service groups, or — with `threadId` — just that thread's. */
+export async function fetchDockerServices(threadId?: string): Promise<DockerServicesResponse> {
+  const query = threadId ? `?thread=${encodeURIComponent(threadId)}` : '';
+  return fetchJson<DockerServicesResponse>(`/api/docker/services${query}`);
+}
+
+/** Tear down one Nexus service group by project name. */
+export async function dockerServiceDown(project: string): Promise<void> {
+  await fetchJson(`/api/docker/services/${encodeURIComponent(project)}/down`, { method: 'POST' });
+}
+
+// Agent browser — the human-facing preview of a thread's headless page (#283).
+export interface BrowserView {
+  image: { data: string; mimeType: string };
+  url: string;
+  title: string;
+  viewport: { width: number; height: number };
+  colorScheme: 'dark' | 'light';
+  version: number;
+  capturedAt: number;
+}
+export interface BrowserViewResponse {
+  /** The feature is on and a browser binary exists. */
+  available: boolean;
+  /** This thread has a browser open with a frame to show. */
+  present: boolean;
+  /** The client's `known` version is current — no new bytes are sent. */
+  unchanged?: boolean;
+  version?: number;
+  view?: BrowserView;
+}
+
+/** The thread's current browser preview. `known` is the last version the client
+ *  holds, so an unchanged static page comes back without re-sending the frame. */
+export async function fetchBrowserView(threadId: string, known?: number): Promise<BrowserViewResponse> {
+  const params = new URLSearchParams({ thread: threadId });
+  if (known !== undefined) params.set('known', String(known));
+  return fetchJson<BrowserViewResponse>(`/api/browser/view?${params.toString()}`);
+}
+
 // Monday.com — the Project Management view's read paths and link CRUD.
 // Free-standing exports (not nested under `api`) so ProjectManagementView can
 // import and mock them directly, matching the Task 11 brief's client surface.

@@ -16,7 +16,7 @@ import { loadConfig } from '../config.js';
 import type { BrowserToolDeps } from '../pi/browser-tool.js';
 import { CdpConnection } from './cdp.js';
 import { findBrowser, type BrowserBinary } from './discover.js';
-import { BrowserPage } from './page.js';
+import { BrowserPage, type BrowserView } from './page.js';
 
 /** Hard cap on concurrent browsers, whatever the thread count. Each is a real
  *  Chromium: a runaway would take the machine down with it. */
@@ -56,6 +56,13 @@ export class BrowserPool {
 
   size(): number {
     return this.browsers.size;
+  }
+
+  /** The thread's page if a browser is already open, else undefined. Never
+   *  launches one — the human-facing view must not spin up a browser just
+   *  because a panel polled it; only an agent navigation does that. */
+  peek(threadId: string): BrowserPage | undefined {
+    return this.browsers.get(threadId)?.page;
   }
 
   async pageFor(threadId: string): Promise<BrowserPage> {
@@ -129,11 +136,20 @@ export interface BrowserSessionOptions {
  * not appear and disappear the way a Docker daemon does, and probing on every
  * session creation would cost filesystem stats for no benefit.
  */
-export function createBrowserSupport(options: BrowserSessionOptions = {}): {
+export interface BrowserSupport {
   pool: BrowserPool;
   browserTools: (threadId: string, cwd: string) => BrowserToolDeps | null;
   closeBrowser: (threadId: string) => void;
-} | null {
+  /** Whether the browser feature is on right now (read live). The binary is
+   *  known to exist — this object is null otherwise. Used by the view route to
+   *  report availability to the panel. */
+  isEnabled: () => boolean;
+  /** A live preview of the thread's page, or null when the thread has no
+   *  browser open (or the feature is off). Peeks — never launches. */
+  viewFor: (threadId: string) => Promise<BrowserView | null>;
+}
+
+export function createBrowserSupport(options: BrowserSessionOptions = {}): BrowserSupport | null {
   const getConfig = options.getConfig ?? loadConfig;
   const find = options.findBrowserBinary ?? (() => findBrowser());
 
@@ -155,6 +171,15 @@ export function createBrowserSupport(options: BrowserSessionOptions = {}): {
         // and narrowing it must take effect immediately.
         allowedHosts: () => browserConfig(getConfig).allowedHosts,
       };
+    },
+    isEnabled: () => browserConfig(getConfig).enabled,
+    viewFor: async (threadId) => {
+      // Off ⇒ no view, even if a browser happens to still be open from before
+      // the feature was disabled: the panel should match the tools.
+      if (!browserConfig(getConfig).enabled) return null;
+      const page = pool.peek(threadId);
+      if (!page) return null;
+      return page.captureView();
     },
     // Fire-and-forget: dropSession is synchronous and must not fail, or block,
     // because a browser is being stubborn about exiting.

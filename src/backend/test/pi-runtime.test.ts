@@ -87,6 +87,76 @@ test('PiRuntime.dropSession evicts the cached session', async () => {
   }
 });
 
+test('a session prompt gains the orientation block, conditional on its capabilities', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };
+  try {
+    // A runtime with memory + docker + browser deps present; no model key, so
+    // no vision.
+    const rt = await PiRuntime.create(paths, {
+      recallMemories: async () => [],
+      dockerTools: (threadId, cwd) => ({ threadId, cwd, exec: async () => ({ stdout: '', stderr: '', code: 0 }) }),
+      browserTools: () => ({ getPage: async () => ({} as never), allowedHosts: () => [] }),
+      sessionModelKey: () => undefined,
+    });
+    const session = await rt.sessionFor('thread-1', '/tmp/proj');
+    const prompt = (session as unknown as { systemPrompt: string }).systemPrompt;
+
+    assert.match(prompt, /Working in Nexus/, 'orientation block present');
+    assert.match(prompt, /project_docs/, 'points at project_docs');
+    assert.match(prompt, /memory_recall/, 'memory line (hasMemory)');
+    assert.match(prompt, /docker_service/, 'docker line (hasDocker)');
+    assert.match(prompt, /verify front-end work in a real browser/, 'browser line (hasBrowser)');
+    assert.doesNotMatch(prompt, /screenshot/i, 'no screenshot line without vision');
+    assert.ok(prompt.length > 400, 'the base coding-agent prompt still comes through');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('policyFor threads the toolPolicy dep, resolved live for the cwd', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };
+  try {
+    let categories: Record<string, string> = { exec: 'deny' };
+    const rt = await PiRuntime.create(paths, {
+      toolPolicy: () => ({ categories: categories as never, rules: [{ tool: 'browser_navigate', when: 'remote_host', decision: 'confirm' }] }),
+    });
+    const policy = rt.policyFor('thread-1', '/repo');
+
+    // Category from config applies (bash is exec → deny).
+    assert.equal(policy({ toolName: 'bash', input: {} }), 'deny');
+    // Input-aware rule applies (remote navigation → confirm; loopback → network default allow).
+    assert.equal(policy({ toolName: 'browser_navigate', input: { url: 'https://x.com/' } }), 'confirm');
+    assert.equal(policy({ toolName: 'browser_navigate', input: { url: 'http://localhost/' } }), 'allow');
+
+    // Read live: mutating the config the dep returns lands on the next call.
+    categories = { exec: 'allow' };
+    assert.equal(policy({ toolName: 'bash', input: {} }), 'allow', 'a config change needs no session rebuild');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a session with no capability deps is oriented but claims no tools', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };
+  try {
+    const rt = await PiRuntime.create(paths);
+    const session = await rt.sessionFor('thread-1', '/tmp/proj');
+    const prompt = (session as unknown as { systemPrompt: string }).systemPrompt;
+
+    assert.match(prompt, /Working in Nexus/);
+    assert.match(prompt, /project_docs/);
+    // The block must never promise a tool this session doesn't have.
+    assert.doesNotMatch(prompt, /memory_recall/);
+    assert.doesNotMatch(prompt, /docker_service/);
+    assert.doesNotMatch(prompt, /real browser/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('PiRuntime.createSession configures a session file path under the per-cwd dir', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = {

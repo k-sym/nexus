@@ -41,7 +41,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 
 | Capability | Description |
 |---|---|
-| **Projects** | Link existing local git repos. NEXUS adds a `project_docs/` structure for specs, plans, and uploads. |
+| **Projects** | Link existing local git repos. NEXUS scaffolds a `project_docs/` structure (`specs`, `plans`, `design`, `uploads`) and, when the repo has none, a starter `AGENTS.md` — so a new project starts agent-aware. Existing agent-instruction files are never overwritten. |
 | **Kanban** | 5-column board (Triage → To Do → In Progress → Review → Deploy) with drag-and-drop. |
 | **Interactive task chat** | Moving a task into **In Progress** opens an interactive chat thread bound to a model you pick — the old headless dispatch loop is gone. The agent works the task in the conversation while you steer it. |
 | **Missions** | Bounded, recurring or self-paced autonomous jobs against a project's tasks/tickets. Hard ceilings (iterations / wall-clock / token budget / run window), a per-iteration audit ledger, and pause/resume/stop controls. Off by default; can never run unbounded. |
@@ -52,6 +52,9 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Agents pull it on demand via a `memory_recall` tool; exposed over HTTP + MCP. |
 | **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, image + PDF/document attachments, and manual archival into memory. |
+| **Local services (Docker)** | Agents can bring a project's Docker Compose stack up/down to actually run and test it — always detached, namespaced per session so two threads on one repo can't collide, torn down with the session, plus a startup sweep for anything a crash orphaned. Off by default; the `docker_service` tool only appears when a Docker daemon is reachable. |
+| **Browser** | Agents can drive a headless Chromium-family browser to verify front-end work — navigate, read the rendered page as text or an accessibility tree, interact with it, and read console/network output. The current page is mirrored back into the chat session as a live preview, so you can watch what the agent's browser is doing (and see it at all, in thin-client mode, where the browser runs on the server). Localhost-only by default; ephemeral profile, never your real one. Off by default; the tools only appear when a browser is installed. |
+| **Tool approvals** | A per-tool approval policy decides — before each tool call runs — whether it's allowed, confirmed, or denied. Side-effectful categories (e.g. starting containers) default to *confirm*; pending gates are answerable from the Nexus UI or the glasses. Read live, so a change lands mid-session. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
 | **GitHub triage** | Open issues on a project's GitHub remote are mirrored into the Triage column on Kanban open (token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. |
 | **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira/GitHub sync that changed tickets, a sync failure, or a task summary being written. Backed by a `notifications` table the frontend polls. |
@@ -388,6 +391,15 @@ curl https://<host>.ts.net:8444/api/projects                                    
 curl -H "Authorization: Bearer <token>" https://<host>.ts.net:8444/api/projects  # 200
 ```
 
+**The agent browser runs on the server.** When a thin client drives a browsing thread, the headless
+browser launches wherever the backend is — i.e. on the server, not the client. This is deliberate:
+the browser is a verification tool for the project's own dev server, which lives with the backend, so
+"look at localhost" has to mean the server's localhost. The client never has a window onto that
+process directly, so the current page is mirrored back into the chat session as a live preview (a
+JPEG the UI polls over the same authenticated `/api/*` path) — that preview *is* the shared view.
+The browser is **not** refused when the backend is remote; the preview is what makes the server-side
+headless case usable rather than blind.
+
 **Limitations.** A thin client needs the tailnet reachable — there's no offline mode (use the glasses
 when out). Two clients can't watch the *same in-flight* turn's token stream (the run continues
 server-side but isn't re-broadcast); resume-after and next-turn work fine.
@@ -632,6 +644,35 @@ jira:                            # native Jira ticket poll (Settings -> Jira). T
 github:                          # GitHub issue triage (Settings -> GitHub). Token via GITHUB_TOKEN or `gh auth token`.
   enabled: true                  # mirrors open issues into Triage on Kanban open
 
+docker:                          # let agents run a project's local Docker Compose services
+  enabled: false                 # off by default; the docker_service tool is also omitted entirely
+                                 #   unless a Docker daemon is reachable
+  allow_host_mounts: []          # host path prefixes a compose file may bind-mount despite being
+                                 #   outside the repo (e.g. /var/run/docker.sock). Empty ⇒ any
+                                 #   escaping bind mount is refused before `up` starts anything.
+
+browser:                         # let agents drive a headless browser to verify front-end work
+  enabled: false                 # off by default; the browser tools are also omitted unless a
+                                 #   Chromium-family browser (Chrome/Edge/Chromium/Brave) is found
+  allow_hosts: []                # hosts the browser may reach beyond loopback (always allowed);
+                                 #   ".example.com" matches subdomains, "example.com" is exact
+                                 # The browser launches wherever the backend runs — including on the
+                                 #   server in thin-client mode (see "Server + thin clients"), where
+                                 #   its live preview in the chat session is your only view of it.
+
+tool_policy:                     # optional per-tool approval policy (omit ⇒ built-in defaults:
+                                 #   read-only allowed, `services` (Docker) confirmed). Read live —
+                                 #   an edit lands on the next tool call, no restart.
+  categories:                    # override the built-in per-category defaults
+    services: confirm            #   allow | confirm | deny, per category
+    network: confirm             #   (read/write/exec/services/network/interactive/unknown)
+  rules:                         # input-aware rules — more specific than a category, first match wins.
+    - tool: browser_navigate     #   Safe "allow localhost, confirm remote": confirm the category,
+      when: loopback_host        #   then allow-list loopback — a typo in `when` fails closed to confirm.
+      decision: allow            #   Conditions are built-in (loopback_host, remote_host); config only
+                                 #   picks a decision. `deny` is a floor no rule can soften.
+  projects: {}                   # per-project overrides keyed by repo path (same as signal_filters)
+
 obsidian:                        # where the canonical vault lives
   vault_path: "~/Obsidian/Nexus"
   sync_interval_seconds: 30
@@ -716,6 +757,22 @@ Each project has a sessions interface:
 - **Concurrency**: a per-`(project, model)` slot and a project-wide slot prevent two repo-mutating runs from racing on the same working tree (issue #95). A conflicting request gets a `409` with `kind: thread_busy` / `model_busy` / `project_busy`; the frontend can retry with `X-Confirm-Cancel: true` to abort the holder first. Live runs are listed at `GET /api/chat/active-runs` and abortable via `POST /api/threads/:threadId/abort`.
 - **Signal filters** trim noisy tool output (ANSI, progress bars, package-manager spam, test output, stack traces, diff context) before it lands in chat history — configurable globally and per-project under `signal_filters` in `config.yaml`.
 - Archival is user-triggered. Nexus summarizes the conversation into canonical `nexus` memory, then removes the hot SQLite thread only after memory storage succeeds.
+
+### Agent tools
+
+On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `grep`, …), each chat session is handed a set of Nexus tools defined in `src/backend/pi/`. Every one follows the same **omit-when-unavailable** contract: a session never advertises a tool it can't actually run, so the model's tool list is an honest reflection of what this machine and this project can do right now.
+
+| Tool | What it does | Registered when |
+|---|---|---|
+| `memory_recall` | Pull relevant memories for this project on demand (see [Memory](#memory)). | The memory daemon is configured. |
+| `docker_service` | Start/stop/inspect the project's Docker Compose services — `up` (always detached), `down`, `status`, `logs`. Namespaced to `nexus-<threadId>` so sessions can't collide; torn down on session drop, with a startup sweep for crash-orphaned projects. Both the compose file *and what it bind-mounts* are contained to the repo — a file that mounts a host path outside the project is refused before `up` starts anything, unless the path is in `docker.allow_host_mounts`. | `docker.enabled` **and** a Docker daemon answers. |
+| `browser_navigate` / `browser_read` / `browser_diagnostics` / `browser_act` / `browser_screenshot` / `browser_emulate` | Load a URL in a headless browser, read the rendered page (text or accessibility tree), interact with it (click/type/press/scroll by ref), read its console/network output, capture a screenshot, and emulate a viewport size / `prefers-color-scheme` for responsive and dark-mode checks. One ephemeral-profile browser per thread, launched lazily and closed with the session. The current page is also mirrored back into the chat UI as a live preview (`GET /api/browser/view`), polled while the session is open — the panel appears only while a browser is open and renders nothing otherwise. | `browser.enabled` **and** a Chromium-family browser is found. |
+| `monday_search` / `monday_get_item` / `monday_post_update` | Read (and, if opted in, post updates to) the Monday.com initiative a task is linked to. | Monday is configured and the task has a linked item. |
+| `question` | Emit a structured question card and wait for your answer. | Always. |
+
+**Tool approvals.** Every tool call is put to a per-thread **tool policy** (`src/backend/pi/tool-policy.ts`) *before* it runs, which returns `allow` (run it), `confirm` (park it for a human), or `deny` (refuse with a reason). The base decision is the most specific that applies — an **input-aware rule** (e.g. `browser_navigate` when the URL is `remote_host`) over the **category** (read-only `allow`, `services` `confirm`) over a fail-closed default; `deny` is then a floor a lower-precedence source can't lift, and **Supervise** (confirm-everything) is a per-thread floor that only raises it. Category overrides and rules are sourced from the `tool_policy` config block (global, or per project by repo path — see [`config.yaml`](#configyaml)); conditions like `loopback_host`/`remote_host` are built-in (config picks a decision, it doesn't author predicates), and an unknown condition is skipped rather than applied. Everything is read live at each call, so a config edit — or toggling Supervise — takes effect on the next tool call without rebuilding the session. Parked gates are answerable from the Nexus UI (`GET /api/approvals/stream`) or the glasses cockpit — both drive one broker, so whoever answers first wins; unanswered gates default-deny after a timeout. Every gated decision is written to an audit trail (`tool_decisions` table, `src/backend/approvals/audit.ts`) — the tool, an input summary, the decision and its *source* (which rule / category / the Supervise floor), the outcome, and how it was answered (policy / human / timeout) — surfaced in the **Decisions** view and at `GET /api/approvals/audit`.
+
+**Session orientation.** Each tool advertises itself (Pi folds its one-line `promptSnippet` into the prompt), so the model's tool list is already an honest picture of what's available. On top of that, a short **orientation block** (`src/backend/pi/orientation.ts`) is injected into the system prompt — via the same `systemPromptOverride` hook the Monday context uses, re-evaluated per session create/resume — to supply the *framing* the tool list and repo don't: that memory persists across sessions and is worth recalling, that this project's docs live under `project_docs/`, that services can be run and front-end work verified. Every line is conditional on the session actually having that capability (and screenshots are mentioned only for vision-capable models), so it never promises a tool that isn't registered. Per-project conventions aren't here — Pi already loads a repo's `AGENTS.md`, which is their home.
 
 ### Assistant
 

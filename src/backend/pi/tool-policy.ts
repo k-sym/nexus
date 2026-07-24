@@ -37,23 +37,14 @@
  * a `confirm` default without touching the approval path again.
  */
 
-/** What to do with a tool call. */
-export type ToolDecision = 'allow' | 'confirm' | 'deny';
+// `ToolDecision`/`ToolCategory` live in @nexus/shared so the config block can
+// reference them; the classification logic and defaults stay here. `unknown`
+// (anything unclassified) is treated as side-effectful, so a broken policy
+// fails closed around it rather than waving it through.
+import type { ToolDecision, ToolCategory, ToolPolicyRule } from '@nexus/shared';
+import { evaluateCondition } from './tool-policy-conditions.js';
 
-/**
- * Coarse grouping used to write policy without naming every tool. `unknown`
- * covers tools we have not classified — including any registered by a future
- * extension — and is treated as side-effectful, so a broken policy fails closed
- * around it rather than waving it through.
- */
-export type ToolCategory =
-  | 'interactive'
-  | 'read'
-  | 'write'
-  | 'exec'
-  | 'services'
-  | 'network'
-  | 'unknown';
+export type { ToolDecision, ToolCategory, ToolPolicyRule } from '@nexus/shared';
 
 export type CategoryPolicy = Partial<Record<ToolCategory, ToolDecision>>;
 
@@ -62,10 +53,27 @@ export interface ToolPolicyRequest {
   input: unknown;
 }
 
+/** Where a decision came from, for the audit trail (#281 part 2). `supervise`
+ *  means the per-thread confirm-everything floor raised whatever the base was. */
+export type ToolDecisionSource = 'ungated' | 'rule' | 'category' | 'default' | 'supervise';
+
+/** A decision plus why — what layer produced it, and the rule when a rule did. */
+export interface ToolDecisionTrace {
+  decision: ToolDecision;
+  source: ToolDecisionSource;
+  /** Present when `source` is `rule` (or a rule was raised by `supervise`). */
+  rule?: { tool: string; when?: string };
+}
+
 /** Resolves a decision for one tool call. Read live at each call — never frozen
  *  into a session — so a policy change takes effect on the next tool call
- *  without rebuilding the session. */
-export type ToolPolicyResolver = (request: ToolPolicyRequest) => ToolDecision;
+ *  without rebuilding the session. `explain` returns the same decision with its
+ *  source, for auditing; it is optional so a plain function still satisfies the
+ *  type. */
+export interface ToolPolicyResolver {
+  (request: ToolPolicyRequest): ToolDecision;
+  explain?(request: ToolPolicyRequest): ToolDecisionTrace;
+}
 
 /** The built-in `question` tool has its own interactive glasses approval path
  *  (see ./questions.ts). Gating it here would double-prompt / deadlock, so it is
@@ -99,8 +107,14 @@ const TOOL_CATEGORIES: Readonly<Record<string, ToolCategory>> = {
   // loaded is just a read. Splitting them means a policy can gate where the
   // browser may GO without gating every look at the result.
   browser_navigate: 'network',
+  browser_act: 'network',
   browser_read: 'read',
   browser_diagnostics: 'read',
+  browser_screenshot: 'read',
+  // Emulation only changes how the page renders for this tab — no network, no
+  // host effect — so it's a read, allowed by default like the other look-only
+  // browser tools.
+  browser_emulate: 'read',
 };
 
 /** Categories whose tools can affect something outside the model's context —
@@ -161,35 +175,79 @@ export interface ToolPolicyOptions {
   /** The per-thread override. `true` ⇒ confirm everything gateable, which is
    *  exactly what Supervise means today. Read live at each tool call. */
   isSupervised?: () => boolean;
-  /** Category-level policy. Merged over `DEFAULT_CATEGORY_POLICY`; a later
-   *  phase sources this from per-project and global config. Read live, so a
-   *  config change lands on the next tool call. */
+  /** Category-level policy. Merged over `DEFAULT_CATEGORY_POLICY`, sourced from
+   *  per-project and global config. Read live, so a config change lands on the
+   *  next tool call. */
   categoryPolicy?: () => CategoryPolicy;
+  /** Input-aware rules, more specific than a category. The first rule that
+   *  matches the tool (and whose named condition holds) sets the base decision.
+   *  Read live, same as the category policy. */
+  rules?: () => ToolPolicyRule[];
+}
+
+const DECISIONS: ReadonlySet<string> = new Set<ToolDecision>(['allow', 'confirm', 'deny']);
+
+/**
+ * The first rule that applies to this request, or `undefined` when none do. A
+ * rule applies when its `tool` matches and either it has no `when` or its named
+ * condition evaluates true. Malformed rules and unknown conditions are skipped —
+ * a rule never applies "blindly".
+ */
+function matchingRule(rules: ToolPolicyRule[], request: ToolPolicyRequest): ToolPolicyRule | undefined {
+  for (const rule of rules) {
+    if (!rule || rule.tool !== request.toolName || !DECISIONS.has(rule.decision)) continue;
+    if (!rule.when) return rule; // unconditional rule for this tool
+    // Unknown condition (undefined) or false → this rule does not apply; try the next.
+    if (evaluateCondition(rule.when, request) === true) return rule;
+  }
+  return undefined;
+}
+
+/**
+ * Resolve a request to a decision AND its source.
+ *
+ * Precedence for the base decision, most specific first: a matching input-aware
+ * rule → the category policy → the fail-closed default. The Supervise override
+ * is then a floor that can only *raise* that base (allow→confirm), never lower
+ * it; when it does raise, the effective source is `supervise`. An explicit
+ * `deny` is never softened.
+ */
+function explainDecision(options: ToolPolicyOptions, request: ToolPolicyRequest): ToolDecisionTrace {
+  const { toolName } = request;
+  // Highest precedence and not overridable: gating this deadlocks the thread.
+  if (UNGATED_TOOL_NAMES.has(toolName)) return { decision: 'allow', source: 'ungated' };
+
+  const floor: ToolDecision | undefined = options.isSupervised?.() ? 'confirm' : undefined;
+
+  const rule = matchingRule(options.rules?.() ?? [], request);
+  const policy = { ...DEFAULT_CATEGORY_POLICY, ...(options.categoryPolicy?.() ?? {}) };
+  const category = categorizeTool(toolName);
+
+  let base: ToolDecision;
+  let source: ToolDecisionSource;
+  if (rule) { base = rule.decision; source = 'rule'; }
+  else if (policy[category] !== undefined) { base = policy[category] as ToolDecision; source = 'category'; }
+  else { base = failClosedDecision(toolName); source = 'default'; }
+
+  const decision = atLeast(base, floor);
+  const ruleInfo = rule ? { tool: rule.tool, ...(rule.when ? { when: rule.when } : {}) } : undefined;
+  // If the Supervise floor changed the outcome, that floor is what decided.
+  if (decision !== base) return { decision, source: 'supervise', ...(ruleInfo ? { rule: ruleInfo } : {}) };
+  return { decision, source, ...(ruleInfo ? { rule: ruleInfo } : {}) };
 }
 
 /**
  * Build the resolver a session's approval extension consults.
  *
  * Every input is a getter rather than a value, because the property that makes
- * mid-session Supervise toggling work — the decision is computed at tool-call
- * time, not captured at session build — has to survive this refactor.
+ * mid-session Supervise toggling (and a live config edit) work — the decision is
+ * computed at tool-call time, not captured at session build — has to survive.
+ * The returned resolver also carries `explain` for the audit trail.
  */
 export function createToolPolicyResolver(options: ToolPolicyOptions = {}): ToolPolicyResolver {
-  return ({ toolName }) => {
-    // Highest precedence and not overridable: gating this deadlocks the thread.
-    if (UNGATED_TOOL_NAMES.has(toolName)) return 'allow';
-
-    let floor: ToolDecision | undefined;
-
-    if (options.isSupervised?.()) {
-      // Supervise's meaning is unchanged: confirm everything that can be gated.
-      floor = 'confirm';
-    }
-
-    const policy = { ...DEFAULT_CATEGORY_POLICY, ...(options.categoryPolicy?.() ?? {}) };
-    const fromCategory = policy[categorizeTool(toolName)] ?? failClosedDecision(toolName);
-    return atLeast(fromCategory, floor);
-  };
+  const resolver = ((request) => explainDecision(options, request).decision) as ToolPolicyResolver;
+  resolver.explain = (request) => explainDecision(options, request);
+  return resolver;
 }
 
 /**

@@ -324,6 +324,40 @@ export interface SignalFilterConfig {
   projects: Record<string, SignalFilterProjectOverride>;
 }
 
+/** What the tool policy does with a call: run it, park it for a human, or refuse. */
+export type ToolDecision = 'allow' | 'confirm' | 'deny';
+
+/** Coarse tool grouping used to write policy without naming every tool.
+ *  `unknown` (anything unclassified) is treated as side-effectful. */
+export type ToolCategory =
+  | 'interactive' | 'read' | 'write' | 'exec' | 'services' | 'network' | 'unknown';
+
+/**
+ * An input-aware rule: a decision for a tool, optionally narrowed to a named
+ * built-in condition over the call's input (e.g. `remote_host` for a browser
+ * navigation to a non-loopback URL). `when` omitted ⇒ the rule always applies
+ * to that tool. Conditions are code-defined and bounded — config selects a
+ * decision for a named condition, it does not author predicates. A rule naming
+ * an unknown condition is ignored (fail-closed), never applied blindly.
+ */
+export interface ToolPolicyRule {
+  tool: string;
+  when?: string;
+  decision: ToolDecision;
+}
+
+/** Category defaults and input-aware rules, as set globally or per project. */
+export interface ToolPolicyOverride {
+  categories?: Partial<Record<ToolCategory, ToolDecision>>;
+  rules?: ToolPolicyRule[];
+}
+
+/** The `tool_policy` config block: global defaults plus per-project overrides
+ *  keyed by repo path (same convention as `signal_filters.projects`). */
+export interface ToolPolicyConfig extends ToolPolicyOverride {
+  projects?: Record<string, ToolPolicyOverride>;
+}
+
 export interface NexusConfig {
   server: {
     /** Local port the backend binds (loopback). */
@@ -432,7 +466,15 @@ export interface NexusConfig {
      *  Enabling it does not make it silent; the tool policy defaults the
      *  `services` category to `confirm`. */
     enabled: boolean;
+    /** Host path prefixes a compose file may bind-mount even though they're
+     *  outside the project directory (e.g. a Docker socket). Empty/absent ⇒ a
+     *  compose file that mounts any host path outside the repo is refused. */
+    allow_host_mounts?: string[];
   };
+  /** Optional per-tool approval policy (see src/backend/pi/tool-policy.ts).
+   *  Absent ⇒ built-in defaults (read-only allowed, `services` confirmed).
+   *  Category overrides and input-aware rules, global and per project. */
+  tool_policy?: ToolPolicyConfig;
   monday: {
     /** When false the poll loop stays dormant and no tools are registered. */
     enabled: boolean;

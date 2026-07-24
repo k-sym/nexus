@@ -33,6 +33,17 @@ function fakePage(overrides: Partial<Record<string, unknown>> = {}) {
         { method: 'GET', url: 'http://localhost/missing.js', failed: 'net::ERR_ABORTED' },
       ];
     },
+    clickRef: async (ref: string) => { calls.push({ op: 'clickRef', args: [ref] }); return `Clicked ${ref}.`; },
+    typeIntoRef: async (ref: string, text: string) => { calls.push({ op: 'typeIntoRef', args: [ref, text] }); return `Typed into ${ref}.`; },
+    pressKey: async (key: string, ref?: string) => { calls.push({ op: 'pressKey', args: [key, ref] }); return `Pressed ${key}.`; },
+    scrollPage: async (direction: string) => { calls.push({ op: 'scrollPage', args: [direction] }); return `Scrolled ${direction}.`; },
+    screenshot: async (opts: { ref?: string; fullPage?: boolean }) => {
+      calls.push({ op: 'screenshot', args: [opts] });
+      return { data: 'iVBORw0KGgoAAAANS', mimeType: 'image/png' };
+    },
+    setViewport: async (w: number, h: number) => { calls.push({ op: 'setViewport', args: [w, h] }); return `Viewport set to ${w}×${h}.`; },
+    setColorScheme: async (scheme: string) => { calls.push({ op: 'setColorScheme', args: [scheme] }); return `Color scheme set to ${scheme}.`; },
+    resetEmulation: async () => { calls.push({ op: 'resetEmulation', args: [] }); return 'Cleared viewport and color-scheme emulation.'; },
     ...overrides,
   } as unknown as BrowserPage;
   return { page, calls };
@@ -48,9 +59,11 @@ async function registerTools(allowedHosts: string[] = [], pageOverrides = {}) {
   return { tools, calls };
 }
 
-test('the extension registers exactly the Phase 1 surface', async () => {
+test('the extension registers the full navigate/read/diagnostics/act/screenshot/emulate surface', async () => {
   const { tools } = await registerTools();
-  assert.deepEqual([...tools.keys()].sort(), ['browser_diagnostics', 'browser_navigate', 'browser_read']);
+  assert.deepEqual([...tools.keys()].sort(), [
+    'browser_act', 'browser_diagnostics', 'browser_emulate', 'browser_navigate', 'browser_read', 'browser_screenshot',
+  ]);
 });
 
 test('navigate loads an allowed URL and reports where it landed', async () => {
@@ -138,6 +151,108 @@ test('empty diagnostics say so rather than returning nothing', async () => {
   assert.match((await diagnostics.execute('c', { source: 'network' })).content[0].text, /No network requests/);
 });
 
+// ── act ───────────────────────────────────────────────────────────────────────
+
+test('act routes each action to the page and reports it', async () => {
+  const { tools, calls } = await registerTools();
+  const act = tools.get('browser_act');
+
+  assert.match((await act.execute('c', { action: 'click', ref: 'ref_3' })).content[0].text, /Clicked ref_3/);
+  assert.deepEqual(calls.at(-1), { op: 'clickRef', args: ['ref_3'] });
+
+  await act.execute('c', { action: 'type', ref: 'ref_1', text: 'hello' });
+  assert.deepEqual(calls.at(-1), { op: 'typeIntoRef', args: ['ref_1', 'hello'] });
+
+  await act.execute('c', { action: 'press', key: 'Enter', ref: 'ref_1' });
+  assert.deepEqual(calls.at(-1), { op: 'pressKey', args: ['Enter', 'ref_1'] });
+
+  await act.execute('c', { action: 'scroll' });
+  assert.deepEqual(calls.at(-1), { op: 'scrollPage', args: ['down'] }, 'scroll defaults to down');
+
+  await act.execute('c', { action: 'scroll', direction: 'up' });
+  assert.deepEqual(calls.at(-1), { op: 'scrollPage', args: ['up'] });
+});
+
+test('act rejects missing arguments before touching the page', async () => {
+  const { tools, calls } = await registerTools();
+  const act = tools.get('browser_act');
+
+  await assert.rejects(act.execute('c', { action: 'click' }), /needs a ref/);
+  await assert.rejects(act.execute('c', { action: 'type', ref: 'ref_1' }), /needs text/);
+  await assert.rejects(act.execute('c', { action: 'type', text: 'x' }), /needs a ref/);
+  await assert.rejects(act.execute('c', { action: 'press' }), /needs a key/);
+  // None of those reached the page.
+  assert.deepEqual(calls, []);
+});
+
+// ── screenshot ──────────────────────────────────────────────────────────────
+
+test('screenshot returns image content plus a text caption', async () => {
+  const { tools, calls } = await registerTools();
+  const result = await tools.get('browser_screenshot').execute('c', {});
+
+  const image = result.content.find((c: { type: string }) => c.type === 'image');
+  assert.ok(image, 'returns image content');
+  assert.equal(image.mimeType, 'image/png');
+  assert.ok(image.data.length > 0);
+  assert.match(result.content.find((c: { type: string }) => c.type === 'text').text, /viewport/);
+  assert.deepEqual(calls.at(-1), { op: 'screenshot', args: [{ ref: undefined, fullPage: undefined }] });
+});
+
+test('screenshot passes ref and full_page through, and labels the scope', async () => {
+  const { tools, calls } = await registerTools();
+  const screenshot = tools.get('browser_screenshot');
+
+  const el = await screenshot.execute('c', { ref: 'ref_2' });
+  assert.deepEqual(calls.at(-1), { op: 'screenshot', args: [{ ref: 'ref_2', fullPage: undefined }] });
+  assert.match(el.details.scope, /element ref_2/);
+
+  const full = await screenshot.execute('c', { full_page: true });
+  assert.deepEqual(calls.at(-1), { op: 'screenshot', args: [{ ref: undefined, fullPage: true }] });
+  assert.match(full.details.scope, /full page/);
+});
+
+// ── emulate ─────────────────────────────────────────────────────────────────────
+
+test('emulate sets the viewport and the color scheme, reporting what it applied', async () => {
+  const { tools, calls } = await registerTools();
+  const emulate = tools.get('browser_emulate');
+
+  const both = await emulate.execute('c', { width: 375, height: 812, color_scheme: 'dark' });
+  assert.deepEqual(calls, [
+    { op: 'setViewport', args: [375, 812] },
+    { op: 'setColorScheme', args: ['dark'] },
+  ]);
+  assert.match(both.content[0].text, /Viewport set to 375×812\./);
+  assert.match(both.content[0].text, /Color scheme set to dark\./);
+  assert.deepEqual(both.details.applied.length, 2);
+});
+
+test('emulate reset clears on its own', async () => {
+  const { tools, calls } = await registerTools();
+  await tools.get('browser_emulate').execute('c', { reset: true });
+  assert.deepEqual(calls, [{ op: 'resetEmulation', args: [] }]);
+});
+
+test('emulate reset combined with a viewport clears FIRST, then applies', async () => {
+  const { tools, calls } = await registerTools();
+  await tools.get('browser_emulate').execute('c', { reset: true, width: 800, height: 600 });
+  assert.deepEqual(calls, [
+    { op: 'resetEmulation', args: [] },
+    { op: 'setViewport', args: [800, 600] },
+  ], 'clear then set, so the new viewport survives the reset');
+});
+
+test('emulate rejects width without height, and a call that does nothing', async () => {
+  const { tools, calls } = await registerTools();
+  const emulate = tools.get('browser_emulate');
+
+  await assert.rejects(emulate.execute('c', { width: 400 }), /width and height together/);
+  await assert.rejects(emulate.execute('c', { height: 400 }), /width and height together/);
+  await assert.rejects(emulate.execute('c', {}), /Nothing to emulate/);
+  assert.deepEqual(calls, [], 'a rejected call never touches the page');
+});
+
 // ── launch plumbing ───────────────────────────────────────────────────────────
 
 test('the DevTools endpoint is parsed out of startup chatter', () => {
@@ -209,4 +324,53 @@ test('the concurrent-browser cap is a real number, not unbounded', () => {
   // Each browser is a real Chromium; without a cap a runaway takes the machine
   // down with it.
   assert.ok(MAX_CONCURRENT_BROWSERS > 0 && MAX_CONCURRENT_BROWSERS <= 8);
+});
+
+// ── the human-facing view (#283) ────────────────────────────────────────────────
+
+test('peek never launches a browser — a thread that never navigated has none', () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  assert.equal(support.pool.peek('never-used'), undefined);
+  assert.equal(support.pool.size(), 0, 'peeking did not spin one up');
+});
+
+test('viewFor is null for a thread with no browser open — polling never launches one', async () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  assert.equal(await support.viewFor('idle-thread'), null);
+  assert.equal(support.pool.size(), 0);
+});
+
+test('viewFor is null when the feature is off, even mid-peek', async () => {
+  const support = createBrowserSupport({
+    getConfig: () => ({ browser: { enabled: false, allow_hosts: [] } }) as unknown as NexusConfig,
+    findBrowserBinary: fakeBinary,
+  })!;
+  assert.equal(await support.viewFor('t'), null);
+});
+
+test('isEnabled tracks the live config', () => {
+  let enabled = true;
+  const support = createBrowserSupport({
+    getConfig: () => ({ browser: { enabled, allow_hosts: [] } }) as unknown as NexusConfig,
+    findBrowserBinary: fakeBinary,
+  })!;
+  assert.equal(support.isEnabled(), true);
+  enabled = false;
+  assert.equal(support.isEnabled(), false, 'read live, not frozen at construction');
+});
+
+test('viewFor returns the page\'s captured frame when a browser is open', async () => {
+  const support = createBrowserSupport({ getConfig: configWith(), findBrowserBinary: fakeBinary })!;
+  const frame = {
+    image: { data: 'ZZZ', mimeType: 'image/jpeg' },
+    url: 'http://localhost:3000/', title: 'Home',
+    viewport: { width: 1024, height: 768 }, colorScheme: 'dark' as const,
+    version: 2, capturedAt: 1,
+  };
+  // Stand a fake page into the pool so viewFor peeks it without a real browser.
+  (support.pool as unknown as { browsers: Map<string, unknown> }).browsers.set('t', {
+    connection: {},
+    page: { captureView: async () => frame },
+  });
+  assert.deepEqual(await support.viewFor('t'), frame);
 });

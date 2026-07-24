@@ -22,7 +22,10 @@ import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
 import { createToolPolicyResolver, type ToolPolicyResolver } from './tool-policy.js';
+import type { ResolvedToolPolicy } from './tool-policy-config.js';
 import { createDockerExtension, type DockerToolDeps } from './docker-tool.js';
+import { buildOrientationBlock, modelKeyHasVision } from './orientation.js';
+import { NULL_APPROVAL_AUDIT, type ApprovalAudit } from '../approvals/audit.js';
 import { createBrowserExtension, type BrowserToolDeps } from './browser-tool.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
@@ -86,6 +89,15 @@ export interface PiRuntimeDeps {
   tearDownServices?: (threadId: string, cwd: string) => void;
   /** Fire-and-forget close of a thread's browser on session drop. */
   closeBrowser?: (threadId: string) => void;
+  /** This thread's persisted model key (`provider/id`), for the orientation
+   *  block's vision line. Read from the DB so it survives a restart, unlike the
+   *  in-memory session model. Undefined resolver ⇒ vision is never asserted. */
+  sessionModelKey?: (threadId: string, cwd: string) => string | undefined;
+  /** Resolves the `tool_policy` config for a repo, read fresh per tool call so
+   *  a config edit lands without a session rebuild. Absent ⇒ built-in defaults. */
+  toolPolicy?: (cwd: string) => ResolvedToolPolicy;
+  /** Sink for the tool-decision audit trail. Absent ⇒ decisions aren't recorded. */
+  approvalAudit?: ApprovalAudit;
 }
 
 export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
@@ -124,6 +136,7 @@ export function buildSessionExtensionFactories(
   mondayTools?: (threadId: string) => MondayToolDeps | null,
   dockerTools?: (threadId: string, cwd: string) => DockerToolDeps | null,
   browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null,
+  audit: ApprovalAudit = NULL_APPROVAL_AUDIT,
 ): ExtensionFactory[] {
   // Mirrors the mondayContext guard in createSession below. Unlike that call,
   // this one has no try/catch at its call site (it's part of the
@@ -154,7 +167,7 @@ export function buildSessionExtensionFactories(
   }
   return [
     createQuestionExtension(threadId, questions),
-    createApprovalExtension(threadId, cwd, approvals, policy),
+    createApprovalExtension(threadId, cwd, approvals, policy, undefined, audit),
     signalFactoryBuilder(cwd),
     // Omitted when the runtime was built without a recall backend (tests,
     // headless callers) so sessions don't advertise a tool that can't run.
@@ -215,6 +228,12 @@ export class PiRuntime {
   private readonly browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null;
   /** Closes a thread's browser on session drop. */
   private readonly closeBrowser?: (threadId: string) => void;
+  /** Resolves a thread's persisted model key, for the orientation vision line. */
+  private readonly sessionModelKey?: (threadId: string, cwd: string) => string | undefined;
+  /** Resolves the tool policy config for a repo, read live per tool call. */
+  private readonly toolPolicy?: (cwd: string) => ResolvedToolPolicy;
+  /** Sink for the tool-decision audit trail. Undefined ⇒ a no-op sink is used. */
+  private readonly approvalAudit?: ApprovalAudit;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
@@ -233,6 +252,33 @@ export class PiRuntime {
     this.tearDownServices = deps.tearDownServices;
     this.browserTools = deps.browserTools;
     this.closeBrowser = deps.closeBrowser;
+    this.sessionModelKey = deps.sessionModelKey;
+    this.toolPolicy = deps.toolPolicy;
+    this.approvalAudit = deps.approvalAudit;
+  }
+
+  /** Whether this session would get the Docker tool — used to decide if the
+   *  orientation block mentions running services. Guarded: a throwing resolver
+   *  costs the mention, not the session. */
+  private hasDockerFor(threadId: string, cwd: string): boolean {
+    try { return (this.dockerTools?.(threadId, cwd) ?? null) != null; } catch { return false; }
+  }
+
+  /** Whether this session would get the browser tools. */
+  private hasBrowserFor(threadId: string, cwd: string): boolean {
+    try { return (this.browserTools?.(threadId, cwd) ?? null) != null; } catch { return false; }
+  }
+
+  /** Whether this thread's model can see images — so the orientation block can
+   *  mention screenshots only when they're useful. Prefers the persisted model
+   *  key (survives a restart) over the in-memory one. */
+  private hasVisionFor(threadId: string, cwd: string): boolean {
+    try {
+      const key = this.sessionModelKey?.(threadId, cwd) ?? this.getSessionModel(threadId, cwd);
+      return modelKeyHasVision(key, (provider, id) => this.findModel(provider, id));
+    } catch {
+      return false;
+    }
   }
 
   static async create(
@@ -294,13 +340,18 @@ export class PiRuntime {
 
   /**
    * The tool policy for a thread. Built once per session, but every input it
-   * reads is a getter evaluated at tool-call time — so toggling Supervise (or,
-   * later, editing project policy) lands on the next tool call without
+   * reads is a getter evaluated at tool-call time — so toggling Supervise AND
+   * editing project policy in config both land on the next tool call without
    * rebuilding the session. That liveness is load-bearing; do not resolve
-   * these into values here.
+   * these into values here. `toolPolicy` (when supplied) reads config fresh for
+   * this repo per call; absent ⇒ built-in category defaults only.
    */
-  policyFor(threadId: string): ToolPolicyResolver {
-    return createToolPolicyResolver({ isSupervised: () => this.isSupervised(threadId) });
+  policyFor(threadId: string, cwd: string): ToolPolicyResolver {
+    return createToolPolicyResolver({
+      isSupervised: () => this.isSupervised(threadId),
+      categoryPolicy: () => this.toolPolicy?.(cwd).categories ?? {},
+      rules: () => this.toolPolicy?.(cwd).rules ?? [],
+    });
   }
 
   /**
@@ -392,24 +443,35 @@ export class PiRuntime {
       agentDir: this.paths.sessionsDir,
       settingsManager,
       extensionFactories: buildSessionExtensionFactories(
-        threadId, cwd, this.questions, this.approvals, this.policyFor(threadId),
+        threadId, cwd, this.questions, this.approvals, this.policyFor(threadId, cwd),
         createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
-        this.browserTools,
+        this.browserTools, this.approvalAudit ?? NULL_APPROVAL_AUDIT,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened
-      // later sees current item state rather than a stale frozen line. Also
-      // guarded: buildMondayContextBlock is pure and defensively parses its
-      // input, but if it were ever to throw, the base prompt must still come
-      // through unmodified rather than the whole session failing to create.
-      systemPromptOverride: mondayContext
-        ? (base: string | undefined) => {
-            try {
-              return `${base ?? ''}\n\n${buildMondayContextBlock(mondayContext)}`;
-            } catch {
-              return base;
-            }
-          }
-        : undefined,
+      // later reflects the capabilities and item state it has THEN, not a line
+      // frozen at first creation. Two blocks are appended: the Nexus orientation
+      // (always) and the Monday context (when the task has a linked item). Each
+      // is guarded independently — a block that throws is skipped, and the base
+      // prompt always comes through, rather than a bad block failing the whole
+      // session.
+      systemPromptOverride: (base: string | undefined) => {
+        const parts: string[] = [];
+        if (base) parts.push(base);
+        try {
+          parts.push(buildOrientationBlock({
+            hasMemory: !!this.recallMemories,
+            hasDocker: this.hasDockerFor(threadId, cwd),
+            hasBrowser: this.hasBrowserFor(threadId, cwd),
+            hasVision: this.hasVisionFor(threadId, cwd),
+          }));
+        } catch { /* orientation is a nicety; never fail a session over it */ }
+        if (mondayContext) {
+          try {
+            parts.push(buildMondayContextBlock(mondayContext));
+          } catch { /* skip the Monday block, keep the rest */ }
+        }
+        return parts.join('\n\n');
+      },
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({
