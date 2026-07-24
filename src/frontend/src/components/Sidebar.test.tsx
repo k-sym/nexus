@@ -58,6 +58,7 @@ function renderSidebar({
   onArchiveThread = noop,
   onDeleteThread = noop,
   onNewChat = noop,
+  onSelectThread = noop,
 }: {
   threads?: ThreadMeta[];
   subView?: 'kanban' | 'memory' | 'chat';
@@ -75,6 +76,7 @@ function renderSidebar({
   onArchiveThread?: (threadId: string) => void;
   onDeleteThread?: (threadId: string) => void;
   onNewChat?: (projectId: string) => void;
+  onSelectThread?: (projectId: string, threadId: string) => void;
 } = {}) {
   return render(
     <Sidebar
@@ -96,7 +98,7 @@ function renderSidebar({
       }}
       onSelectProject={noop}
       onSelectSubView={noop}
-      onSelectThread={noop}
+      onSelectThread={onSelectThread}
       onRenameThread={noop}
       onArchiveThread={onArchiveThread}
       onDeleteThread={onDeleteThread}
@@ -260,12 +262,12 @@ describe('Sidebar', () => {
     expect(activeSection).not.toHaveTextContent('RUN');
   });
 
-  it('orders the list waiting first, then working, then idle', () => {
+  it('orders active sessions alphabetically by title', () => {
     renderSidebar({
       sessions: [
-        { threadId: 'idle-1', title: 'Idle session', projectId: project.id, activity: 'idle' },
-        { threadId: 'work-1', title: 'Working session', projectId: project.id, activity: 'working' },
-        { threadId: 'wait-1', title: 'Waiting session', projectId: project.id, activity: 'waiting' },
+        { threadId: 'zeta-1', title: 'Zeta session', projectId: project.id, activity: 'idle' },
+        { threadId: 'alpha-1', title: 'Alpha session', projectId: project.id, activity: 'working' },
+        { threadId: 'beta-1', title: 'Beta session', projectId: project.id, activity: 'waiting' },
       ],
     });
 
@@ -273,10 +275,25 @@ describe('Sidebar', () => {
       .getAllByRole('button')
       .map((el) => el.textContent);
     expect(titles).toEqual([
-      expect.stringContaining('Waiting session'),
-      expect.stringContaining('Working session'),
-      expect.stringContaining('Idle session'),
+      expect.stringContaining('Alpha session'),
+      expect.stringContaining('Beta session'),
+      expect.stringContaining('Zeta session'),
     ]);
+  });
+
+  it('selects the active session when its card is clicked', async () => {
+    const user = userEvent.setup();
+    const onSelectThread = vi.fn();
+    renderSidebar({
+      sessions: [
+        { threadId: 'active-thread', title: 'Clicked session', projectId: secondProject.id, activity: 'working' },
+      ],
+      onSelectThread,
+    });
+
+    await user.click(screen.getByRole('button', { name: /Clicked session/i }));
+
+    expect(onSelectThread).toHaveBeenCalledWith(secondProject.id, 'active-thread');
   });
 
   it('shows sessions from OTHER projects (global), so they stay visible after navigating away', () => {
