@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { apiFetch } from '../api-base';
+import type { ThinkingLevel } from '../lib/thinking';
 
 export interface ModelInfo {
   id: string;
@@ -10,6 +11,7 @@ export interface ModelInfo {
   maxTokens?: number;
   input?: Array<'text' | 'image'>;
   configured?: boolean;
+  thinkingLevels?: ThinkingLevel[];
 }
 
 /** Encode a model as `provider/id` for use as a key. */

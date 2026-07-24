@@ -541,3 +541,44 @@ test('buildModelCatalog exposes model input capabilities', () => {
 
   assert.deepEqual(buildModelCatalog(fastify)[0].input, ['text', 'image']);
 });
+
+test('buildModelCatalog exposes thinkingLevels for reasoning models only', () => {
+  const fastify = {
+    pi: {
+      models: {
+        getAll: () => [
+          {
+            provider: 'test',
+            id: 'thinker',
+            name: 'Thinker',
+            reasoning: true,
+            input: ['text'],
+            contextWindow: 1,
+            maxTokens: 1,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+          {
+            provider: 'test',
+            id: 'plain',
+            name: 'Plain',
+            reasoning: false,
+            input: ['text'],
+            contextWindow: 1,
+            maxTokens: 1,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          },
+        ],
+        getAvailable: () => [
+          { provider: 'test', id: 'thinker' },
+          { provider: 'test', id: 'plain' },
+        ],
+      },
+    },
+  } as any;
+
+  const catalog = buildModelCatalog(fastify);
+  assert.ok(Array.isArray(catalog[0].thinkingLevels));
+  assert.ok(catalog[0].thinkingLevels!.includes('off'));
+  assert.ok(catalog[0].thinkingLevels!.some((level) => level !== 'off'));
+  assert.deepEqual(catalog[1].thinkingLevels, []);
+});
