@@ -41,7 +41,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 
 | Capability | Description |
 |---|---|
-| **Projects** | Link existing local git repos. NEXUS adds a `project_docs/` structure for specs, plans, and uploads. |
+| **Projects** | Link existing local git repos. NEXUS scaffolds a `project_docs/` structure (`specs`, `plans`, `design`, `uploads`) and, when the repo has none, a starter `AGENTS.md` — so a new project starts agent-aware. Existing agent-instruction files are never overwritten. |
 | **Kanban** | 5-column board (Triage → To Do → In Progress → Review → Deploy) with drag-and-drop. |
 | **Interactive task chat** | Moving a task into **In Progress** opens an interactive chat thread bound to a model you pick — the old headless dispatch loop is gone. The agent works the task in the conversation while you steer it. |
 | **Missions** | Bounded, recurring or self-paced autonomous jobs against a project's tasks/tickets. Hard ceilings (iterations / wall-clock / token budget / run window), a per-iteration audit ledger, and pause/resume/stop controls. Off by default; can never run unbounded. |
