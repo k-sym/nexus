@@ -96,6 +96,13 @@ const TOOL_CATEGORIES: Readonly<Record<string, ToolCategory>> = {
   monday_search: 'read',
   monday_get_item: 'read',
 
+  // API helpers (#291): read-biased — they fetch external data, never mutate.
+  // Kept out of `network` deliberately so routine search/lookup doesn't trigger
+  // confirm-fatigue, matching monday_search.
+  web_search: 'read',
+  web_answer: 'read',
+  docs_lookup: 'read',
+
   edit: 'write',
   write: 'write',
   monday_post_update: 'network',

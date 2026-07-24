@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildOrientationBlock, modelKeyHasVision, type OrientationInput } from '../pi/orientation';
 
-const NONE: OrientationInput = { hasMemory: false, hasDocker: false, hasBrowser: false, hasVision: false };
+const NONE: OrientationInput = {
+  hasMemory: false, hasDocker: false, hasBrowser: false, hasHelpers: false, hasVision: false,
+};
 
 test('the block always orients to Nexus and points at project_docs', () => {
   const block = buildOrientationBlock(NONE);
@@ -18,6 +20,7 @@ test('each line appears only when its capability is present', () => {
   assert.match(buildOrientationBlock({ ...NONE, hasMemory: true }), /memory_recall/);
   assert.match(buildOrientationBlock({ ...NONE, hasDocker: true }), /docker_service/);
   assert.match(buildOrientationBlock({ ...NONE, hasBrowser: true }), /verify front-end work in a real browser/);
+  assert.match(buildOrientationBlock({ ...NONE, hasHelpers: true }), /search the live web and look up current docs/);
 });
 
 test('screenshots are mentioned only for a vision-capable model', () => {
@@ -36,11 +39,14 @@ test('screenshots are mentioned only for a vision-capable model', () => {
 });
 
 test('a fully-capable session gets every line', () => {
-  const block = buildOrientationBlock({ hasMemory: true, hasDocker: true, hasBrowser: true, hasVision: true });
+  const block = buildOrientationBlock({
+    hasMemory: true, hasDocker: true, hasBrowser: true, hasHelpers: true, hasVision: true,
+  });
   assert.match(block, /memory_recall/);
   assert.match(block, /docker_service/);
   assert.match(block, /real browser/);
   assert.match(block, /screenshot/);
+  assert.match(block, /web_search/);
   assert.match(block, /project_docs/);
 });
 

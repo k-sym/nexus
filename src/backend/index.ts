@@ -43,6 +43,7 @@ import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMondayPoll } from './monday/poll.js';
 import { buildMondayContext, buildMondayToolDeps } from './monday/session-deps.js';
+import { buildHelpersToolDeps } from './helpers/resolve.js';
 import { startMissionScheduler } from './missions/runner.js';
 import { ActivityManager } from './activity/manager.js';
 import { PiRuntime, defaultPiRuntimePaths } from './pi/runtime.js';
@@ -100,6 +101,17 @@ async function main() {
     tearDownServices: buildTearDownServices(dockerAvailability),
     browserTools: browserSupport?.browserTools,
     closeBrowser: browserSupport?.closeBrowser,
+    // API helpers (#291): resolved from config fresh per session, so enabling a
+    // provider in Settings takes effect on the next thread without a restart.
+    // Args ignored — helpers are global config, not per-thread. Degrade to null
+    // on any read error so a broken config never blocks session creation.
+    helpersTools: () => {
+      try {
+        return buildHelpersToolDeps(loadConfig());
+      } catch {
+        return null;
+      }
+    },
     // The thread's last-used model, persisted in the DB, so the orientation
     // block's vision line survives a restart. Best-effort — a missing row or a
     // read error just means "no vision asserted".

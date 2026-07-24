@@ -54,6 +54,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, image + PDF/document attachments, and manual archival into memory. |
 | **Local services (Docker)** | Agents can bring a project's Docker Compose stack up/down to actually run and test it — always detached, namespaced per session so two threads on one repo can't collide, torn down with the session, plus a startup sweep for anything a crash orphaned. Off by default; the `docker_service` tool only appears when a Docker daemon is reachable. |
 | **Browser** | Agents can drive a headless Chromium-family browser to verify front-end work — navigate, read the rendered page as text or an accessibility tree, and read console/network output. Localhost-only by default; ephemeral profile, never your real one. Off by default; the tools only appear when a browser is installed. |
+| **API helpers** | Optional external APIs the agent reaches for when a task fits: **web search** (Brave/Exa), a **cited answer** engine (Perplexity), and **current library docs** (Context7). Enabled per provider in Settings with a key that's verified before it goes live; keys stay server-side and never enter the prompt. Off by default; each tool only appears when its provider is enabled with a working key. |
 | **Tool approvals** | A per-tool approval policy decides — before each tool call runs — whether it's allowed, confirmed, or denied. Side-effectful categories (e.g. starting containers) default to *confirm*; pending gates are answerable from the Nexus UI or the glasses. Read live, so a change lands mid-session. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
 | **GitHub triage** | Open issues on a project's GitHub remote are mirrored into the Triage column on Kanban open (token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. |
@@ -648,6 +649,21 @@ browser:                         # let agents drive a headless browser to verify
   allow_hosts: []                # hosts the browser may reach beyond loopback (always allowed);
                                  #   ".example.com" matches subdomains, "example.com" is exact
 
+helpers:                         # optional external API helpers; each off by default (#291)
+  brave:                         # web search results
+    enabled: false               #   keys support ${ENV}, are masked in the UI, and are verified
+    api_key: "${BRAVE_API_KEY}"  #   (a cheap test call) before a provider can be enabled
+  exa:                           # neural search with page text inline
+    enabled: false
+    api_key: "${EXA_API_KEY}"
+  perplexity:                    # synthesised, cited answers
+    enabled: false
+    api_key: "${PERPLEXITY_API_KEY}"
+  context7:                      # current library/framework documentation
+    enabled: false
+    api_key: "${CONTEXT7_API_KEY}"
+  search_default: exa            # which backend web_search prefers when Brave AND Exa are both on
+
 tool_policy:                     # optional per-tool approval policy (omit ⇒ built-in defaults:
                                  #   read-only allowed, `services` (Docker) confirmed). Read live —
                                  #   an edit lands on the next tool call, no restart.
@@ -756,6 +772,7 @@ On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `g
 | `docker_service` | Start/stop/inspect the project's Docker Compose services — `up` (always detached), `down`, `status`, `logs`. Namespaced to `nexus-<threadId>` so sessions can't collide; torn down on session drop, with a startup sweep for crash-orphaned projects. Both the compose file *and what it bind-mounts* are contained to the repo — a file that mounts a host path outside the project is refused before `up` starts anything, unless the path is in `docker.allow_host_mounts`. | `docker.enabled` **and** a Docker daemon answers. |
 | `browser_navigate` / `browser_read` / `browser_diagnostics` | Load a URL in a headless browser, read the rendered page (text or accessibility tree), and read its console/network output. One ephemeral-profile browser per thread, launched lazily and closed with the session. | `browser.enabled` **and** a Chromium-family browser is found. |
 | `monday_search` / `monday_get_item` / `monday_post_update` | Read (and, if opted in, post updates to) the Monday.com initiative a task is linked to. | Monday is configured and the task has a linked item. |
+| `web_search` / `web_answer` / `docs_lookup` | Search the live web (Brave/Exa — results, with page text inline from Exa), get a synthesised cited answer (Perplexity), or fetch current library/framework docs (Context7). Keys resolve server-side and never enter the prompt. | The matching API helper is enabled with a working key. |
 | `question` | Emit a structured question card and wait for your answer. | Always. |
 
 **Tool approvals.** Every tool call is put to a per-thread **tool policy** (`src/backend/pi/tool-policy.ts`) *before* it runs, which returns `allow` (run it), `confirm` (park it for a human), or `deny` (refuse with a reason). The base decision is the most specific that applies — an **input-aware rule** (e.g. `browser_navigate` when the URL is `remote_host`) over the **category** (read-only `allow`, `services` `confirm`) over a fail-closed default; `deny` is then a floor a lower-precedence source can't lift, and **Supervise** (confirm-everything) is a per-thread floor that only raises it. Category overrides and rules are sourced from the `tool_policy` config block (global, or per project by repo path — see [`config.yaml`](#configyaml)); conditions like `loopback_host`/`remote_host` are built-in (config picks a decision, it doesn't author predicates), and an unknown condition is skipped rather than applied. Everything is read live at each call, so a config edit — or toggling Supervise — takes effect on the next tool call without rebuilding the session. Parked gates are answerable from the Nexus UI (`GET /api/approvals/stream`) or the glasses cockpit — both drive one broker, so whoever answers first wins; unanswered gates default-deny after a timeout. Every gated decision is written to an audit trail (`tool_decisions` table, `src/backend/approvals/audit.ts`) — the tool, an input summary, the decision and its *source* (which rule / category / the Supervise floor), the outcome, and how it was answered (policy / human / timeout) — surfaced in the **Decisions** view and at `GET /api/approvals/audit`.

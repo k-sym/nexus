@@ -11,6 +11,15 @@ const MOTION_OPTIONS: { mode: BackgroundMotion; label: string }[] = [
   { mode: 'low', label: 'Battery saver' },
 ];
 
+// The curated API helpers (#291). id matches the config key and the backend
+// provider id; env is the default ${ENV} the key resolves from.
+const HELPER_PROVIDERS: { id: string; label: string; env: string; blurb: string }[] = [
+  { id: 'brave', label: 'Brave Search', env: 'BRAVE_API_KEY', blurb: 'Web search results.' },
+  { id: 'exa', label: 'Exa', env: 'EXA_API_KEY', blurb: 'Neural search with page text inline.' },
+  { id: 'perplexity', label: 'Perplexity', env: 'PERPLEXITY_API_KEY', blurb: 'Synthesised, cited answers.' },
+  { id: 'context7', label: 'Context7', env: 'CONTEXT7_API_KEY', blurb: 'Current library documentation.' },
+];
+
 export default function SettingsPage() {
   const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -18,6 +27,9 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [testingLocalModel, setTestingLocalModel] = useState(false);
   const [localModelStatus, setLocalModelStatus] = useState<{ ok: boolean; message: string } | null>(null);
+  // Per-provider API-helper Test state (#291), keyed by provider id.
+  const [helperTesting, setHelperTesting] = useState<Record<string, boolean>>({});
+  const [helperStatus, setHelperStatus] = useState<Record<string, { ok: boolean; message: string } | null>>({});
   // Appearance prefs are local-only (localStorage) and apply instantly, so they
   // live outside the config object and the Save Changes flow.
   const [motion, setMotion] = useState<BackgroundMotion>(getBackgroundMotion);
@@ -79,6 +91,21 @@ export default function SettingsPage() {
       setLocalModelStatus({ ok: false, message: err?.message || 'Endpoint test failed.' });
     } finally {
       setTestingLocalModel(false);
+    }
+  };
+
+  const handleTestHelper = async (id: string) => {
+    setHelperTesting((s) => ({ ...s, [id]: true }));
+    setHelperStatus((s) => ({ ...s, [id]: null }));
+    try {
+      // Sends whatever is in the field; the backend falls back to the stored
+      // key when the field still holds the mask, so testing a saved key works.
+      const result = await api.settings.testHelper(id, config.helpers?.[id]?.api_key ?? '');
+      setHelperStatus((s) => ({ ...s, [id]: { ok: result.ok, message: result.message } }));
+    } catch (err: any) {
+      setHelperStatus((s) => ({ ...s, [id]: { ok: false, message: err?.message || 'Test failed.' } }));
+    } finally {
+      setHelperTesting((s) => ({ ...s, [id]: false }));
     }
   };
 
@@ -489,6 +516,92 @@ export default function SettingsPage() {
             <p className="text-xs text-faint">
               The API token is read from the <span className="font-mono text-muted">MONDAY_TOKEN</span> environment
               variable, never stored here. Changes apply on the next backend restart.
+            </p>
+          </Section>
+
+          {/* API Helpers (#291) */}
+          <Section title="API Helpers">
+            <p className="text-[10px] text-faint -mt-1">
+              Optional external APIs. When a provider is enabled with a working key, every session gets the
+              matching tool — <span className="font-mono">web_search</span> (Brave/Exa),{' '}
+              <span className="font-mono">web_answer</span> (Perplexity),{' '}
+              <span className="font-mono">docs_lookup</span> (Context7) — and the agent reaches for it when the
+              task fits. Keys stay on the server and never enter the prompt. Applies on the next thread.
+            </p>
+            {HELPER_PROVIDERS.map(({ id, label, env, blurb }) => {
+              const h = config.helpers?.[id] ?? { enabled: false, api_key: '' };
+              const status = helperStatus[id];
+              // Typo-catch: a provider can't be turned ON until its key passes a
+              // Test this session. Already-enabled providers stay enabled.
+              const canEnable = h.enabled || !!status?.ok;
+              return (
+                <div key={id} className="border border-subtle rounded-sm p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="text-sm text-primary">{label}</div>
+                      <div className="text-[10px] text-faint">{blurb}</div>
+                    </div>
+                    <button
+                      type="button"
+                      aria-label={`${label} ${h.enabled ? 'Enabled' : 'Disabled'}`}
+                      disabled={!canEnable}
+                      title={!canEnable ? 'Test the key first' : undefined}
+                      onClick={() => update(['helpers', id, 'enabled'], !h.enabled)}
+                      className={`shrink-0 px-3 py-1 text-xs rounded-sm transition-colors disabled:opacity-40 ${h.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                    >
+                      {h.enabled ? 'Enabled' : 'Disabled'}
+                    </button>
+                  </div>
+                  <input
+                    aria-label={`${label} API key`}
+                    type="text"
+                    value={h.api_key ?? ''}
+                    onChange={(e) => update(['helpers', id, 'api_key'], e.target.value)}
+                    placeholder={`\${${env}} or paste a key`}
+                    className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
+                  />
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      aria-label={`Test ${label}`}
+                      onClick={() => handleTestHelper(id)}
+                      disabled={helperTesting[id]}
+                      className="px-3 py-1.5 text-xs rounded-sm surface-elevated text-muted hover:text-primary border border-subtle disabled:opacity-40 transition-colors"
+                    >
+                      {helperTesting[id] ? 'Testing…' : 'Test'}
+                    </button>
+                    {status && (
+                      <span className={`text-xs ${status.ok ? 'text-green-400' : 'text-red-400'}`}>
+                        {status.message}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {config.helpers?.brave?.enabled && config.helpers?.exa?.enabled && (
+              <Field label="Default search backend">
+                <div className="inline-flex rounded-sm overflow-hidden border border-subtle">
+                  {(['exa', 'brave'] as const).map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => update(['helpers', 'search_default'], p)}
+                      className={`px-3 py-1 text-xs capitalize transition-colors ${config.helpers?.search_default === p ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                    >
+                      {p}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-faint mt-1">
+                  Which backend <span className="font-mono">web_search</span> uses when both are on. The agent
+                  can still override it per call.
+                </p>
+              </Field>
+            )}
+            <p className="text-xs text-faint">
+              Keys support <span className="font-mono">{'${ENV_VAR}'}</span> interpolation and are masked on
+              load. A provider can only be enabled after its key passes a Test.
             </p>
           </Section>
 
