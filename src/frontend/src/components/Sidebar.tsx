@@ -165,9 +165,6 @@ const ACTIVITY_PILL: Record<SessionActivity, { className: string; text: string }
   idle: { className: 'compact-session-status-idle', text: 'IDLE' },
 };
 
-/** waiting > working > idle, so the list surfaces what needs the user first. */
-const ACTIVITY_RANK: Record<SessionActivity, number> = { waiting: 0, working: 1, idle: 2 };
-
 export default function Sidebar({
   projects, activeProjectId, subView, activeThreadId, threads, workingSessionIds,
   waitingSessionIds, workingProjectIds, waitingProjectIds, liveProjectIds, sessions,
@@ -181,10 +178,13 @@ export default function Sidebar({
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
   const dragStartRef = useRef<{ startX: number; startWidth: number } | null>(null);
 
-  // Sessions arrive most-recent first; lift the ones needing attention to the top
-  // without disturbing recency within each band.
+  // Keep the dock stable while activity changes; status is still visible in the pill.
   const orderedSessions = useMemo(
-    () => [...sessions].sort((a, b) => ACTIVITY_RANK[a.activity] - ACTIVITY_RANK[b.activity]),
+    () => [...sessions].sort((a, b) => (
+      a.title.localeCompare(b.title, undefined, { sensitivity: 'base', numeric: true })
+      || (a.projectId ?? '').localeCompare(b.projectId ?? '')
+      || a.threadId.localeCompare(b.threadId)
+    )),
     [sessions],
   );
 
