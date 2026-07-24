@@ -252,8 +252,10 @@ export interface DockerServicesResponse {
   groups: ServiceGroup[];
 }
 
-export async function fetchDockerServices(): Promise<DockerServicesResponse> {
-  return fetchJson<DockerServicesResponse>('/api/docker/services');
+/** All Nexus service groups, or — with `threadId` — just that thread's. */
+export async function fetchDockerServices(threadId?: string): Promise<DockerServicesResponse> {
+  const query = threadId ? `?thread=${encodeURIComponent(threadId)}` : '';
+  return fetchJson<DockerServicesResponse>(`/api/docker/services${query}`);
 }
 
 /** Tear down one Nexus service group by project name. */

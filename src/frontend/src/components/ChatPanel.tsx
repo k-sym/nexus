@@ -21,6 +21,7 @@ import { api } from '../api';
 import { buildQuestionAnswerSummary, parseTerminalAskBlock, type QuestionAnswer, type QuestionRequest, type QuestionToolResult } from '../lib/questions';
 import { useNextSuggestion } from '../hooks/useNextSuggestion';
 import { ModelSelector } from './ModelSelector';
+import ThreadServicesPanel from './ThreadServicesPanel';
 import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
@@ -736,6 +737,8 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
           </button>
         </div>
       )}
+
+      <ThreadServicesPanel threadId={threadId} />
 
       <div
         ref={messagesRef}

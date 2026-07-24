@@ -115,6 +115,26 @@ test('GET services returns the grouped list when available', async () => {
   }
 });
 
+test('GET services?thread=X narrows to that thread\'s project', async () => {
+  const groups = [
+    { project: composeProjectName('thread-a'), orphaned: false, containers: [{ name: 'x', image: 'i', state: 'running', status: 'Up', ports: '' }] },
+    { project: composeProjectName('thread-b'), orphaned: true, containers: [] },
+  ];
+  const app = await buildApp({ isAvailable: () => true, listGroups: async () => groups });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/docker/services?thread=thread-a' });
+    const body = res.json() as { groups: Array<{ project: string }> };
+    assert.equal(body.groups.length, 1);
+    assert.equal(body.groups[0].project, composeProjectName('thread-a'));
+
+    // A thread with no services gets an empty list, not everything.
+    const none = await app.inject({ method: 'GET', url: '/api/docker/services?thread=thread-z' });
+    assert.deepEqual((none.json() as { groups: unknown[] }).groups, []);
+  } finally {
+    await app.close();
+  }
+});
+
 test('POST down tears down a nexus project and refuses anything else', async () => {
   const downs: string[] = [];
   const exec: DockerExec = async (args) => {
