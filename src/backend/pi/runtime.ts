@@ -23,6 +23,7 @@ import { createSignalFilterExtension } from '../signal-filters/extension.js';
 import { createMemoryExtension, type MemoryRecallFn } from './memory-tool.js';
 import { createToolPolicyResolver, type ToolPolicyResolver } from './tool-policy.js';
 import { createDockerExtension, type DockerToolDeps } from './docker-tool.js';
+import { buildOrientationBlock, modelKeyHasVision } from './orientation.js';
 import { createBrowserExtension, type BrowserToolDeps } from './browser-tool.js';
 import { createMondayExtension, type MondayToolDeps } from './monday-tool.js';
 import { buildMondayContextBlock, type MondayContextInput } from './monday-context.js';
@@ -86,6 +87,10 @@ export interface PiRuntimeDeps {
   tearDownServices?: (threadId: string, cwd: string) => void;
   /** Fire-and-forget close of a thread's browser on session drop. */
   closeBrowser?: (threadId: string) => void;
+  /** This thread's persisted model key (`provider/id`), for the orientation
+   *  block's vision line. Read from the DB so it survives a restart, unlike the
+   *  in-memory session model. Undefined resolver ⇒ vision is never asserted. */
+  sessionModelKey?: (threadId: string, cwd: string) => string | undefined;
 }
 
 export const defaultPiRuntimePaths = (): Required<PiRuntimePaths> => ({
@@ -215,6 +220,8 @@ export class PiRuntime {
   private readonly browserTools?: (threadId: string, cwd: string) => BrowserToolDeps | null;
   /** Closes a thread's browser on session drop. */
   private readonly closeBrowser?: (threadId: string) => void;
+  /** Resolves a thread's persisted model key, for the orientation vision line. */
+  private readonly sessionModelKey?: (threadId: string, cwd: string) => string | undefined;
 
   private constructor(
     paths: Required<PiRuntimePaths>,
@@ -233,6 +240,31 @@ export class PiRuntime {
     this.tearDownServices = deps.tearDownServices;
     this.browserTools = deps.browserTools;
     this.closeBrowser = deps.closeBrowser;
+    this.sessionModelKey = deps.sessionModelKey;
+  }
+
+  /** Whether this session would get the Docker tool — used to decide if the
+   *  orientation block mentions running services. Guarded: a throwing resolver
+   *  costs the mention, not the session. */
+  private hasDockerFor(threadId: string, cwd: string): boolean {
+    try { return (this.dockerTools?.(threadId, cwd) ?? null) != null; } catch { return false; }
+  }
+
+  /** Whether this session would get the browser tools. */
+  private hasBrowserFor(threadId: string, cwd: string): boolean {
+    try { return (this.browserTools?.(threadId, cwd) ?? null) != null; } catch { return false; }
+  }
+
+  /** Whether this thread's model can see images — so the orientation block can
+   *  mention screenshots only when they're useful. Prefers the persisted model
+   *  key (survives a restart) over the in-memory one. */
+  private hasVisionFor(threadId: string, cwd: string): boolean {
+    try {
+      const key = this.sessionModelKey?.(threadId, cwd) ?? this.getSessionModel(threadId, cwd);
+      return modelKeyHasVision(key, (provider, id) => this.findModel(provider, id));
+    } catch {
+      return false;
+    }
   }
 
   static async create(
@@ -397,19 +429,30 @@ export class PiRuntime {
         this.browserTools,
       ),
       // Re-evaluated on every session create AND resume, so a thread reopened
-      // later sees current item state rather than a stale frozen line. Also
-      // guarded: buildMondayContextBlock is pure and defensively parses its
-      // input, but if it were ever to throw, the base prompt must still come
-      // through unmodified rather than the whole session failing to create.
-      systemPromptOverride: mondayContext
-        ? (base: string | undefined) => {
-            try {
-              return `${base ?? ''}\n\n${buildMondayContextBlock(mondayContext)}`;
-            } catch {
-              return base;
-            }
-          }
-        : undefined,
+      // later reflects the capabilities and item state it has THEN, not a line
+      // frozen at first creation. Two blocks are appended: the Nexus orientation
+      // (always) and the Monday context (when the task has a linked item). Each
+      // is guarded independently — a block that throws is skipped, and the base
+      // prompt always comes through, rather than a bad block failing the whole
+      // session.
+      systemPromptOverride: (base: string | undefined) => {
+        const parts: string[] = [];
+        if (base) parts.push(base);
+        try {
+          parts.push(buildOrientationBlock({
+            hasMemory: !!this.recallMemories,
+            hasDocker: this.hasDockerFor(threadId, cwd),
+            hasBrowser: this.hasBrowserFor(threadId, cwd),
+            hasVision: this.hasVisionFor(threadId, cwd),
+          }));
+        } catch { /* orientation is a nicety; never fail a session over it */ }
+        if (mondayContext) {
+          try {
+            parts.push(buildMondayContextBlock(mondayContext));
+          } catch { /* skip the Monday block, keep the rest */ }
+        }
+        return parts.join('\n\n');
+      },
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
     const { session } = await createAgentSession({

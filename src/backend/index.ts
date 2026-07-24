@@ -94,6 +94,18 @@ async function main() {
     tearDownServices: buildTearDownServices(dockerAvailability),
     browserTools: browserSupport?.browserTools,
     closeBrowser: browserSupport?.closeBrowser,
+    // The thread's last-used model, persisted in the DB, so the orientation
+    // block's vision line survives a restart. Best-effort — a missing row or a
+    // read error just means "no vision asserted".
+    sessionModelKey: (threadId) => {
+      try {
+        const row = db.prepare('SELECT last_model_key FROM chat_threads WHERE id = ?').get(threadId) as
+          { last_model_key?: string } | undefined;
+        return row?.last_model_key ?? undefined;
+      } catch {
+        return undefined;
+      }
+    },
   });
 
   const openRouterKey = resolveOpenRouterKey(config);
