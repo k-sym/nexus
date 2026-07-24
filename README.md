@@ -645,6 +645,19 @@ browser:                         # let agents drive a headless browser to verify
   allow_hosts: []                # hosts the browser may reach beyond loopback (always allowed);
                                  #   ".example.com" matches subdomains, "example.com" is exact
 
+tool_policy:                     # optional per-tool approval policy (omit ⇒ built-in defaults:
+                                 #   read-only allowed, `services` (Docker) confirmed). Read live —
+                                 #   an edit lands on the next tool call, no restart.
+  categories:                    # override the built-in per-category defaults
+    services: confirm            #   allow | confirm | deny, per category
+    network: confirm             #   (read/write/exec/services/network/interactive/unknown)
+  rules:                         # input-aware rules — more specific than a category, first match wins.
+    - tool: browser_navigate     #   Safe "allow localhost, confirm remote": confirm the category,
+      when: loopback_host        #   then allow-list loopback — a typo in `when` fails closed to confirm.
+      decision: allow            #   Conditions are built-in (loopback_host, remote_host); config only
+                                 #   picks a decision. `deny` is a floor no rule can soften.
+  projects: {}                   # per-project overrides keyed by repo path (same as signal_filters)
+
 obsidian:                        # where the canonical vault lives
   vault_path: "~/Obsidian/Nexus"
   sync_interval_seconds: 30
@@ -742,7 +755,7 @@ On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `g
 | `monday_search` / `monday_get_item` / `monday_post_update` | Read (and, if opted in, post updates to) the Monday.com initiative a task is linked to. | Monday is configured and the task has a linked item. |
 | `question` | Emit a structured question card and wait for your answer. | Always. |
 
-**Tool approvals.** Every tool call is put to a per-thread **tool policy** (`src/backend/pi/tool-policy.ts`) *before* it runs, which returns `allow` (run it), `confirm` (park it for a human), or `deny` (refuse with a reason). Categories carry the defaults — read-only tools `allow`, `services` (Docker) defaults to `confirm` — and `deny` is a floor a lower-precedence source can't lift. The policy is read live at each call, so toggling **Supervise** (confirm-everything) for a thread takes effect on the next tool call without rebuilding the session. Parked gates are answerable from the Nexus UI (`GET /api/approvals/stream`) or the glasses cockpit — both drive one broker, so whoever answers first wins; unanswered gates default-deny after a timeout.
+**Tool approvals.** Every tool call is put to a per-thread **tool policy** (`src/backend/pi/tool-policy.ts`) *before* it runs, which returns `allow` (run it), `confirm` (park it for a human), or `deny` (refuse with a reason). The base decision is the most specific that applies — an **input-aware rule** (e.g. `browser_navigate` when the URL is `remote_host`) over the **category** (read-only `allow`, `services` `confirm`) over a fail-closed default; `deny` is then a floor a lower-precedence source can't lift, and **Supervise** (confirm-everything) is a per-thread floor that only raises it. Category overrides and rules are sourced from the `tool_policy` config block (global, or per project by repo path — see [`config.yaml`](#configyaml)); conditions like `loopback_host`/`remote_host` are built-in (config picks a decision, it doesn't author predicates), and an unknown condition is skipped rather than applied. Everything is read live at each call, so a config edit — or toggling Supervise — takes effect on the next tool call without rebuilding the session. Parked gates are answerable from the Nexus UI (`GET /api/approvals/stream`) or the glasses cockpit — both drive one broker, so whoever answers first wins; unanswered gates default-deny after a timeout.
 
 **Session orientation.** Each tool advertises itself (Pi folds its one-line `promptSnippet` into the prompt), so the model's tool list is already an honest picture of what's available. On top of that, a short **orientation block** (`src/backend/pi/orientation.ts`) is injected into the system prompt — via the same `systemPromptOverride` hook the Monday context uses, re-evaluated per session create/resume — to supply the *framing* the tool list and repo don't: that memory persists across sessions and is worth recalling, that this project's docs live under `project_docs/`, that services can be run and front-end work verified. Every line is conditional on the session actually having that capability (and screenshots are mentioned only for vision-capable models), so it never promises a tool that isn't registered. Per-project conventions aren't here — Pi already loads a repo's `AGENTS.md`, which is their home.
 

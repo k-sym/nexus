@@ -37,23 +37,14 @@
  * a `confirm` default without touching the approval path again.
  */
 
-/** What to do with a tool call. */
-export type ToolDecision = 'allow' | 'confirm' | 'deny';
+// `ToolDecision`/`ToolCategory` live in @nexus/shared so the config block can
+// reference them; the classification logic and defaults stay here. `unknown`
+// (anything unclassified) is treated as side-effectful, so a broken policy
+// fails closed around it rather than waving it through.
+import type { ToolDecision, ToolCategory, ToolPolicyRule } from '@nexus/shared';
+import { evaluateCondition } from './tool-policy-conditions.js';
 
-/**
- * Coarse grouping used to write policy without naming every tool. `unknown`
- * covers tools we have not classified — including any registered by a future
- * extension — and is treated as side-effectful, so a broken policy fails closed
- * around it rather than waving it through.
- */
-export type ToolCategory =
-  | 'interactive'
-  | 'read'
-  | 'write'
-  | 'exec'
-  | 'services'
-  | 'network'
-  | 'unknown';
+export type { ToolDecision, ToolCategory, ToolPolicyRule } from '@nexus/shared';
 
 export type CategoryPolicy = Partial<Record<ToolCategory, ToolDecision>>;
 
@@ -163,34 +154,63 @@ export interface ToolPolicyOptions {
   /** The per-thread override. `true` ⇒ confirm everything gateable, which is
    *  exactly what Supervise means today. Read live at each tool call. */
   isSupervised?: () => boolean;
-  /** Category-level policy. Merged over `DEFAULT_CATEGORY_POLICY`; a later
-   *  phase sources this from per-project and global config. Read live, so a
-   *  config change lands on the next tool call. */
+  /** Category-level policy. Merged over `DEFAULT_CATEGORY_POLICY`, sourced from
+   *  per-project and global config. Read live, so a config change lands on the
+   *  next tool call. */
   categoryPolicy?: () => CategoryPolicy;
+  /** Input-aware rules, more specific than a category. The first rule that
+   *  matches the tool (and whose named condition holds) sets the base decision.
+   *  Read live, same as the category policy. */
+  rules?: () => ToolPolicyRule[];
+}
+
+const DECISIONS: ReadonlySet<string> = new Set<ToolDecision>(['allow', 'confirm', 'deny']);
+
+/**
+ * The decision of the first rule that applies to this request, or `undefined`
+ * when none do. A rule applies when its `tool` matches and either it has no
+ * `when` or its named condition evaluates true. Malformed rules and unknown
+ * conditions are skipped — a rule never applies "blindly".
+ */
+function ruleDecision(rules: ToolPolicyRule[], request: ToolPolicyRequest): ToolDecision | undefined {
+  for (const rule of rules) {
+    if (!rule || rule.tool !== request.toolName || !DECISIONS.has(rule.decision)) continue;
+    if (!rule.when) return rule.decision; // unconditional rule for this tool
+    // Unknown condition (undefined) or false → this rule does not apply; try the next.
+    if (evaluateCondition(rule.when, request) === true) return rule.decision;
+  }
+  return undefined;
 }
 
 /**
  * Build the resolver a session's approval extension consults.
  *
  * Every input is a getter rather than a value, because the property that makes
- * mid-session Supervise toggling work — the decision is computed at tool-call
- * time, not captured at session build — has to survive this refactor.
+ * mid-session Supervise toggling (and now a live config edit) work — the
+ * decision is computed at tool-call time, not captured at session build — has to
+ * survive this refactor.
+ *
+ * Precedence for the base decision, most specific first: a matching input-aware
+ * rule → the category policy → the fail-closed default. The Supervise override
+ * is then a floor that can only *raise* that base (allow→confirm), never lower
+ * it, and an explicit `deny` is never softened.
  */
 export function createToolPolicyResolver(options: ToolPolicyOptions = {}): ToolPolicyResolver {
-  return ({ toolName }) => {
+  return (request) => {
+    const { toolName } = request;
     // Highest precedence and not overridable: gating this deadlocks the thread.
     if (UNGATED_TOOL_NAMES.has(toolName)) return 'allow';
 
     let floor: ToolDecision | undefined;
-
     if (options.isSupervised?.()) {
       // Supervise's meaning is unchanged: confirm everything that can be gated.
       floor = 'confirm';
     }
 
+    const fromRule = ruleDecision(options.rules?.() ?? [], request);
     const policy = { ...DEFAULT_CATEGORY_POLICY, ...(options.categoryPolicy?.() ?? {}) };
-    const fromCategory = policy[categorizeTool(toolName)] ?? failClosedDecision(toolName);
-    return atLeast(fromCategory, floor);
+    const base = fromRule ?? policy[categorizeTool(toolName)] ?? failClosedDecision(toolName);
+    return atLeast(base, floor);
   };
 }
 

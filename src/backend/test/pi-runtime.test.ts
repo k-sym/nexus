@@ -114,6 +114,30 @@ test('a session prompt gains the orientation block, conditional on its capabilit
   }
 });
 
+test('policyFor threads the toolPolicy dep, resolved live for the cwd', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  const paths: PiRuntimePaths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };
+  try {
+    let categories: Record<string, string> = { exec: 'deny' };
+    const rt = await PiRuntime.create(paths, {
+      toolPolicy: () => ({ categories: categories as never, rules: [{ tool: 'browser_navigate', when: 'remote_host', decision: 'confirm' }] }),
+    });
+    const policy = rt.policyFor('thread-1', '/repo');
+
+    // Category from config applies (bash is exec → deny).
+    assert.equal(policy({ toolName: 'bash', input: {} }), 'deny');
+    // Input-aware rule applies (remote navigation → confirm; loopback → network default allow).
+    assert.equal(policy({ toolName: 'browser_navigate', input: { url: 'https://x.com/' } }), 'confirm');
+    assert.equal(policy({ toolName: 'browser_navigate', input: { url: 'http://localhost/' } }), 'allow');
+
+    // Read live: mutating the config the dep returns lands on the next call.
+    categories = { exec: 'allow' };
+    assert.equal(policy({ toolName: 'bash', input: {} }), 'allow', 'a config change needs no session rebuild');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a session with no capability deps is oriented but claims no tools', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };

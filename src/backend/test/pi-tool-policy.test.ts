@@ -116,6 +116,72 @@ test('deny is a floor: a lower-precedence source cannot downgrade it', () => {
   assert.equal(escalating(call('grep')), 'confirm');
 });
 
+// ── input-aware rules ─────────────────────────────────────────────────────────
+
+test('a rule is more specific than a category and sets the base decision', () => {
+  const policy = createToolPolicyResolver({
+    isSupervised: () => false,
+    rules: () => [{ tool: 'bash', decision: 'confirm' }],
+  });
+  // exec defaults to allow; the unconditional rule tightens just bash.
+  assert.equal(policy(call('bash')), 'confirm');
+  assert.equal(policy(call('grep')), 'allow', 'other tools are unaffected');
+});
+
+test('a conditional rule applies only when its named condition holds', () => {
+  // The safe "allow localhost, confirm remote" shape: category confirms, a
+  // loopback_host rule opens the local case — so a typo fails closed.
+  const policy = createToolPolicyResolver({
+    isSupervised: () => false,
+    categoryPolicy: () => ({ network: 'confirm' }),
+    rules: () => [{ tool: 'browser_navigate', when: 'loopback_host', decision: 'allow' }],
+  });
+  assert.equal(policy(call('browser_navigate', { url: 'http://localhost:3000/' })), 'allow');
+  assert.equal(policy(call('browser_navigate', { url: 'https://example.com/' })), 'confirm', 'remote falls to the category');
+});
+
+test('the remote_host condition is the inverse, and only matches a real remote URL', () => {
+  const policy = createToolPolicyResolver({
+    isSupervised: () => false,
+    rules: () => [{ tool: 'browser_navigate', when: 'remote_host', decision: 'deny' }],
+  });
+  assert.equal(policy(call('browser_navigate', { url: 'https://evil.example/' })), 'deny');
+  assert.equal(policy(call('browser_navigate', { url: 'http://127.0.0.1:8080/' })), 'allow', 'loopback not matched → category (network allow)');
+  assert.equal(policy(call('browser_navigate', { url: 'not a url' })), 'allow', 'unparseable → not matched');
+});
+
+test('malformed rules and unknown conditions are skipped, not applied blindly', () => {
+  const policy = createToolPolicyResolver({
+    isSupervised: () => false,
+    categoryPolicy: () => ({ network: 'confirm' }),
+    rules: () => [
+      { tool: 'browser_navigate', decision: 'nonsense' as never },       // bad decision → skipped
+      { tool: 'browser_navigate', when: 'no_such_condition', decision: 'allow' }, // unknown condition → skipped
+      { tool: 'browser_navigate', when: 'loopback_host', decision: 'allow' },      // this one applies
+    ],
+  });
+  // The first two are skipped; loopback still resolves to allow, remote to the category confirm.
+  assert.equal(policy(call('browser_navigate', { url: 'http://localhost/' })), 'allow');
+  assert.equal(policy(call('browser_navigate', { url: 'https://x.com/' })), 'confirm');
+});
+
+test('a rule cannot escape the deny floor, and supervise still escalates over a rule', () => {
+  // Supervised confirm floor raises an allow rule to confirm.
+  const supervised = createToolPolicyResolver({
+    isSupervised: () => true,
+    rules: () => [{ tool: 'browser_navigate', decision: 'allow' }],
+  });
+  assert.equal(supervised(call('browser_navigate', { url: 'http://localhost/' })), 'confirm');
+
+  // A rule that denies stands regardless of a lower category allow.
+  const denying = createToolPolicyResolver({
+    isSupervised: () => false,
+    categoryPolicy: () => ({ network: 'allow' }),
+    rules: () => [{ tool: 'browser_navigate', when: 'remote_host', decision: 'deny' }],
+  });
+  assert.equal(denying(call('browser_navigate', { url: 'https://x.com/' })), 'deny');
+});
+
 test('resolveToolDecision fails closed on a throwing policy', () => {
   const boom: ToolPolicyResolver = () => { throw new Error('bad rule'); };
   assert.equal(resolveToolDecision(boom, call('bash')), 'confirm');
