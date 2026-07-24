@@ -12,6 +12,7 @@ import DaemonToasts from './components/DaemonToasts';
 import NotificationToasts from './components/NotificationToasts';
 import ConfirmHost from './components/ConfirmHost';
 import ApprovalQueue from './components/ApprovalQueue';
+import ServicesView from './components/ServicesView';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import AssistantView from './components/AssistantView';
@@ -28,7 +29,7 @@ import DiffReviewPanel from './components/DiffReviewPanel';
 import type { ActivityResponse, ChatSessionSummary, OperationKind, OperationStatus, ReviewActionResult } from './api';
 import { loadViewState, saveViewState } from './viewState';
 
-type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'settings';
+type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'services' | 'settings';
 
 /** The slice of an in-flight run the sidebar needs: which project owns it and
  *  whether it is blocked on the user. */
@@ -685,6 +686,7 @@ export default function App() {
       { id: 'view-activity', label: 'Activity Console', hint: 'View', keywords: 'operations running recent', run: () => selectGlobal('activity') },
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
       { id: 'view-braindump', label: 'Braindump', hint: 'View', keywords: 'ideas capture', run: () => selectGlobal('braindump') },
+      { id: 'view-services', label: 'Services', hint: 'View', keywords: 'docker compose containers running orphaned', run: () => selectGlobal('services') },
       { id: 'view-assistant', label: 'Assistant', hint: 'View', keywords: 'hermes openclaw remote chat', run: () => selectGlobal('assistant') },
     ];
     (['kanban', 'memory', 'chat', 'projectManagement'] as const).forEach((sub) => {
@@ -733,6 +735,8 @@ export default function App() {
       return <MissionsView projects={projects} />;
     if (globalView === 'assistant')
       return <AssistantView />;
+    if (globalView === 'services')
+      return <ServicesView />;
 
     if (!activeProject) {
       return (
