@@ -21,6 +21,7 @@ import { api } from '../api';
 import { buildQuestionAnswerSummary, parseTerminalAskBlock, type QuestionAnswer, type QuestionRequest, type QuestionToolResult } from '../lib/questions';
 import { useNextSuggestion } from '../hooks/useNextSuggestion';
 import { ModelSelector } from './ModelSelector';
+import { ThinkingSelector } from './ThinkingSelector';
 import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
 import { QuestionCard } from './QuestionCard';
@@ -30,6 +31,12 @@ import type { AgentRunView } from '../chat/agent-run-state';
 import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 import ArtifactPreviewRail from './ArtifactPreviewRail';
 import ChatMessageContent from './ChatMessageContent';
+import {
+  clampToSupportedThinkingLevel,
+  type ThinkingLevel,
+} from '../lib/thinking';
+
+const EMPTY_THINKING_LEVELS: ThinkingLevel[] = [];
 
 interface ChatPanelProps {
   projectId: string;
@@ -159,6 +166,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
   const [artifactPath, setArtifactPath] = useState<string | null>(null);
   const [artifactRailOpen, setArtifactRailOpen] = useState(false);
+  const [thinkingByThread, setThinkingByThread] = useState<Record<string, ThinkingLevel>>({});
   // Live mirror of loadedMessages + the persisted-history length captured when
   // the current turn started. Used to decide when the optimistic in-flight turn
   // has been superseded by persisted history (see `visible` below) — keeping it
@@ -177,10 +185,26 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const { containerRef: messagesRef, isFollowing, onScroll, jumpToLatest } = useFollowAtBottom(streamContentVersion);
 
   const activeModel = models.find((model) => `${model.provider}/${model.id}` === activeModelId);
+  const thinkingLevels = activeModel?.thinkingLevels?.length
+    ? activeModel.thinkingLevels
+    : EMPTY_THINKING_LEVELS;
+  const thinkingLevel: ThinkingLevel = (threadId && thinkingByThread[threadId]) || 'off';
   const pendingImages = pendingAttachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
   const hasPendingImages = pendingImages.length > 0;
   const selectedModelSupportsImages = activeModel?.input?.includes('image') ?? false;
   const imageModelBlocked = hasPendingImages && !!activeModelId && !selectedModelSupportsImages;
+
+  // Clamp the sticky thinking level when the active model (or its levels) change.
+  const thinkingLevelsKey = thinkingLevels.join(',');
+  useEffect(() => {
+    if (!threadId || thinkingLevels.length === 0) return;
+    setThinkingByThread((prev) => {
+      const current = prev[threadId] ?? 'off';
+      const clamped = clampToSupportedThinkingLevel(current, thinkingLevels) ?? 'off';
+      if (prev[threadId] === clamped) return prev;
+      return { ...prev, [threadId]: clamped };
+    });
+  }, [threadId, thinkingLevelsKey]); // eslint-disable-line react-hooks/exhaustive-deps -- levels keyed by thinkingLevelsKey
 
   // Update the active thread in usePiStream to filter events correctly
   useEffect(() => {
@@ -410,6 +434,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         const contextUsage = await startStream(threadId, text, {
           confirmCancel: opts.confirmCancel,
           modelKey: opts.modelKey ?? activeModelId,
+          thinkingLevel,
           attachments,
           onError: (message) => {
             streamError = message;
@@ -453,7 +478,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         return false;
       }
     },
-    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, pendingAttachments, fetchThreadMessages, dispatch],
+    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, thinkingLevel, pendingAttachments, fetchThreadMessages, dispatch],
   );
 
   const answerNativeQuestion = useCallback(async (toolCallId: string, answers: QuestionAnswer[]) => {
@@ -796,6 +821,19 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         {imageModelBlocked && (
           <div className="pb-2 text-xs text-amber-200">
             The selected model does not support images. Pick a vision-capable model or remove the images.
+          </div>
+        )}
+        {thinkingLevels.length > 0 && (
+          <div className="pb-2">
+            <ThinkingSelector
+              levels={thinkingLevels}
+              value={thinkingLevels.includes(thinkingLevel) ? thinkingLevel : (thinkingLevels[0] ?? 'off')}
+              onChange={(level) => {
+                if (!threadId) return;
+                setThinkingByThread((prev) => ({ ...prev, [threadId]: level }));
+              }}
+              disabled={isRunning}
+            />
           </div>
         )}
         {pendingAttachments.length > 0 && (

@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import type { ThinkingLevel } from './thinking.js';
+
 export interface ModelCatalogItem {
   provider: string;
   id: string;
@@ -10,6 +12,8 @@ export interface ModelCatalogItem {
   contextWindow?: number;
   maxTokens?: number;
   input?: Array<'text' | 'image'>;
+  /** Supported Pi thinking levels; empty when the model has no extended thinking. */
+  thinkingLevels?: ThinkingLevel[];
 }
 
 interface CurationFile {

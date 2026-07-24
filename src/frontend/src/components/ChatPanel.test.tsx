@@ -1264,4 +1264,90 @@ describe('ChatPanel', () => {
     expect(await screen.findByText(/Select a session/)).toBeInTheDocument();
     expect(screen.queryByTestId('chat-input')).not.toBeInTheDocument();
   });
+
+  it('hides the thinking selector when the model has no thinking levels', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true, thinkingLevels: [] }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await screen.findByTestId('chat-input');
+    expect(screen.queryByTestId('thinking-selector')).not.toBeInTheDocument();
+  });
+
+  it('sends the selected thinkingLevel on stream and disables the control while running', async () => {
+    const streamBodies: unknown[] = [];
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{
+              id: 'sonnet',
+              name: 'Sonnet',
+              provider: 'anthropic',
+              configured: true,
+              reasoning: true,
+              thinkingLevels: ['off', 'high'],
+            }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }),
+        } as Response;
+      }
+      if (url === '/api/models/active') {
+        return { ok: true, json: async () => ({ ok: true }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        streamBodies.push(JSON.parse(String(init?.body ?? '{}')));
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({ start() {} }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const selector = await screen.findByTestId('thinking-selector');
+    expect(selector).toHaveTextContent('Thinking: Off');
+
+    await userEvent.click(selector);
+    await userEvent.click(screen.getByRole('option', { name: 'High' }));
+    expect(screen.getByTestId('thinking-selector')).toHaveTextContent('Thinking: High');
+
+    await userEvent.type(screen.getByTestId('chat-input'), 'plan this');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => expect(streamBodies).toHaveLength(1));
+    expect(streamBodies[0]).toMatchObject({ content: 'plan this', thinkingLevel: 'high' });
+    await waitFor(() => expect(screen.getByTestId('thinking-selector')).toBeDisabled());
+  });
 });
