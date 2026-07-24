@@ -203,6 +203,59 @@ public actor APIClient {
         let body = try JSONEncoder().encode(SendMessageRequest(content: content, modelKey: modelKey))
         return try events(.threadStream(threadId, body: body, confirmCancel: confirmCancel))
     }
+
+    // MARK: Writes (M3)
+
+    @discardableResult
+    public func updateTask(id: String, status: String) async throws -> ProjectTask {
+        let body = try JSONEncoder().encode(UpdateTaskRequest(status: status))
+        return try await request(.updateTask(id, body: body))
+    }
+
+    public func memories(projectId: String, query: String? = nil) async throws -> [MemoryRecord] {
+        try await request(.projectMemories(projectId, query: query))
+    }
+
+    public func createMemory(projectId: String, content: String, category: String? = nil) async throws {
+        let body = try JSONEncoder().encode(CreateMemoryRequest(content: content, category: category))
+        _ = try await requestData(.createMemory(projectId, body: body))
+    }
+
+    public func updateMemory(id: String, content: String) async throws {
+        let body = try JSONEncoder().encode(UpdateMemoryRequest(content: content))
+        _ = try await requestData(.updateMemory(id, body: body))
+    }
+
+    public func deleteMemory(id: String) async throws {
+        _ = try await requestData(.deleteMemory(id))
+    }
+
+    public func braindump() async throws -> [BraindumpIdea] {
+        try await request(.braindump)
+    }
+
+    public func createBraindump(title: String, body: String? = nil) async throws {
+        let data = try JSONEncoder().encode(CreateBraindumpRequest(title: title, body: body))
+        _ = try await requestData(.createBraindump(body: data))
+    }
+
+    public func updateBraindump(id: String, patch: UpdateBraindumpRequest) async throws {
+        let data = try JSONEncoder().encode(patch)
+        _ = try await requestData(.updateBraindump(id, body: data))
+    }
+
+    public func deleteBraindump(id: String) async throws {
+        _ = try await requestData(.deleteBraindump(id))
+    }
+
+    public func missions(projectId: String) async throws -> [Mission] {
+        try await request(.projectMissions(projectId))
+    }
+
+    /// `action` ∈ resume | pause | stop.
+    public func missionAction(id: String, action: String) async throws {
+        _ = try await requestData(.missionAction(id, action))
+    }
 }
 
 public struct HealthResponse: Decodable, Sendable {

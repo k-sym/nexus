@@ -81,4 +81,43 @@ public struct Endpoint: Sendable {
     public static func threadAbort(_ threadId: String, body: Data) -> Endpoint {
         Endpoint(path: "/api/threads/\(threadId)/abort", method: "POST", body: body)
     }
+
+    // MARK: M3 writes
+
+    public static func updateTask(_ taskId: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/tasks/\(taskId)", method: "PUT", body: body)
+    }
+
+    public static func projectMemories(_ projectId: String, query: String?) -> Endpoint {
+        Endpoint(
+            path: "/api/projects/\(projectId)/memories",
+            queryItems: (query?.isEmpty == false) ? [URLQueryItem(name: "q", value: query)] : [])
+    }
+    public static func createMemory(_ projectId: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/memories", method: "POST", body: body)
+    }
+    public static func updateMemory(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/memories/\(id)", method: "PUT", body: body)
+    }
+    public static func deleteMemory(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/memories/\(id)", method: "DELETE")
+    }
+
+    public static let braindump = Endpoint(path: "/api/braindump")
+    public static func createBraindump(body: Data) -> Endpoint {
+        Endpoint(path: "/api/braindump", method: "POST", body: body)
+    }
+    public static func updateBraindump(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/braindump/\(id)", method: "PATCH", body: body)
+    }
+    public static func deleteBraindump(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/braindump/\(id)", method: "DELETE")
+    }
+
+    public static func projectMissions(_ projectId: String) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/missions")
+    }
+    public static func missionAction(_ id: String, _ action: String) -> Endpoint {
+        Endpoint(path: "/api/missions/\(id)/\(action)", method: "POST")
+    }
 }

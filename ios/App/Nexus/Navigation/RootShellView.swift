@@ -26,11 +26,10 @@ struct RootShellView: View {
 
     var body: some View {
         #if DEBUG
-        // Verification hook: launch straight into one thread's chat.
-        if let threadId = ProcessInfo.processInfo.environment["NEXUS_DEV_CHAT"], !threadId.isEmpty {
-            NavigationStack {
-                StreamingChatView(api: api, threadId: threadId, title: "Chat")
-            }
+        // Verification hook: launch straight into a specific view.
+        // NEXUS_DEV_VIEW = chat:<threadId> | board:<pid> | memory:<pid> | missions:<pid> | braindump
+        if let spec = ProcessInfo.processInfo.environment["NEXUS_DEV_VIEW"], !spec.isEmpty {
+            NavigationStack { debugDestination(spec) }
         } else {
             adaptiveBody
         }
@@ -38,6 +37,22 @@ struct RootShellView: View {
         adaptiveBody
         #endif
     }
+
+    #if DEBUG
+    @ViewBuilder
+    private func debugDestination(_ spec: String) -> some View {
+        let parts = spec.split(separator: ":", maxSplits: 1).map(String.init)
+        let arg = parts.count > 1 ? parts[1] : ""
+        switch parts.first {
+        case "chat": StreamingChatView(api: api, threadId: arg, title: "Chat")
+        case "board": KanbanBoardView(api: api, projectId: arg).navigationTitle("Board").navigationBarTitleDisplayMode(.inline)
+        case "memory": MemoryView(api: api, projectId: arg).navigationTitle("Memory").navigationBarTitleDisplayMode(.inline)
+        case "missions": MissionsView(api: api, projectId: arg).navigationTitle("Missions").navigationBarTitleDisplayMode(.inline)
+        case "braindump": BraindumpView(api: api)
+        default: adaptiveBody
+        }
+    }
+    #endif
 
     @ViewBuilder
     private var adaptiveBody: some View {
@@ -122,7 +137,7 @@ struct RootShellView: View {
         case .tickets:
             TicketsView(api: api)
         case .braindump:
-            PlaceholderView(title: "Braindump", systemImage: section.systemImage, note: "Capture lands in M3.")
+            BraindumpView(api: api)
         case .settings:
             SettingsView()
         }
