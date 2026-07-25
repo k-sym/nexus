@@ -69,6 +69,8 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         api_key: maskSecret(config.assistant.api_key),
       },
       helpers: maskHelpers(config.helpers),
+      // Mask the APNs .p8 key like any other secret; env refs pass through.
+      apns: { ...config.apns, key: maskSecret(config.apns.key || '') },
       // Derived, read-only signal so the UI can show "token detected" without
       // ever receiving the secret. Reflects the resolver (GITHUB_TOKEN or a
       // `gh auth token` fallback); the token value itself is never sent.
@@ -97,6 +99,11 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const serverToken = !incomingServerToken || incomingServerToken === MASK
       ? current.server.token
       : incomingServerToken;
+    // apns.key is masked on read; keep the stored value unless a new one was typed.
+    const incomingApnsKey = incoming.apns?.key;
+    const apnsKey = !incomingApnsKey || incomingApnsKey === MASK
+      ? current.apns.key
+      : incomingApnsKey;
 
     const merged: NexusConfig = {
       ...current,
@@ -113,6 +120,11 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       github: incoming.github ?? current.github,
       // Merge explicitly so a masked key echoed back never overwrites the real one.
       helpers: mergeHelpers(current.helpers, incoming.helpers),
+      apns: {
+        ...current.apns,
+        ...incoming.apns,
+        key: apnsKey,
+      },
       assistant: {
         url: incoming.assistant?.url ?? current.assistant.url,
         api_key: assistantKey,
@@ -151,6 +163,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         api_key: maskSecret(merged.assistant.api_key),
       },
       helpers: maskHelpers(merged.helpers),
+      apns: { ...merged.apns, key: maskSecret(merged.apns.key || '') },
       github_token_detected: !!(await resolveGitHubToken()),
     };
   });

@@ -290,6 +290,19 @@ public actor APIClient {
         let body = try JSONEncoder().encode(config)
         return try await request(.updateSettings(body: body), decoder: plainDecoder)
     }
+
+    // MARK: M5 push
+
+    /// Register (or refresh) this device's APNs token. `env` is "sandbox" or
+    /// "production" — which APNs host the backend should use.
+    public func registerDevice(token: String, env: String) async throws {
+        let body = try JSONEncoder().encode(["token": token, "platform": "ios", "env": env])
+        _ = try await requestData(.registerDevice(body: body))
+    }
+
+    public func deleteDevice(token: String) async throws {
+        _ = try await requestData(.deleteDevice(token))
+    }
 }
 
 public struct HealthResponse: Decodable, Sendable {

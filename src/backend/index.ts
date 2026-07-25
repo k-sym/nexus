@@ -25,6 +25,8 @@ import { registerStatusRoutes } from './routes/status.js';
 import { registerTicketRoutes } from './routes/tickets.js';
 import { registerBraindumpRoutes } from './routes/braindump.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
+import { registerDeviceRoutes } from './routes/devices.js';
+import { ApnsSender } from './apns/sender.js';
 import { registerAuthRoutes } from './routes/auth.js';
 import { registerPiRoutes } from './routes/pi.js';
 import { registerActivityRoutes } from './routes/activity.js';
@@ -145,6 +147,42 @@ async function main() {
   await initMemorySystem(db);
   const activityManager = new ActivityManager(db);
   const stopActivityListening = activityManager.startListening();
+
+  // iOS push (M5). Inert until apns.enabled with a resolvable key (ApnsSender
+  // no-ops otherwise). Two hooks: a pending tool-gate approval (always worth a
+  // ping — it blocks the run), and a long run finishing. Listeners live for the
+  // process; a throwing push can't wedge the broker (both buses isolate them).
+  const apns = new ApnsSender(db);
+  pi.approvals.subscribe((event) => {
+    if (event.type !== 'pending') return;
+    const view = event.view;
+    const thread = db.prepare('SELECT title, project_id FROM chat_threads WHERE id = ?').get(view.threadId) as
+      { title?: string; project_id?: string } | undefined;
+    const project = thread?.project_id
+      ? (db.prepare('SELECT name FROM projects WHERE id = ?').get(thread.project_id) as { name?: string } | undefined)
+      : undefined;
+    const where = [project?.name, thread?.title].filter(Boolean).join(' / ') || 'a thread';
+    void apns.notify({
+      title: `Approval needed — ${view.toolName}`,
+      body: `${view.toolName} wants to run in ${where}.`,
+      deepLink: `approval:${view.toolCallId}`,
+      threadId: view.threadId,
+    });
+  });
+  activityManager.bus.subscribe((event) => {
+    if (event.type !== 'stop') return;
+    if (event.kind !== 'chat_turn' && event.kind !== 'assistant_stream') return;
+    // Only ping for longer runs, so ordinary quick replies don't spam.
+    if ((event.durationMs ?? 0) < 30_000) return;
+    const status = event.status ?? 'completed';
+    void apns.notify({
+      title: status === 'succeeded' ? 'Run finished' : `Run ${status}`,
+      body: event.title || 'Your agent run has finished.',
+      deepLink: event.threadId ? `thread:${event.threadId}` : 'open:',
+      threadId: event.threadId ?? undefined,
+    });
+  });
+
   startJiraSync(db, activityManager);
   startMondayPoll(db, activityManager.bus.emit.bind(activityManager.bus));
   // Shared between chat routes and the mission scheduler so an assistant_turn
@@ -198,6 +236,7 @@ async function main() {
   app.register(registerTicketRoutes);
   app.register(registerBraindumpRoutes);
   app.register(registerNotificationRoutes);
+  app.register(registerDeviceRoutes);
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
   app.register(registerActivityRoutes);

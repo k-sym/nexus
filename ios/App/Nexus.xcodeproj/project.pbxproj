@@ -22,6 +22,7 @@
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
+				Nexus.entitlements,
 			);
 			target = AA00000000000000000000E6 /* Nexus */;
 		};
