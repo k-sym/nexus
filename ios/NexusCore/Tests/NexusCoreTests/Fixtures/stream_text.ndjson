@@ -1,0 +1,7 @@
+{"kind":"run_start","run":{"runId":"r1","threadId":"t1","startedAt":"2026-07-24T12:00:00.000Z","provider":"anthropic","model":"claude-opus-4-8"}}
+{"type":"message_start"}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello"}}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":", world"}}
+{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Hello, world"}],"model":"claude-opus-4-8","provider":"anthropic","timestamp":123}}
+{"type":"context_usage","usage":{"tokens":1200,"contextWindow":200000,"percent":0.6}}
+{"kind":"run_end","run":{"runId":"r1","threadId":"t1","completedAt":"2026-07-24T12:00:05.000Z","status":"completed"}}

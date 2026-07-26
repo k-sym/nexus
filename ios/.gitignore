@@ -1,0 +1,13 @@
+# Xcode / SwiftPM build artifacts and per-user state
+**/xcuserdata/
+**/*.xcuserstate
+**/.swiftpm/
+**/DerivedData/
+**/build/
+.build/
+
+# Per-machine local overrides (signing team, dev backend URL)
+App/Local.xcconfig
+
+# macOS
+.DS_Store

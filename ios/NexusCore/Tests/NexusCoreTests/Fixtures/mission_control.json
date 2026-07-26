@@ -1,0 +1,27 @@
+{
+  "memory": {
+    "ok": true,
+    "status": "ready",
+    "memories": 1423,
+    "jobs": { "pending": 2, "dead": 0 },
+    "models": { "gen": true, "embed": true, "rerank": false }
+  },
+  "models": [
+    { "provider": "anthropic", "id": "claude-opus-4-8", "name": "Claude Opus 4.8", "reasoning": true, "contextWindow": 200000, "maxTokens": 64000, "configured": true },
+    { "provider": "openrouter", "id": "moonshot/kimi", "name": "Kimi", "configured": false }
+  ],
+  "modelCounts": { "active": 5, "available": 42 },
+  "stats": {
+    "claude": {
+      "ok": true,
+      "value": "38%",
+      "caption": "session used",
+      "windows": {
+        "session": { "usedPercent": 38, "remainingPercent": 62, "resetLabel": "in 2h", "resetsAt": "2026-07-24T14:00:00.000Z", "windowMinutes": 300 }
+      },
+      "source": "api",
+      "sampledAt": "2026-07-24T12:00:00.000Z"
+    },
+    "openrouter": { "ok": false, "value": "—", "caption": "unconfigured", "error": "no key" }
+  }
+}
