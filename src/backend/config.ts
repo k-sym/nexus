@@ -139,6 +139,17 @@ function defaultConfig(): NexusConfig {
       context7: { enabled: false, api_key: '${CONTEXT7_API_KEY}' },
       search_default: 'exa',
     },
+    apns: {
+      // Off by default: needs an Apple .p8 auth key. Inert until enabled with a
+      // resolvable key. deepMerge backfills this block onto older configs.
+      enabled: false,
+      key_id: '',
+      team_id: '',
+      bundle_id: 'it.resolve.nexus',
+      environment: 'sandbox',
+      key_path: '',
+      key: '${APNS_KEY}',
+    },
   };
 }
 

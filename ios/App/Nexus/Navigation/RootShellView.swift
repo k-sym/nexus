@@ -8,10 +8,12 @@ import NexusCore
 struct RootShellView: View {
     @Environment(ConnectionStore.self) private var connection
     @Environment(LiveHub.self) private var liveHub
+    @Environment(AppRouter.self) private var router
+    @Environment(PushManager.self) private var pushManager
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.scenePhase) private var scenePhase
     @State private var selection: AppSection? = .projects
-    @State private var tabSelection: String = Self.initialTab
+    @State private var didAppear = false
 
     private var api: APIClient { connection.api }
 
@@ -27,8 +29,31 @@ struct RootShellView: View {
     }
 
     var body: some View {
-        shell
-            .task { liveHub.start() }
+        @Bindable var router = router
+        return shell
+            .fullScreenCover(item: $router.openThread) { open in
+                NavigationStack {
+                    StreamingChatView(api: api, threadId: open.id, title: "Chat")
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Done") { router.openThread = nil }
+                            }
+                        }
+                }
+            }
+            .task {
+                liveHub.start()
+                pushManager.enable()
+                if !didAppear {
+                    didAppear = true
+                    router.selectedTab = Self.initialTab
+                    #if DEBUG
+                    if let deepLink = ProcessInfo.processInfo.environment["NEXUS_DEV_DEEPLINK"], !deepLink.isEmpty {
+                        router.handle(deepLink: deepLink)
+                    }
+                    #endif
+                }
+            }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { liveHub.start() } else if phase == .background { liveHub.stop() }
             }
@@ -80,7 +105,8 @@ struct RootShellView: View {
     // MARK: iPhone
 
     private var tabView: some View {
-        TabView(selection: $tabSelection) {
+        @Bindable var router = router
+        return TabView(selection: $router.selectedTab) {
             NavigationStack { destination(for: .assistant) }
                 .tabItem { Label(AppSection.assistant.title, systemImage: AppSection.assistant.systemImage) }
                 .tag("assistant")

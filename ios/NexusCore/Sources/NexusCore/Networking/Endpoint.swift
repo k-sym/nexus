@@ -141,4 +141,14 @@ public struct Endpoint: Sendable {
     public static func updateSettings(body: Data) -> Endpoint {
         Endpoint(path: "/api/settings", method: "PUT", body: body)
     }
+
+    // MARK: M5 push
+
+    public static func registerDevice(body: Data) -> Endpoint {
+        Endpoint(path: "/api/devices", method: "POST", body: body)
+    }
+    public static func deleteDevice(_ token: String) -> Endpoint {
+        let encoded = token.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? token
+        return Endpoint(path: "/api/devices/\(encoded)", method: "DELETE")
+    }
 }

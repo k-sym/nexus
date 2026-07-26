@@ -513,6 +513,29 @@ export interface NexusConfig {
      *  Ignored when only one (or neither) search provider is on. */
     search_default: 'brave' | 'exa';
   };
+  /** Apple Push Notification service for the iOS thin client. Off by default.
+   *  The iOS app registers device tokens via POST /api/devices; Nexus then
+   *  pushes on a pending tool-gate approval and on run completion. The `.p8`
+   *  auth-key material follows the secret pattern — env-referenced or a file
+   *  path, masked by the settings route, resolved server-side at send time. */
+  apns: {
+    enabled: boolean;
+    /** APNs Auth Key ID (10 chars) from the Apple Developer portal. */
+    key_id: string;
+    /** Apple Developer Team ID (10 chars). */
+    team_id: string;
+    /** App bundle id, used as the APNs topic (e.g. it.resolve.nexus). */
+    bundle_id: string;
+    /** 'sandbox' (development builds) or 'production' (TestFlight/App Store).
+     *  Selects the APNs host; per-device `env` can override at send time. */
+    environment: 'sandbox' | 'production';
+    /** Path to the `.p8` auth-key file (leading ~ expanded). Preferred, since
+     *  the key is multi-line PEM. */
+    key_path: string;
+    /** Inline `.p8` key material; supports ${ENV} interpolation. Used only when
+     *  key_path is empty. Masked by the settings route; never returned raw. */
+    key: string;
+  };
 }
 
 /** Which roll-up bucket each Kanban column contributes to. */

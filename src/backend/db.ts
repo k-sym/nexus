@@ -172,6 +172,16 @@ function runMigrations(db: Database.Database) {
       seen_at TEXT
     );
 
+    -- APNs device tokens registered by the iOS thin client. Keyed by the token
+    -- so re-registration upserts. `env` = sandbox|production (which APNs host).
+    CREATE TABLE IF NOT EXISTS devices (
+      token TEXT PRIMARY KEY,
+      platform TEXT NOT NULL DEFAULT 'ios',
+      env TEXT NOT NULL DEFAULT 'sandbox',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS assistant_messages (
       id TEXT PRIMARY KEY,
       role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
