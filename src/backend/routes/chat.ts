@@ -298,19 +298,38 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     const activeRunId = activeStreams.get(threadId)?.runId;
     const activeThreadIds = threadRunClaims.has(threadId) ? new Set([threadId]) : undefined;
     const claimHeld = threadRunClaims.has(threadId);
+    const supervised = pi.isSupervised?.(threadId) ?? false;
     if (CHAT_RUN_DEBUG) {
       const flattened = entries.length > 0 ? flattenEntries(entries, cwd, { activeRunIds: activeRunId ? new Set([activeRunId]) : undefined, activeThreadIds }) : dbMessages(db, threadId);
       const lastRun = (flattened as any[]).slice().reverse().find((m) => m?.run)?.run;
       console.log(`[chat-run] history_query thread=${threadId} entriesOnDisk=${entries.length} claimHeld=${claimHeld} activeRunId=${activeRunId ?? 'none'} lastRunStatus=${lastRun?.status ?? 'none'} lastRunPhase=${lastRun?.phase ?? 'none'}`);
-      return { thread, cwd, messages: flattened };
+      return { thread, cwd, supervised, messages: flattened };
     }
     return {
       thread,
       cwd,
+      supervised,
       messages: entries.length > 0
         ? flattenEntries(entries, cwd, { activeRunIds: activeRunId ? new Set([activeRunId]) : undefined, activeThreadIds })
         : dbMessages(db, threadId),
     };
+  });
+
+  // Per-thread Supervise: when on, every gateable tool call on this thread parks
+  // as an approval until a human answers (see pi/tool-policy). In-memory on the
+  // pi runtime, mirroring the glasses gateway's POST /api/supervise — exposed
+  // here so the Nexus UI and the iOS thin client can drive it without a G2.
+  fastify.post('/api/threads/:threadId/supervise', async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    const body = (request.body ?? {}) as { supervised?: boolean };
+    const thread = db.prepare('SELECT id FROM chat_threads WHERE id = ?').get(threadId);
+    if (!thread) {
+      reply.code(404);
+      return { error: 'Thread not found' };
+    }
+    const on = body.supervised !== false;
+    pi.setSupervised(threadId, on);
+    return { threadId, supervised: on };
   });
 
   // Backwards-compat alias — the old route returned just the messages.

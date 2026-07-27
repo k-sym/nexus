@@ -82,6 +82,11 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/threads/\(threadId)/abort", method: "POST", body: body)
     }
 
+    /// Toggle per-thread Supervise → `{ threadId, supervised }`. Body `{ supervised }`.
+    public static func threadSupervise(_ threadId: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/threads/\(threadId)/supervise", method: "POST", body: body)
+    }
+
     // MARK: M3 writes
 
     public static func updateTask(_ taskId: String, body: Data) -> Endpoint {

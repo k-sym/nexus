@@ -195,6 +195,14 @@ public actor APIClient {
         _ = try await requestData(.threadAbort(threadId, body: body))
     }
 
+    /// Toggle per-thread Supervise (tool-gate every call). Returns confirmed state.
+    @discardableResult
+    public func setSupervised(threadId: String, supervised: Bool) async throws -> Bool {
+        let body = try JSONEncoder().encode(["supervised": supervised])
+        let res: SuperviseResponse = try await request(.threadSupervise(threadId, body: body), decoder: plainDecoder)
+        return res.supervised
+    }
+
     /// Send a message and stream the turn. Throws `.busy` synchronously if the
     /// thread/model/project is already running (retry with `confirmCancel: true`).
     public func streamThreadMessage(

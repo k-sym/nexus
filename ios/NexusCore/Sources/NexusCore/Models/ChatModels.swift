@@ -25,10 +25,18 @@ public struct ChatThread: Decodable, Identifiable, Hashable, Sendable {
 }
 
 /// `GET /api/threads/:id` → the thread plus its flattened, persisted messages.
+/// `supervised` reflects the pi runtime's per-thread tool-gate flag (ephemeral).
 public struct ThreadDetail: Decodable, Sendable {
     public let thread: ChatThread
     public let cwd: String?
+    public let supervised: Bool?
     public let messages: [PersistedMessage]
+}
+
+/// `POST /api/threads/:id/supervise` → the confirmed per-thread Supervise state.
+public struct SuperviseResponse: Decodable, Sendable {
+    public let threadId: String
+    public let supervised: Bool
 }
 
 /// One flattened persisted message (see `flattenEntries` in

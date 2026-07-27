@@ -416,6 +416,11 @@ export const api = {
         `/api/threads/${encodeURIComponent(threadId)}/questions/${encodeURIComponent(toolCallId)}/answer`,
         { method: 'POST', body: JSON.stringify({ answers }) },
       ),
+    setSupervised: (threadId: string, supervised: boolean) =>
+      fetchJson<{ threadId: string; supervised: boolean }>(
+        `/api/threads/${encodeURIComponent(threadId)}/supervise`,
+        { method: 'POST', body: JSON.stringify({ supervised }) },
+      ),
   },
   models: {
     list: () => fetchJson<ModelsResponse>(`/api/models`),
