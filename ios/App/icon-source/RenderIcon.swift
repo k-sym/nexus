@@ -17,10 +17,15 @@ import UniformTypeIdentifiers
 let size = 1024.0
 let cs = CGColorSpaceCreateDeviceRGB()
 
-func makeCtx() -> CGContext {
-    CGContext(data: nil, width: Int(size), height: Int(size),
+// `opaque: true` for the primary (any/light) icon — iOS REQUIRES the base app
+// icon to have no alpha channel or it is silently rejected (blank icon). The
+// dark/tinted layers keep alpha so the system glass shows through.
+func makeCtx(opaque: Bool = false) -> CGContext {
+    let info = opaque ? CGImageAlphaInfo.noneSkipLast.rawValue
+                      : CGImageAlphaInfo.premultipliedLast.rawValue
+    return CGContext(data: nil, width: Int(size), height: Int(size),
               bitsPerComponent: 8, bytesPerRow: 0, space: cs,
-              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+              bitmapInfo: info)!
 }
 
 func rgb(_ r: Double, _ g: Double, _ b: Double, _ a: Double = 1) -> CGColor {
@@ -86,9 +91,9 @@ func writePNG(_ ctx: CGContext, _ name: String) {
 
 try? FileManager.default.createDirectory(atPath: "out", withIntermediateDirectories: true)
 
-// 1) Default / light: dark charcoal fill + subtle glow + mark.
+// 1) Default / light: dark charcoal fill + subtle glow + mark. OPAQUE (no alpha).
 do {
-    let ctx = makeCtx()
+    let ctx = makeCtx(opaque: true)
     let bg = CGGradient(colorsSpace: cs, colors: [rgb(28,28,30), rgb(10,10,11)] as CFArray, locations: [0,1])!
     ctx.saveGState(); ctx.addRect(CGRect(x:0,y:0,width:size,height:size)); ctx.clip()
     ctx.drawLinearGradient(bg, start: CGPoint(x:0,y:size), end: CGPoint(x:0,y:0), options: [])
