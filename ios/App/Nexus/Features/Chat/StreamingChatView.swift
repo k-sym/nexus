@@ -96,14 +96,22 @@ struct StreamingChatView: View {
                     }
                 }
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: 6) {
                     Image(systemName: "cpu")
                     Text(vm.selectedModelLabel).lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
-                    Spacer()
+                    Image(systemName: "chevron.up.chevron.down").font(.caption)
+                    Spacer(minLength: 0)
                 }
-                .font(.caption)
+                .font(.subheadline)
                 .foregroundStyle(.secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(minHeight: 44)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.primary.opacity(0.06))
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
             .disabled(vm.isSending)
             .padding(.horizontal).padding(.top, 6)
@@ -120,7 +128,7 @@ struct StreamingChatView: View {
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Message", text: $vm.input, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
-                    .lineLimit(1...5)
+                    .lineLimit(2...6)
                     .disabled(vm.isSending)
 
                 if vm.isSending {
