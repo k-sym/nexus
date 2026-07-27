@@ -12,6 +12,8 @@ public struct ChatThread: Decodable, Identifiable, Hashable, Sendable {
     public let createdAt: String
     public let updatedAt: String
     public let archivedAt: String?
+    /// `provider/id` of the model last used on this thread; seeds the picker.
+    public let lastModelKey: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -21,7 +23,34 @@ public struct ChatThread: Decodable, Identifiable, Hashable, Sendable {
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case archivedAt = "archived_at"
+        case lastModelKey = "last_model_key"
     }
+}
+
+/// One model from `GET /api/models`. The response is camelCase, so it decodes
+/// with the plain decoder. `modelKey` (`provider/id`) is what the chat stream
+/// endpoint expects as its `modelKey`.
+public struct Model: Decodable, Identifiable, Hashable, Sendable {
+    public let provider: String
+    public let modelId: String
+    public let name: String
+    public let contextWindow: Int?
+    public let configured: Bool?
+    public let thinkingLevels: [String]?
+
+    public var modelKey: String { "\(provider)/\(modelId)" }
+    public var id: String { modelKey }
+
+    enum CodingKeys: String, CodingKey {
+        case provider, name, contextWindow, configured, thinkingLevels
+        case modelId = "id"
+    }
+}
+
+/// `GET /api/models` → curated (`models`) + full catalog. iOS uses the curated
+/// `models` as the pickable set.
+public struct ModelsResponse: Decodable, Sendable {
+    public let models: [Model]
 }
 
 /// `GET /api/threads/:id` → the thread plus its flattened, persisted messages.
