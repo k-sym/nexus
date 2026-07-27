@@ -173,7 +173,7 @@ function runMigrations(db: Database.Database) {
     );
 
     -- APNs device tokens registered by the iOS thin client. Keyed by the token
-    -- so re-registration upserts. `env` = sandbox|production (which APNs host).
+    -- so re-registration upserts. \`env\` = sandbox|production (which APNs host).
     CREATE TABLE IF NOT EXISTS devices (
       token TEXT PRIMARY KEY,
       platform TEXT NOT NULL DEFAULT 'ios',

@@ -756,6 +756,9 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         title: `${project?.name ?? 'unknown'} / ${thread.title}`,
         status: streamError === 'aborted' ? 'cancelled' : streamError ? 'failed' : 'succeeded',
         error: streamError,
+        durationMs: Date.now() - Date.parse(startEvent.startedAt),
+        threadId,
+        projectId: thread.project_id,
       });
       reply.raw.end();
     }

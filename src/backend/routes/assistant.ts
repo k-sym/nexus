@@ -660,7 +660,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       } finally {
         const completedAtIso = new Date().toISOString();
         write({ kind: 'run_end', run: { runId: run.id, threadId: session.id, completedAt: completedAtIso, status, ...(abortSource ? { abortSource } : {}), ...(errorMsg ? { error: errorMsg } : {}) } });
-        fastify.activity?.bus.emit({ type: 'stop', operationId: run.id, kind: 'assistant_stream', title: session.title, status: activityStatusForRun(status as any), error: status === 'failed' ? errorMsg : undefined });
+        fastify.activity?.bus.emit({ type: 'stop', operationId: run.id, kind: 'assistant_stream', title: session.title, status: activityStatusForRun(status as any), error: status === 'failed' ? errorMsg : undefined, durationMs: Date.now() - Date.parse(startedAtIso), threadId: session.id });
         activeRemoteRuns.delete(run.id);
         activeStreamControllers.delete(run.id);
         try { reply.raw.end(); } catch { /* already closed */ }
