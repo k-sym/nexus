@@ -50,4 +50,38 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(info.activeTitle, "Refactor auth")
         XCTAssertEqual(info.modelKey, "anthropic/claude-opus-4-8")
     }
+
+    func testModelsResponseDecodesCuratedListAndModelKey() throws {
+        // /api/models is camelCase → decode with the plain (nexusCamel) decoder.
+        let json = Data("""
+        {
+          "models": [
+            { "provider": "anthropic", "id": "claude-haiku-4-5-20251001", "name": "Claude Haiku 4.5",
+              "contextWindow": 200000, "configured": true, "thinkingLevels": ["off","low","high"] },
+            { "provider": "openrouter", "id": "owl-alpha", "name": "Owl Alpha" }
+          ],
+          "allModels": [], "enabledModelKeys": [], "customized": false
+        }
+        """.utf8)
+        let res = try JSONDecoder.nexusCamel.decode(ModelsResponse.self, from: json)
+        XCTAssertEqual(res.models.count, 2)
+        let haiku = res.models[0]
+        XCTAssertEqual(haiku.modelId, "claude-haiku-4-5-20251001")
+        XCTAssertEqual(haiku.modelKey, "anthropic/claude-haiku-4-5-20251001")
+        XCTAssertEqual(haiku.id, haiku.modelKey)          // Identifiable id == modelKey
+        XCTAssertEqual(haiku.contextWindow, 200000)
+        XCTAssertEqual(haiku.thinkingLevels, ["off", "low", "high"])
+        XCTAssertEqual(haiku.configured, true)
+        XCTAssertNil(res.models[1].configured)            // absent flag ⇒ nil
+    }
+
+    func testChatThreadDecodesLastModelKey() throws {
+        let json = Data("""
+        { "id": "t1", "project_id": "p1", "title": "T", "git_branch": "main",
+          "created_at": "a", "updated_at": "b", "archived_at": null,
+          "last_model_key": "anthropic/claude-opus-4-8" }
+        """.utf8)
+        let thread = try JSONDecoder.nexusCamel.decode(ChatThread.self, from: json)
+        XCTAssertEqual(thread.lastModelKey, "anthropic/claude-opus-4-8")
+    }
 }

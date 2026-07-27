@@ -87,6 +87,26 @@ struct StreamingChatView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal).padding(.top, 6)
             }
+            Menu {
+                Picker("Model", selection: $vm.selectedModelKey) {
+                    Text("Default").tag(String?.none)
+                    ForEach(vm.availableModels) { model in
+                        Text(model.configured == false ? "\(model.name) (no auth)" : model.name)
+                            .tag(String?.some(model.modelKey))
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "cpu")
+                    Text(vm.selectedModelLabel).lineLimit(1)
+                    Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                    Spacer()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+            .disabled(vm.isSending)
+            .padding(.horizontal).padding(.top, 6)
             Toggle(isOn: Binding(get: { vm.supervised }, set: { vm.setSupervised($0) })) {
                 Label("Supervise", systemImage: "hand.raised.fill")
                     .font(.caption)

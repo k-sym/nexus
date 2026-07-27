@@ -87,6 +87,9 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/threads/\(threadId)/supervise", method: "POST", body: body)
     }
 
+    /// Curated + full model catalog → `ModelsResponse`.
+    public static let models = Endpoint(path: "/api/models")
+
     // MARK: M3 writes
 
     public static func updateTask(_ taskId: String, body: Data) -> Endpoint {

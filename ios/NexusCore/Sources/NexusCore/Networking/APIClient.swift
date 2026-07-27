@@ -203,6 +203,12 @@ public actor APIClient {
         return res.supervised
     }
 
+    /// The curated model list for the per-thread picker (`modelKey` = provider/id).
+    public func models() async throws -> [Model] {
+        let res: ModelsResponse = try await request(.models, decoder: plainDecoder)
+        return res.models
+    }
+
     /// Send a message and stream the turn. Throws `.busy` synchronously if the
     /// thread/model/project is already running (retry with `confirmCancel: true`).
     public func streamThreadMessage(

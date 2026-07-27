@@ -21,6 +21,10 @@ final class ChatViewModel {
     private(set) var isSending = false
     /// Per-thread Supervise: when on, every gateable tool call parks for approval.
     private(set) var supervised = false
+    /// Curated models for the picker; `selectedModelKey` is `provider/id`
+    /// (nil ⇒ backend default).
+    private(set) var availableModels: [Model] = []
+    var selectedModelKey: String?
 
     var input: String = ""
     /// Non-nil drives the "cancel the running turn?" confirmation.
@@ -40,15 +44,26 @@ final class ChatViewModel {
         "\(reducer.messages.count)-\(reducer.streaming?.content.count ?? 0)-\(reducer.streaming?.thinking.count ?? 0)-\(reducer.streaming?.toolCalls.count ?? 0)-\(reducer.streaming?.toolCalls.last?.result.count ?? 0)"
     }
 
+    /// Display name for the selected model, or "Default".
+    var selectedModelLabel: String {
+        guard let key = selectedModelKey else { return "Default" }
+        return availableModels.first { $0.modelKey == key }?.name ?? key
+    }
+
     func loadHistory() async {
         do {
             let detail = try await api.threadDetail(threadId: threadId)
             reducer.loadPersisted(detail.messages)
             supervised = detail.supervised ?? false
+            if selectedModelKey == nil { selectedModelKey = detail.thread.lastModelKey }
             historyState = .ready
             maybeAutosend()
         } catch {
             historyState = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
+        }
+        // Model list for the picker — best-effort, independent of history load.
+        if availableModels.isEmpty {
+            availableModels = (try? await api.models()) ?? []
         }
     }
 
@@ -124,7 +139,7 @@ final class ChatViewModel {
     private func runStream(content: String, confirmCancel: Bool, rollback: TranscriptReducer) async {
         do {
             let stream = try await api.streamThreadMessage(
-                threadId: threadId, content: content, confirmCancel: confirmCancel)
+                threadId: threadId, content: content, modelKey: selectedModelKey, confirmCancel: confirmCancel)
             for try await line in stream {
                 reducer.apply(line)
                 if reducer.pendingTitle != nil { reducer.pendingTitle = nil }
