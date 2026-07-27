@@ -167,6 +167,8 @@ async function main() {
       body: `${view.toolName} wants to run in ${where}.`,
       deepLink: `approval:${view.toolCallId}`,
       threadId: view.threadId,
+      // Badge = total gates awaiting a decision across all threads.
+      badge: pi.approvals.listPending().length,
     });
   });
   activityManager.bus.subscribe((event) => {
@@ -180,6 +182,8 @@ async function main() {
       body: event.title || 'Your agent run has finished.',
       deepLink: event.threadId ? `thread:${event.threadId}` : 'open:',
       threadId: event.threadId ?? undefined,
+      // Keep the badge in sync with any still-pending approvals.
+      badge: pi.approvals.listPending().length,
     });
   });
 

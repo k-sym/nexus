@@ -33,6 +33,9 @@ export interface PushMessage {
   deepLink: string;
   /** Groups notifications in the iOS UI (usually the threadId). */
   threadId?: string;
+  /** App-icon badge count to set on the device. Omit to leave unchanged; pass
+   *  0 to clear. Typically the number of pending approvals. */
+  badge?: number;
 }
 
 function base64url(input: Buffer | string): string {
@@ -100,6 +103,7 @@ export class ApnsSender {
       aps: {
         alert: { title: message.title, body: message.body },
         sound: 'default',
+        ...(message.badge != null ? { badge: Math.max(0, Math.floor(message.badge)) } : {}),
         ...(message.threadId ? { 'thread-id': message.threadId } : {}),
       },
       nexus: { deepLink: message.deepLink },
