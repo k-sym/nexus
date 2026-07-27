@@ -39,18 +39,20 @@ let white  = rgb(255, 255, 255)
 // Node layout (top-left origin; convert y for CG's bottom-left origin).
 func p(_ x: Double, _ y: Double) -> CGPoint { CGPoint(x: x, y: size - y) }
 let c = p(512, 512)
+// Pulled slightly inward so the bolder/larger nodes keep breathing room and
+// stay legible when the icon is rendered tiny (notifications, Settings).
 let outer: [CGPoint] = [
-    p(512, 268), p(723, 390), p(723, 634),
-    p(512, 756), p(301, 634), p(301, 390)
+    p(512, 296), p(699, 404), p(699, 620),
+    p(512, 728), p(325, 620), p(325, 404)
 ]
 
 // Draws the connected-nodes mark. `mono` renders it in solid white (for the
 // tinted variant, which the system recolors).
 func drawMark(_ ctx: CGContext, mono: Bool) {
-    // Edges
+    // Edges (bold so they read at small notification sizes)
     ctx.setLineCap(.round)
-    ctx.setLineWidth(26)
-    ctx.setStrokeColor(mono ? rgb(255,255,255,0.9) : rgb(10,132,255,0.85))
+    ctx.setLineWidth(40)
+    ctx.setStrokeColor(mono ? rgb(255,255,255,0.95) : rgb(10,132,255,0.9))
     for o in outer { ctx.move(to: c); ctx.addLine(to: o); ctx.strokePath() }
 
     func node(_ pt: CGPoint, radius: Double) {
@@ -69,13 +71,13 @@ func drawMark(_ ctx: CGContext, mono: Bool) {
             ctx.restoreGState()
         }
     }
-    for o in outer { node(o, radius: 66) }
-    node(c, radius: 104)
+    for o in outer { node(o, radius: 84) }
+    node(c, radius: 124)
 
     // White core on the center node (skip in mono so the whole mark is one shape)
     if !mono {
         ctx.setFillColor(white)
-        ctx.addEllipse(in: CGRect(x: c.x-46, y: c.y-46, width: 92, height: 92))
+        ctx.addEllipse(in: CGRect(x: c.x-58, y: c.y-58, width: 116, height: 116))
         ctx.fillPath()
     }
 }
