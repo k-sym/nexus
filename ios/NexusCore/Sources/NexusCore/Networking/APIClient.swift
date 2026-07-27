@@ -203,6 +203,13 @@ public actor APIClient {
         return res.supervised
     }
 
+    /// In-flight chat runs across all projects. Feeds the projects list's
+    /// activity badge (working/waiting). camelCase payload → `plainDecoder`.
+    public func activeChatRuns() async throws -> [ActiveChatRun] {
+        let res: ActiveChatRunsResponse = try await request(.chatActiveRuns, decoder: plainDecoder)
+        return res.runs
+    }
+
     /// The curated model list for the per-thread picker (`modelKey` = provider/id).
     public func models() async throws -> [Model] {
         let res: ModelsResponse = try await request(.models, decoder: plainDecoder)

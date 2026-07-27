@@ -5,16 +5,22 @@ import NexusCore
 @Observable
 final class ProjectsViewModel {
     private let api: APIClient
-    var state: LoadState<[Project]> = .idle
+    var state: LoadState<[ProjectListItem]> = .idle
 
     init(api: APIClient) { self.api = api }
 
     func refresh() async {
         if state.value == nil { state = .loading }
         do {
-            state = .loaded(try await api.projects())
+            // Projects are the source of truth; the run feed only *decorates*
+            // them. If it fails (older/broken backend) we still render the list
+            // and fall back to chatSessionCount-only activity.
+            async let projectsTask = api.projects()
+            let runs = (try? await api.activeChatRuns()) ?? []
+            let projects = try await projectsTask
+            state = .loaded(ProjectListItem.assemble(projects: projects, runs: runs))
         } catch {
-            state = .failed(LoadState<[Project]>.message(for: error))
+            state = .failed(LoadState<[ProjectListItem]>.message(for: error))
         }
     }
 }
@@ -35,7 +41,7 @@ struct ProjectsListView: View {
                 ProjectHubView(api: api, project: project)
             }
             .refreshable { await vm.refresh() }
-            .polling(PollingCadence.projects) { await vm.refresh() }
+            .polling(PollingCadence.sessions) { await vm.refresh() }
     }
 
     @ViewBuilder
@@ -43,13 +49,13 @@ struct ProjectsListView: View {
         switch vm.state {
         case .idle, .loading:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
-        case .loaded(let projects):
-            if projects.isEmpty {
+        case .loaded(let items):
+            if items.isEmpty {
                 ContentUnavailableView("No projects", systemImage: "folder", description: Text("Create a project on the desktop to see it here."))
             } else {
-                List(projects) { project in
-                    NavigationLink(value: project) {
-                        ProjectRow(project: project)
+                List(items) { item in
+                    NavigationLink(value: item.project) {
+                        ProjectRow(project: item.project, activity: item.activity)
                     }
                 }
             }
@@ -61,6 +67,7 @@ struct ProjectsListView: View {
 
 struct ProjectRow: View {
     let project: Project
+    var activity: ProjectActivity?
 
     var body: some View {
         HStack(spacing: 12) {
@@ -69,6 +76,14 @@ struct ProjectRow: View {
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(Theme.accent.gradient, in: RoundedRectangle(cornerRadius: 8))
+                .overlay(alignment: .bottomTrailing) {
+                    if let activity {
+                        ActivityDot(activity: activity)
+                            .accessibilityLabel("\(project.name): \(ActivityDot.label(for: activity))")
+                            // Nudge onto the badge's corner rather than inside it.
+                            .offset(x: 3, y: 3)
+                    }
+                }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(project.name).font(.body)
@@ -80,5 +95,35 @@ struct ProjectRow: View {
             }
         }
         .padding(.vertical, 2)
+    }
+}
+
+/// The corner status dot, matching the desktop project-rail colour vocabulary:
+/// working = red, waiting = amber, idle (live) = green.
+struct ActivityDot: View {
+    let activity: ProjectActivity
+
+    var body: some View {
+        Circle()
+            .fill(Self.color(for: activity))
+            .frame(width: 9, height: 9)
+            // A hairline ring so the dot reads against any badge colour.
+            .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+    }
+
+    static func color(for activity: ProjectActivity) -> Color {
+        switch activity {
+        case .working: return .red
+        case .waiting: return .orange
+        case .idle: return .green
+        }
+    }
+
+    static func label(for activity: ProjectActivity) -> String {
+        switch activity {
+        case .working: return "model working"
+        case .waiting: return "waiting for input"
+        case .idle: return "idle"
+        }
     }
 }
