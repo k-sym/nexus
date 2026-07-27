@@ -6,6 +6,7 @@ import type { ModelCurationStore } from './pi/model-curation.js';
 import type { OAuthFlowManager } from './pi/oauth-flows.js';
 import type { ActivityManager } from './activity/manager.js';
 import type { DbApprovalAudit } from './approvals/audit.js';
+import type { ApnsSender } from './apns/sender.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -16,6 +17,7 @@ declare module 'fastify' {
     oauthFlows: OAuthFlowManager;
     activity: ActivityManager;
     approvalAudit?: DbApprovalAudit;
+    apns: ApnsSender;
     activeChatStreams?: Map<string, { session: { abort: () => Promise<void> } }>;
   }
 }

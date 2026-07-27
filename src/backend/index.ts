@@ -41,6 +41,7 @@ import { DbApprovalAudit } from './approvals/audit.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
+import { registerDevRoutes } from './routes/dev.js';
 import { registerNextMessageRoutes } from './routes/next-message.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
@@ -228,6 +229,7 @@ async function main() {
   app.decorate('oauthFlows', new OAuthFlowManager(pi.auth));
   app.decorate('activity', activityManager);
   app.decorate('approvalAudit', approvalAudit);
+  app.decorate('apns', apns);
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
@@ -258,6 +260,12 @@ async function main() {
   app.register(registerTrustRoutes);
   app.register(registerMissionRoutes);
   app.register(registerMondayRoutes);
+
+  // Dev-only helpers (e.g. POST /api/dev/test-push). Never registered in
+  // production; still behind the bearer-token gate.
+  if (process.env.NODE_ENV !== 'production') {
+    app.register(registerDevRoutes);
+  }
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
