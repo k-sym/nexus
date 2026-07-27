@@ -35,6 +35,7 @@ final class ThreadsViewModel {
 /// Threads for a project. Tapping opens the shared streaming chat.
 struct ThreadsListView: View {
     private let api: APIClient
+    @Environment(ThreadReadStore.self) private var readStore
     @State private var vm: ThreadsViewModel
 
     init(api: APIClient, project: Project) {
@@ -46,6 +47,7 @@ struct ThreadsListView: View {
         content
             .navigationDestination(for: ChatThread.self) { thread in
                 StreamingChatView(api: api, threadId: thread.id, title: thread.title)
+                    .onAppear { readStore.markRead(thread) }
             }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
@@ -74,9 +76,12 @@ struct ThreadsListView: View {
                 }
             } else {
                 List(threads) { thread in
-                    NavigationLink(value: thread) { ThreadRow(thread: thread) }
+                    NavigationLink(value: thread) {
+                        ThreadRow(thread: thread, isUnread: readStore.isUnread(thread))
+                    }
                 }
                 .refreshable { await vm.refresh() }
+                .onAppear { readStore.seed(threads) }
             }
         case .failed(let message):
             ErrorStateView(message: message) { Task { await vm.refresh() } }
@@ -86,14 +91,27 @@ struct ThreadsListView: View {
 
 struct ThreadRow: View {
     let thread: ChatThread
+    var isUnread: Bool = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(thread.title).font(.body).lineLimit(1)
-            if let branch = thread.gitBranch, !branch.isEmpty {
-                Label(branch, systemImage: "arrow.triangle.branch")
-                    .font(.caption2).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(thread.title)
+                    .font(.body)
+                    .fontWeight(isUnread ? .semibold : .regular)
+                    .lineLimit(1)
+                if let branch = thread.gitBranch, !branch.isEmpty {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.caption2).foregroundStyle(.secondary).labelStyle(.titleAndIcon)
+                }
+            }
+            Spacer(minLength: 0)
+            if isUnread {
+                GlassUnreadDot()
+                    .transition(.scale.combined(with: .opacity))
             }
         }
         .padding(.vertical, 2)
+        .animation(.snappy, value: isUnread)
     }
 }
