@@ -300,6 +300,33 @@ async function makeApp(runtimeOverride?: unknown, options: { includeSecondThread
   return { app, db, dir, runtime, concurrency };
 }
 
+test('POST /api/threads/:id/supervise toggles pi state; thread GET reflects it', async () => {
+  const { app, dir, runtime } = await makeApp();
+  try {
+    const before = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+    assert.equal(before.json().supervised, false);
+    assert.equal(runtime.isSupervised('thread-1'), false);
+
+    const on = await app.inject({ method: 'POST', url: '/api/threads/thread-1/supervise', payload: { supervised: true } });
+    assert.equal(on.statusCode, 200);
+    assert.deepEqual(on.json(), { threadId: 'thread-1', supervised: true });
+    assert.equal(runtime.isSupervised('thread-1'), true);
+
+    const mid = await app.inject({ method: 'GET', url: '/api/threads/thread-1' });
+    assert.equal(mid.json().supervised, true);
+
+    const off = await app.inject({ method: 'POST', url: '/api/threads/thread-1/supervise', payload: { supervised: false } });
+    assert.deepEqual(off.json(), { threadId: 'thread-1', supervised: false });
+    assert.equal(runtime.isSupervised('thread-1'), false);
+
+    const missing = await app.inject({ method: 'POST', url: '/api/threads/nope/supervise', payload: { supervised: true } });
+    assert.equal(missing.statusCode, 404);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 const pngImage = {
   type: 'image',
   data: 'iVBORw0KGgo=',

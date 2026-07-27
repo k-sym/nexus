@@ -19,6 +19,8 @@ final class ChatViewModel {
     private(set) var reducer = TranscriptReducer()
     private(set) var historyState: HistoryState = .loading
     private(set) var isSending = false
+    /// Per-thread Supervise: when on, every gateable tool call parks for approval.
+    private(set) var supervised = false
 
     var input: String = ""
     /// Non-nil drives the "cancel the running turn?" confirmation.
@@ -42,6 +44,7 @@ final class ChatViewModel {
         do {
             let detail = try await api.threadDetail(threadId: threadId)
             reducer.loadPersisted(detail.messages)
+            supervised = detail.supervised ?? false
             historyState = .ready
             maybeAutosend()
         } catch {
@@ -54,6 +57,21 @@ final class ChatViewModel {
         guard !text.isEmpty, !isSending else { return }
         input = ""
         attemptSend(content: text, confirmCancel: false)
+    }
+
+    /// Toggle Supervise for this thread. Optimistic; rolls back on failure.
+    func setSupervised(_ on: Bool) {
+        let previous = supervised
+        supervised = on
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                supervised = try await api.setSupervised(threadId: threadId, supervised: on)
+            } catch {
+                supervised = previous
+                errorBanner = "Couldn't update Supervise."
+            }
+        }
     }
 
     func confirmTakeover() {

@@ -169,6 +169,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [artifactPath, setArtifactPath] = useState<string | null>(null);
   const [artifactRailOpen, setArtifactRailOpen] = useState(false);
   const [thinkingByThread, setThinkingByThread] = useState<Record<string, ThinkingLevel>>({});
+  // Per-thread Supervise (tool-gate every call). Ephemeral on the pi runtime;
+  // seeded from GET /api/threads/:id and toggled via POST .../supervise.
+  const [supervised, setSupervised] = useState(false);
   // Live mirror of loadedMessages + the persisted-history length captured when
   // the current turn started. Used to decide when the optimistic in-flight turn
   // has been superseded by persisted history (see `visible` below) — keeping it
@@ -304,26 +307,41 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     }
   }, []);
 
+  const toggleSupervise = useCallback(async () => {
+    if (!threadId) return;
+    const next = !supervised;
+    setSupervised(next); // optimistic
+    try {
+      const res = await api.chat.setSupervised(threadId, next);
+      setSupervised(res.supervised);
+    } catch (err) {
+      console.error('[chat-panel] supervise toggle failed', threadId, err);
+      setSupervised(!next); // rollback
+    }
+  }, [threadId, supervised]);
+
   // Load persisted messages and restore thread's model when switching threads
   useEffect(() => {
     if (!threadId) {
       setLoadedMessages([]);
       setModel('', '');
+      setSupervised(false);
       return;
     }
-    
+
     // Clear messages and model immediately when switching threads
     setLoadedMessages([]);
     setQuestionSubmissions({});
     setFallbackSubmissions({});
     setModel('', '');
+    setSupervised(false);
     
     let cancelled = false;
     (async () => {
       try {
         const res = await apiFetch(`/api/threads/${threadId}`);
         if (!res.ok) throw new Error(`GET /api/threads/${threadId} ${res.status}`);
-        const data = (await res.json()) as { messages: any[]; thread?: any };
+        const data = (await res.json()) as { messages: any[]; thread?: any; supervised?: boolean };
         
         // Restore the thread's saved model if it has one
         if (!cancelled && data.thread?.last_model_key) {
@@ -336,6 +354,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         }
         
         if (!cancelled) {
+          setSupervised(data.supervised === true);
           const msgs = (data.messages ?? []).map((m: any) => ({
             ...m,
             toolCalls: m.tool_calls ?? m.toolCalls ?? undefined,
@@ -883,6 +902,27 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             ))}
           </div>
         )}
+        <div className="mb-1.5 flex items-center">
+          <button
+            type="button"
+            onClick={toggleSupervise}
+            disabled={!threadId}
+            aria-pressed={supervised}
+            data-testid="supervise-toggle"
+            title="Supervise: pause every tool call on this thread for your approval"
+            className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-40 ${
+              supervised
+                ? 'accent-button'
+                : 'surface-panel border border-subtle text-faint hover:text-primary'
+            }`}
+          >
+            <span
+              aria-hidden
+              className={`h-1.5 w-1.5 rounded-full ${supervised ? 'bg-current' : 'bg-zinc-500'}`}
+            />
+            Supervise{supervised ? ' · on' : ''}
+          </button>
+        </div>
         <div className="flex gap-2 items-end">
           <textarea
             value={input}

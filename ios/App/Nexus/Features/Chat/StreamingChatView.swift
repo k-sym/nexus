@@ -87,6 +87,13 @@ struct StreamingChatView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal).padding(.top, 6)
             }
+            Toggle(isOn: Binding(get: { vm.supervised }, set: { vm.setSupervised($0) })) {
+                Label("Supervise", systemImage: "hand.raised.fill")
+                    .font(.caption)
+                    .foregroundStyle(vm.supervised ? .primary : .secondary)
+            }
+            .tint(Theme.accent)
+            .padding(.horizontal).padding(.top, 6)
             if let usage = vm.reducer.contextUsage {
                 ContextMeter(usage: usage)
             }
