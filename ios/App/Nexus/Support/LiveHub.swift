@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import NexusCore
 
 /// Centralizes the app's "attached / live" concept. Owns the single long-lived
@@ -17,6 +18,16 @@ final class LiveHub {
 
     var pendingCount: Int { pending.count }
 
+    /// Keep the app-icon badge in sync with the live pending count. Push sets
+    /// the badge when a notification arrives, but resolves (allow/deny) don't
+    /// push — so we clear/adjust it here as the live stream updates.
+    private func syncBadge() {
+        let count = pending.count
+        Task { @MainActor in
+            try? await UNUserNotificationCenter.current().setBadgeCount(count)
+        }
+    }
+
     func start() {
         guard streamTask == nil else { return }
         streamTask = Task { await run() }
@@ -29,6 +40,7 @@ final class LiveHub {
 
     func decide(_ approval: PendingApproval, action: String, reason: String? = nil) {
         pending.removeAll { $0.toolCallId == approval.toolCallId } // optimistic
+        syncBadge()
         Task { try? await api.decideApproval(toolCallId: approval.toolCallId, action: action, reason: reason) }
     }
 
@@ -47,6 +59,7 @@ final class LiveHub {
 
     private func apply(_ line: JSONValue) {
         guard let kind = line["kind"]?.string else { return } // heartbeat: bare "\n"
+        defer { syncBadge() }
         switch kind {
         case "snapshot":
             pending = (line["approvals"]?.array ?? []).compactMap { PendingApproval(json: $0) }

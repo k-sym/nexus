@@ -25,6 +25,12 @@ struct ApprovalsView: View {
             }
         }
         .navigationTitle("Approvals")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                // Liquid Glass count pill mirroring the tab badge.
+                GlassBadge(count: liveHub.pendingCount)
+            }
+        }
     }
 }
 

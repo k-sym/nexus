@@ -41,6 +41,7 @@ import { DbApprovalAudit } from './approvals/audit.js';
 import { registerTrustRoutes } from './routes/trust.js';
 import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
+import { registerDevRoutes } from './routes/dev.js';
 import { registerNextMessageRoutes } from './routes/next-message.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
@@ -167,6 +168,8 @@ async function main() {
       body: `${view.toolName} wants to run in ${where}.`,
       deepLink: `approval:${view.toolCallId}`,
       threadId: view.threadId,
+      // Badge = total gates awaiting a decision across all threads.
+      badge: pi.approvals.listPending().length,
     });
   });
   activityManager.bus.subscribe((event) => {
@@ -180,6 +183,8 @@ async function main() {
       body: event.title || 'Your agent run has finished.',
       deepLink: event.threadId ? `thread:${event.threadId}` : 'open:',
       threadId: event.threadId ?? undefined,
+      // Keep the badge in sync with any still-pending approvals.
+      badge: pi.approvals.listPending().length,
     });
   });
 
@@ -224,6 +229,7 @@ async function main() {
   app.decorate('oauthFlows', new OAuthFlowManager(pi.auth));
   app.decorate('activity', activityManager);
   app.decorate('approvalAudit', approvalAudit);
+  app.decorate('apns', apns);
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
@@ -254,6 +260,12 @@ async function main() {
   app.register(registerTrustRoutes);
   app.register(registerMissionRoutes);
   app.register(registerMondayRoutes);
+
+  // Dev-only helpers (e.g. POST /api/dev/test-push). Never registered in
+  // production; still behind the bearer-token gate.
+  if (process.env.NODE_ENV !== 'production') {
+    app.register(registerDevRoutes);
+  }
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 

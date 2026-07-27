@@ -63,7 +63,7 @@ extension PushManager: UNUserNotificationCenterDelegate {
     func userNotificationCenter(
         _ center: UNUserNotificationCenter, willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        [.banner, .sound]
+        [.banner, .sound, .badge]
     }
 
     /// Tap → deep-link to the thread/approval.

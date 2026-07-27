@@ -9,6 +9,7 @@ struct NexusApp: App {
     @State private var liveHub: LiveHub
     @State private var pushManager: PushManager
     @State private var router: AppRouter
+    @State private var threadReadStore = ThreadReadStore()
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
@@ -27,6 +28,7 @@ struct NexusApp: App {
                 .environment(liveHub)
                 .environment(router)
                 .environment(pushManager)
+                .environment(threadReadStore)
                 .task {
                     appDelegate.push = pushManager
                     await connection.loadPersisted()

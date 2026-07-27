@@ -117,6 +117,9 @@ struct RootShellView: View {
 
             NavigationStack { destination(for: .approvals) }
                 .tabItem { Label(AppSection.approvals.title, systemImage: AppSection.approvals.systemImage) }
+                // System tab badge (already glass-treated in the iOS 26 tab bar).
+                // The custom Liquid Glass pill lives inside ApprovalsView, where
+                // we control layout.
                 .badge(liveHub.pendingCount)
                 .tag("approvals")
 
