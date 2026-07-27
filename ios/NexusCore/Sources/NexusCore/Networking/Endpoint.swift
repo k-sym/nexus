@@ -87,6 +87,10 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/threads/\(threadId)/supervise", method: "POST", body: body)
     }
 
+    /// In-flight chat runs across all projects → `ActiveChatRunsResponse`
+    /// (camelCase). Drives the per-project activity badge on the projects list.
+    public static let chatActiveRuns = Endpoint(path: "/api/chat/active-runs")
+
     /// Curated + full model catalog → `ModelsResponse`.
     public static let models = Endpoint(path: "/api/models")
 
