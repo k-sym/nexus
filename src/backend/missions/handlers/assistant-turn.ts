@@ -153,15 +153,11 @@ export const assistantTurnHandler: MissionHandler = async (ctx): Promise<Mission
   // An assistant_turn mission mutates the repo's working tree, so it must
   // hold the project-wide slot. This mutually excludes it with any chat turn
   // on the same project (regardless of model), which is the repo-mutation
-  // safety the claim exists to enforce. See project_docs/design/ for the
-  // full rationale and the per-model vs. project-wide distinction.
-  //
-  // We do NOT also claim a per-(project,model) slot: the mission has no
-  // resolved model key at claim time (the session uses the pi-default), and
-  // the project-wide slot is the correct primitive for working-tree safety.
+  // safety the claim exists to enforce. Model identity is not part of the
+  // claim because Pi conversation context is already isolated per session.
   let owner: symbol | undefined;
   if (concurrency) {
-    owner = concurrency.claimProject(mission.project_id, threadId, mission.title);
+    owner = concurrency.claimProject(mission.project_id, threadId, mission.title, 'mission');
     if (owner === undefined) {
       return { status: 'failed', summary: 'project busy with another run', error: 'project busy' };
     }

@@ -408,13 +408,13 @@ describe('usePiStream', () => {
     expect(onError).toHaveBeenCalledWith('This thread already has a run in progress');
   });
 
-  it('keeps different-thread model busy responses on the confirmable conflict path', async () => {
+  it('keeps another project session on the confirmable conflict path', async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 409,
       body: null,
       json: async () => ({
-        kind: 'model_busy',
+        kind: 'chat_busy',
         activeThreadId: 'thread-2',
         activeTitle: 'Other thread',
         modelKey: 'anthropic/sonnet',
@@ -432,6 +432,34 @@ describe('usePiStream', () => {
     });
 
     expect(thrown).toEqual(new ChatBusyError('thread-2', 'Other thread', 'anthropic/sonnet'));
+  });
+
+  it('surfaces an autonomous mission conflict as a non-cancellable error', async () => {
+    const onError = vi.fn();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 409,
+      body: null,
+      json: async () => ({
+        kind: 'project_busy',
+        error: 'An autonomous mission already has a run in progress for this project',
+        activeThreadId: 'mission-1',
+        activeTitle: 'Nightly checks',
+      }),
+    } as Response);
+    const { result } = renderHook(() => usePiStream());
+
+    let response: unknown;
+    await act(async () => {
+      response = await result.current.startStream('thread-1', 'second', { onError });
+    });
+
+    expect(response).toBeNull();
+    expect(result.current.state).toMatchObject({
+      status: 'error',
+      error: 'An autonomous mission already has a run in progress for this project',
+    });
+    expect(onError).toHaveBeenCalledWith('An autonomous mission already has a run in progress for this project');
   });
 
   it('keeps a question running when message_end arrives before tool_execution_end', async () => {

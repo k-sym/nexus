@@ -4,10 +4,10 @@
  * Per-thread AgentSession instances are created and cached by the runtime.
  * NDJSON-over-HTTP streams the pi events to the frontend.
  *
- * Concurrency: per-project active run is tracked in `chatConcurrency`. A
- * 409 with `{ kind: "project_busy", activeThreadId, activeTitle }` is
- * returned if the project is already mid-run. The frontend retries with
- * `X-Confirm-Cancel: true` to override.
+ * Concurrency: Pi context is isolated per thread, while the repository working
+ * tree is shared per project. `chatConcurrency` therefore serializes runs by
+ * project (not by model). A chat holder can be cancelled explicitly; a mission
+ * holder must finish before another project run starts.
  */
 import { FastifyInstance } from 'fastify';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -31,6 +31,7 @@ import { resolveSignalFilterConfig } from '../signal-filters/config.js';
 import { projectToolResultMessages, type SignalProjection } from '../signal-filters/messages.js';
 import { detectGitBranch as detectProjectGitBranch } from '../github/repo.js';
 import { isThinkingLevel, type ThinkingLevel } from '../pi/thinking.js';
+import type { ProjectRun } from '../pi/concurrency.js';
 
 const ABORT_GRACE_MS = 200;
 
@@ -200,6 +201,29 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     activeTitle: claim.title,
     modelKey: claim.modelKey,
   });
+
+  const projectBusyResponse = (run: ProjectRun | undefined) => {
+    if (!run) {
+      return {
+        kind: 'project_busy',
+        error: 'Another run already has this project reserved',
+      };
+    }
+    return run.source === 'chat'
+      ? {
+          kind: 'chat_busy',
+          error: 'Another session already has a run in progress for this project',
+          activeThreadId: run.threadId,
+          activeTitle: run.title,
+          modelKey: run.modelKey,
+        }
+      : {
+          kind: 'project_busy',
+          error: 'An autonomous mission already has a run in progress for this project',
+          activeThreadId: run.threadId,
+          activeTitle: run.title,
+        };
+  };
 
   const claimThreadRun = (threadId: string, title: string, modelKey: string): symbol | undefined => {
     if (threadRunClaims.has(threadId)) return undefined;
@@ -400,72 +424,35 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       reply.code(409);
       return threadBusyResponse(threadId, existingThreadClaim);
     }
-    const busy = concurrency.get(thread.project_id, modelKey);
-    if (busy?.threadId === threadId) {
-      reply.code(409);
-      return threadBusyResponse(threadId, busy);
-    }
-    if (busy && busy.threadId !== threadId) {
-      if (confirmCancel) {
-        const existing = activeStreams.get(busy.threadId);
-        if (existing) {
-          try {
-            await existing.session.abort();
-          } catch (err: any) {
-            console.error(`[chat] failed to abort active thread ${busy.threadId}:`, err?.message);
-          }
-        }
-        pi.questions?.cancelThread(busy.threadId, 'Cancelled by another thread');
-        await concurrency.waitForRelease(thread.project_id, modelKey, busy, ABORT_GRACE_MS);
-        // If the grace window expired without release, surface the per-model
-        // conflict here rather than falling through to the project-wide check
-        // (a still-busy per-model slot is the more specific diagnostic).
-        if (concurrency.get(thread.project_id, modelKey)?.threadId === busy.threadId) {
-          reply.code(409);
-          return {
-            kind: 'model_busy',
-            activeThreadId: busy.threadId,
-            activeTitle: busy.title,
-            modelKey: busy.modelKey,
-          };
-        }
-      } else {
-        reply.code(409);
-        return {
-          kind: 'model_busy',
-          activeThreadId: busy.threadId,
-          activeTitle: busy.title,
-          modelKey: busy.modelKey,
-        };
-      }
-    }
-
-    // Project-wide check: an assistant_turn mission (or any repo-mutating
-    // agent) may hold the project-wide slot. If so, treat it like a model_busy
-    // conflict so an autonomous agent and a chat turn never race on the same
-    // working tree regardless of which model each uses (issue #95).
+    // Pi sessions are isolated by threadId + cwd, so using the same model in
+    // two sessions is not itself a conflict. The shared project working tree
+    // is the exclusive resource: any chat turn or autonomous mission may edit
+    // it, regardless of which model it uses.
     const projectBusy = concurrency.getProject(thread.project_id);
     if (projectBusy && projectBusy.threadId !== threadId) {
       if (confirmCancel) {
-        // The project-wide holder is a mission — there's no active chat
-        // stream to abort here, and the mission runs to completion on its
-        // own schedule. Wait for it to release within the grace window.
+        if (projectBusy.source === 'chat') {
+          const existing = activeStreams.get(projectBusy.threadId);
+          if (existing) {
+            try {
+              await existing.session.abort();
+            } catch (err: any) {
+              console.error(`[chat] failed to abort active thread ${projectBusy.threadId}:`, err?.message);
+            }
+          }
+          pi.questions?.cancelThread(projectBusy.threadId, 'Cancelled by another thread');
+        }
+        // A mission cannot be cancelled from chat. The short wait still lets a
+        // mission that is already finishing release without a spurious retry.
         await concurrency.waitForProjectRelease(thread.project_id, projectBusy, ABORT_GRACE_MS);
-        if (concurrency.getProject(thread.project_id)?.threadId === projectBusy.threadId) {
+        const stillBusy = concurrency.getProject(thread.project_id);
+        if (stillBusy) {
           reply.code(409);
-          return {
-            kind: 'project_busy',
-            activeThreadId: projectBusy.threadId,
-            activeTitle: projectBusy.title,
-          };
+          return projectBusyResponse(stillBusy);
         }
       } else {
         reply.code(409);
-        return {
-          kind: 'project_busy',
-          activeThreadId: projectBusy.threadId,
-          activeTitle: projectBusy.title,
-        };
+        return projectBusyResponse(projectBusy);
       }
     }
 
@@ -486,8 +473,6 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       reply.code(400);
       return { error: 'Selected model does not support image input' };
     }
-    const savedAttachments = saveFileAttachments(attachments, cwd);
-    const promptContent = promptWithFileReferences(body.content, savedAttachments);
 
     // This claim is deliberately synchronous and precedes sessionFor/setModel.
     // Reaching it after the confirm-cancel awaits also rechecks the thread in
@@ -498,42 +483,30 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       return threadBusyResponse(threadId, threadRunClaims.get(threadId)!);
     }
     const releaseThreadClaim = () => releaseThreadRun(threadId, threadClaimOwner);
-    // Acquire the project-wide slot FIRST (deadlock-safe ordering: any caller
-    // that holds both always acquires project-wide before per-model). A
-    // mission that already holds the project slot will cause this claim to
-    // fail and we surface project_busy. Issue #95.
-    const projectClaimOwner = concurrency.claimProject(thread.project_id, threadId, thread.title);
+    // Claim the shared working tree after the thread-local claim. There is no
+    // model claim: model clients and conversation context belong to the Pi
+    // session, while file mutation is the actual project-scoped conflict.
+    const projectClaimOwner = concurrency.claimProject(
+      thread.project_id,
+      threadId,
+      thread.title,
+      'chat',
+      modelKey,
+    );
     if (!projectClaimOwner) {
       releaseThreadClaim();
       const active = concurrency.getProject(thread.project_id);
       reply.code(409);
-      return {
-        kind: 'project_busy',
-        activeThreadId: active?.threadId,
-        activeTitle: active?.title,
-      };
+      return projectBusyResponse(active);
     }
     const releaseProjectClaim = () => concurrency.releaseProject(thread.project_id, projectClaimOwner);
-    const modelClaimOwner = concurrency.claim(thread.project_id, modelKey, threadId, thread.title);
-    if (!modelClaimOwner) {
-      releaseProjectClaim();
-      releaseThreadClaim();
-      const active = concurrency.get(thread.project_id, modelKey);
-      reply.code(409);
-      return active?.threadId === threadId
-        ? threadBusyResponse(threadId, active)
-        : {
-            kind: 'model_busy',
-            activeThreadId: active?.threadId,
-            activeTitle: active?.title,
-            modelKey: active?.modelKey ?? modelKey,
-          };
-    }
     let session: ChatSession | undefined;
     let responseCompleted = false;
     let clientDisconnected = false;
     let lastEventType = '(none)';
     let promptInFlight = false;
+    let savedAttachments: ChatAttachment[] = [];
+    let promptContent = body.content;
     const abortOnResponseClose = () => {
       if (responseCompleted || clientDisconnected) return;
       clientDisconnected = true;
@@ -549,6 +522,10 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     request.raw.once('aborted', abortOnResponseClose);
 
     try {
+      // Attachment persistence may write into the project checkout, so it must
+      // happen only after the project claim is held.
+      savedAttachments = saveFileAttachments(attachments, cwd);
+      promptContent = promptWithFileReferences(body.content, savedAttachments);
       try {
         session = await pi.sessionFor(threadId, cwd);
       } catch (err: any) {
@@ -791,9 +768,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       responseCompleted = true;
       reply.raw.removeListener('close', abortOnResponseClose);
       request.raw.removeListener('aborted', abortOnResponseClose);
-      // Release in reverse acquisition order: per-model, then project-wide,
-      // then the in-process thread claim. See issue #95.
-      concurrency.release(thread.project_id, modelKey, modelClaimOwner);
+      // Release the shared working tree, then the in-process thread claim.
       releaseProjectClaim();
       releaseThreadClaim();
     }
@@ -927,32 +902,24 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     }
   });
 
-  // Check if a model is currently streaming in a project
+  // Backwards-compatible endpoint name: the gate is project-run scoped, not
+  // model scoped. `sameModel` is diagnostic only and never controls access.
   fastify.get('/api/projects/:projectId/model-status', async (request) => {
     const { projectId } = request.params as { projectId: string };
     const { modelKey } = request.query as { modelKey?: string };
-    
-    if (!modelKey) {
-      return { busy: false };
-    }
-    
-    const busy = concurrency.get(projectId, modelKey);
-    if (busy) {
+
+    const active = concurrency.getProject(projectId);
+    if (active) {
       return {
         busy: true,
-        activeThreadId: busy.threadId,
-        activeTitle: busy.title,
-      };
-    }
-    // A mission (or any repo-mutating agent) may hold the project-wide slot
-    // without a per-(project,model) entry. Surface that too (issue #95).
-    const projectBusy = concurrency.getProject(projectId);
-    if (projectBusy) {
-      return {
-        busy: true,
-        activeThreadId: projectBusy.threadId,
-        activeTitle: projectBusy.title,
-        projectBusy: true,
+        activeThreadId: active.threadId,
+        activeTitle: active.title,
+        source: active.source,
+        modelKey: active.modelKey,
+        sameModel: !!modelKey && active.modelKey === modelKey,
+        // Kept for older frontends. It now means specifically "mission", not
+        // merely that the project-wide slot is occupied.
+        projectBusy: active.source === 'mission',
       };
     }
     return { busy: false };
