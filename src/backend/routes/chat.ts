@@ -387,8 +387,14 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     const attachments = attachmentsResult.attachments;
     const images = attachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
 
-    // Check if this project+model combination is already streaming
-    const modelKey = body.modelKey || 'default';
+    // The user must choose a concrete model for every turn. Nexus no longer
+    // permits the SDK's implicit "default" fallback because model choice is
+    // task-dependent and should be explicit.
+    const modelKey = body.modelKey;
+    if (!modelKey) {
+      reply.code(400);
+      return { error: 'modelKey is required; choose a model before sending' };
+    }
     const existingThreadClaim = threadRunClaims.get(threadId);
     if (existingThreadClaim) {
       reply.code(409);

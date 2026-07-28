@@ -197,6 +197,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const pendingImages = pendingAttachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
   const hasPendingImages = pendingImages.length > 0;
   const selectedModelSupportsImages = activeModel?.input?.includes('image') ?? false;
+  const noModelSelected = !activeModelId;
   const imageModelBlocked = hasPendingImages && !!activeModelId && !selectedModelSupportsImages;
 
   // Clamp the sticky thinking level when the active model (or its levels) change.
@@ -445,6 +446,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const submit = useCallback(
     async (text: string, opts: { confirmCancel?: boolean; modelKey?: string; attachments?: ChatAttachment[]; onError?: (message: string) => void } = {}) => {
       if (!threadId) return;
+      const selectedModelKey = opts.modelKey ?? activeModelId;
+      if (!selectedModelKey) {
+        const message = 'Choose a model for this task before sending.';
+        setError(message);
+        opts.onError?.(message);
+        return false;
+      }
       setError(null);
       const attachments = opts.attachments ?? pendingAttachments;
       let streamError: string | null = null;
@@ -454,7 +462,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       try {
         const contextUsage = await startStream(threadId, text, {
           confirmCancel: opts.confirmCancel,
-          modelKey: opts.modelKey ?? activeModelId,
+          modelKey: selectedModelKey,
           thinkingLevel,
           attachments,
           onError: (message) => {
@@ -564,13 +572,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (isRunning || (!text && pendingAttachments.length === 0) || !threadId || imageModelBlocked) return;
+    if (isRunning || (!text && pendingAttachments.length === 0) || !threadId || noModelSelected || imageModelBlocked) return;
     const attachments = pendingAttachments;
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, imageModelBlocked, pendingAttachments, isRunning, submit]);
+  }, [input, threadId, noModelSelected, imageModelBlocked, pendingAttachments, isRunning, submit]);
 
   // Cancel whichever run is active: a locally-streamed run (this instance
   // started it) goes through abortStream; a backend-owned run re-attached
@@ -842,6 +850,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
       <div className="border-t border-subtle surface-glass p-3">
         {attachmentWarning && <div className="pb-2 text-xs text-amber-200">{attachmentWarning}</div>}
+        {noModelSelected && (
+          <div className="pb-2 text-xs text-amber-200">
+            Choose a model for this task before sending.
+          </div>
+        )}
         {imageModelBlocked && (
           <div className="pb-2 text-xs text-amber-200">
             The selected model does not support images. Pick a vision-capable model or remove the images.
@@ -935,7 +948,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             }}
             onKeyDown={handleKeyDown}
             onPaste={handlePaste}
-            placeholder={suggestion || 'Type a message… (Enter to send, Shift+Enter for newline)'}
+            placeholder={suggestion || (noModelSelected ? 'Choose a model before typing…' : 'Type a message… (Enter to send, Shift+Enter for newline)')}
             rows={2}
             data-testid="chat-input"
             className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong"
@@ -961,7 +974,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
                 type="button"
                 onClick={handleSend}
                 data-testid="send-button"
-                disabled={(!input.trim() && pendingAttachments.length === 0) || imageModelBlocked}
+                disabled={noModelSelected || (!input.trim() && pendingAttachments.length === 0) || imageModelBlocked}
                 className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
               >
                 Send

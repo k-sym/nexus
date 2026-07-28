@@ -23,7 +23,7 @@ describe('ModelSelector', () => {
 
   it('shows a placeholder when no model is selected', () => {
     render(<ModelSelector models={models} onSelect={() => {}} />);
-    expect(screen.getByText('Pick a model')).toBeInTheDocument();
+    expect(screen.getByText('Choose model')).toBeInTheDocument();
   });
 
   it('opens the dropdown on click and shows all models', async () => {

@@ -29,6 +29,26 @@ beforeEach(() => {
 });
 
 describe('ChatPanel', () => {
+  it('requires choosing a model before sending a turn', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+    global.fetch = fetchMock;
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await screen.findByText('Choose a model for this task before sending.');
+    await userEvent.type(screen.getByTestId('chat-input'), 'please help');
+    expect(screen.getByTestId('send-button')).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/threads/t1/messages/stream', expect.anything());
+  });
+
   it('disables the composer and ignores Enter while a turn is running', async () => {
     let streamCalls = 0;
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -40,7 +60,7 @@ describe('ChatPanel', () => {
         return { ok: true, json: async () => ({ busy: false }) } as Response;
       }
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [] }) } as Response;
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
         streamCalls += 1;
@@ -75,7 +95,7 @@ describe('ChatPanel', () => {
         return { ok: true, json: async () => ({ busy: false }) } as Response;
       }
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [] }) } as Response;
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
         return { ok: true, status: 200, body: new ReadableStream({ start() {} }) } as Response;
@@ -107,7 +127,7 @@ describe('ChatPanel', () => {
         return {
           ok: true,
           json: async () => ({
-            thread: { id: 't1' },
+            thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
             messages: [{
               id: 'assistant-1', role: 'assistant', content: '', timestamp: 1,
               tool_calls: [{
@@ -148,7 +168,7 @@ describe('ChatPanel', () => {
       const url = String(input);
       if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [{
           id: 'assistant-1', role: 'assistant', content: '', timestamp: 1,
           tool_calls: [{
             id: 'call-1', name: 'question', status: 'completed',
@@ -169,7 +189,7 @@ describe('ChatPanel', () => {
 
   it('re-attaches to a still-running backend run: gates the composer, polls for progress, and cancels via /abort', async () => {
     const runningMessages = {
-      thread: { id: 't1' },
+      thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
       messages: [{
         id: 'assistant-1', role: 'assistant', content: '', timestamp: 1,
         run: {
@@ -180,7 +200,7 @@ describe('ChatPanel', () => {
       }],
     };
     const completedMessages = {
-      thread: { id: 't1' },
+      thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
       messages: [{
         id: 'assistant-1', role: 'assistant', content: 'done', timestamp: 1,
         run: { runId: 'run-1', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [{ id: 'call-1', name: 'Bash', args: { command: 'npm test' }, status: 'succeeded', result: 'ok' }] },
@@ -225,7 +245,7 @@ describe('ChatPanel', () => {
     let persisted = false;
     let streamController!: ReadableStreamDefaultController<Uint8Array>;
     const persistedMessages = {
-      thread: { id: 't1' },
+      thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
       messages: [
         { id: 'user-1', role: 'user', content: 'hi there', timestamp: 1 },
         {
@@ -239,7 +259,7 @@ describe('ChatPanel', () => {
       if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
       if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => (persisted ? persistedMessages : { thread: { id: 't1' }, messages: [] }) } as Response;
+        return { ok: true, json: async () => (persisted ? persistedMessages : { thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
         return { ok: true, status: 200, body: new ReadableStream({ start(c) { streamController = c; } }) } as Response;
@@ -284,7 +304,7 @@ describe('ChatPanel', () => {
     // Existing thread: one completed prior turn. The backend only persists a
     // new turn at run_end, so during a dropped run the history stays stale.
     const priorHistory = {
-      thread: { id: 't1' },
+      thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
       messages: [
         { id: 'user-0', role: 'user', content: 'earlier question', timestamp: 1 },
         { id: 'assistant-0', role: 'assistant', content: 'earlier answer', timestamp: 2, run: { runId: 'run-0', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [] } },
@@ -329,7 +349,7 @@ describe('ChatPanel', () => {
     // reconciliation must still fetch the completed turn.
     let done = false;
     const completed = {
-      thread: { id: 't1' },
+      thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
       messages: [
         { id: 'u1', role: 'user', content: 'Hey GLM!', timestamp: 1 },
         { id: 'a1', role: 'assistant', content: 'the reply', timestamp: 2, run: { runId: 'r1', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [] } },
@@ -339,7 +359,7 @@ describe('ChatPanel', () => {
       const url = String(input);
       if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
       if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
-      if (url === '/api/threads/t1') return { ok: true, json: async () => (done ? completed : { thread: { id: 't1' }, messages: [] }) } as Response;
+      if (url === '/api/threads/t1') return { ok: true, json: async () => (done ? completed : { thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
       return { ok: true, json: async () => ({}) } as Response;
     });
 
@@ -368,7 +388,7 @@ describe('ChatPanel', () => {
       }
       if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `Choose a scope.\n\n\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `Choose a scope.\n\n\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
         return { ok: true, status: 200, body: new ReadableStream({ start(controller) { controller.enqueue(encoder.encode(`${JSON.stringify({ kind: 'done' })}\n`)); controller.close(); } }) } as Response;
@@ -404,7 +424,7 @@ describe('ChatPanel', () => {
       }
       if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
         streamCalls += 1;
@@ -435,7 +455,7 @@ describe('ChatPanel', () => {
       }
       if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [{ id: 'assistant-1', role: 'assistant', content: `\`\`\`ask\n${ask}\n\`\`\``, timestamp: 1 }] }) } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
         return { ok: false, status: 503, body: null, json: async () => ({ error: 'Continuation unavailable' }) } as Response;
@@ -458,7 +478,7 @@ describe('ChatPanel', () => {
       const url = String(input);
       if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [
           { id: 'a1', role: 'assistant', content: 'A. Small\nB. Full', timestamp: 1 },
           { id: 'a2', role: 'assistant', content: '```ask\n{broken}\n```', timestamp: 2 },
           { id: 'a3', role: 'assistant', content: '```ask\n{"questions":[]}\n```\nAfterward', timestamp: 3 },
@@ -480,7 +500,7 @@ describe('ChatPanel', () => {
       const url = String(input);
       if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [
           { id: 'assistant-1', role: 'assistant', content: `Spec written to ${filePath}`, timestamp: 1 },
         ] }) } as Response;
       }
@@ -515,7 +535,7 @@ describe('ChatPanel', () => {
       const url = String(input);
       if (url === '/api/models') return { ok: true, json: async () => ({ models: [] }) } as Response;
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [
           { id: 'assistant-1', role: 'assistant', content: `Created: \`${filePath}\``, timestamp: 1 },
         ] }) } as Response;
       }
@@ -604,7 +624,7 @@ describe('ChatPanel', () => {
       if (url === '/api/threads/t1') {
         return {
           ok: true,
-          json: async () => ({ thread: { id: 't1' }, messages: [] }),
+          json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }),
         } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
@@ -656,7 +676,7 @@ describe('ChatPanel', () => {
       if (url === '/api/threads/t1') {
         return {
           ok: true,
-          json: async () => ({ thread: { id: 't1' }, messages: [] }),
+          json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }),
         } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
@@ -712,7 +732,7 @@ describe('ChatPanel', () => {
         return { ok: true, json: async () => ({ busy: false }) } as Response;
       }
       if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1' }, messages: [] }) } as Response;
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
       }
       if (url === '/api/threads/t1/messages/stream') {
         streamCalls += 1;
@@ -768,7 +788,7 @@ describe('ChatPanel', () => {
         return {
           ok: true,
           json: async () => ({
-            thread: { id: 't1' },
+            thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
             messages: [
               {
                 id: 'm-user',
@@ -1076,7 +1096,7 @@ describe('ChatPanel', () => {
         return {
           ok: true,
           json: async () => ({
-            thread: { id: 't1' },
+            thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
             messages: [
               {
                 id: 'tool-1',
@@ -1138,7 +1158,7 @@ describe('ChatPanel', () => {
         return {
           ok: true,
           json: async () => ({
-            thread: { id: 't1' },
+            thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
             messages: [
               {
                 id: 'tool-read',
@@ -1178,7 +1198,7 @@ describe('ChatPanel', () => {
         return {
           ok: true,
           json: async () => ({
-            thread: { id: 't1' },
+            thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
             messages: [
               { id: 'm1', role: 'user', content: 'add a test', timestamp: 1 },
               { id: 'm2', role: 'assistant', content: 'done', timestamp: 2 },
@@ -1217,7 +1237,7 @@ describe('ChatPanel', () => {
         return {
           ok: true,
           json: async () => ({
-            thread: { id: 't1' },
+            thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
             messages: [
               { id: 'm1', role: 'user', content: 'add a test', timestamp: 1 },
               { id: 'm2', role: 'assistant', content: 'done', timestamp: 2 },
@@ -1243,7 +1263,7 @@ describe('ChatPanel', () => {
         return {
           ok: true,
           json: async () => ({
-            thread: { id: 't1' },
+            thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
             messages: [
               { id: 'm1', role: 'user', content: 'add a test', timestamp: 1 },
               { id: 'm2', role: 'assistant', content: 'done', timestamp: 2 },

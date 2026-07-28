@@ -29,7 +29,7 @@ import { registerChatRoutes } from '../../routes/chat';
 import { registerPiRoutes } from '../../routes/pi';
 import { registerAuthRoutes } from '../../routes/auth';
 
-test('POST /api/threads/:id/messages/stream returns 200 NDJSON', async () => {
+test('POST /api/threads/:id/messages/stream rejects missing modelKey', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-e2e-'));
   const db = new Database(join(dir, 'test.db'));
   db.exec(`
@@ -61,15 +61,8 @@ test('POST /api/threads/:id/messages/stream returns 200 NDJSON', async () => {
       url: '/api/threads/t1/messages/stream',
       payload: { content: 'hi' },
     });
-    assert.equal(res.statusCode, 200, `stream failed: ${res.status} ${res.body.slice(0, 200)}`);
-    const lines = res.body.trim().split('\n').filter(Boolean);
-    assert.ok(lines.length > 0, 'expected at least one NDJSON line');
-    // A run_end envelope is the durable terminal record. The important thing
-    // is the wire format is valid NDJSON, the route completes, and the stream
-    // ends cleanly.
-    const last = JSON.parse(lines[lines.length - 1]);
-    assert.equal(last.kind, 'run_end', `expected terminal kind, got ${JSON.stringify(last)}`);
-    assert.ok(['completed', 'failed', 'cancelled', 'interrupted'].includes(last.run.status));
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body, /modelKey is required/);
   } finally {
     await app.close();
     db.close();
