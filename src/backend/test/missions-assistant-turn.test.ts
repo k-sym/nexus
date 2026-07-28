@@ -438,27 +438,26 @@ test('assistant_turn + runner: multi-iteration tokens_used accumulates per-turn 
   }
 });
 
-// ── Test 11: project-wide concurrency claim blocks a same-project chat slot ──
+// ── Test 11: project-wide concurrency serializes same-project runs ───────────
 //
 // Verifies at the handler + tracker level (no Fastify) that a mission holding
-// the project-wide slot prevents a per-(project,model) claim from coexisting
-// in the route layer's acquisition order. Mirrors the route-level test in
-// routes-chat.test.ts but exercises the real ConcurrencyTracker.
+// the shared working-tree slot prevents a chat run from coexisting. Mirrors
+// the route-level test in routes-chat.test.ts but exercises the real tracker.
 
-test('assistant_turn: project-wide claim mutually excludes with a per-model claim on the same project', async () => {
+test('assistant_turn: project-wide claim mutually excludes with a chat run on the same project', async () => {
   const { ConcurrencyTracker } = await import('../pi/concurrency.js');
   const t = new ConcurrencyTracker();
   // Mission claims the project-wide slot.
-  const missionOwner = t.claimProject('proj-x', 'mission-thread', 'Mission');
+  const missionOwner = t.claimProject('proj-x', 'mission-thread', 'Mission', 'mission');
   assert.ok(missionOwner);
-  // A chat turn on an explicit model in the SAME project: the route acquires
-  // project-wide first, so it must fail here (this is the route's check).
-  assert.equal(t.claimProject('proj-x', 'chat-thread', 'Chat'), undefined, 'project-wide slot must be held by the mission');
-  // And conversely, while the mission holds the project slot, the per-model
-  // primitive itself is independent (chat would only reach it after the
-  // project claim succeeds). The mutual-exclusion is enforced at the
-  // project-wide layer, which is the whole point of issue #95.
+  // A chat turn on an explicit model in the SAME project must fail because the
+  // working tree, rather than the model client, is the shared resource.
+  assert.equal(
+    t.claimProject('proj-x', 'chat-thread', 'Chat', 'chat', 'anthropic/sonnet'),
+    undefined,
+    'project-wide slot must be held by the mission',
+  );
   t.releaseProject('proj-x', missionOwner);
   // After release, a chat turn can claim the project slot again.
-  assert.ok(t.claimProject('proj-x', 'chat-thread', 'Chat'));
+  assert.ok(t.claimProject('proj-x', 'chat-thread', 'Chat', 'chat', 'anthropic/sonnet'));
 });

@@ -160,7 +160,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ activeThreadId: string; activeTitle: string; pendingText: string; pendingAttachments: ChatAttachment[] } | null>(null);
-  const [modelBusy, setModelBusy] = useState<{ threadId: string; title: string; projectBusy?: boolean } | null>(null);
+  const [projectRunBusy, setProjectRunBusy] = useState<{
+    threadId: string;
+    title: string;
+    source: 'chat' | 'mission';
+  } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
   const [draggingAttachments, setDraggingAttachments] = useState(false);
@@ -253,28 +257,35 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setDraggingAttachments(false);
   }, [threadId, dispatch, detachStream]);
 
-  // Check if the selected model is busy in another thread (poll every 2 seconds)
+  // Poll the project working-tree owner. The endpoint keeps its historical
+  // model-status name, but model identity is diagnostic only: Pi context is
+  // isolated per thread and the actual exclusive resource is the checkout.
   useEffect(() => {
-    if (!projectId || !activeModelId) {
-      setModelBusy(null);
+    if (!projectId) {
+      setProjectRunBusy(null);
       return;
     }
 
     let cancelled = false;
     const checkStatus = async () => {
       try {
-        const res = await apiFetch(`/api/projects/${projectId}/model-status?modelKey=${encodeURIComponent(activeModelId)}`);
+        const modelQuery = activeModelId ? `?modelKey=${encodeURIComponent(activeModelId)}` : '';
+        const res = await apiFetch(`/api/projects/${projectId}/model-status${modelQuery}`);
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) {
           if (data.busy && data.activeThreadId !== threadId) {
-            setModelBusy({ threadId: data.activeThreadId, title: data.activeTitle, projectBusy: data.projectBusy === true });
+            setProjectRunBusy({
+              threadId: data.activeThreadId,
+              title: data.activeTitle,
+              source: data.source === 'mission' || data.projectBusy === true ? 'mission' : 'chat',
+            });
           } else {
-            setModelBusy(null);
+            setProjectRunBusy(null);
           }
         }
       } catch (err) {
-        console.error('Failed to check model status:', err);
+        console.error('Failed to check project run status:', err);
       }
     };
 
@@ -572,13 +583,20 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
   const handleSend = useCallback(() => {
     const text = input.trim();
-    if (isRunning || (!text && pendingAttachments.length === 0) || !threadId || noModelSelected || imageModelBlocked) return;
+    if (
+      isRunning
+      || projectRunBusy?.source === 'mission'
+      || (!text && pendingAttachments.length === 0)
+      || !threadId
+      || noModelSelected
+      || imageModelBlocked
+    ) return;
     const attachments = pendingAttachments;
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, noModelSelected, imageModelBlocked, pendingAttachments, isRunning, submit]);
+  }, [input, threadId, noModelSelected, imageModelBlocked, pendingAttachments, isRunning, projectRunBusy, submit]);
 
   // Cancel whichever run is active: a locally-streamed run (this instance
   // started it) goes through abortStream; a backend-owned run re-attached
@@ -758,14 +776,21 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         )}
       </header>
 
-      {modelBusy && (
-        <div className="px-4 py-2 border-b border-amber-800/50 bg-amber-950/30 text-xs text-amber-200">
+      {projectRunBusy && (
+        <div
+          className="px-4 py-2 border-b border-amber-800/50 bg-amber-950/30 text-xs text-amber-200"
+          role="status"
+          aria-live="polite"
+        >
           <span className="flex items-center gap-2">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+            <span
+              aria-hidden
+              className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse motion-reduce:animate-none"
+            />
             <span>
-              {modelBusy.projectBusy
-                ? `An autonomous mission is running in "${modelBusy.title}". Chat is paused on this project until it finishes.`
-                : `This model is currently streaming in "${modelBusy.title}". Wait for it to finish or choose a different model.`}
+              {projectRunBusy.source === 'mission'
+                ? `An autonomous mission is running in "${projectRunBusy.title}". To protect shared project files, another run cannot start until it finishes.`
+                : `Another session is running in "${projectRunBusy.title}". Nexus allows one run per project to prevent conflicting file changes; sending here will ask before cancelling it.`}
             </span>
           </span>
         </div>
@@ -974,7 +999,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
                 type="button"
                 onClick={handleSend}
                 data-testid="send-button"
-                disabled={noModelSelected || (!input.trim() && pendingAttachments.length === 0) || imageModelBlocked}
+                disabled={
+                  noModelSelected
+                  || (!input.trim() && pendingAttachments.length === 0)
+                  || imageModelBlocked
+                  || projectRunBusy?.source === 'mission'
+                }
+                title={projectRunBusy?.source === 'mission' ? 'Wait for the autonomous mission to finish' : undefined}
                 className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
               >
                 Send

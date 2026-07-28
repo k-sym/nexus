@@ -1,141 +1,72 @@
 /**
- * Per-project-model active-run tracker.
+ * Per-project active-run tracker.
  *
- * Allows multiple threads in the same project to stream simultaneously,
- * but prevents two threads using the same model in the same project from
- * streaming at the same time. This keeps history/log tracking clean:
- * project + model = unique chat context.
+ * Chat context is isolated by Pi session (`threadId + cwd`), so the selected
+ * model is not a shared resource and must not be used as a concurrency key.
  *
- * Key format: `${projectId}::${modelKey}`
+ * The project working tree is shared, however. Chat turns and autonomous
+ * missions can both mutate it, so only one run may own a project at a time.
+ * The source is retained so callers can distinguish a cancellable chat run
+ * from an autonomous mission and present an accurate explanation.
  *
- * State is lost on backend restart — by design. A restart shouldn't keep
- * a slot "permanently busy".
- *
- * ## Project-wide claims (repo-mutation safety)
- *
- * On top of the per-(project,model) slots above, the tracker also guards a
- * **project-wide** slot. Any agent that mutates a repo's working tree
- * (an `assistant_turn` mission, or a chat turn that may edit files / commit)
- * must hold the project-wide slot for that project, so two agents never race
- * on the same working tree regardless of which model each uses.
- *
- * Acquisition order to avoid deadlock: **project-wide first, then
- * per-(project,model)**. Release in reverse. A holder of only a per-model
- * slot never blocks a project-wide claimant from acquiring the project slot
- * because the project slot is a separate map; the ordering rule only
- * matters for a single caller that acquires both — and only chat does.
+ * State is lost on backend restart by design. A restart should never leave a
+ * project permanently busy.
  */
-export interface ActiveRun {
-  threadId: string;
-  title: string;
-  modelKey: string;
-}
+export type ProjectRunSource = 'chat' | 'mission';
 
 export interface ProjectRun {
   threadId: string;
   title: string;
-  /** Marker so the project-wide slot can be distinguished from a per-model run. */
   scope: 'project';
+  source: ProjectRunSource;
+  /** Present for chat runs; missions resolve their model inside the session. */
+  modelKey?: string;
 }
 
 export class ConcurrencyTracker {
-  private readonly active = new Map<string, ActiveRun & { owner: symbol }>();
   private readonly projectActive = new Map<string, ProjectRun & { owner: symbol }>();
-  private readonly observedOwners = new WeakMap<ActiveRun, symbol>();
   private readonly observedProjectOwners = new WeakMap<ProjectRun, symbol>();
-  private readonly releaseWaiters = new Map<string, Set<() => void>>();
   private readonly projectReleaseWaiters = new Map<string, Set<() => void>>();
 
-  private key(projectId: string, modelKey: string): string {
-    return `${projectId}::${modelKey || 'default'}`;
-  }
-
-  claim(projectId: string, modelKey: string, threadId: string, title: string): symbol | undefined {
-    const key = this.key(projectId, modelKey);
-    if (this.active.has(key)) return undefined;
-    const owner = Symbol(`${projectId}:${modelKey}:${threadId}`);
-    this.active.set(key, { owner, threadId, title, modelKey });
-    return owner;
-  }
-
-  get(projectId: string, modelKey: string): ActiveRun | undefined {
-    const run = this.active.get(this.key(projectId, modelKey));
-    if (!run) return undefined;
-    const observed = { threadId: run.threadId, title: run.title, modelKey: run.modelKey };
-    this.observedOwners.set(observed, run.owner);
-    return observed;
-  }
-
-  release(projectId: string, modelKey: string, owner: symbol): boolean {
-    const key = this.key(projectId, modelKey);
-    if (this.active.get(key)?.owner !== owner) return false;
-    this.active.delete(key);
-    for (const resolve of this.releaseWaiters.get(key) ?? []) resolve();
-    this.releaseWaiters.delete(key);
-    return true;
-  }
-
-  async waitForRelease(projectId: string, modelKey: string, observed: ActiveRun, timeoutMs: number): Promise<boolean> {
-    const key = this.key(projectId, modelKey);
-    const observedOwner = this.observedOwners.get(observed);
-    const matchesObserved = () => {
-      const current = this.active.get(key);
-      return observedOwner
-        ? current?.owner === observedOwner
-        : current?.threadId === observed.threadId
-          && current.title === observed.title
-          && current.modelKey === observed.modelKey;
-    };
-    if (!matchesObserved()) return true;
-
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const finish = (released: boolean) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        const waiters = this.releaseWaiters.get(key);
-        waiters?.delete(onRelease);
-        if (waiters?.size === 0) this.releaseWaiters.delete(key);
-        resolve(released);
-      };
-      const onRelease = () => finish(true);
-      const timeout = setTimeout(() => finish(!matchesObserved()), timeoutMs);
-      const waiters = this.releaseWaiters.get(key) ?? new Set<() => void>();
-      waiters.add(onRelease);
-      this.releaseWaiters.set(key, waiters);
-
-      // Recheck after subscribing so a release between the first check and
-      // waiter registration cannot strand this waiter until the timeout.
-      if (!matchesObserved()) finish(true);
-    });
-  }
-
-  // ── Project-wide claims ───────────────────────────────────────────────────
-
   /**
-   * Claim the project-wide slot for `projectId`. Returns a symbol owner on
-   * success, or `undefined` if another agent already holds the project slot.
-   *
-   * Callers that also acquire a per-(project,model) slot MUST acquire the
-   * project-wide slot first to avoid deadlock.
+   * Claim the shared working tree for `projectId`. Returns an owner token on
+   * success, or `undefined` if another run already owns the project.
    */
-  claimProject(projectId: string, threadId: string, title: string): symbol | undefined {
+  claimProject(
+    projectId: string,
+    threadId: string,
+    title: string,
+    source: ProjectRunSource,
+    modelKey?: string,
+  ): symbol | undefined {
     if (this.projectActive.has(projectId)) return undefined;
     const owner = Symbol(`project:${projectId}:${threadId}`);
-    this.projectActive.set(projectId, { owner, threadId, title, scope: 'project' });
+    this.projectActive.set(projectId, {
+      owner,
+      threadId,
+      title,
+      scope: 'project',
+      source,
+      ...(modelKey ? { modelKey } : {}),
+    });
     return owner;
   }
 
   /**
-   * Read the project-wide holder, if any. Returns a fresh object whose
-   * identity is tracked via `observedProjectOwners` so `waitForProjectRelease`
-   * can match it.
+   * Read the current project holder. The fresh object's identity is associated
+   * with its private owner token so waitForProjectRelease can distinguish a
+   * replacement run from the run the caller originally observed.
    */
   getProject(projectId: string): ProjectRun | undefined {
     const run = this.projectActive.get(projectId);
     if (!run) return undefined;
-    const observed: ProjectRun = { threadId: run.threadId, title: run.title, scope: 'project' };
+    const observed: ProjectRun = {
+      threadId: run.threadId,
+      title: run.title,
+      scope: 'project',
+      source: run.source,
+      ...(run.modelKey ? { modelKey: run.modelKey } : {}),
+    };
     this.observedProjectOwners.set(observed, run.owner);
     return observed;
   }
@@ -155,7 +86,10 @@ export class ConcurrencyTracker {
       const current = this.projectActive.get(projectId);
       return observedOwner
         ? current?.owner === observedOwner
-        : current?.threadId === observed.threadId && current.title === observed.title;
+        : current?.threadId === observed.threadId
+          && current.title === observed.title
+          && current.source === observed.source
+          && current.modelKey === observed.modelKey;
     };
     if (!matchesObserved()) return true;
 

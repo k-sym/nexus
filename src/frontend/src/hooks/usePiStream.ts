@@ -605,7 +605,7 @@ export function usePiStream() {
       }
       if (res.status === 409) {
         const body = await res.json().catch(() => ({}));
-        if (body.kind === 'model_busy') {
+        if (body.kind === 'chat_busy' || body.kind === 'model_busy') {
           clearRequestRefs();
           throw new ChatBusyError(
             body.activeThreadId ?? '',

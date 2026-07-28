@@ -468,10 +468,10 @@ test('question answer route returns 404 before consulting the broker when the th
   }
 });
 
-test('POST /api/threads/:id/messages/stream returns 409 when a *different* thread in the same project is busy', async () => {
+test('POST /api/threads/:id/messages/stream returns chat_busy when another session owns the project', async () => {
   const { app, db, dir, concurrency } = await makeApp();
   try {
-    concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
+    concurrency.claimProject('proj-1', 'other-thread', 'Other', 'chat', 'anthropic/sonnet');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
@@ -479,7 +479,7 @@ test('POST /api/threads/:id/messages/stream returns 409 when a *different* threa
     });
     assert.equal(res.statusCode, 409);
     const body = res.json();
-    assert.equal(body.kind, 'model_busy');
+    assert.equal(body.kind, 'chat_busy');
     assert.equal(body.activeThreadId, 'other-thread');
     assert.equal(body.activeTitle, 'Other');
     assert.equal(body.modelKey, 'anthropic/sonnet');
@@ -490,10 +490,10 @@ test('POST /api/threads/:id/messages/stream returns 409 when a *different* threa
   }
 });
 
-test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy thread in the same project', async () => {
+test('POST /api/threads/:id/messages/stream reports a different active session even when it uses another model', async () => {
   const { app, db, dir, concurrency } = await makeApp();
   try {
-    concurrency.claim('proj-1', 'anthropic/sonnet', 'other-thread', 'Other');
+    concurrency.claimProject('proj-1', 'other-thread', 'Other', 'chat', 'openai/gpt-5');
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
@@ -501,7 +501,9 @@ test('POST /api/threads/:id/messages/stream returns 409 for a *different* busy t
     });
     assert.equal(res.statusCode, 409);
     const body = res.json();
+    assert.equal(body.kind, 'chat_busy');
     assert.equal(body.activeThreadId, 'other-thread');
+    assert.equal(body.modelKey, 'openai/gpt-5');
   } finally {
     await app.close();
     db.close();
@@ -520,7 +522,7 @@ test('POST /api/threads/:id/messages/stream returns 409 project_busy when a miss
   const { app, db, dir, concurrency } = await makeApp();
   try {
     // Simulate an assistant_turn mission claiming the project-wide slot.
-    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Overnight mission');
+    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Overnight mission', 'mission');
     assert.ok(missionOwner);
 
     // Chat on a different, explicit model — must NOT slip past the project guard.
@@ -544,7 +546,7 @@ test('POST /api/threads/:id/messages/stream returns 409 project_busy when a miss
 test('GET /api/projects/:id/model-status reports busy=true (projectBusy) when a mission holds the project-wide slot', async () => {
   const { app, db, dir, concurrency } = await makeApp();
   try {
-    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission');
+    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission', 'mission');
     assert.ok(missionOwner);
     const res = await app.inject({
       method: 'GET',
@@ -554,7 +556,40 @@ test('GET /api/projects/:id/model-status reports busy=true (projectBusy) when a 
     const body = res.json();
     assert.equal(body.busy, true);
     assert.equal(body.projectBusy, true);
+    assert.equal(body.source, 'mission');
     assert.equal(body.activeThreadId, 'mission-thread');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/model-status identifies a chat holder without treating model identity as the gate', async () => {
+  const { app, db, dir, concurrency } = await makeApp();
+  try {
+    const chatOwner = concurrency.claimProject(
+      'proj-1',
+      'other-thread',
+      'Other session',
+      'chat',
+      'openai/gpt-5',
+    );
+    assert.ok(chatOwner);
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/projects/proj-1/model-status?modelKey=anthropic/sonnet',
+    });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), {
+      busy: true,
+      activeThreadId: 'other-thread',
+      activeTitle: 'Other session',
+      source: 'chat',
+      modelKey: 'openai/gpt-5',
+      sameModel: false,
+      projectBusy: false,
+    });
   } finally {
     await app.close();
     db.close();
@@ -579,7 +614,7 @@ test('POST /api/threads/:id/messages/stream proceeds once the mission releases t
   };
   const { app, db, dir, concurrency } = await makeApp(runtime);
   try {
-    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission');
+    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission', 'mission');
     assert.ok(missionOwner);
 
     // With confirm-cancel, the route waits up to ABORT_GRACE_MS (200ms) for
@@ -625,9 +660,8 @@ test('POST /api/threads/:id/messages/stream releases the project-wide slot on co
       payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
     });
     assert.equal(res.statusCode, 200);
-    // After the stream completes, both the per-model and project-wide slots
-    // must be released so a subsequent chat turn (or a mission) can claim.
-    assert.equal(concurrency.get('proj-1', 'anthropic/sonnet'), undefined);
+    // After the stream completes, the shared working-tree slot must be
+    // released so a subsequent chat turn or mission can claim it.
     assert.equal(concurrency.getProject('proj-1'), undefined);
   } finally {
     await app.close();
@@ -693,7 +727,7 @@ test('POST /api/threads/:id/messages/stream aborts the active session when confi
   }
 });
 
-test('two simultaneous confirm-cancel requests cannot both start the replacement model run', async () => {
+test('two simultaneous confirm-cancel requests cannot both start the replacement project run', async () => {
   const firstPromptStarted = deferred<void>();
   const firstAbortSeen = deferred<void>();
   const replacementPromptStarted = deferred<void>();
@@ -783,7 +817,7 @@ test('two simultaneous confirm-cancel requests cannot both start the replacement
   }
 });
 
-test('confirm-cancel returns 409 when the previous owner has not released the model slot', async () => {
+test('confirm-cancel returns 409 when the previous owner has not released the project slot', async () => {
   const firstPromptStarted = deferred<void>();
   const releaseFirstPrompt = deferred<void>();
   let replacementSessionForCalls = 0;
@@ -827,7 +861,7 @@ test('confirm-cancel returns 409 when the previous owner has not released the mo
       payload: { content: 'replacement', modelKey: 'anthropic/sonnet' },
     });
     assert.equal(replacement.statusCode, 409);
-    assert.equal(replacement.json().kind, 'model_busy');
+    assert.equal(replacement.json().kind, 'chat_busy');
     assert.equal(abortCalls, 1);
     assert.equal(replacementSessionForCalls, 0);
   } finally {
@@ -839,7 +873,7 @@ test('confirm-cancel returns 409 when the previous owner has not released the mo
   }
 });
 
-test('different threads atomically claim a project model before session setup', async () => {
+test('different threads atomically claim the project before session setup', async () => {
   const sessionForStarted = deferred<void>();
   const releaseSessionFor = deferred<void>();
   let sessionForCalls = 0;
@@ -879,7 +913,7 @@ test('different threads atomically claim a project model before session setup', 
     });
     const secondResponse = await second;
     assert.equal(secondResponse.statusCode, 409);
-    assert.equal(secondResponse.json().kind, 'model_busy');
+    assert.equal(secondResponse.json().kind, 'chat_busy');
     assert.equal(sessionForCalls, 1);
 
     releaseSessionFor.resolve();
@@ -2500,11 +2534,17 @@ test('question cleanup leaves the active session running when the response close
     assert.equal(abortCalls, 0);
     assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).ok, true);
     assert.equal((await pending).status, 'answered');
-    assert.deepEqual(concurrency.get('proj-1', 'anthropic/sonnet'), { threadId: 'thread-1', title: 'T1', modelKey: 'anthropic/sonnet' });
+    assert.deepEqual(concurrency.getProject('proj-1'), {
+      threadId: 'thread-1',
+      title: 'T1',
+      scope: 'project',
+      source: 'chat',
+      modelKey: 'anthropic/sonnet',
+    });
 
     promptStopped.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(concurrency.get('proj-1', 'anthropic/sonnet'), undefined);
+    assert.equal(concurrency.getProject('proj-1'), undefined);
   } finally {
     promptStopped.resolve();
     questions.cancelThread('thread-1', 'test cleanup');

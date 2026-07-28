@@ -190,8 +190,8 @@ async function main() {
 
   startJiraSync(db, activityManager);
   startMondayPoll(db, activityManager.bus.emit.bind(activityManager.bus));
-  // Shared between chat routes and the mission scheduler so an assistant_turn
-  // mission claims the per-project/model slot the same way a chat turn does.
+  // Shared between chat routes and the mission scheduler so every potentially
+  // mutating run claims the same project working-tree slot.
   // Created here (before the scheduler), then decorated onto the app below.
   const chatConcurrency = new ConcurrencyTracker();
   startMissionScheduler(db, {
