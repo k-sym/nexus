@@ -7,6 +7,9 @@ import NexusCore
 struct StreamingChatView: View {
     @State private var vm: ChatViewModel
     @State private var photoItems: [PhotosPickerItem] = []
+    @State private var showAttachMenu = false
+    @State private var showPhotosPicker = false
+    @State private var showFileImporter = false
     @Environment(\.scenePhase) private var scenePhase
 
     /// Backend-agnostic entry point.
@@ -115,18 +118,14 @@ struct StreamingChatView: View {
                     .disabled(vm.isSending || vm.isBackgroundActive)
             }
             HStack(alignment: .bottom, spacing: 8) {
-                // Attach photos (assistant only) — the vision path. Hidden while a
+                // Attach photos (vision) or files (assistant only). Hidden while a
                 // turn is in flight or once the 5-attachment cap is reached.
                 if vm.canAddAttachment, !vm.isSending, !vm.isBackgroundActive {
-                    PhotosPicker(
-                        selection: $photoItems,
-                        maxSelectionCount: ChatViewModel.attachmentLimit - vm.pendingAttachments.count,
-                        matching: .images
-                    ) {
+                    Button { showAttachMenu = true } label: {
                         Image(systemName: "paperclip").font(.title2)
                     }
                     .tint(.secondary)
-                    .accessibilityLabel("Attach photos")
+                    .accessibilityLabel("Add attachment")
                 }
 
                 TextField("Message", text: $vm.input, axis: .vertical)
@@ -167,9 +166,36 @@ struct StreamingChatView: View {
             .padding(.horizontal).padding(.vertical, 8)
         }
         .background(.bar)
+        .confirmationDialog("Add attachment", isPresented: $showAttachMenu, titleVisibility: .visible) {
+            Button("Photo Library") { showPhotosPicker = true }
+            Button("Files") { showFileImporter = true }
+            Button("Cancel", role: .cancel) {}
+        }
+        .photosPicker(
+            isPresented: $showPhotosPicker,
+            selection: $photoItems,
+            maxSelectionCount: max(1, ChatViewModel.attachmentLimit - vm.pendingAttachments.count),
+            matching: .images)
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: AttachmentEncoder.allowedFileTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result { loadPickedFiles(urls) }
+        }
         .onChange(of: photoItems) { _, items in
             guard !items.isEmpty else { return }
             Task { await loadPickedPhotos(items) }
+        }
+    }
+
+    /// Encode each picked file (security-scoped) and stage it, up to the cap.
+    private func loadPickedFiles(_ urls: [URL]) {
+        for url in urls {
+            guard vm.canAddAttachment else { break }
+            if let draft = AttachmentEncoder.fileDraft(from: url) {
+                vm.addAttachment(draft)
+            }
         }
     }
 
@@ -246,14 +272,17 @@ struct MessageBubble: View {
             HStack {
                 Spacer(minLength: 40)
                 VStack(alignment: .trailing, spacing: 6) {
-                    // Attached image thumbnails, shown on the sent turn (live only —
-                    // a persisted reload carries none, so they clear on rehydrate).
+                    // Attachments shown on the sent turn — image thumbnails or file
+                    // cards (live only; a persisted reload carries none, so they
+                    // clear on rehydrate).
                     ForEach(message.attachments) { attachment in
-                        if let image = attachment.uiImage {
+                        if attachment.isImage, let image = attachment.uiImage {
                             Image(uiImage: image)
                                 .resizable().scaledToFill()
                                 .frame(maxWidth: 220, maxHeight: 220)
                                 .clipShape(RoundedRectangle(cornerRadius: 14))
+                        } else {
+                            FileAttachmentCard(name: attachment.name ?? "File", mimeType: attachment.mimeType)
                         }
                     }
                     if !message.content.isEmpty {
@@ -381,19 +410,27 @@ struct AttachmentTray: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 ForEach(drafts) { draft in
-                    Image(uiImage: draft.image)
-                        .resizable().scaledToFill()
-                        .frame(width: 56, height: 56)
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .overlay(alignment: .topTrailing) {
-                            Button { onRemove(draft.id) } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.body)
-                                    .foregroundStyle(.white, .black.opacity(0.55))
-                            }
-                            .padding(2)
-                            .accessibilityLabel("Remove attachment")
+                    Group {
+                        if let image = draft.image {
+                            Image(uiImage: image)
+                                .resizable().scaledToFill()
+                                .frame(width: 56, height: 56)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                        } else {
+                            FileAttachmentCard(
+                                name: draft.attachment.name ?? "File", mimeType: draft.attachment.mimeType)
+                                .frame(maxWidth: 180)
                         }
+                    }
+                    .overlay(alignment: .topTrailing) {
+                        Button { onRemove(draft.id) } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.body)
+                                .foregroundStyle(.white, .black.opacity(0.55))
+                        }
+                        .padding(2)
+                        .accessibilityLabel("Remove attachment")
+                    }
                 }
             }
             .padding(.horizontal).padding(.top, 8)

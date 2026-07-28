@@ -49,6 +49,26 @@ final class AssistantAttachmentTests: XCTestCase {
         XCTAssertEqual(arr[0]["mimeType"] as? String, "image/png")
     }
 
+    // MARK: File MIME mapping
+
+    func testFileMimeMappingCoversAllowedExtensionsCaseInsensitively() {
+        XCTAssertEqual(AssistantAttachment.fileMimeType(forExtension: "pdf"), "application/pdf")
+        XCTAssertEqual(AssistantAttachment.fileMimeType(forExtension: "CSV"), "text/csv")
+        XCTAssertEqual(AssistantAttachment.fileMimeType(forExtension: "Md"), "text/markdown")
+        XCTAssertEqual(
+            AssistantAttachment.fileMimeType(forExtension: "docx"),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        XCTAssertEqual(
+            AssistantAttachment.fileMimeType(forExtension: "xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    }
+
+    func testFileMimeMappingRejectsUnsupportedExtension() {
+        XCTAssertNil(AssistantAttachment.fileMimeType(forExtension: "heic"))
+        XCTAssertNil(AssistantAttachment.fileMimeType(forExtension: "exe"))
+        XCTAssertNil(AssistantAttachment.fileMimeType(forExtension: ""))
+    }
+
     // MARK: Endpoint capability
 
     func testAssistantEndpointSupportsAttachmentsThreadDoesNot() {

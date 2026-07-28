@@ -205,6 +205,27 @@ public struct AssistantAttachment: Encodable, Sendable, Equatable {
     }
 
     public var isImage: Bool { type == .image }
+
+    /// Backend-allowed file MIME types keyed by lowercased extension (mirrors
+    /// `allowedFileMimeTypes` in `routes/assistant.ts`). A file outside this set
+    /// is rejected before send, so the picker restricts to these extensions.
+    public static let fileMimeTypesByExtension: [String: String] = [
+        "pdf": "application/pdf",
+        "txt": "text/plain",
+        "text": "text/plain",
+        "md": "text/markdown",
+        "markdown": "text/markdown",
+        "csv": "text/csv",
+        "doc": "application/msword",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls": "application/vnd.ms-excel",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ]
+
+    /// The allowed MIME for a file extension, or nil if unsupported.
+    public static func fileMimeType(forExtension ext: String) -> String? {
+        fileMimeTypesByExtension[ext.lowercased()]
+    }
 }
 
 /// Body for `POST /api/assistant/sessions/:id/messages/stream` — also reused for
