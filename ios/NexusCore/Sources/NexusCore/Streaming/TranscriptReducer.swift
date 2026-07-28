@@ -86,16 +86,34 @@ public struct TranscriptReducer: Sendable {
 
     // MARK: History
 
+    /// Count of user messages in the current transcript. The next sent message's
+    /// ordinal (0-based, among user rows) — used to key preserved attachments.
+    public var userMessageCount: Int { messages.reduce(0) { $0 + ($1.role == .user ? 1 : 0) } }
+
     /// Seed from `GET /api/threads/:id` flattened messages. Standalone
     /// `toolResult` rows are dropped — the assistant's `toolCalls` already carry
     /// their results.
-    public mutating func loadPersisted(_ persisted: [PersistedMessage]) {
+    ///
+    /// `attachmentsForUserOrdinal`, when given, re-attaches the sent thumbnails to
+    /// each user row by its 0-based ordinal among user rows. The server transcript
+    /// is text-only (images go inline to the model, file names get appended to the
+    /// content), so without this every rehydrate — foreground reconcile, 5s sync
+    /// poll, reopen — would drop the thumbnails. Keyed by ordinal, not content,
+    /// precisely because the file path suffix mutates the content.
+    public mutating func loadPersisted(
+        _ persisted: [PersistedMessage],
+        attachmentsForUserOrdinal: ((Int) -> [RenderedAttachment])? = nil
+    ) {
+        var userOrdinal = 0
         messages = persisted.compactMap { message in
             switch message.role {
             case "user":
+                let attachments = attachmentsForUserOrdinal?(userOrdinal) ?? []
+                userOrdinal += 1
                 return RenderedMessage(
                     id: message.id, role: .user, content: message.content ?? "",
-                    thinking: "", toolCalls: [], isError: false, isStreaming: false)
+                    thinking: "", toolCalls: [], isError: false, isStreaming: false,
+                    attachments: attachments)
             case "assistant":
                 let tools = (message.toolCalls ?? []).map { call in
                     ToolCallView(

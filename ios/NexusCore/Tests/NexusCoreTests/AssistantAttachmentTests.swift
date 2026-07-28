@@ -78,6 +78,46 @@ final class AssistantAttachmentTests: XCTestCase {
         XCTAssertFalse(thread.supportsAttachments)
     }
 
+    // MARK: Preserve attachments across a reload (ordinal-keyed)
+
+    func testLoadPersistedReattachesByUserOrdinal() throws {
+        // The server transcript is text-only; the provider restores thumbnails by
+        // each user row's ordinal — including a file whose content the backend
+        // augmented with a path suffix (so content-matching would miss it).
+        let json = Data("""
+        { "session": { "id": "s1", "title": "T", "status": "idle" },
+          "messages": [
+            { "role": "assistant", "content": "hi" },
+            { "role": "user", "content": "look at this" },
+            { "role": "assistant", "content": "nice" },
+            { "role": "user", "content": "summarize\\n\\nAttached files:\\n- notes.txt: /uploads/notes.txt" }
+          ] }
+        """.utf8)
+        let detail = try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: json)
+
+        let img = RenderedAttachment(id: "a0", name: "p.jpg", mimeType: "image/jpeg", base64: "Zm9v")
+        let file = RenderedAttachment(id: "a1", name: "notes.txt", mimeType: "text/plain", base64: "")
+        let byOrdinal: [Int: [RenderedAttachment]] = [0: [img], 1: [file]]
+
+        var reducer = TranscriptReducer()
+        reducer.loadPersisted(detail.persistedMessages) { byOrdinal[$0] ?? [] }
+
+        let users = reducer.messages.filter { $0.role == .user }
+        XCTAssertEqual(users.count, 2)
+        XCTAssertEqual(users[0].attachments.map(\.id), ["a0"])   // ordinal 0 → image
+        XCTAssertEqual(users[1].attachments.map(\.id), ["a1"])   // ordinal 1 → file (augmented content)
+        XCTAssertFalse(users[1].attachments[0].isImage)
+    }
+
+    func testUserMessageCountTracksSentOrdinals() {
+        var reducer = TranscriptReducer()
+        XCTAssertEqual(reducer.userMessageCount, 0)               // first send → ordinal 0
+        reducer.startTurn(prompt: "one")
+        XCTAssertEqual(reducer.userMessageCount, 1)               // next send → ordinal 1
+        reducer.appendUserMessage("two")
+        XCTAssertEqual(reducer.userMessageCount, 2)
+    }
+
     // MARK: Reducer carries attachments on the user turn
 
     func testStartTurnAttachesToUserMessageAndReloadClearsThem() {

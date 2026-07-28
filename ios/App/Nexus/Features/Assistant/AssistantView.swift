@@ -39,6 +39,7 @@ final class AssistantSessionsViewModel {
         }
         do {
             try await api.deleteAssistantSession(sessionId: session.id)
+            AssistantAttachmentStore.shared.purge(scope: session.id)  // drop cached thumbnails
             await refresh()
         } catch {
             if let previous { state = .loaded(previous) }
