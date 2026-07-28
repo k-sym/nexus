@@ -16,6 +16,25 @@ public struct ToolCallView: Identifiable, Hashable, Sendable {
     public var result: String
 }
 
+/// An attachment shown on the user's own turn (image thumbnail). Platform-neutral
+/// (raw base64, no UIKit) so NexusCore stays testable on macOS; the app decodes it
+/// for display. Live/optimistic only — a persisted reload carries none.
+public struct RenderedAttachment: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let name: String?
+    public let mimeType: String
+    public let base64: String
+
+    public init(id: String, name: String?, mimeType: String, base64: String) {
+        self.id = id
+        self.name = name
+        self.mimeType = mimeType
+        self.base64 = base64
+    }
+
+    public var isImage: Bool { mimeType.hasPrefix("image/") }
+}
+
 public struct RenderedMessage: Identifiable, Hashable, Sendable {
     public let id: String
     public let role: ChatRole
@@ -26,6 +45,9 @@ public struct RenderedMessage: Identifiable, Hashable, Sendable {
     public var isStreaming: Bool
     public var provider: String?
     public var model: String?
+    /// Outbound attachments on the user's own turn (image thumbnails). Live/
+    /// optimistic only — a persisted reload carries none, so they clear on rehydrate.
+    public var attachments: [RenderedAttachment] = []
     /// Live-only: the next prose delta starts a new paragraph after tool activity.
     var pendingTextBreak: Bool = false
 }
@@ -105,10 +127,10 @@ public struct TranscriptReducer: Sendable {
 
     // MARK: Turn lifecycle
 
-    public mutating func startTurn(prompt: String) {
+    public mutating func startTurn(prompt: String, attachments: [RenderedAttachment] = []) {
         messages.append(RenderedMessage(
             id: nextId("user"), role: .user, content: prompt,
-            thinking: "", toolCalls: [], isError: false, isStreaming: false))
+            thinking: "", toolCalls: [], isError: false, isStreaming: false, attachments: attachments))
         streaming = RenderedMessage(
             id: nextId("assistant"), role: .assistant, content: "",
             thinking: "", toolCalls: [], isError: false, isStreaming: true)
@@ -123,10 +145,10 @@ public struct TranscriptReducer: Sendable {
     /// transcript refreshes via polling rather than a live stream — so there is
     /// no live assistant placeholder to spin. A later `loadPersisted` replaces
     /// this row with the server's own copy, so no duplicate results.
-    public mutating func appendUserMessage(_ prompt: String) {
+    public mutating func appendUserMessage(_ prompt: String, attachments: [RenderedAttachment] = []) {
         messages.append(RenderedMessage(
             id: nextId("user"), role: .user, content: prompt,
-            thinking: "", toolCalls: [], isError: false, isStreaming: false))
+            thinking: "", toolCalls: [], isError: false, isStreaming: false, attachments: attachments))
     }
 
     // MARK: Event application

@@ -183,12 +183,42 @@ public struct PatchAssistantSessionRequest: Encodable, Sendable {
     }
 }
 
+/// An outbound attachment (`{ type, data, mimeType, name?, size? }`). `data` is
+/// base64-encoded bytes. The backend caps a turn at 5, requires image MIME types
+/// in {png, jpeg, gif, webp}, and routes images through the (non-streaming)
+/// vision path while files are saved and referenced by path. Encode-only: the
+/// transcript reloads as text, so we never decode attachments back.
+public struct AssistantAttachment: Encodable, Sendable, Equatable {
+    public enum Kind: String, Encodable, Sendable { case image, file }
+    public let type: Kind
+    public let data: String       // base64
+    public let mimeType: String
+    public let name: String?
+    public let size: Int?
+
+    public init(type: Kind, data: String, mimeType: String, name: String? = nil, size: Int? = nil) {
+        self.type = type
+        self.data = data
+        self.mimeType = mimeType
+        self.name = name
+        self.size = size
+    }
+
+    public var isImage: Bool { type == .image }
+}
+
 /// Body for `POST /api/assistant/sessions/:id/messages/stream` — also reused for
 /// `POST /api/assistant/sessions/:id/runs` (background handoff), which reads the
-/// same `{ content, attachments? }` shape.
+/// same `{ content, attachments? }` shape. `attachments` is omitted when empty so
+/// text-only turns stay `{ content }`.
 public struct AssistantStreamRequest: Encodable, Sendable {
     public let content: String
-    public init(content: String) { self.content = content }
+    public let attachments: [AssistantAttachment]?
+
+    public init(content: String, attachments: [AssistantAttachment] = []) {
+        self.content = content
+        self.attachments = attachments.isEmpty ? nil : attachments
+    }
 }
 
 /// `{ run }` envelope shared by `POST …/runs`, `GET /api/assistant/runs/:runId`.

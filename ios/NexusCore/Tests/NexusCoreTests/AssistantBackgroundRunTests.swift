@@ -110,7 +110,7 @@ final class AssistantBackgroundRunTests: XCTestCase {
         try await stub.stopBackgroundRun(runId: "whatever")
         // startBackgroundRun is capability-gated, so its default must throw.
         do {
-            _ = try await stub.startBackgroundRun(content: "x")
+            _ = try await stub.startBackgroundRun(content: "x", attachments: [])
             XCTFail("default startBackgroundRun should throw")
         } catch let error as APIError {
             guard case .server(let status, _) = error else { return XCTFail("wrong error \(error)") }
@@ -125,7 +125,7 @@ private struct StubChatEndpoint: ChatEndpoint {
     var supportsModelPicker: Bool { true }
     var supportsSupervise: Bool { true }
     func loadDetail() async throws -> ChatDetail { ChatDetail(messages: []) }
-    func stream(content: String, modelKey: String?, confirmCancel: Bool) async throws -> AsyncThrowingStream<JSONValue, Error> {
+    func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error> {
         AsyncThrowingStream { $0.finish() }
     }
     func abort() async throws {}

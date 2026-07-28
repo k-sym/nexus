@@ -1,10 +1,12 @@
 import SwiftUI
+import PhotosUI
 import NexusCore
 
 /// The shared streaming chat surface: rehydrated history + a live transcript,
 /// a composer with send/stop, a context meter, and the 409 takeover flow.
 struct StreamingChatView: View {
     @State private var vm: ChatViewModel
+    @State private var photoItems: [PhotosPickerItem] = []
     @Environment(\.scenePhase) private var scenePhase
 
     /// Backend-agnostic entry point.
@@ -108,7 +110,25 @@ struct StreamingChatView: View {
             if vm.isBackgroundActive {
                 BackgroundRunStrip(stopping: vm.backgroundRun?.status == "cancelling")
             }
+            if !vm.pendingAttachments.isEmpty {
+                AttachmentTray(drafts: vm.pendingAttachments, onRemove: vm.removeAttachment)
+                    .disabled(vm.isSending || vm.isBackgroundActive)
+            }
             HStack(alignment: .bottom, spacing: 8) {
+                // Attach photos (assistant only) — the vision path. Hidden while a
+                // turn is in flight or once the 5-attachment cap is reached.
+                if vm.canAddAttachment, !vm.isSending, !vm.isBackgroundActive {
+                    PhotosPicker(
+                        selection: $photoItems,
+                        maxSelectionCount: ChatViewModel.attachmentLimit - vm.pendingAttachments.count,
+                        matching: .images
+                    ) {
+                        Image(systemName: "paperclip").font(.title2)
+                    }
+                    .tint(.secondary)
+                    .accessibilityLabel("Attach photos")
+                }
+
                 TextField("Message", text: $vm.input, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(2...6)
@@ -121,7 +141,7 @@ struct StreamingChatView: View {
                         Image(systemName: "icloud.and.arrow.up").font(.title2)
                     }
                     .tint(.secondary)
-                    .disabled(vm.input.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!vm.canSubmit)
                     .accessibilityLabel("Hand off to background run")
                 }
 
@@ -141,12 +161,31 @@ struct StreamingChatView: View {
                     Button { vm.send() } label: {
                         Image(systemName: "arrow.up.circle.fill").font(.title)
                     }
-                    .disabled(vm.input.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(!vm.canSubmit)
                 }
             }
             .padding(.horizontal).padding(.vertical, 8)
         }
         .background(.bar)
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            Task { await loadPickedPhotos(items) }
+        }
+    }
+
+    /// Decode each picked photo to a `UIImage`, JPEG-encode it, and stage it.
+    /// Runs off the picker order; caps at the remaining slots. Clears the
+    /// selection when done so re-picking the same photo fires `onChange` again.
+    private func loadPickedPhotos(_ items: [PhotosPickerItem]) async {
+        for item in items {
+            guard vm.canAddAttachment else { break }
+            if let data = try? await item.loadTransferable(type: Data.self),
+               let image = UIImage(data: data),
+               let draft = AttachmentEncoder.imageDraft(from: image, index: vm.pendingAttachments.count) {
+                vm.addAttachment(draft)
+            }
+        }
+        photoItems = []
     }
 
     /// Compact model chip: flexes to fill the row, truncating a long model name,
@@ -206,10 +245,24 @@ struct MessageBubble: View {
         if message.role == .user {
             HStack {
                 Spacer(minLength: 40)
-                Text(message.content)
-                    .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Theme.accent, in: RoundedRectangle(cornerRadius: 16))
-                    .foregroundStyle(.white)
+                VStack(alignment: .trailing, spacing: 6) {
+                    // Attached image thumbnails, shown on the sent turn (live only —
+                    // a persisted reload carries none, so they clear on rehydrate).
+                    ForEach(message.attachments) { attachment in
+                        if let image = attachment.uiImage {
+                            Image(uiImage: image)
+                                .resizable().scaledToFill()
+                                .frame(maxWidth: 220, maxHeight: 220)
+                                .clipShape(RoundedRectangle(cornerRadius: 14))
+                        }
+                    }
+                    if !message.content.isEmpty {
+                        Text(message.content)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(Theme.accent, in: RoundedRectangle(cornerRadius: 16))
+                            .foregroundStyle(.white)
+                    }
+                }
             }
         } else {
             VStack(alignment: .leading, spacing: 8) {
@@ -310,6 +363,41 @@ struct ToolCallCard: View {
             if let value = object[key]?.string { return value }
         }
         return object.values.compactMap { $0.string }.first
+    }
+}
+
+/// Decode a base64 image attachment for display.
+extension RenderedAttachment {
+    var uiImage: UIImage? { Data(base64Encoded: base64).flatMap(UIImage.init(data:)) }
+}
+
+/// Horizontal strip of staged attachment thumbnails in the composer, each with a
+/// remove affordance.
+struct AttachmentTray: View {
+    let drafts: [AttachmentDraft]
+    let onRemove: (UUID) -> Void
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(drafts) { draft in
+                    Image(uiImage: draft.image)
+                        .resizable().scaledToFill()
+                        .frame(width: 56, height: 56)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .overlay(alignment: .topTrailing) {
+                            Button { onRemove(draft.id) } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.body)
+                                    .foregroundStyle(.white, .black.opacity(0.55))
+                            }
+                            .padding(2)
+                            .accessibilityLabel("Remove attachment")
+                        }
+                }
+            }
+            .padding(.horizontal).padding(.top, 8)
+        }
     }
 }
 

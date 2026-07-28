@@ -42,12 +42,16 @@ public protocol ChatEndpoint: Sendable {
     /// progress is polled via `syncBackgroundRuns()` + `loadDetail()` rather than
     /// streamed. Threads have no equivalent.
     var supportsBackgroundHandoff: Bool { get }
+    /// Whether the composer offers attachments (assistant only). Images route
+    /// through the backend's vision path; threads don't accept attachments here.
+    var supportsAttachments: Bool { get }
 
     /// Rehydrate history + seeds.
     func loadDetail() async throws -> ChatDetail
     /// Send a message and stream the turn. May throw `.busy` on the thread path
     /// (retry with `confirmCancel: true`); the assistant path never does.
-    func stream(content: String, modelKey: String?, confirmCancel: Bool) async throws -> AsyncThrowingStream<JSONValue, Error>
+    /// `attachments` are ignored where unsupported.
+    func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error>
     /// Abort the active run.
     func abort() async throws
     /// Toggle Supervise; returns the confirmed state. A no-op returning `false`
@@ -57,19 +61,21 @@ public protocol ChatEndpoint: Sendable {
     func models() async throws -> [Model]
 
     /// Hand the turn off to a durable background run and return it. Only called
-    /// where `supportsBackgroundHandoff`; the default throws.
-    func startBackgroundRun(content: String) async throws -> AssistantRun
+    /// where `supportsBackgroundHandoff`; the default throws. The backend rejects
+    /// image attachments on this path (vision is Send-only).
+    func startBackgroundRun(content: String, attachments: [AssistantAttachment]) async throws -> AssistantRun
     /// Reconcile in-flight background runs server-side (global). No-op by default.
     func syncBackgroundRuns() async throws
     /// Ask a specific background run to stop. No-op by default.
     func stopBackgroundRun(runId: String) async throws
 }
 
-/// Threads (and any future endpoint) get the background-handoff surface for free
-/// as no-ops, so only assistant sessions implement it.
+/// Threads (and any future endpoint) get the background-handoff and attachment
+/// surfaces for free as no-ops, so only assistant sessions implement them.
 public extension ChatEndpoint {
     var supportsBackgroundHandoff: Bool { false }
-    func startBackgroundRun(content: String) async throws -> AssistantRun {
+    var supportsAttachments: Bool { false }
+    func startBackgroundRun(content: String, attachments: [AssistantAttachment]) async throws -> AssistantRun {
         throw APIError.server(status: 400, message: "This chat doesn't support background handoff.")
     }
     func syncBackgroundRuns() async throws {}
@@ -99,7 +105,8 @@ public struct ThreadChatEndpoint: ChatEndpoint {
             lastModelKey: detail.thread.lastModelKey)
     }
 
-    public func stream(content: String, modelKey: String?, confirmCancel: Bool) async throws -> AsyncThrowingStream<JSONValue, Error> {
+    public func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error> {
+        // Threads don't accept attachments here; the composer never offers them.
         try await api.streamThreadMessage(
             threadId: threadId, content: content, modelKey: modelKey, confirmCancel: confirmCancel)
     }
@@ -132,6 +139,7 @@ public struct AssistantChatEndpoint: ChatEndpoint {
     public var supportsModelPicker: Bool { false }
     public var supportsSupervise: Bool { false }
     public var supportsBackgroundHandoff: Bool { true }
+    public var supportsAttachments: Bool { true }
 
     public func loadDetail() async throws -> ChatDetail {
         let detail = try await api.assistantSessionDetail(sessionId: sessionId)
@@ -143,9 +151,9 @@ public struct AssistantChatEndpoint: ChatEndpoint {
             latestRun: detail.latestRun)
     }
 
-    public func stream(content: String, modelKey: String?, confirmCancel: Bool) async throws -> AsyncThrowingStream<JSONValue, Error> {
+    public func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error> {
         // The assistant endpoint takes no modelKey and has no confirm-cancel gate.
-        try await api.streamAssistantMessage(sessionId: sessionId, content: content)
+        try await api.streamAssistantMessage(sessionId: sessionId, content: content, attachments: attachments)
     }
 
     public func abort() async throws {
@@ -157,8 +165,8 @@ public struct AssistantChatEndpoint: ChatEndpoint {
 
     public func models() async throws -> [Model] { [] }
 
-    public func startBackgroundRun(content: String) async throws -> AssistantRun {
-        try await api.startAssistantRun(sessionId: sessionId, content: content)
+    public func startBackgroundRun(content: String, attachments: [AssistantAttachment]) async throws -> AssistantRun {
+        try await api.startAssistantRun(sessionId: sessionId, content: content, attachments: attachments)
     }
 
     public func syncBackgroundRuns() async throws {

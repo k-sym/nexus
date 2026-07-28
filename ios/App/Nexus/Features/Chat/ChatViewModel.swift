@@ -48,6 +48,9 @@ final class ChatViewModel {
     /// True while the handoff POST is in flight (before a run id exists).
     private(set) var isStartingBackgroundRun = false
 
+    /// Attachments staged in the composer, sent with the next turn (assistant only).
+    private(set) var pendingAttachments: [AttachmentDraft] = []
+
     private var pendingBusyContent: String?
     private var streamTask: Task<Void, Never>?
     private var syncTask: Task<Void, Never>?
@@ -55,6 +58,15 @@ final class ChatViewModel {
     var supportsModelPicker: Bool { endpoint.supportsModelPicker }
     var supportsSupervise: Bool { endpoint.supportsSupervise }
     var supportsBackgroundHandoff: Bool { endpoint.supportsBackgroundHandoff }
+    var supportsAttachments: Bool { endpoint.supportsAttachments }
+
+    /// Max attachments per turn (matches the backend cap).
+    static let attachmentLimit = 5
+    var canAddAttachment: Bool { supportsAttachments && pendingAttachments.count < Self.attachmentLimit }
+    /// A turn is sendable with text OR at least one attachment.
+    var canSubmit: Bool {
+        !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingAttachments.isEmpty
+    }
 
     /// Whether a handed-off run is currently executing on the server.
     var isBackgroundRunning: Bool { backgroundRun?.isRunning ?? false }
@@ -100,9 +112,22 @@ final class ChatViewModel {
 
     func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSending, !isBackgroundActive else { return }
+        guard canSubmit, !isSending, !isBackgroundActive else { return }
+        let attachments = pendingAttachments
         input = ""
-        attemptSend(content: text, confirmCancel: false)
+        pendingAttachments = []
+        attemptSend(content: text, confirmCancel: false, attachments: attachments)
+    }
+
+    // MARK: Attachments (assistant only)
+
+    func addAttachment(_ draft: AttachmentDraft) {
+        guard canAddAttachment else { return }
+        pendingAttachments.append(draft)
+    }
+
+    func removeAttachment(_ id: UUID) {
+        pendingAttachments.removeAll { $0.id == id }
     }
 
     // MARK: Background handoff (assistant only)
@@ -113,18 +138,23 @@ final class ChatViewModel {
     func startBackgroundRun() {
         guard supportsBackgroundHandoff else { return }
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSending, !isBackgroundActive else { return }
+        guard canSubmit, !isSending, !isBackgroundActive else { return }
         errorBanner = nil
         isStartingBackgroundRun = true
+        let attachments = pendingAttachments
         Task { [weak self] in
             guard let self else { return }
             defer { self.isStartingBackgroundRun = false }
             do {
-                let run = try await self.endpoint.startBackgroundRun(content: text)
+                // The backend rejects image attachments here (vision is Send-only)
+                // with a 400 we surface as a banner, leaving the composer intact.
+                let run = try await self.endpoint.startBackgroundRun(
+                    content: text, attachments: attachments.map(\.attachment))
                 // Clear + show the user's turn only once the handoff is accepted;
                 // a later sync reload replaces this row with the server's copy.
                 self.input = ""
-                self.reducer.appendUserMessage(text)
+                self.pendingAttachments = []
+                self.reducer.appendUserMessage(text, attachments: attachments.map(\.rendered))
                 self.backgroundRun = run
                 self.startSyncLoop()
             } catch {
@@ -234,20 +264,26 @@ final class ChatViewModel {
 
     // MARK: Internals
 
-    private func attemptSend(content: String, confirmCancel: Bool) {
+    private func attemptSend(content: String, confirmCancel: Bool, attachments: [AttachmentDraft] = []) {
         let rollback = reducer
-        reducer.startTurn(prompt: content)
+        reducer.startTurn(prompt: content, attachments: attachments.map(\.rendered))
         isSending = true
         errorBanner = nil
         streamTask = Task { [weak self] in
-            await self?.runStream(content: content, confirmCancel: confirmCancel, rollback: rollback)
+            await self?.runStream(
+                content: content, confirmCancel: confirmCancel,
+                attachments: attachments.map(\.attachment), rollback: rollback)
         }
     }
 
-    private func runStream(content: String, confirmCancel: Bool, rollback: TranscriptReducer) async {
+    private func runStream(
+        content: String, confirmCancel: Bool, attachments: [AssistantAttachment] = [],
+        rollback: TranscriptReducer
+    ) async {
         do {
             let stream = try await endpoint.stream(
-                content: content, modelKey: selectedModelKey, confirmCancel: confirmCancel)
+                content: content, modelKey: selectedModelKey, confirmCancel: confirmCancel,
+                attachments: attachments)
             for try await line in stream {
                 reducer.apply(line)
                 if let newTitle = reducer.pendingTitle {
