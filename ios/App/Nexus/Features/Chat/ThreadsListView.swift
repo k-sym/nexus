@@ -8,6 +8,10 @@ final class ThreadsViewModel {
     let projectId: String
     var state: LoadState<[ChatThread]> = .idle
     var isCreating = false
+    /// Threads whose archive is in flight (archive is a slow, model-backed op).
+    private(set) var archivingIds: Set<String> = []
+    /// Non-nil surfaces an archive/delete failure as an alert.
+    var actionError: String?
 
     init(api: APIClient, projectId: String) {
         self.api = api
@@ -30,6 +34,43 @@ final class ThreadsViewModel {
         await refresh()
         return thread
     }
+
+    func isArchiving(_ thread: ChatThread) -> Bool { archivingIds.contains(thread.id) }
+
+    /// Archive (summarize-to-memory, then the backend removes the thread). Keeps
+    /// the row in place with a spinner until it completes, since it can take
+    /// seconds and can fail (e.g. an empty thread).
+    func archive(_ thread: ChatThread) async {
+        guard !archivingIds.contains(thread.id) else { return }
+        archivingIds.insert(thread.id)
+        defer { archivingIds.remove(thread.id) }
+        do {
+            try await api.archiveThread(threadId: thread.id)
+            await refresh()
+        } catch {
+            actionError = Self.message(for: error, verb: "archive")
+        }
+    }
+
+    /// Delete optimistically; restore the row if the request fails.
+    func delete(_ thread: ChatThread) async {
+        let previous = state.value
+        if var threads = state.value {
+            threads.removeAll { $0.id == thread.id }
+            state = .loaded(threads)
+        }
+        do {
+            try await api.deleteThread(threadId: thread.id)
+            await refresh()
+        } catch {
+            if let previous { state = .loaded(previous) }
+            actionError = Self.message(for: error, verb: "delete")
+        }
+    }
+
+    private static func message(for error: Error, verb: String) -> String {
+        (error as? APIError)?.errorDescription ?? "Couldn't \(verb) the session."
+    }
 }
 
 /// Threads for a project. Tapping opens the shared streaming chat.
@@ -37,6 +78,8 @@ struct ThreadsListView: View {
     private let api: APIClient
     @Environment(ThreadReadStore.self) private var readStore
     @State private var vm: ThreadsViewModel
+    /// Set by the Delete swipe action; drives the confirmation dialog.
+    @State private var pendingDelete: ChatThread?
 
     init(api: APIClient, project: Project) {
         self.api = api
@@ -45,10 +88,6 @@ struct ThreadsListView: View {
 
     var body: some View {
         content
-            .navigationDestination(for: ChatThread.self) { thread in
-                StreamingChatView(api: api, threadId: thread.id, title: thread.title)
-                    .onAppear { readStore.markRead(thread) }
-            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -60,6 +99,29 @@ struct ThreadsListView: View {
                 }
             }
             .task { if vm.state.value == nil { await vm.refresh() } }
+            .confirmationDialog(
+                "Delete this session?",
+                isPresented: deleteDialogBinding,
+                presenting: pendingDelete
+            ) { thread in
+                Button("Delete", role: .destructive) { Task { await vm.delete(thread) } }
+                Button("Cancel", role: .cancel) {}
+            } message: { thread in
+                Text("“\(thread.title)” will be permanently deleted. This can't be undone.")
+            }
+            .alert("Something went wrong", isPresented: actionErrorBinding, presenting: vm.actionError) { _ in
+                Button("OK", role: .cancel) { vm.actionError = nil }
+            } message: { message in
+                Text(message)
+            }
+    }
+
+    private var deleteDialogBinding: Binding<Bool> {
+        Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
+    }
+
+    private var actionErrorBinding: Binding<Bool> {
+        Binding(get: { vm.actionError != nil }, set: { if !$0 { vm.actionError = nil } })
     }
 
     @ViewBuilder
@@ -76,8 +138,28 @@ struct ThreadsListView: View {
                 }
             } else {
                 List(threads) { thread in
-                    NavigationLink(value: thread) {
-                        ThreadRow(thread: thread, isUnread: readStore.isUnread(thread))
+                    NavigationLink {
+                        StreamingChatView(api: api, threadId: thread.id, title: thread.title)
+                            .onAppear { readStore.markRead(thread) }
+                    } label: {
+                        ThreadRow(
+                            thread: thread,
+                            isUnread: readStore.isUnread(thread),
+                            isArchiving: vm.isArchiving(thread))
+                    }
+                    .disabled(vm.isArchiving(thread))
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            pendingDelete = thread
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        Button {
+                            Task { await vm.archive(thread) }
+                        } label: {
+                            Label("Archive", systemImage: "archivebox")
+                        }
+                        .tint(.indigo)
                     }
                 }
                 .refreshable { await vm.refresh() }
@@ -92,6 +174,7 @@ struct ThreadsListView: View {
 struct ThreadRow: View {
     let thread: ChatThread
     var isUnread: Bool = false
+    var isArchiving: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -106,12 +189,18 @@ struct ThreadRow: View {
                 }
             }
             Spacer(minLength: 0)
-            if isUnread {
+            if isArchiving {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Archiving…").font(.caption2).foregroundStyle(.secondary)
+                }
+            } else if isUnread {
                 GlassUnreadDot()
                     .transition(.scale.combined(with: .opacity))
             }
         }
         .padding(.vertical, 2)
+        .opacity(isArchiving ? 0.6 : 1)
         .animation(.snappy, value: isUnread)
     }
 }

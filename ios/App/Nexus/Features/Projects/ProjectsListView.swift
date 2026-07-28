@@ -76,14 +76,6 @@ struct ProjectRow: View {
                 .foregroundStyle(.white)
                 .frame(width: 40, height: 40)
                 .background(Theme.accent.gradient, in: RoundedRectangle(cornerRadius: 8))
-                .overlay(alignment: .bottomTrailing) {
-                    if let activity {
-                        ActivityDot(activity: activity)
-                            .accessibilityLabel("\(project.name): \(ActivityDot.label(for: activity))")
-                            // Nudge onto the badge's corner rather than inside it.
-                            .offset(x: 3, y: 3)
-                    }
-                }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(project.name).font(.body)
@@ -93,33 +85,63 @@ struct ProjectRow: View {
                         .foregroundStyle(.secondary)
                 }
             }
+
+            Spacer(minLength: 8)
+
+            if let activity {
+                ProjectStatusBadge(activity: activity)
+            }
         }
         .padding(.vertical, 2)
     }
 }
 
-/// The corner status dot, matching the desktop project-rail colour vocabulary:
-/// working = red, waiting = amber, idle (live) = green.
-struct ActivityDot: View {
+/// A descriptive status pill on the trailing edge of a project row. Replaces the
+/// desktop's tiny corner dot now that the mobile row has room for a word.
+/// Attention states (RUN/WAIT) are loud filled pills; IDLE is a calm tint.
+/// Colour vocabulary matches the project rail: working = red, waiting = amber,
+/// idle = green.
+struct ProjectStatusBadge: View {
     let activity: ProjectActivity
 
     var body: some View {
-        Circle()
-            .fill(Self.color(for: activity))
-            .frame(width: 9, height: 9)
-            // A hairline ring so the dot reads against any badge colour.
-            .overlay(Circle().strokeBorder(Color(.systemBackground), lineWidth: 1.5))
+        Text(Self.label(for: activity))
+            .font(.caption2.weight(.bold))
+            .tracking(0.5)
+            .foregroundStyle(foreground)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(fill, in: Capsule())
+            .accessibilityLabel(Self.accessibilityLabel(for: activity))
     }
 
-    static func color(for activity: ProjectActivity) -> Color {
+    private var foreground: Color {
         switch activity {
-        case .working: return .red
-        case .waiting: return .orange
+        case .working: return .white
+        case .waiting: return .black.opacity(0.8)
         case .idle: return .green
         }
     }
 
+    private var fill: Color {
+        switch activity {
+        case .working: return .red
+        case .waiting: return .orange
+        case .idle: return .green.opacity(0.22)
+        }
+    }
+
+    /// Short pill copy.
     static func label(for activity: ProjectActivity) -> String {
+        switch activity {
+        case .working: return "RUN"
+        case .waiting: return "WAIT"
+        case .idle: return "IDLE"
+        }
+    }
+
+    /// Spoken description for VoiceOver.
+    static func accessibilityLabel(for activity: ProjectActivity) -> String {
         switch activity {
         case .working: return "model working"
         case .waiting: return "waiting for input"
