@@ -323,6 +323,54 @@ public actor APIClient {
         return try await request(.updateSettings(body: body), decoder: plainDecoder)
     }
 
+    // MARK: Assistant (M6)
+
+    /// Merged local + adoptable-remote Hermes sessions. Mixed snake/camel keys →
+    /// `plainDecoder` + explicit CodingKeys on `AssistantSession`.
+    public func assistantSessions() async throws -> [AssistantSession] {
+        let res: AssistantSessionsResponse = try await request(.assistantSessions, decoder: plainDecoder)
+        return res.sessions
+    }
+
+    public func createAssistantSession(title: String? = nil) async throws -> AssistantSession {
+        let body = try JSONEncoder().encode(CreateAssistantSessionRequest(title: title))
+        return try await request(.createAssistantSession(body: body), decoder: plainDecoder)
+    }
+
+    /// Adopt a remote Hermes session into a local one. Pass the un-prefixed id
+    /// (`AssistantSession.adoptableRemoteId`).
+    public func importAssistantSession(remoteSessionId: String) async throws -> AssistantSessionDetail {
+        let body = try JSONEncoder().encode(ImportAssistantSessionRequest(remoteSessionId: remoteSessionId))
+        return try await request(.importAssistantSession(body: body), decoder: plainDecoder)
+    }
+
+    public func assistantSessionDetail(sessionId: String) async throws -> AssistantSessionDetail {
+        try await request(.assistantSession(sessionId), decoder: plainDecoder)
+    }
+
+    @discardableResult
+    public func patchAssistantSession(sessionId: String, title: String? = nil, archived: Bool? = nil) async throws -> AssistantSession {
+        let body = try JSONEncoder().encode(PatchAssistantSessionRequest(title: title, archived: archived))
+        return try await request(.patchAssistantSession(sessionId, body: body), decoder: plainDecoder)
+    }
+
+    /// Hard-delete a session (backend also stops/deletes the remote).
+    public func deleteAssistantSession(sessionId: String) async throws {
+        _ = try await requestData(.deleteAssistantSession(sessionId))
+    }
+
+    /// Send a message and stream the turn. No busy gate on the assistant path, so
+    /// this never throws `.busy`.
+    public func streamAssistantMessage(sessionId: String, content: String) throws -> AsyncThrowingStream<JSONValue, Error> {
+        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content))
+        return try events(.assistantSessionStream(sessionId, body: body))
+    }
+
+    /// Abort the latest running assistant run (global).
+    public func abortAssistant() async throws {
+        _ = try await requestData(.assistantAbort)
+    }
+
     // MARK: M5 push
 
     /// Register (or refresh) this device's APNs token. `env` is "sandbox" or

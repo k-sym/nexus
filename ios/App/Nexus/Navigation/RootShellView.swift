@@ -80,6 +80,8 @@ struct RootShellView: View {
         let arg = parts.count > 1 ? parts[1] : ""
         switch parts.first {
         case "chat": StreamingChatView(api: api, threadId: arg, title: "Chat")
+        case "assistant": AssistantView(api: api)
+        case "achat": StreamingChatView(endpoint: AssistantChatEndpoint(api: api, sessionId: arg), title: "Assistant")
         case "board": KanbanBoardView(api: api, projectId: arg).navigationTitle("Board").navigationBarTitleDisplayMode(.inline)
         case "memory": MemoryView(api: api, projectId: arg).navigationTitle("Memory").navigationBarTitleDisplayMode(.inline)
         case "missions": MissionsView(api: api, projectId: arg).navigationTitle("Missions").navigationBarTitleDisplayMode(.inline)
@@ -171,7 +173,7 @@ struct RootShellView: View {
     private func destination(for section: AppSection) -> some View {
         switch section {
         case .assistant:
-            PlaceholderView(title: "Assistant", systemImage: section.systemImage, note: "Streaming chat lands in M2.")
+            AssistantView(api: api)
         case .projects:
             ProjectsListView(api: api)
         case .approvals:
