@@ -1,10 +1,15 @@
 import SwiftUI
 import NexusCore
 
-/// Drives one thread's chat: rehydrates history, streams turns into a
+/// Drives one chat's lifecycle: rehydrates history, streams turns into a
 /// `TranscriptReducer`, and handles the 409 busy → `X-Confirm-Cancel` retry and
-/// background/foreground reconciliation. Thread-scoped; the Assistant surface
-/// will reuse this shape via a `ChatEndpoint` abstraction in a follow-up.
+/// background/foreground reconciliation.
+///
+/// Backend-agnostic: it depends on a `ChatEndpoint`, so the same view model
+/// serves both project threads (`ThreadChatEndpoint`) and assistant sessions
+/// (`AssistantChatEndpoint`). Capability flags let the composer hide the model
+/// picker / Supervise toggle where an endpoint doesn't support them; the busy
+/// takeover branch simply never fires on endpoints that don't gate turns.
 @MainActor
 @Observable
 final class ChatViewModel {
@@ -13,8 +18,12 @@ final class ChatViewModel {
         case failed(String)
     }
 
-    private let api: APIClient
-    let threadId: String
+    private let endpoint: ChatEndpoint
+
+    /// Live title: seeded at construction, refreshed from `loadDetail`, and
+    /// updated when the stream carries a `thread_title`/`session_title` (the
+    /// backend names an untitled session from its opening prompt).
+    private(set) var title: String
 
     private(set) var reducer = TranscriptReducer()
     private(set) var historyState: HistoryState = .loading
@@ -34,9 +43,12 @@ final class ChatViewModel {
     private var pendingBusyContent: String?
     private var streamTask: Task<Void, Never>?
 
-    init(api: APIClient, threadId: String) {
-        self.api = api
-        self.threadId = threadId
+    var supportsModelPicker: Bool { endpoint.supportsModelPicker }
+    var supportsSupervise: Bool { endpoint.supportsSupervise }
+
+    init(endpoint: ChatEndpoint, title: String) {
+        self.endpoint = endpoint
+        self.title = title
     }
 
     /// A cheap value that changes whenever the transcript grows, for auto-scroll.
@@ -52,18 +64,19 @@ final class ChatViewModel {
 
     func loadHistory() async {
         do {
-            let detail = try await api.threadDetail(threadId: threadId)
+            let detail = try await endpoint.loadDetail()
             reducer.loadPersisted(detail.messages)
             supervised = detail.supervised ?? false
-            if selectedModelKey == nil { selectedModelKey = detail.thread.lastModelKey }
+            if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
+            if selectedModelKey == nil { selectedModelKey = detail.lastModelKey }
             historyState = .ready
             maybeAutosend()
         } catch {
             historyState = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
         }
-        // Model list for the picker — best-effort, independent of history load.
-        if availableModels.isEmpty {
-            availableModels = (try? await api.models()) ?? []
+        // Model list for the picker — best-effort, only where the endpoint has one.
+        if supportsModelPicker, availableModels.isEmpty {
+            availableModels = (try? await endpoint.models()) ?? []
         }
     }
 
@@ -74,14 +87,16 @@ final class ChatViewModel {
         attemptSend(content: text, confirmCancel: false)
     }
 
-    /// Toggle Supervise for this thread. Optimistic; rolls back on failure.
+    /// Toggle Supervise for this chat. Optimistic; rolls back on failure. A no-op
+    /// on endpoints without Supervise (the toggle isn't shown there anyway).
     func setSupervised(_ on: Bool) {
+        guard supportsSupervise else { return }
         let previous = supervised
         supervised = on
         Task { [weak self] in
             guard let self else { return }
             do {
-                supervised = try await api.setSupervised(threadId: threadId, supervised: on)
+                supervised = try await endpoint.setSupervised(on)
             } catch {
                 supervised = previous
                 errorBanner = "Couldn't update Supervise."
@@ -105,7 +120,7 @@ final class ChatViewModel {
         streamTask?.cancel()
         reducer.abort()
         isSending = false
-        Task { try? await api.abortThread(threadId: threadId) }
+        Task { [endpoint] in try? await endpoint.abort() }
     }
 
     // MARK: Scene phase
@@ -138,11 +153,14 @@ final class ChatViewModel {
 
     private func runStream(content: String, confirmCancel: Bool, rollback: TranscriptReducer) async {
         do {
-            let stream = try await api.streamThreadMessage(
-                threadId: threadId, content: content, modelKey: selectedModelKey, confirmCancel: confirmCancel)
+            let stream = try await endpoint.stream(
+                content: content, modelKey: selectedModelKey, confirmCancel: confirmCancel)
             for try await line in stream {
                 reducer.apply(line)
-                if reducer.pendingTitle != nil { reducer.pendingTitle = nil }
+                if let newTitle = reducer.pendingTitle {
+                    if !newTitle.isEmpty { title = newTitle }
+                    reducer.pendingTitle = nil
+                }
             }
             // Stream ended: finalize if no terminal event arrived (transport drop).
             reducer.finishByDisconnect()

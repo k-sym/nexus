@@ -1,0 +1,7 @@
+{"kind":"run_start","run":{"runId":"r1","threadId":"s1","startedAt":"2026-07-28T12:00:00.000Z","provider":"assistant","model":"hermes-agent"}}
+{"kind":"session_title","sessionId":"s1","title":"Weather check"}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Let me check the weather."}}
+{"type":"tool_execution_start","toolCallId":"t0","toolName":"web_search","args":{"query":"weather today","max_results":3}}
+{"type":"tool_execution_end","toolCallId":"t0","toolName":"web_search","result":{"content":[{"type":"text","text":"Sunny, 24C"}]},"isError":false}
+{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"It's sunny, 24C."}}
+{"kind":"run_end","run":{"runId":"r1","threadId":"s1","completedAt":"2026-07-28T12:00:05.000Z","status":"completed"}}

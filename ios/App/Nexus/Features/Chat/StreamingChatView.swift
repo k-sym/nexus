@@ -4,18 +4,22 @@ import NexusCore
 /// The shared streaming chat surface: rehydrated history + a live transcript,
 /// a composer with send/stop, a context meter, and the 409 takeover flow.
 struct StreamingChatView: View {
-    private let title: String
     @State private var vm: ChatViewModel
     @Environment(\.scenePhase) private var scenePhase
 
+    /// Backend-agnostic entry point.
+    init(endpoint: ChatEndpoint, title: String) {
+        _vm = State(initialValue: ChatViewModel(endpoint: endpoint, title: title))
+    }
+
+    /// Convenience for project-thread chat.
     init(api: APIClient, threadId: String, title: String) {
-        self.title = title
-        _vm = State(initialValue: ChatViewModel(api: api, threadId: threadId))
+        self.init(endpoint: ThreadChatEndpoint(api: api, threadId: threadId), title: title)
     }
 
     var body: some View {
         transcript
-            .navigationTitle(title)
+            .navigationTitle(vm.title)
             .navigationBarTitleDisplayMode(.inline)
             .safeAreaInset(edge: .bottom) { composer }
             .task {
@@ -88,13 +92,16 @@ struct StreamingChatView: View {
                     .padding(.horizontal).padding(.top, 6)
             }
             // One control row: the model picker takes the free space, Supervise
-            // is a compact button-toggle. Replaces the two full-width stacked
-            // rows that used to sit above the input.
-            HStack(spacing: 8) {
-                modelPicker
-                superviseToggle
+            // is a compact button-toggle. Each control appears only if the
+            // endpoint supports it — the assistant supports neither, so the whole
+            // row collapses and the composer is just the input + send/stop.
+            if vm.supportsModelPicker || vm.supportsSupervise {
+                HStack(spacing: 8) {
+                    if vm.supportsModelPicker { modelPicker }
+                    if vm.supportsSupervise { superviseToggle }
+                }
+                .padding(.horizontal).padding(.top, 6)
             }
-            .padding(.horizontal).padding(.top, 6)
             if let usage = vm.reducer.contextUsage {
                 ContextMeter(usage: usage)
             }

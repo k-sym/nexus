@@ -165,6 +165,47 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/settings", method: "PUT", body: body)
     }
 
+    // MARK: M6 assistant
+
+    /// Merged local + adoptable-remote Hermes sessions → `AssistantSessionsResponse`.
+    public static let assistantSessions = Endpoint(path: "/api/assistant/sessions")
+
+    /// Create a local assistant session → `AssistantSession`. Body `{ title? }`.
+    public static func createAssistantSession(body: Data) -> Endpoint {
+        Endpoint(path: "/api/assistant/sessions", method: "POST", body: body)
+    }
+
+    /// Adopt a remote Hermes session as a local one → `AssistantSessionDetail`.
+    /// Body `{ remoteSessionId }` (the un-prefixed Hermes id).
+    public static func importAssistantSession(body: Data) -> Endpoint {
+        Endpoint(path: "/api/assistant/sessions/import", method: "POST", body: body)
+    }
+
+    /// One session + its transcript → `AssistantSessionDetail`.
+    public static func assistantSession(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/assistant/sessions/\(id)")
+    }
+
+    /// Rename or soft-archive a session → `AssistantSession`. Body
+    /// `{ title? }` or `{ archived: true }`.
+    public static func patchAssistantSession(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/assistant/sessions/\(id)", method: "PATCH", body: body)
+    }
+
+    /// Hard-delete a session (also stops/removes the remote) → `{ ok }`.
+    public static func deleteAssistantSession(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/assistant/sessions/\(id)", method: "DELETE")
+    }
+
+    /// Send a message and stream the turn (NDJSON). Body an `AssistantStreamRequest`.
+    /// No `X-Confirm-Cancel` — the assistant path has no busy gate.
+    public static func assistantSessionStream(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/assistant/sessions/\(id)/messages/stream", method: "POST", body: body)
+    }
+
+    /// Abort the latest running assistant run (global, not session-scoped).
+    public static let assistantAbort = Endpoint(path: "/api/assistant/abort", method: "POST")
+
     // MARK: M5 push
 
     public static func registerDevice(body: Data) -> Endpoint {
