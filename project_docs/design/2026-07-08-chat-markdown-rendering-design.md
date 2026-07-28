@@ -55,9 +55,18 @@ Implemented in the shared chat renderer:
 
 Deviation from the initial wording: user messages still preserve the existing GitHub image rendering behavior when sent through `ChatMessageContent` with `linkifyPaths={false}`. They do not get Markdown headings/lists/code parsing.
 
+## Attachment preview and user inline-code follow-up (2026-07-28)
+
+- Restored image thumbnails in the packaged session composers and persisted user-message bubbles by allowing `data:` and `blob:` image sources in the Tauri content security policy.
+- Restored chat image previews from the same narrowly allowlisted GitHub attachment hosts already enforced by `ChatMessageContent`; arbitrary remote image hosts remain blocked.
+- User messages remain verbatim except for matched, single-line backtick spans, which now use the same inline-code treatment as model messages. Headings, emphasis, lists, fenced code, and artifact-path buttons remain disabled for user-authored text.
+- Testing should verify pasted, picked, and dragged images in both session composers; the resulting persisted image in each thread; GitHub attachment previews; and literal versus matched backtick behavior.
+
 Verification performed:
 
 - `npm --workspace=src/frontend test -- ChatMessageContent.test.tsx AgentRunCard.test.tsx ChatPanel.test.tsx AssistantView.test.tsx` passed with 64 tests.
+- 2026-07-28: `npm --workspace=src/frontend test -- ChatMessageContent.test.tsx ChatPanel.test.tsx AssistantView.test.tsx` passed with 73 tests.
+- 2026-07-28: `npm --workspace=src/frontend run build` passed.
 - `npm --workspace=src/frontend run typecheck` passed.
 - `npm --workspace=src/frontend test` still fails because `src/components/Sidebar.test.tsx` expects `Project intelligence`; that same Sidebar test fails in isolation and is unrelated to Markdown rendering.
 

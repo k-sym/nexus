@@ -6,8 +6,8 @@ import ChatArtifactLinks, { containsArtifactPath } from './ChatArtifactLinks';
 interface ChatMessageContentProps {
   text: string;
   onOpenPath: (path: string) => void;
-  /** Linkify file paths in the text runs. Off for user messages (their text
-   *  is shown verbatim), on for assistant/tool output — matching prior behavior. */
+  /** Linkify paths and render full Markdown for assistant/tool output. User
+   *  messages stay verbatim apart from matched single-line inline-code spans. */
   linkifyPaths?: boolean;
 }
 
@@ -121,11 +121,32 @@ function tokenize(text: string): Token[] {
 }
 
 export default function ChatMessageContent({ text, onOpenPath, linkifyPaths = true }: ChatMessageContentProps) {
+  const renderUserText = (runText: string, key: string) => {
+    const parts = runText.split(/(`[^`\r\n]+`)/g);
+    if (parts.length === 1) return <span key={key}>{runText}</span>;
+    return (
+      <span key={key}>
+        {parts.map((part, index) =>
+          part.startsWith('`') && part.endsWith('`') ? (
+            <code
+              key={`${key}-code-${index}`}
+              className="rounded-sm border border-subtle bg-zinc-950/45 px-1 py-0.5 text-[0.92em] accent-text"
+            >
+              {part.slice(1, -1)}
+            </code>
+          ) : (
+            <span key={`${key}-text-${index}`}>{part}</span>
+          ),
+        )}
+      </span>
+    );
+  };
+
   const renderText = (runText: string, key: string) =>
     linkifyPaths ? (
       <ChatArtifactLinks key={key} text={runText} onOpenPath={onOpenPath} />
     ) : (
-      <span key={key}>{runText}</span>
+      renderUserText(runText, key)
     );
 
   if (linkifyPaths) {
