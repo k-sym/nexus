@@ -25,3 +25,9 @@ Testing should verify:
 - Existing and newly created Pi sessions, including model selection and extension loading.
 
 Automated validation completed with the full workspace build/type-check, 429 backend tests, 20 memory-daemon tests, frontend tests, glasses build, and Tauri `cargo check`.
+
+## 2026-07-28 explicit model choice update
+
+Nexus no longer falls through to Pi's implicit default model for chat turns. New or model-less sessions show an explicit "Choose a model for this task before sending" prompt, the Send button stays disabled until a model is selected/restored, and the chat stream API now rejects requests without `modelKey` with HTTP 400. Existing sessions with `last_model_key` continue to restore that prior explicit choice.
+
+Validation: `npm run --workspace=src/frontend test -- ChatPanel.test.tsx ModelSelector.test.tsx`; `npm run --workspace=src/backend typecheck`; `npm run --workspace=src/frontend typecheck`.

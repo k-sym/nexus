@@ -1007,7 +1007,7 @@ test('POST /api/threads/:id/messages/stream rejects same-thread re-entry with a 
     const second = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'second' },
+      payload: { content: 'second', modelKey: 'anthropic/opus' },
     });
 
     assert.equal(second.statusCode, 409);
@@ -1163,7 +1163,7 @@ test('POST /api/threads/:id/messages/stream keeps a setup-completed prompt runni
     const whileSetupPending = app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'second' },
+      payload: { content: 'second', modelKey: 'anthropic/opus' },
     });
     const outcome = await Promise.race([
       whileSetupPending.then((response) => ({ kind: 'response' as const, response })),
@@ -1229,7 +1229,7 @@ test('POST /api/threads/:id/messages/stream keeps a disconnected prompt running 
     const second = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'second' },
+      payload: { content: 'second', modelKey: 'anthropic/opus' },
     });
     assert.equal(second.statusCode, 409);
     assert.equal(second.json().kind, 'thread_busy');
@@ -1252,13 +1252,10 @@ test('POST /api/threads/:id/messages/stream keeps a disconnected prompt running 
 
     promptStopped.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const third = await app.inject({
-      method: 'POST',
-      url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'third' },
-    });
-    assert.equal(third.statusCode, 200);
-    assert.equal(promptCalls, 2);
+    const cleared = await app.inject({ method: 'GET', url: '/api/chat/active-runs' });
+    assert.equal(cleared.statusCode, 200);
+    assert.deepEqual(cleared.json(), { activeThreadIds: [], runs: [] });
+    assert.equal(promptCalls, 1);
   } finally {
     promptStopped.resolve();
     await app.close();
@@ -1653,7 +1650,7 @@ test('POST /api/threads/:id/messages/stream rejects images for text-only models'
   }
 });
 
-test('POST /api/threads/:id/messages/stream rejects images without a selected image-capable model', async () => {
+test('POST /api/threads/:id/messages/stream rejects images without an explicit model', async () => {
   let promptCalled = false;
   const session = {
     subscribe: () => () => {},
@@ -1680,7 +1677,7 @@ test('POST /api/threads/:id/messages/stream rejects images without a selected im
     });
 
     assert.equal(res.statusCode, 400);
-    assert.match(res.json().error, /does not support image input/i);
+    assert.match(res.json().error, /modelKey is required/i);
     assert.equal(promptCalled, false);
   } finally {
     await app.close();
@@ -1731,6 +1728,39 @@ test('POST /api/threads/:id/messages/stream accepts screenshot-sized image paylo
   }
 });
 
+test('POST /api/threads/:id/messages/stream requires an explicit modelKey', async () => {
+  let promptCalled = false;
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async () => { promptCalled = true; },
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'test-provider', id: 'test-model' }) },
+  };
+  const { app, db, dir } = await makeApp(runtime);
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'plain text' },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.body, /modelKey is required/);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream preserves text-only prompt behavior', async () => {
   let promptArgs: unknown[] = [];
   const runtime = {
@@ -1746,14 +1776,14 @@ test('POST /api/threads/:id/messages/stream preserves text-only prompt behavior'
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'test-provider', id: 'test-model' }) },
   };
   const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'plain text' },
+      payload: { content: 'plain text', modelKey: 'test-provider/test-model' },
     });
 
     assert.equal(res.statusCode, 200);
@@ -1779,14 +1809,14 @@ test('POST /api/threads/:id/messages/stream emits context usage after prompting'
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'test-provider', id: 'test-model' }) },
   };
   const { app, db, dir } = await makeApp(runtime);
   try {
     const res = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'plain text' },
+      payload: { content: 'plain text', modelKey: 'test-provider/test-model' },
     });
 
     assert.equal(res.statusCode, 200);
@@ -2311,14 +2341,14 @@ test('POST /api/threads/:id/abort records a user-cancelled terminal run', async 
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
   const { app, db, dir } = await makeApp(runtime);
   try {
     const stream = app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'cancel me' },
+      payload: { content: 'cancel me', modelKey: 'anthropic/sonnet' },
     });
     await promptStarted.promise;
 
@@ -2357,14 +2387,14 @@ test('POST /api/threads/:id/abort rejects an untrusted abort source', async () =
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
   const { app, db, dir } = await makeApp(runtime);
   try {
     const stream = app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'keep running' },
+      payload: { content: 'keep running', modelKey: 'anthropic/sonnet' },
     });
     await promptStarted.promise;
     const invalid = await app.inject({
@@ -2402,7 +2432,7 @@ test('question cleanup cancels a pending question when its active stream is abor
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
   const { app, db, dir } = await makeApp(runtime);
   try {
@@ -2410,7 +2440,7 @@ test('question cleanup cancels a pending question when its active stream is abor
     const stream = app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'ask me' },
+      payload: { content: 'ask me', modelKey: 'anthropic/sonnet' },
     });
     await promptStarted.promise;
 
@@ -2451,7 +2481,7 @@ test('question cleanup leaves the active session running when the response close
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
   const { app, db, dir, concurrency } = await makeApp(runtime);
   const pending = questions.register('thread-1', 'call-1', questionRequest);
@@ -2459,7 +2489,7 @@ test('question cleanup leaves the active session running when the response close
     const response = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'ask me' },
+      payload: { content: 'ask me', modelKey: 'anthropic/sonnet' },
       payloadAsStream: true,
     });
     await promptStarted.promise;
@@ -2470,11 +2500,11 @@ test('question cleanup leaves the active session running when the response close
     assert.equal(abortCalls, 0);
     assert.equal(questions.answer('thread-1', 'call-1', validQuestionAnswer).ok, true);
     assert.equal((await pending).status, 'answered');
-    assert.deepEqual(concurrency.get('proj-1', 'default'), { threadId: 'thread-1', title: 'T1', modelKey: 'default' });
+    assert.deepEqual(concurrency.get('proj-1', 'anthropic/sonnet'), { threadId: 'thread-1', title: 'T1', modelKey: 'anthropic/sonnet' });
 
     promptStopped.resolve();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(concurrency.get('proj-1', 'default'), undefined);
+    assert.equal(concurrency.get('proj-1', 'anthropic/sonnet'), undefined);
   } finally {
     promptStopped.resolve();
     questions.cancelThread('thread-1', 'test cleanup');
@@ -2498,14 +2528,14 @@ test('a normally completed response does not abort its session', async () => {
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
   const { app, db, dir } = await makeApp(runtime);
   try {
     const response = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'complete normally' },
+      payload: { content: 'complete normally', modelKey: 'anthropic/sonnet' },
     });
 
     assert.equal(response.statusCode, 200);
@@ -2589,7 +2619,7 @@ test('question cleanup cancels a pending question when the stream aborts interna
     getSessionModel: () => undefined,
     setSessionModel: () => {},
     dropSession: () => {},
-    models: { find: () => undefined },
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) },
   };
   const { app, db, dir } = await makeApp(runtime);
   try {
@@ -2597,7 +2627,7 @@ test('question cleanup cancels a pending question when the stream aborts interna
     const stream = await app.inject({
       method: 'POST',
       url: '/api/threads/thread-1/messages/stream',
-      payload: { content: 'ask me' },
+      payload: { content: 'ask me', modelKey: 'anthropic/sonnet' },
     });
     assert.equal(stream.statusCode, 200);
 

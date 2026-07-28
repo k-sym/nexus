@@ -74,7 +74,7 @@ export function ModelSelector({ models, currentModelId, onSelect, disabled }: Mo
     );
   }, [models, query]);
 
-  const label = current?.name ?? 'Pick a model';
+  const label = current?.name ?? 'Choose model';
 
   return (
     <div className="relative inline-block">
