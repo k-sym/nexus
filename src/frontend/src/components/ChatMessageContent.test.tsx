@@ -61,6 +61,34 @@ describe('ChatMessageContent', () => {
     expect(screen.getByText(/```text/)).toBeInTheDocument();
   });
 
+  it('styles inline code in user messages without enabling other markdown', () => {
+    const { container } = render(
+      <ChatMessageContent
+        text={'Please inspect `src/frontend/src/App.tsx` but keep **this** literal.'}
+        onOpenPath={vi.fn()}
+        linkifyPaths={false}
+      />,
+    );
+
+    expect(container.querySelector('code')).toHaveTextContent('src/frontend/src/App.tsx');
+    expect(screen.getByText(/\*\*this\*\*/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Preview App\.tsx/ })).not.toBeInTheDocument();
+  });
+
+  it('leaves unmatched and fenced backticks verbatim in user messages', () => {
+    const { container } = render(
+      <ChatMessageContent
+        text={'Unmatched `text\n```js\nconst value = 1;\n```'}
+        onOpenPath={vi.fn()}
+        linkifyPaths={false}
+      />,
+    );
+
+    expect(container.querySelector('code')).not.toBeInTheDocument();
+    expect(container).toHaveTextContent('Unmatched `text');
+    expect(container).toHaveTextContent('```js');
+  });
+
   it('linkifies file paths inside markdown prose', () => {
     const onOpenPath = vi.fn();
     render(
