@@ -59,6 +59,8 @@ final class ChatViewModel {
     var supportsSupervise: Bool { endpoint.supportsSupervise }
     var supportsBackgroundHandoff: Bool { endpoint.supportsBackgroundHandoff }
     var supportsAttachments: Bool { endpoint.supportsAttachments }
+    /// Per-conversation key for the sent-attachment thumbnail cache (assistant only).
+    private var attachmentScope: String? { endpoint.attachmentScopeId }
 
     /// Max attachments per turn (matches the backend cap).
     static let attachmentLimit = 5
@@ -92,7 +94,7 @@ final class ChatViewModel {
     func loadHistory() async {
         do {
             let detail = try await endpoint.loadDetail()
-            reducer.loadPersisted(detail.messages)
+            reducer.loadPersisted(detail.messages, attachmentsForUserOrdinal: preservedAttachments())
             supervised = detail.supervised ?? false
             if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
             if selectedModelKey == nil { selectedModelKey = detail.lastModelKey }
@@ -116,6 +118,7 @@ final class ChatViewModel {
         let attachments = pendingAttachments
         input = ""
         pendingAttachments = []
+        cacheSentAttachments(attachments)  // before the optimistic append fixes the ordinal
         attemptSend(content: text, confirmCancel: false, attachments: attachments)
     }
 
@@ -128,6 +131,24 @@ final class ChatViewModel {
 
     func removeAttachment(_ id: UUID) {
         pendingAttachments.removeAll { $0.id == id }
+    }
+
+    /// Cache sent thumbnails at this message's ordinal (its index among user rows,
+    /// which equals the current user-message count since we haven't appended yet)
+    /// so a later rehydrate can restore them — the server transcript is text-only.
+    private func cacheSentAttachments(_ drafts: [AttachmentDraft]) {
+        guard let scope = attachmentScope, !drafts.isEmpty else { return }
+        AssistantAttachmentStore.shared.record(
+            scope: scope, ordinal: reducer.userMessageCount, drafts.map(\.rendered))
+    }
+
+    /// Provider that re-attaches cached thumbnails by user-message ordinal on load;
+    /// nil where the endpoint has no attachment scope (threads).
+    private func preservedAttachments() -> ((Int) -> [RenderedAttachment])? {
+        guard let scope = attachmentScope else { return nil }
+        let snapshot = AssistantAttachmentStore.shared.snapshot(scope: scope)
+        guard !snapshot.isEmpty else { return nil }
+        return { snapshot[$0] ?? [] }
     }
 
     // MARK: Background handoff (assistant only)
@@ -154,6 +175,7 @@ final class ChatViewModel {
                 // a later sync reload replaces this row with the server's copy.
                 self.input = ""
                 self.pendingAttachments = []
+                self.cacheSentAttachments(attachments)  // before the append fixes the ordinal
                 self.reducer.appendUserMessage(text, attachments: attachments.map(\.rendered))
                 self.backgroundRun = run
                 self.startSyncLoop()
@@ -199,7 +221,7 @@ final class ChatViewModel {
         do {
             try await endpoint.syncBackgroundRuns()
             let detail = try await endpoint.loadDetail()
-            reducer.loadPersisted(detail.messages)
+            reducer.loadPersisted(detail.messages, attachmentsForUserOrdinal: preservedAttachments())
             if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
             backgroundRun = detail.latestRun
         } catch {

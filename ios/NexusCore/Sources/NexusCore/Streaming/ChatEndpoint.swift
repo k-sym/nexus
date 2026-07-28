@@ -75,6 +75,9 @@ public protocol ChatEndpoint: Sendable {
 public extension ChatEndpoint {
     var supportsBackgroundHandoff: Bool { false }
     var supportsAttachments: Bool { false }
+    /// A stable per-conversation key for caching sent-attachment thumbnails so
+    /// they survive a rehydrate. Nil where there are no attachments (threads).
+    var attachmentScopeId: String? { nil }
     func startBackgroundRun(content: String, attachments: [AssistantAttachment]) async throws -> AssistantRun {
         throw APIError.server(status: 400, message: "This chat doesn't support background handoff.")
     }
@@ -140,6 +143,7 @@ public struct AssistantChatEndpoint: ChatEndpoint {
     public var supportsSupervise: Bool { false }
     public var supportsBackgroundHandoff: Bool { true }
     public var supportsAttachments: Bool { true }
+    public var attachmentScopeId: String? { sessionId }
 
     public func loadDetail() async throws -> ChatDetail {
         let detail = try await api.assistantSessionDetail(sessionId: sessionId)

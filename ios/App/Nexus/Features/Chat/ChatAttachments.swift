@@ -11,10 +11,40 @@ struct AttachmentDraft: Identifiable {
     let image: UIImage?     // nil for non-image files
     let attachment: AssistantAttachment
 
-    /// The in-bubble render form (base64 kept; the view decodes images).
+    /// The in-bubble render form. Images keep their base64 for the thumbnail;
+    /// files render as a name+glyph card, so we drop the (potentially large) file
+    /// bytes to keep the preserve-across-reload cache lean.
     var rendered: RenderedAttachment {
-        RenderedAttachment(id: id.uuidString, name: attachment.name, mimeType: attachment.mimeType, base64: attachment.data)
+        RenderedAttachment(
+            id: id.uuidString, name: attachment.name, mimeType: attachment.mimeType,
+            base64: attachment.isImage ? attachment.data : "")
     }
+}
+
+/// In-memory cache of sent-attachment thumbnails, keyed by session + the user
+/// message's 0-based ordinal. The server transcript is text-only, so on every
+/// rehydrate `ChatViewModel` re-attaches from here — thumbnails then survive a
+/// foreground reconcile, a 5s background-run sync poll, and reopening the session
+/// (the singleton outlives the view). Process-lifetime only; a cold launch falls
+/// back to the server's text-only transcript.
+@MainActor
+final class AssistantAttachmentStore {
+    static let shared = AssistantAttachmentStore()
+    private var byScope: [String: [Int: [RenderedAttachment]]] = [:]
+
+    func record(scope: String, ordinal: Int, _ attachments: [RenderedAttachment]) {
+        guard !attachments.isEmpty else { return }
+        byScope[scope, default: [:]][ordinal] = attachments
+    }
+
+    /// The whole ordinal→attachments map for a session, snapshotted so a
+    /// synchronous provider closure can read it without an actor hop.
+    func snapshot(scope: String) -> [Int: [RenderedAttachment]] {
+        byScope[scope] ?? [:]
+    }
+
+    /// Drop a session's cache (on hard delete).
+    func purge(scope: String) { byScope[scope] = nil }
 }
 
 /// Turns picked photos and files into send-ready attachments.
