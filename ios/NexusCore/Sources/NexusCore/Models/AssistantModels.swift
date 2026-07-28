@@ -78,6 +78,13 @@ public struct AssistantSession: Decodable, Identifiable, Hashable, Sendable {
 
     /// Whether this session's latest run is still in flight.
     public var isRunning: Bool { latestRun?.isRunning ?? false }
+
+    /// A copy with a new title, for optimistic rename before the PATCH lands.
+    public func withTitle(_ newTitle: String) -> AssistantSession {
+        AssistantSession(
+            id: id, title: newTitle, status: status, remoteOnly: remoteOnly,
+            source: source, remoteSessionId: remoteSessionId, updatedAt: updatedAt, latestRun: latestRun)
+    }
 }
 
 /// The latest run attached to a session row (`publicRun`). Only the fields the

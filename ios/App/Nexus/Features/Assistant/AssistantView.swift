@@ -45,6 +45,43 @@ final class AssistantSessionsViewModel {
             actionError = (error as? APIError)?.errorDescription ?? "Couldn't delete the session."
         }
     }
+
+    /// Soft-archive a local session (`PATCH {archived:true}`). Reversible on the
+    /// backend, unlike thread archive — but the list only shows unarchived rows,
+    /// so it drops from view. Optimistic with rollback.
+    func archive(_ session: AssistantSession) async {
+        let previous = state.value
+        if var sessions = state.value {
+            sessions.removeAll { $0.id == session.id }
+            state = .loaded(sessions)
+        }
+        do {
+            _ = try await api.patchAssistantSession(sessionId: session.id, archived: true)
+            await refresh()
+        } catch {
+            if let previous { state = .loaded(previous) }
+            actionError = (error as? APIError)?.errorDescription ?? "Couldn't archive the session."
+        }
+    }
+
+    /// Rename a local session (`PATCH {title}`). Optimistic with rollback; a
+    /// blank title is a no-op.
+    func rename(_ session: AssistantSession, to newTitle: String) async {
+        let trimmed = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != session.title else { return }
+        let previous = state.value
+        if var sessions = state.value, let index = sessions.firstIndex(where: { $0.id == session.id }) {
+            sessions[index] = session.withTitle(trimmed)
+            state = .loaded(sessions)
+        }
+        do {
+            _ = try await api.patchAssistantSession(sessionId: session.id, title: trimmed)
+            await refresh()
+        } catch {
+            if let previous { state = .loaded(previous) }
+            actionError = (error as? APIError)?.errorDescription ?? "Couldn't rename the session."
+        }
+    }
 }
 
 /// Programmatic push target for a just-created session. Row taps use
@@ -64,6 +101,9 @@ struct AssistantView: View {
     @State private var vm: AssistantSessionsViewModel
     /// Set by the Delete swipe action; drives the confirmation dialog.
     @State private var pendingDelete: AssistantSession?
+    /// Set by the Rename swipe action; drives the rename alert.
+    @State private var pendingRename: AssistantSession?
+    @State private var renameText: String = ""
     /// Programmatic push target for a just-created session.
     @State private var createdSession: NewAssistantSession?
 
@@ -104,6 +144,16 @@ struct AssistantView: View {
             } message: { session in
                 Text("“\(session.title)” will be permanently deleted. This can't be undone.")
             }
+            .alert("Rename session", isPresented: renameDialogBinding, presenting: pendingRename) { session in
+                TextField("Title", text: $renameText)
+                Button("Save") {
+                    Task { await vm.rename(session, to: renameText) }
+                    pendingRename = nil
+                }
+                Button("Cancel", role: .cancel) { pendingRename = nil }
+            } message: { _ in
+                Text("Enter a new name for this session.")
+            }
             .alert("Something went wrong", isPresented: actionErrorBinding, presenting: vm.actionError) { _ in
                 Button("OK", role: .cancel) { vm.actionError = nil }
             } message: { message in
@@ -125,6 +175,10 @@ struct AssistantView: View {
 
     private var deleteDialogBinding: Binding<Bool> {
         Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } })
+    }
+
+    private var renameDialogBinding: Binding<Bool> {
+        Binding(get: { pendingRename != nil }, set: { if !$0 { pendingRename = nil } })
     }
 
     private var actionErrorBinding: Binding<Bool> {
@@ -150,15 +204,32 @@ struct AssistantView: View {
                     } label: {
                         AssistantSessionRow(session: session)
                     }
+                    // Session actions apply to local rows only — a remote-only
+                    // row isn't a local session until it's adopted (on tap).
                     .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        // Only local sessions are deletable — remote-only rows
-                        // aren't a local session until they're adopted.
                         if !session.remoteOnly {
                             Button(role: .destructive) {
                                 pendingDelete = session
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                            Button {
+                                Task { await vm.archive(session) }
+                            } label: {
+                                Label("Archive", systemImage: "archivebox")
+                            }
+                            .tint(.orange)
+                        }
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if !session.remoteOnly {
+                            Button {
+                                renameText = session.title
+                                pendingRename = session
+                            } label: {
+                                Label("Rename", systemImage: "pencil")
+                            }
+                            .tint(.blue)
                         }
                     }
                 }
