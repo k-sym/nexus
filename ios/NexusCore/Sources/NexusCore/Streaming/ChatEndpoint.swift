@@ -8,17 +8,22 @@ public struct ChatDetail: Sendable {
     public let title: String?
     public let supervised: Bool?
     public let lastModelKey: String?
+    /// The session's latest background run, where the endpoint has one (assistant
+    /// only). Lets a reopened chat resume 5s sync polling for an in-flight handoff.
+    public let latestRun: AssistantRun?
 
     public init(
         messages: [PersistedMessage],
         title: String? = nil,
         supervised: Bool? = nil,
-        lastModelKey: String? = nil
+        lastModelKey: String? = nil,
+        latestRun: AssistantRun? = nil
     ) {
         self.messages = messages
         self.title = title
         self.supervised = supervised
         self.lastModelKey = lastModelKey
+        self.latestRun = latestRun
     }
 }
 
@@ -32,6 +37,11 @@ public protocol ChatEndpoint: Sendable {
     var supportsModelPicker: Bool { get }
     /// Whether the composer offers a Supervise toggle (threads: yes, assistant: no).
     var supportsSupervise: Bool { get }
+    /// Whether the composer offers "hand off to a background run" (assistant only).
+    /// A background turn runs server-side against Hermes and outlives the app, so
+    /// progress is polled via `syncBackgroundRuns()` + `loadDetail()` rather than
+    /// streamed. Threads have no equivalent.
+    var supportsBackgroundHandoff: Bool { get }
 
     /// Rehydrate history + seeds.
     func loadDetail() async throws -> ChatDetail
@@ -45,6 +55,25 @@ public protocol ChatEndpoint: Sendable {
     @discardableResult func setSupervised(_ on: Bool) async throws -> Bool
     /// The curated model list for the picker; empty where unsupported.
     func models() async throws -> [Model]
+
+    /// Hand the turn off to a durable background run and return it. Only called
+    /// where `supportsBackgroundHandoff`; the default throws.
+    func startBackgroundRun(content: String) async throws -> AssistantRun
+    /// Reconcile in-flight background runs server-side (global). No-op by default.
+    func syncBackgroundRuns() async throws
+    /// Ask a specific background run to stop. No-op by default.
+    func stopBackgroundRun(runId: String) async throws
+}
+
+/// Threads (and any future endpoint) get the background-handoff surface for free
+/// as no-ops, so only assistant sessions implement it.
+public extension ChatEndpoint {
+    var supportsBackgroundHandoff: Bool { false }
+    func startBackgroundRun(content: String) async throws -> AssistantRun {
+        throw APIError.server(status: 400, message: "This chat doesn't support background handoff.")
+    }
+    func syncBackgroundRuns() async throws {}
+    func stopBackgroundRun(runId: String) async throws {}
 }
 
 /// Project-thread chat. Wraps today's thread calls byte-for-byte so the existing
@@ -102,6 +131,7 @@ public struct AssistantChatEndpoint: ChatEndpoint {
 
     public var supportsModelPicker: Bool { false }
     public var supportsSupervise: Bool { false }
+    public var supportsBackgroundHandoff: Bool { true }
 
     public func loadDetail() async throws -> ChatDetail {
         let detail = try await api.assistantSessionDetail(sessionId: sessionId)
@@ -109,7 +139,8 @@ public struct AssistantChatEndpoint: ChatEndpoint {
             messages: detail.persistedMessages,
             title: detail.session.title,
             supervised: nil,
-            lastModelKey: nil)
+            lastModelKey: nil,
+            latestRun: detail.latestRun)
     }
 
     public func stream(content: String, modelKey: String?, confirmCancel: Bool) async throws -> AsyncThrowingStream<JSONValue, Error> {
@@ -125,4 +156,16 @@ public struct AssistantChatEndpoint: ChatEndpoint {
     public func setSupervised(_ on: Bool) async throws -> Bool { false }
 
     public func models() async throws -> [Model] { [] }
+
+    public func startBackgroundRun(content: String) async throws -> AssistantRun {
+        try await api.startAssistantRun(sessionId: sessionId, content: content)
+    }
+
+    public func syncBackgroundRuns() async throws {
+        _ = try await api.syncAssistant()
+    }
+
+    public func stopBackgroundRun(runId: String) async throws {
+        try await api.stopAssistantRun(runId: runId)
+    }
 }
