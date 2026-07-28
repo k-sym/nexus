@@ -68,6 +68,17 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/threads/\(threadId)")
     }
 
+    /// Permanently delete a thread → `{ success }`.
+    public static func deleteThread(_ threadId: String) -> Endpoint {
+        Endpoint(path: "/api/threads/\(threadId)", method: "DELETE")
+    }
+
+    /// Summarize a thread into a memory, then remove it → `{ memoryId }`. Slow
+    /// (model-generated summary); 400 when the thread has no meaningful history.
+    public static func archiveThread(_ threadId: String) -> Endpoint {
+        Endpoint(path: "/api/threads/\(threadId)/archive", method: "POST")
+    }
+
     /// Send a message and stream the turn (NDJSON). Body is a `SendMessageRequest`.
     public static func threadStream(_ threadId: String, body: Data, confirmCancel: Bool) -> Endpoint {
         Endpoint(

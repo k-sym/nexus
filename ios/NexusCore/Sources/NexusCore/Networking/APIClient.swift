@@ -190,6 +190,17 @@ public actor APIClient {
         try await request(.thread(threadId), decoder: plainDecoder)
     }
 
+    /// Permanently delete a thread.
+    public func deleteThread(threadId: String) async throws {
+        _ = try await requestData(.deleteThread(threadId))
+    }
+
+    /// Summarize the thread into a memory then remove it. Slow (a model writes
+    /// the summary); throws `.server(400)` when there's no meaningful history.
+    public func archiveThread(threadId: String) async throws {
+        _ = try await requestData(.archiveThread(threadId))
+    }
+
     public func abortThread(threadId: String, source: String = "user") async throws {
         let body = try JSONEncoder().encode(["source": source])
         _ = try await requestData(.threadAbort(threadId, body: body))
