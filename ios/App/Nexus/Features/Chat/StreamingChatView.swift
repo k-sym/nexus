@@ -87,40 +87,13 @@ struct StreamingChatView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal).padding(.top, 6)
             }
-            Menu {
-                Picker("Model", selection: $vm.selectedModelKey) {
-                    Text("Default").tag(String?.none)
-                    ForEach(vm.availableModels) { model in
-                        Text(model.configured == false ? "\(model.name) (no auth)" : model.name)
-                            .tag(String?.some(model.modelKey))
-                    }
-                }
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "cpu")
-                    Text(vm.selectedModelLabel).lineLimit(1)
-                    Image(systemName: "chevron.up.chevron.down").font(.caption)
-                    Spacer(minLength: 0)
-                }
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .frame(minHeight: 44)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.primary.opacity(0.06))
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            // One control row: the model picker takes the free space, Supervise
+            // is a compact button-toggle. Replaces the two full-width stacked
+            // rows that used to sit above the input.
+            HStack(spacing: 8) {
+                modelPicker
+                superviseToggle
             }
-            .disabled(vm.isSending)
-            .padding(.horizontal).padding(.top, 6)
-            Toggle(isOn: Binding(get: { vm.supervised }, set: { vm.setSupervised($0) })) {
-                Label("Supervise", systemImage: "hand.raised.fill")
-                    .font(.caption)
-                    .foregroundStyle(vm.supervised ? .primary : .secondary)
-            }
-            .tint(Theme.accent)
             .padding(.horizontal).padding(.top, 6)
             if let usage = vm.reducer.contextUsage {
                 ContextMeter(usage: usage)
@@ -146,6 +119,53 @@ struct StreamingChatView: View {
             .padding(.horizontal).padding(.vertical, 8)
         }
         .background(.bar)
+    }
+
+    /// Compact model chip: flexes to fill the row, truncating a long model name,
+    /// and opens a menu of the curated models.
+    private var modelPicker: some View {
+        @Bindable var vm = vm
+        return Menu {
+            Picker("Model", selection: $vm.selectedModelKey) {
+                Text("Default").tag(String?.none)
+                ForEach(vm.availableModels) { model in
+                    Text(model.configured == false ? "\(model.name) (no auth)" : model.name)
+                        .tag(String?.some(model.modelKey))
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "cpu")
+                Text(vm.selectedModelLabel).lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down").font(.caption2)
+                Spacer(minLength: 0)
+            }
+            .font(.subheadline)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.primary.opacity(0.06))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .disabled(vm.isSending)
+    }
+
+    /// Supervise as a labeled button-toggle: tinted/filled when on, so a lone
+    /// icon never has to carry the meaning on its own.
+    private var superviseToggle: some View {
+        @Bindable var vm = vm
+        return Toggle(isOn: Binding(get: { vm.supervised }, set: { vm.setSupervised($0) })) {
+            Label("Supervise", systemImage: "hand.raised.fill")
+                .font(.subheadline)
+                .labelStyle(.titleAndIcon)
+        }
+        .toggleStyle(.button)
+        .tint(Theme.accent)
+        .fixedSize()
     }
 }
 

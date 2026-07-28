@@ -45,10 +45,6 @@ struct ThreadsListView: View {
 
     var body: some View {
         content
-            .navigationDestination(for: ChatThread.self) { thread in
-                StreamingChatView(api: api, threadId: thread.id, title: thread.title)
-                    .onAppear { readStore.markRead(thread) }
-            }
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
                     Button {
@@ -76,7 +72,10 @@ struct ThreadsListView: View {
                 }
             } else {
                 List(threads) { thread in
-                    NavigationLink(value: thread) {
+                    NavigationLink {
+                        StreamingChatView(api: api, threadId: thread.id, title: thread.title)
+                            .onAppear { readStore.markRead(thread) }
+                    } label: {
                         ThreadRow(thread: thread, isUnread: readStore.isUnread(thread))
                     }
                 }
