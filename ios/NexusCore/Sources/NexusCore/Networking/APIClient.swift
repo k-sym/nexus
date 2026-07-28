@@ -371,6 +371,44 @@ public actor APIClient {
         _ = try await requestData(.assistantAbort)
     }
 
+    // MARK: Assistant background handoff (M6 Phase B)
+
+    /// Hand a turn off to a durable server-side run. The run executes against
+    /// Hermes and outlives this connection; poll `syncAssistant()` + reload the
+    /// session to see its progress. Throws `.server(400)` if Hermes isn't
+    /// configured or the content is empty.
+    public func startAssistantRun(sessionId: String, content: String) async throws -> AssistantRun {
+        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content))
+        let res: AssistantRunResponse = try await request(.startAssistantRun(sessionId, body: body), decoder: plainDecoder)
+        guard let run = res.run else {
+            throw APIError.server(status: 502, message: "Background run did not start.")
+        }
+        return run
+    }
+
+    /// Poll one background run's current status.
+    public func assistantRun(runId: String) async throws -> AssistantRun {
+        let res: AssistantRunResponse = try await request(.assistantRun(runId), decoder: plainDecoder)
+        guard let run = res.run else {
+            throw APIError.server(status: 404, message: "Run not found.")
+        }
+        return run
+    }
+
+    /// Ask a background run to stop (marks it cancelling). Session-scoped, unlike
+    /// the global `abortAssistant()`.
+    public func stopAssistantRun(runId: String) async throws {
+        _ = try await requestData(.stopAssistantRun(runId))
+    }
+
+    /// Reconcile all in-flight background runs against Hermes; returns how many
+    /// changed status. Reload the session afterwards for the freshened transcript.
+    @discardableResult
+    public func syncAssistant() async throws -> Int {
+        let res: AssistantSyncResponse = try await request(.assistantSync, decoder: plainDecoder)
+        return res.updated
+    }
+
     // MARK: M5 push
 
     /// Register (or refresh) this device's APNs token. `env` is "sandbox" or

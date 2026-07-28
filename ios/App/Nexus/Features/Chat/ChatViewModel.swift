@@ -40,11 +40,26 @@ final class ChatViewModel {
     var busyInfo: BusyInfo?
     var errorBanner: String?
 
+    /// The session's latest background run (assistant only). Seeded from
+    /// `loadDetail`, set by `startBackgroundRun`, and refreshed by the sync loop.
+    /// A background turn runs server-side and outlives the app, so its progress is
+    /// polled rather than streamed.
+    private(set) var backgroundRun: AssistantRun?
+    /// True while the handoff POST is in flight (before a run id exists).
+    private(set) var isStartingBackgroundRun = false
+
     private var pendingBusyContent: String?
     private var streamTask: Task<Void, Never>?
+    private var syncTask: Task<Void, Never>?
 
     var supportsModelPicker: Bool { endpoint.supportsModelPicker }
     var supportsSupervise: Bool { endpoint.supportsSupervise }
+    var supportsBackgroundHandoff: Bool { endpoint.supportsBackgroundHandoff }
+
+    /// Whether a handed-off run is currently executing on the server.
+    var isBackgroundRunning: Bool { backgroundRun?.isRunning ?? false }
+    /// Any background activity — the in-flight handoff POST or a running run.
+    var isBackgroundActive: Bool { isBackgroundRunning || isStartingBackgroundRun }
 
     init(endpoint: ChatEndpoint, title: String) {
         self.endpoint = endpoint
@@ -69,7 +84,10 @@ final class ChatViewModel {
             supervised = detail.supervised ?? false
             if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
             if selectedModelKey == nil { selectedModelKey = detail.lastModelKey }
+            backgroundRun = detail.latestRun
             historyState = .ready
+            // Reopening a session with a handoff still in flight resumes polling.
+            if isBackgroundRunning { startSyncLoop() }
             maybeAutosend()
         } catch {
             historyState = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
@@ -82,9 +100,82 @@ final class ChatViewModel {
 
     func send() {
         let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSending else { return }
+        guard !text.isEmpty, !isSending, !isBackgroundActive else { return }
         input = ""
         attemptSend(content: text, confirmCancel: false)
+    }
+
+    // MARK: Background handoff (assistant only)
+
+    /// Hand the current input off to a durable server-side run instead of
+    /// streaming it. The run keeps executing on the backend even if the app is
+    /// suspended; `startSyncLoop` polls its progress every 5s.
+    func startBackgroundRun() {
+        guard supportsBackgroundHandoff else { return }
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !isSending, !isBackgroundActive else { return }
+        errorBanner = nil
+        isStartingBackgroundRun = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { self.isStartingBackgroundRun = false }
+            do {
+                let run = try await self.endpoint.startBackgroundRun(content: text)
+                // Clear + show the user's turn only once the handoff is accepted;
+                // a later sync reload replaces this row with the server's copy.
+                self.input = ""
+                self.reducer.appendUserMessage(text)
+                self.backgroundRun = run
+                self.startSyncLoop()
+            } catch {
+                self.errorBanner = (error as? APIError)?.errorDescription ?? "Couldn't hand off the run."
+            }
+        }
+    }
+
+    /// Ask the active background run to stop; keeps polling until it settles.
+    func stopBackgroundRun() {
+        guard let run = backgroundRun, run.isRunning else { return }
+        backgroundRun = AssistantRun(id: run.id, status: "cancelling")  // optimistic
+        Task { [weak self, endpoint] in
+            do { try await endpoint.stopBackgroundRun(runId: run.id) }
+            catch { self?.errorBanner = (error as? APIError)?.errorDescription ?? "Couldn't stop the run." }
+        }
+        startSyncLoop()  // poll until the backend reports a terminal status
+    }
+
+    /// Poll `sync` + reload every 5s while a background run is in flight, then
+    /// stop. Reloading pulls the freshened Hermes transcript, so incremental
+    /// progress (new assistant text, tool cards) appears as the run advances.
+    private func startSyncLoop() {
+        syncTask?.cancel()
+        syncTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(5))
+                if Task.isCancelled { break }
+                guard let self else { break }
+                let stillRunning = await self.syncTick()
+                if !stillRunning { break }
+            }
+        }
+    }
+
+    /// One reconcile step. Returns whether the run is still in flight. Skips the
+    /// transcript reload while a foreground stream is active so it never clobbers
+    /// live tokens (the two paths are mutually exclusive in the UI anyway).
+    @discardableResult
+    private func syncTick() async -> Bool {
+        guard !isSending else { return isBackgroundRunning }
+        do {
+            try await endpoint.syncBackgroundRuns()
+            let detail = try await endpoint.loadDetail()
+            reducer.loadPersisted(detail.messages)
+            if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
+            backgroundRun = detail.latestRun
+        } catch {
+            // Transient failure — keep the loop alive; a later tick reconciles.
+        }
+        return isBackgroundRunning
     }
 
     /// Toggle Supervise for this chat. Optimistic; rolls back on failure. A no-op
@@ -127,6 +218,7 @@ final class ChatViewModel {
 
     func handleBackground() {
         streamTask?.cancel()
+        syncTask?.cancel()  // iOS suspends timers anyway; loadHistory resumes it
         if isSending {
             reducer.finishByDisconnect()
             isSending = false
@@ -135,7 +227,8 @@ final class ChatViewModel {
 
     func handleForeground() {
         // The backend keeps a run alive across our disconnect; rehydrate to
-        // reconcile whatever happened while backgrounded.
+        // reconcile whatever happened while backgrounded. `loadHistory` re-seeds
+        // `backgroundRun` and restarts the sync loop if a handoff is still running.
         Task { await loadHistory() }
     }
 

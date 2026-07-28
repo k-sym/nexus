@@ -183,8 +183,29 @@ public struct PatchAssistantSessionRequest: Encodable, Sendable {
     }
 }
 
-/// Body for `POST /api/assistant/sessions/:id/messages/stream`.
+/// Body for `POST /api/assistant/sessions/:id/messages/stream` — also reused for
+/// `POST /api/assistant/sessions/:id/runs` (background handoff), which reads the
+/// same `{ content, attachments? }` shape.
 public struct AssistantStreamRequest: Encodable, Sendable {
     public let content: String
     public init(content: String) { self.content = content }
+}
+
+/// `{ run }` envelope shared by `POST …/runs`, `GET /api/assistant/runs/:runId`.
+/// The payload carries more (`session_id`, `remote_run_id`, `usage`…); only the
+/// fields the poll loop needs (`id`, `status` via `AssistantRun`) are modelled.
+public struct AssistantRunResponse: Decodable, Sendable {
+    public let run: AssistantRun?
+}
+
+/// `POST /api/assistant/sync` result: how many run statuses were reconciled.
+public struct AssistantSyncResponse: Decodable, Sendable {
+    public let updated: Int
+
+    enum CodingKeys: String, CodingKey { case updated }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        updated = try c.decodeIfPresent(Int.self, forKey: .updated) ?? 0
+    }
 }

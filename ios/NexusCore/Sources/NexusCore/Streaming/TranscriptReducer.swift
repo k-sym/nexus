@@ -118,6 +118,17 @@ public struct TranscriptReducer: Sendable {
         sawRunEnd = false
     }
 
+    /// Append a user message without opening a streaming assistant bubble. Used
+    /// by background handoff, where the turn executes server-side and the
+    /// transcript refreshes via polling rather than a live stream — so there is
+    /// no live assistant placeholder to spin. A later `loadPersisted` replaces
+    /// this row with the server's own copy, so no duplicate results.
+    public mutating func appendUserMessage(_ prompt: String) {
+        messages.append(RenderedMessage(
+            id: nextId("user"), role: .user, content: prompt,
+            thinking: "", toolCalls: [], isError: false, isStreaming: false))
+    }
+
     // MARK: Event application
 
     /// Apply one parsed NDJSON line. Handles both the `kind`-tagged run

@@ -105,17 +105,38 @@ struct StreamingChatView: View {
             if let usage = vm.reducer.contextUsage {
                 ContextMeter(usage: usage)
             }
+            if vm.isBackgroundActive {
+                BackgroundRunStrip(stopping: vm.backgroundRun?.status == "cancelling")
+            }
             HStack(alignment: .bottom, spacing: 8) {
                 TextField("Message", text: $vm.input, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(2...6)
-                    .disabled(vm.isSending)
+                    .disabled(vm.isSending || vm.isBackgroundActive)
+
+                // Hand off to a durable background run (assistant only): the turn
+                // keeps running on the backend even if the app is suspended.
+                if vm.supportsBackgroundHandoff, !vm.isSending, !vm.isBackgroundActive {
+                    Button { vm.startBackgroundRun() } label: {
+                        Image(systemName: "icloud.and.arrow.up").font(.title2)
+                    }
+                    .tint(.secondary)
+                    .disabled(vm.input.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .accessibilityLabel("Hand off to background run")
+                }
 
                 if vm.isSending {
                     Button { vm.abort() } label: {
                         Image(systemName: "stop.circle.fill").font(.title)
                     }
                     .tint(.red)
+                } else if vm.isBackgroundActive {
+                    Button { vm.stopBackgroundRun() } label: {
+                        Image(systemName: "stop.circle.fill").font(.title)
+                    }
+                    .tint(.red)
+                    .disabled(vm.isStartingBackgroundRun)  // no run id to stop yet
+                    .accessibilityLabel("Stop background run")
                 } else {
                     Button { vm.send() } label: {
                         Image(systemName: "arrow.up.circle.fill").font(.title)
@@ -289,6 +310,23 @@ struct ToolCallCard: View {
             if let value = object[key]?.string { return value }
         }
         return object.values.compactMap { $0.string }.first
+    }
+}
+
+/// Thin caption shown while a handed-off run executes server-side. There's no
+/// live token stream for a background run, so this reassures the user work is
+/// underway between 5s sync reloads.
+struct BackgroundRunStrip: View {
+    let stopping: Bool
+    var body: some View {
+        HStack(spacing: 6) {
+            ProgressView().controlSize(.mini)
+            Text(stopping ? "Stopping…" : "Working in the background…")
+            Spacer()
+        }
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal).padding(.top, 4)
     }
 }
 

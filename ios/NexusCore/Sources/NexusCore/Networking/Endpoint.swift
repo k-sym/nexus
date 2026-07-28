@@ -206,6 +206,30 @@ public struct Endpoint: Sendable {
     /// Abort the latest running assistant run (global, not session-scoped).
     public static let assistantAbort = Endpoint(path: "/api/assistant/abort", method: "POST")
 
+    // MARK: M6 assistant — background handoff (Phase B)
+
+    /// Hand a turn off to a durable server-side run → `{ run }`. Body an
+    /// `AssistantStreamRequest` (`{ content }`). Unlike the stream, this returns
+    /// immediately; the run keeps executing against Hermes after we disconnect.
+    public static func startAssistantRun(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/assistant/sessions/\(id)/runs", method: "POST", body: body)
+    }
+
+    /// Poll one background run's status → `{ run }`.
+    public static func assistantRun(_ runId: String) -> Endpoint {
+        Endpoint(path: "/api/assistant/runs/\(runId)")
+    }
+
+    /// Request a background run stop (marks it cancelling) → `{ ok }`.
+    public static func stopAssistantRun(_ runId: String) -> Endpoint {
+        Endpoint(path: "/api/assistant/runs/\(runId)/stop", method: "POST")
+    }
+
+    /// Reconcile all in-flight background runs against Hermes → `{ updated }`.
+    /// Global, not session-scoped; the caller reloads the session afterwards to
+    /// pull the freshened transcript.
+    public static let assistantSync = Endpoint(path: "/api/assistant/sync", method: "POST")
+
     // MARK: M5 push
 
     public static func registerDevice(body: Data) -> Endpoint {
