@@ -360,9 +360,12 @@ public actor APIClient {
     }
 
     /// Send a message and stream the turn. No busy gate on the assistant path, so
-    /// this never throws `.busy`.
-    public func streamAssistantMessage(sessionId: String, content: String) throws -> AsyncThrowingStream<JSONValue, Error> {
-        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content))
+    /// this never throws `.busy`. Image attachments route through the backend's
+    /// (non-streaming) vision path, surfaced as a single text delta.
+    public func streamAssistantMessage(
+        sessionId: String, content: String, attachments: [AssistantAttachment] = []
+    ) throws -> AsyncThrowingStream<JSONValue, Error> {
+        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content, attachments: attachments))
         return try events(.assistantSessionStream(sessionId, body: body))
     }
 
@@ -377,8 +380,10 @@ public actor APIClient {
     /// Hermes and outlives this connection; poll `syncAssistant()` + reload the
     /// session to see its progress. Throws `.server(400)` if Hermes isn't
     /// configured or the content is empty.
-    public func startAssistantRun(sessionId: String, content: String) async throws -> AssistantRun {
-        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content))
+    public func startAssistantRun(
+        sessionId: String, content: String, attachments: [AssistantAttachment] = []
+    ) async throws -> AssistantRun {
+        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content, attachments: attachments))
         let res: AssistantRunResponse = try await request(.startAssistantRun(sessionId, body: body), decoder: plainDecoder)
         guard let run = res.run else {
             throw APIError.server(status: 502, message: "Background run did not start.")
