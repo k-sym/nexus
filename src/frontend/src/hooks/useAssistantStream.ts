@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api-base';
 import { agentRunReducer, type AgentRunView } from '../chat/agent-run-state';
 import { agentRunActionsFor } from '../chat/agent-run-events';
+import { nextUserOrdinal, purgeSession, reattachAttachments, recordAttachments } from './assistantAttachmentCache';
 
 export type AssistantSessionStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'cancelling' | string;
 
@@ -118,6 +119,13 @@ export function useAssistantStream() {
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const selectedSessionIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<AssistantSession[]>([]);
+  // Mirrors `messages` so send/handoff can read the current user-row count
+  // synchronously (to key the sent-attachment cache) without a stale closure.
+  const messagesRef = useRef<AssistantMessage[]>([]);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   useEffect(() => {
     selectedSessionIdRef.current = selectedSessionId;
@@ -161,7 +169,7 @@ export function useAssistantStream() {
     };
     const run = data.latestRun ?? null;
     setSelectedSessionId(data.session.id);
-    setMessages((data.messages ?? []).map(toAssistantMessage));
+    setMessages(reattachAttachments((data.messages ?? []).map(toAssistantMessage), data.session.id));
     setLatestRun(run);
     setIsRunning(isActiveRunStatus(run?.status));
     setSessions((current) => [
@@ -189,7 +197,7 @@ export function useAssistantStream() {
     };
     const run = data.latestRun ?? null;
     setSelectedSessionId(data.session.id);
-    setMessages((data.messages ?? []).map(toAssistantMessage));
+    setMessages(reattachAttachments((data.messages ?? []).map(toAssistantMessage), data.session.id));
     setLatestRun(run);
     setIsRunning(run?.status === 'running' || run?.status === 'cancelling');
     applySessionStatus(data.session, run);
@@ -272,6 +280,9 @@ export function useAssistantStream() {
     // throw from apiFetch (the packaged WebKit webview surfaces a dropped stream
     // as `TypeError: Load failed`) can't leave `sendingRef` stuck true — which
     // would silently wedge every future send in every session until restart.
+    // Cache the sent thumbnails at this turn's ordinal so they survive a reload
+    // (the server transcript comes back text-only).
+    recordAttachments(selectedSessionId, nextUserOrdinal(messagesRef.current), attachments);
     const assistantDraft = localMessage('assistant', '');
     assistantDraft.isStreaming = true;
     setMessages((current) => [...current, localMessage('user', trimmed, attachments), assistantDraft]);
@@ -444,6 +455,7 @@ export function useAssistantStream() {
         session.id === selectedSessionId ? { ...session, status: data.run?.status ?? 'running', latestRun: data.run } : session,
       ));
     }
+    recordAttachments(selectedSessionId, nextUserOrdinal(messagesRef.current), attachments);
     setMessages((current) => [...current, localMessage('user', trimmed, attachments)]);
     return true;
   }, [selectedSessionId]);
@@ -490,6 +502,7 @@ export function useAssistantStream() {
       setError(await responseError(res));
       return false;
     }
+    purgeSession(selectedSessionId);  // drop the session's cached thumbnails
     sendingRef.current = false;
     setIsRunning(false);
     setMessages([]);
