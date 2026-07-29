@@ -7,7 +7,7 @@
  * rejected our token" and "this board has no items" must not look alike.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MondayItemWithLinks, MondayProjectConfig } from '@nexus/shared';
+import type { MondayItemWithLinks, MondayProjectConfig, Task } from '@nexus/shared';
 import {
   api, fetchMondayItems, fetchMondayProjectConfig, linkTaskToMondayItem, unlinkTaskFromMondayItem,
   type FetchJsonError,
@@ -16,6 +16,30 @@ import { MondayScopeSettings } from './MondayScopeSettings';
 
 interface Props {
   projectId: string;
+  /** Jump to this project's Kanban board — used by the linked-task chips so a
+   *  task can be found where it lives. Optional so the component still renders
+   *  standalone (e.g. in tests); the chip is a plain label without it. */
+  onNavigateToKanban?: () => void;
+}
+
+/** The Monday board's own URL, derived from any mirrored item's `url` (which
+ *  carries the account subdomain that `board_id` alone lacks). Null when no
+ *  item has a url to derive it from. */
+function deriveBoardUrl(items: MondayItemWithLinks[]): string | null {
+  const withUrl = items.find((i) => i.url);
+  if (!withUrl?.url) return null;
+  try {
+    return `${new URL(withUrl.url).origin}/boards/${withUrl.board_id}`;
+  } catch {
+    return null;
+  }
+}
+
+/** A friendly chip label: the task title, or a shortened id when the title
+ *  isn't loaded yet (short ids like test fixtures are left intact). */
+function chipLabel(taskId: string, task: Task | undefined): string {
+  if (task?.title) return task.title;
+  return taskId.length > 12 ? `${taskId.slice(0, 8)}…` : taskId;
 }
 
 /** Any non-'active' state means the initiative should not read as healthy in
@@ -39,7 +63,7 @@ interface LoadError {
   retryable?: boolean;
 }
 
-export function ProjectManagementView({ projectId }: Props) {
+export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) {
   const [items, setItems] = useState<MondayItemWithLinks[] | null>(null);
   const [error, setError] = useState<LoadError | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -67,6 +91,10 @@ export function ProjectManagementView({ projectId }: Props) {
   const [creatingItemIds, setCreatingItemIds] = useState<Set<string>>(new Set());
   const [createError, setCreateError] = useState<string | null>(null);
 
+  // Linked-task id → task, so a chip can show the task's title instead of its
+  // raw UUID. Best-effort: a chip falls back to the id if this hasn't loaded.
+  const [tasksById, setTasksById] = useState<Map<string, Task>>(new Map());
+
   // Not-yet-configured (backend 409 `code: 'unconfigured'`) and "reopened via
   // the header's Configure control" both render the same setup panel, keyed
   // off the config it should pre-fill from: null for the former (there is
@@ -74,7 +102,20 @@ export function ProjectManagementView({ projectId }: Props) {
   const [configPanel, setConfigPanel] = useState<{ current: MondayProjectConfig | null } | null>(null);
   const [configOpenError, setConfigOpenError] = useState<string | null>(null);
 
+  // Best-effort task-title lookup for the linked-task chips. Kept separate from
+  // the item load: a titles failure must never blank the item list, so it
+  // swallows its error and simply leaves the chips on their id fallback.
+  const loadTasks = useCallback(async () => {
+    try {
+      const tasks = await api.projects.tasks(projectId);
+      setTasksById(new Map(tasks.map((t) => [t.id, t])));
+    } catch {
+      // Ignore — chips fall back to the raw id.
+    }
+  }, [projectId]);
+
   const load = useCallback(async (refresh: boolean) => {
+    void loadTasks();
     const generation = ++generationRef.current;
     setError(null);
     if (refresh) setRefreshing(true);
@@ -97,7 +138,7 @@ export function ProjectManagementView({ projectId }: Props) {
     } finally {
       if (generationRef.current === generation) setRefreshing(false);
     }
-  }, [projectId]);
+  }, [projectId, loadTasks]);
 
   // Fetches the project's current Monday scope and opens the setup panel
   // pre-filled with it — the header's Configure control. A failure here
@@ -216,6 +257,8 @@ export function ProjectManagementView({ projectId }: Props) {
     groups.set(key, [...(groups.get(key) ?? []), item]);
   }
 
+  const boardUrl = deriveBoardUrl(items);
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
@@ -224,6 +267,16 @@ export function ProjectManagementView({ projectId }: Props) {
           <p className="text-xs text-zinc-500">Monday.com initiatives in this project&apos;s scope, with roll-up from linked tasks.</p>
         </div>
         <div className="flex items-center gap-2">
+          {boardUrl ? (
+            <a
+              href={boardUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 border border-zinc-800 rounded-md hover:border-zinc-700 transition-colors"
+            >
+              Open board in Monday ↗
+            </a>
+          ) : null}
           <button
             type="button"
             className="px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100 border border-zinc-800 rounded-md hover:border-zinc-700 transition-colors"
@@ -334,23 +387,37 @@ export function ProjectManagementView({ projectId }: Props) {
                     </div>
                     {item.task_ids.length > 0 ? (
                       <ul className="mt-2 flex flex-wrap gap-1.5">
-                        {item.task_ids.map((taskId) => (
-                          <li
-                            key={taskId}
-                            className="inline-flex items-center gap-1.5 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
-                          >
-                            <span>{taskId}</span>
-                            <button
-                              type="button"
-                              disabled={unlinkingTaskIds.has(taskId)}
-                              onClick={() => void handleUnlink(taskId)}
-                              aria-label={`Unlink task ${taskId} from ${item.name}`}
-                              className="text-zinc-500 hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                        {item.task_ids.map((taskId) => {
+                          const label = chipLabel(taskId, tasksById.get(taskId));
+                          return (
+                            <li
+                              key={taskId}
+                              className="inline-flex items-center gap-1.5 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
                             >
-                              {unlinkingTaskIds.has(taskId) ? '…' : '✕'}
-                            </button>
-                          </li>
-                        ))}
+                              {onNavigateToKanban ? (
+                                <button
+                                  type="button"
+                                  onClick={onNavigateToKanban}
+                                  title="Open on the Kanban board"
+                                  className="max-w-[16rem] truncate text-left hover:text-zinc-100"
+                                >
+                                  {label}
+                                </button>
+                              ) : (
+                                <span className="max-w-[16rem] truncate">{label}</span>
+                              )}
+                              <button
+                                type="button"
+                                disabled={unlinkingTaskIds.has(taskId)}
+                                onClick={() => void handleUnlink(taskId)}
+                                aria-label={`Unlink task ${taskId} from ${item.name}`}
+                                className="text-zinc-500 hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {unlinkingTaskIds.has(taskId) ? '…' : '✕'}
+                              </button>
+                            </li>
+                          );
+                        })}
                       </ul>
                     ) : null}
                   </li>
