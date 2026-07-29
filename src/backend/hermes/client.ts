@@ -142,7 +142,12 @@ export interface HermesRawToolCall {
 }
 
 export interface HermesSessionMessage {
-  id?: string;
+  // Hermes's `messages` table PK is `INTEGER PRIMARY KEY AUTOINCREMENT`, so
+  // `/api/sessions/{id}/messages` sends `id` as a JSON *number*. Typed as
+  // `string | number` to keep the wire honest; `hermesMessagesToTranscript`
+  // stringifies it before it reaches any client (see PR #319 — iOS's strict
+  // decoder rejects a numeric id).
+  id?: string | number;
   role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   created_at?: string;

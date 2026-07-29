@@ -56,6 +56,21 @@ test('hermesMessagesToTranscript folds tool output into the owning assistant mes
   assert.equal(second.tool_calls?.[0].result, 'job output');
 });
 
+test('hermesMessagesToTranscript stringifies the numeric Hermes message id', () => {
+  // Hermes's `messages.id` is `INTEGER PRIMARY KEY AUTOINCREMENT`, so the wire
+  // carries `id` as a JSON *number*. It must reach clients as a string so the
+  // transcript honours its declared `id: string` contract (iOS's strict decoder
+  // rejects a number — PR #319).
+  const numericIds: HermesSessionMessage[] = [
+    { id: 31, role: 'user', content: 'hi' },
+    { id: 32, role: 'assistant', content: 'hello' },
+    { role: 'assistant', content: 'no id here' }, // absent id stays undefined
+  ];
+  const out = hermesMessagesToTranscript(numericIds);
+  assert.deepEqual(out.map((m) => m.id), ['31', '32', undefined]);
+  assert.equal(typeof out[0].id, 'string');
+});
+
 test('hermesMessagesToTranscript marks an unpaired tool call as interrupted (mid-run capture)', () => {
   const midRun: HermesSessionMessage[] = [
     { id: 'u', role: 'user', content: 'go' },

@@ -64,6 +64,14 @@ function isErrorResult(_result: HermesSessionMessage): boolean {
   return false;
 }
 
+// Hermes sends the message PK as a JSON number (`messages.id` is
+// `INTEGER PRIMARY KEY AUTOINCREMENT`); stringify it so the transcript's `id`
+// honours its declared `string` type on the wire. JS tolerates a numeric id,
+// but a strict client decoder (iOS) rejects it — see PR #319.
+function toMessageId(id: string | number | undefined): string | undefined {
+  return id == null ? undefined : String(id);
+}
+
 export function hermesMessagesToTranscript(messages: HermesSessionMessage[]): TranscriptMessage[] {
   const results = new Map<string, HermesSessionMessage>();
   for (const m of messages) {
@@ -73,13 +81,13 @@ export function hermesMessagesToTranscript(messages: HermesSessionMessage[]): Tr
   const out: TranscriptMessage[] = [];
   for (const m of messages) {
     if (m.role === 'user') {
-      out.push({ id: m.id, role: 'user', content: m.content, timestamp: m.created_at });
+      out.push({ id: toMessageId(m.id), role: 'user', content: m.content, timestamp: m.created_at });
     } else if (m.role === 'assistant') {
       const toolCalls = (m.tool_calls ?? [])
         .map((call) => toTranscriptToolCall(call, results))
         .filter((call): call is TranscriptToolCall => call !== null);
       out.push({
-        id: m.id,
+        id: toMessageId(m.id),
         role: 'assistant',
         content: m.content,
         thinking: m.reasoning_content || null,
