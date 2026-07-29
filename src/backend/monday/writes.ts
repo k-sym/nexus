@@ -1,11 +1,15 @@
 /**
  * The only place Nexus writes to Monday.
  *
- * The write invariant: only the project's configured roll-up column and the
- * item's updates feed. Never the status column, never anything else a human
- * owns. Nexus and a human editing the item therefore write disjoint fields,
- * so there is no read-modify-write conflict to lose and no way for an agent
- * to silently declare an initiative done.
+ * The write invariant: this module writes only the project's configured
+ * roll-up column and the item's updates feed — never anything a human owns by
+ * default, so Nexus and a human editing the item write disjoint fields with no
+ * read-modify-write conflict to lose. The one deliberate exception is opt-in
+ * status sync (status-sync.ts), which writes the status column only when a
+ * project turns it on and only under guardrails that stop it from ever
+ * clobbering a status a human is relying on (never-overwrite-a-hold,
+ * forward-only, no-op-if-unchanged) — it reuses the self-healing baseline
+ * (mirrorColumnText + the lastWritten/synced_at dance) exported from here.
  *
  * Throttling is leading-edge with a trailing flush: an isolated event posts
  * at once, and everything that arrives inside the window merges into a single
@@ -90,8 +94,9 @@ export function __resetWriteState(): void {
   lastWritten.clear();
 }
 
-/** The mirror's own stored text for one column, or null if unset/unknown. */
-function mirrorColumnText(item: MondayItem, columnId: string): string | null {
+/** The mirror's own stored text for one column, or null if unset/unknown.
+ *  Exported for status-sync.ts, which needs the same per-column baseline. */
+export function mirrorColumnText(item: MondayItem, columnId: string): string | null {
   try {
     const cols = JSON.parse(item.column_values_json) as Record<string, { text?: string | null } | undefined>;
     return cols[columnId]?.text ?? null;

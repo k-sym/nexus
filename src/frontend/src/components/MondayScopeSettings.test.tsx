@@ -39,6 +39,24 @@ const CURRENT_CONFIG = {
   updates: { enabled: true, min_interval_minutes: 45 },
 };
 
+// A board whose single status column carries the DM-Safety-shaped labels, so
+// the status-sync mapping UI has real labels (and colours) to render.
+const META_STATUS = {
+  groups: [{ id: 'g1', title: 'Q3' }],
+  columns: [
+    { id: 'text_1', title: 'Points', type: 'numbers' },
+    {
+      id: 'color_1', title: 'Status', type: 'status', labels: [
+        { index: 3, text: 'Planned', color: '#007eb5' },
+        { index: 0, text: 'In flight', color: '#fdab3d' },
+        { index: 8, text: 'Near done', color: '#cab641' },
+        { index: 1, text: 'Complete', color: '#00c875' },
+        { index: 2, text: 'Wants attention', color: '#df2f4a' },
+      ],
+    },
+  ],
+};
+
 beforeEach(() => vi.restoreAllMocks());
 
 describe('MondayScopeSettings', () => {
@@ -162,6 +180,7 @@ describe('MondayScopeSettings', () => {
       group_id: null,
       rollup: { enabled: false, column_id: null, column_type: 'text' },
       updates: { enabled: false, min_interval_minutes: 30 },
+      status_sync: { enabled: false, column_id: null, forward_only: true, mapping: {} },
     }));
     expect(onSaved).toHaveBeenCalled();
   });
@@ -349,6 +368,75 @@ describe('MondayScopeSettings', () => {
     forA.resolve(META);
     await waitFor(() => expect(screen.getByText('B-Group')).toBeTruthy());
     expect(screen.queryByText('Q3')).toBeNull();
+  });
+
+  // --- status sync --------------------------------------------------------
+
+  it('enables status sync, auto-selects the sole status column, prefills the recommended mapping, and saves it', async () => {
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue(BOARDS as never);
+    vi.spyOn(api, 'fetchMondayBoardMeta').mockResolvedValue(META_STATUS as never);
+    const save = vi.spyOn(api, 'saveMondayProjectConfig').mockResolvedValue({} as never);
+    render(<MondayScopeSettings projectId="p1" current={null} onSaved={vi.fn()} />);
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^board$/i), 'b1');
+    await screen.findByText('Q3');
+    await userEvent.click(screen.getByLabelText(/sync task status/i));
+
+    // In Progress is prefilled to the recommended "In flight".
+    const inProgress = await screen.findByLabelText(/monday status for in progress/i) as HTMLSelectElement;
+    expect(inProgress.value).toBe('In flight');
+
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(save).toHaveBeenCalled());
+    const [, payload] = save.mock.calls[0] as [string, any];
+    expect(payload.status_sync.enabled).toBe(true);
+    expect(payload.status_sync.column_id).toBe('color_1'); // the sole status column, auto-selected
+    expect(payload.status_sync.forward_only).toBe(true);
+    expect(payload.status_sync.mapping.in_progress).toBe('In flight');
+    expect(payload.status_sync.mapping.deploy).toBe('Complete');
+    // Nothing is ever mapped to the human-owned inbox label.
+    expect(Object.values(payload.status_sync.mapping)).not.toContain('Wants attention');
+  });
+
+  it('shows a colour swatch reflecting the selected status label', async () => {
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue(BOARDS as never);
+    vi.spyOn(api, 'fetchMondayBoardMeta').mockResolvedValue(META_STATUS as never);
+    render(<MondayScopeSettings projectId="p1" current={null} onSaved={vi.fn()} />);
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^board$/i), 'b1');
+    await screen.findByText('Q3');
+    await userEvent.click(screen.getByLabelText(/sync task status/i));
+
+    // in_progress prefilled to "In flight" (#fdab3d) — a real, non-transparent colour.
+    const swatch = await screen.findByTestId('swatch-in_progress');
+    expect(swatch.style.backgroundColor).toBeTruthy();
+    expect(swatch.style.backgroundColor).not.toBe('transparent');
+  });
+
+  it('defaults the forward-only guard to checked', async () => {
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue(BOARDS as never);
+    vi.spyOn(api, 'fetchMondayBoardMeta').mockResolvedValue(META_STATUS as never);
+    render(<MondayScopeSettings projectId="p1" current={null} onSaved={vi.fn()} />);
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^board$/i), 'b1');
+    await screen.findByText('Q3');
+    await userEvent.click(screen.getByLabelText(/sync task status/i));
+
+    const forward = await screen.findByLabelText(/only advance status/i) as HTMLInputElement;
+    expect(forward.checked).toBe(true);
+  });
+
+  it('warns when the board has no status column and keeps Save disabled', async () => {
+    vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue(BOARDS as never);
+    vi.spyOn(api, 'fetchMondayBoardMeta').mockResolvedValue(META as never); // META has no status column
+    render(<MondayScopeSettings projectId="p1" current={null} onSaved={vi.fn()} />);
+
+    await userEvent.selectOptions(await screen.findByLabelText(/^board$/i), 'b1');
+    await screen.findByText('Q3');
+    await userEvent.click(screen.getByLabelText(/sync task status/i));
+
+    expect(await screen.findByText(/no status column/i)).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
   });
 
   it('disables Save while a save is in flight', async () => {

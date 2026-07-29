@@ -10,7 +10,8 @@
  * `db` at app-boot in index.ts, not a bespoke `{ db }` deps argument.
  */
 import type { FastifyInstance } from 'fastify';
-import type { MondayProjectConfig, MondayItemWithLinks, Project, Task } from '@nexus/shared';
+import type { MondayProjectConfig, MondayItemWithLinks, Project, Task, TaskStatus } from '@nexus/shared';
+import { KANBAN_COLUMNS } from '@nexus/shared';
 import { loadConfig } from '../config.js';
 import { resolveMondayToken } from '../monday/poll.js';
 import { syncScope } from '../monday/sync.js';
@@ -23,7 +24,9 @@ import {
   getItem, upsertItems,
 } from '../monday/store.js';
 import { computeRollup, formatRollupText } from '../monday/rollup.js';
-import { scheduleRollup, scheduleRollupForItem } from '../monday/trigger.js';
+import {
+  scheduleRollup, scheduleRollupForItem, scheduleStatusSync, scheduleStatusSyncForItem,
+} from '../monday/trigger.js';
 
 function projectMondayConfig(project: Project): MondayProjectConfig | null {
   try {
@@ -85,12 +88,43 @@ function validateMondayConfig(body: unknown): { config: MondayProjectConfig } | 
     return { error: 'updates.min_interval_minutes must be a positive number' };
   }
 
+  // status_sync is optional (a legacy or pre-feature body simply omits it —
+  // the whole `monday` block is replaced on save, so an omitted block means
+  // "off"). When present, the same up-front rejection the roll-up uses applies:
+  // an enabled sync with no column is the misconfiguration that would later
+  // self-disable and notify. The mapping is sanitized to known Kanban columns
+  // with non-empty string labels so a malformed shape can't reach the store.
+  let statusSync: MondayProjectConfig['status_sync'] | undefined;
+  const statusRaw = (b.status_sync && typeof b.status_sync === 'object')
+    ? b.status_sync as Record<string, unknown>
+    : null;
+  if (statusRaw) {
+    const statusEnabled = statusRaw.enabled === true;
+    const statusColumnId = typeof statusRaw.column_id === 'string' && statusRaw.column_id.trim()
+      ? statusRaw.column_id.trim()
+      : null;
+    if (statusEnabled && !statusColumnId) {
+      return { error: 'status_sync.column_id is required when status_sync.enabled is true' };
+    }
+    const forwardOnly = statusRaw.forward_only !== false; // default true
+    const mappingRaw = (statusRaw.mapping && typeof statusRaw.mapping === 'object')
+      ? statusRaw.mapping as Record<string, unknown>
+      : {};
+    const mapping: Partial<Record<TaskStatus, string>> = {};
+    for (const col of KANBAN_COLUMNS) {
+      const label = mappingRaw[col];
+      if (typeof label === 'string' && label.trim()) mapping[col] = label.trim();
+    }
+    statusSync = { enabled: statusEnabled, column_id: statusColumnId, forward_only: forwardOnly, mapping };
+  }
+
   return {
     config: {
       board_id: boardId,
       group_id: groupId,
       rollup: { enabled: rollupEnabled, column_id: rollupColumnId, column_type: columnType },
       updates: { enabled: updatesEnabled, min_interval_minutes: Math.max(minInterval, MIN_UPDATE_INTERVAL_MINUTES) },
+      ...(statusSync ? { status_sync: statusSync } : {}),
     },
   };
 }
@@ -313,7 +347,11 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     // routes/projects.ts already reaches the ActivityManager through — without
     // it this write was invisible in the Activity Console (only Kanban moves
     // produced a monday_write operation).
-    void scheduleRollup(db, taskId, 'task linked', fastify.activity?.bus.emit.bind(fastify.activity.bus));
+    const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
+    void scheduleRollup(db, taskId, 'task linked', emit);
+    // Link is the ownership handoff: `true` lets this first sync advance the
+    // item off the human-owned inbox label (e.g. "Wants attention" → "Planned").
+    void scheduleStatusSync(db, taskId, 'task linked', true, emit);
     return { link };
   });
 
@@ -324,10 +362,11 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     if (existing) {
       // Recompute the item we just detached from, or it keeps a count that
       // still includes this task. Same emitter seam as the link handler above.
-      void scheduleRollupForItem(
-        db, existing.item_id, existing.project_id, null,
-        fastify.activity?.bus.emit.bind(fastify.activity.bus),
-      );
+      const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
+      void scheduleRollupForItem(db, existing.item_id, existing.project_id, null, emit);
+      // Re-derive status from the remaining links. `false`: an unlink must never
+      // advance the item off a label a human is holding.
+      void scheduleStatusSyncForItem(db, existing.item_id, existing.project_id, null, false, emit);
     }
     return { ok: true };
   });

@@ -24,7 +24,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-beforeEach(() => vi.restoreAllMocks());
+beforeEach(() => {
+  vi.restoreAllMocks();
+  // The view now loads project tasks to title the linked-task chips. Default it
+  // to empty so existing tests keep their raw-id chip fallback; specific tests
+  // override it. Without this, every render would hit a real (unmocked) fetch.
+  vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([] as never);
+});
 
 describe('ProjectManagementView', () => {
   it('renders items grouped by Monday group with their roll-up', async () => {
@@ -301,6 +307,43 @@ describe('ProjectManagementView', () => {
       t3Button = screen.getByRole('button', { name: /unlink task t3/i });
       expect(t3Button).not.toBeDisabled();
     });
+  });
+
+  // --- board link + friendly linked-task chips ----------------------------
+
+  it('links out to the Monday board, derived from an item url', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    const link = await screen.findByRole('link', { name: /open board in monday/i });
+    expect(link.getAttribute('href')).toBe('https://x.monday.com/boards/b1');
+    expect(link.getAttribute('target')).toBe('_blank');
+  });
+
+  it('shows a linked task by its title and jumps to the Kanban when the chip is clicked', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([{ ...ITEM, task_ids: ['t1'] }] as never);
+    vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([
+      { id: 't1', project_id: 'p1', title: 'Fix the login bug', description: '', status: 'in_progress', priority: 'medium', created_at: 'now', updated_at: 'now' },
+    ] as never);
+    const onNavigateToKanban = vi.fn();
+    render(<ProjectManagementView projectId="p1" onNavigateToKanban={onNavigateToKanban} />);
+
+    const chip = await screen.findByRole('button', { name: 'Fix the login bug' });
+    fireEvent.click(chip);
+    expect(onNavigateToKanban).toHaveBeenCalled();
+    // The raw UUID is no longer surfaced once the title is known.
+    expect(screen.queryByText('t1')).toBeNull();
+  });
+
+  it('auto-refreshes from Monday when the window regains focus', async () => {
+    const spy = vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    await screen.findByText('Ship the thing');
+    expect(spy).toHaveBeenCalledTimes(1); // the on-open sync
+
+    fireEvent(window, new Event('focus'));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(spy).toHaveBeenLastCalledWith('p1', true);
   });
 
   // --- Task 15: per-project Monday scope configuration --------------------

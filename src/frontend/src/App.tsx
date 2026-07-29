@@ -812,7 +812,10 @@ export default function App() {
           ) : subView === 'memory' ? (
             <MemoryView projectId={activeProject.id} />
           ) : subView === 'projectManagement' ? (
-            <ProjectManagementView projectId={activeProject.id} />
+            <ProjectManagementView
+              projectId={activeProject.id}
+              onNavigateToKanban={() => selectSubView(activeProject.id, 'kanban')}
+            />
           ) : null}
         </div>
       </>

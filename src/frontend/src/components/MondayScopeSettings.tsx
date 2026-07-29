@@ -1,17 +1,20 @@
 /**
  * Configure a project's Monday scope: board, optional group, roll-up column,
- * and updates cadence. Rendered by ProjectManagementView both when a project
- * has no scope yet (in place of the error screen — see the brief's Task 15)
- * and from a "Configure" control once one exists.
+ * updates cadence, and status sync. Rendered by ProjectManagementView both when
+ * a project has no scope yet (in place of the error screen — see the brief's
+ * Task 15) and from a "Configure" control once one exists.
  *
  * This panel never offers a token field: MONDAY_TOKEN stays the only token
  * source, and the PUT this component calls does not accept or store one.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MondayProjectConfig } from '@nexus/shared';
+import {
+  KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, MONDAY_STATUS_SYNC_DEFAULT_MAPPING,
+  type MondayProjectConfig, type TaskStatus,
+} from '@nexus/shared';
 import {
   fetchMondayBoards, fetchMondayBoardMeta, saveMondayProjectConfig,
-  type MondayBoardSummary, type MondayBoardMetaResult, type FetchJsonError,
+  type MondayBoardSummary, type MondayBoardMetaResult, type MondayStatusLabel, type FetchJsonError,
 } from '../api';
 
 interface Props {
@@ -37,6 +40,21 @@ function columnTypeFor(mondayType: string): 'text' | 'numeric' {
   return mondayType === 'numbers' || mondayType === 'numeric' ? 'numeric' : 'text';
 }
 
+/** Prefill the status mapping from the recommended defaults, keeping only the
+ *  columns whose default label text actually exists on the chosen status column
+ *  (matched case-insensitively, adopting the board's own casing). */
+function defaultMappingFor(labels: MondayStatusLabel[]): Partial<Record<TaskStatus, string>> {
+  const byLower = new Map(labels.map((l) => [l.text.toLowerCase(), l.text]));
+  const out: Partial<Record<TaskStatus, string>> = {};
+  for (const col of KANBAN_COLUMNS) {
+    const wanted = MONDAY_STATUS_SYNC_DEFAULT_MAPPING[col];
+    if (!wanted) continue;
+    const match = byLower.get(wanted.toLowerCase());
+    if (match) out[col] = match;
+  }
+  return out;
+}
+
 export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: Props) {
   const [boards, setBoards] = useState<MondayBoardSummary[] | null>(null);
   const [boardsError, setBoardsError] = useState<string | null>(null);
@@ -58,6 +76,13 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
   // become a "valid" 0 and sail past validation. See minIntervalIsValid below.
   const [minIntervalMinutes, setMinIntervalMinutes] = useState(
     String(current?.updates.min_interval_minutes ?? DEFAULT_MIN_INTERVAL_MINUTES),
+  );
+
+  const [statusSyncEnabled, setStatusSyncEnabled] = useState(current?.status_sync?.enabled ?? false);
+  const [statusColumnId, setStatusColumnId] = useState<string | null>(current?.status_sync?.column_id ?? null);
+  const [forwardOnly, setForwardOnly] = useState(current?.status_sync?.forward_only ?? true);
+  const [statusMapping, setStatusMapping] = useState<Partial<Record<TaskStatus, string>>>(
+    current?.status_sync?.mapping ?? {},
   );
 
   const [saving, setSaving] = useState(false);
@@ -120,6 +145,10 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
     // harmless today because a null column_id blocks saving roll-up enabled;
     // reset both so there is never a dangling stale type.
     setRollupColumnType('text');
+    // A new board has different status columns and labels — the previous
+    // column id and mapping cannot carry over.
+    setStatusColumnId(null);
+    setStatusMapping({});
     setMeta(null);
     setMetaError(null);
     if (id) void loadMeta(id);
@@ -130,6 +159,46 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
     setRollupColumnId(id);
     const column = meta?.columns.find((c) => c.id === columnId);
     if (column) setRollupColumnType(columnTypeFor(column.type));
+  }
+
+  const statusColumns = (meta?.columns ?? []).filter((c) => c.type === 'status');
+  const selectedStatusColumn = statusColumns.find((c) => c.id === statusColumnId) ?? null;
+  const statusLabels: MondayStatusLabel[] = selectedStatusColumn?.labels ?? [];
+
+  function handleStatusSyncToggle(checked: boolean) {
+    setStatusSyncEnabled(checked);
+    if (!checked) return;
+    // Auto-select the sole status column, then prefill the mapping the first
+    // time (only when nothing is mapped yet, so editing never clobbers a saved
+    // mapping). Compute from meta directly rather than the render-derived list.
+    const cols = (meta?.columns ?? []).filter((c) => c.type === 'status');
+    let colId = statusColumnId;
+    if (!colId && cols.length === 1) {
+      colId = cols[0]!.id;
+      setStatusColumnId(colId);
+    }
+    const labels = cols.find((c) => c.id === colId)?.labels ?? [];
+    if (Object.keys(statusMapping).length === 0 && labels.length > 0) {
+      setStatusMapping(defaultMappingFor(labels));
+    }
+  }
+
+  function handleStatusColumnChange(id: string) {
+    const colId = id || null;
+    setStatusColumnId(colId);
+    const labels = (meta?.columns ?? []).find((c) => c.id === colId)?.labels ?? [];
+    if (Object.keys(statusMapping).length === 0 && labels.length > 0) {
+      setStatusMapping(defaultMappingFor(labels));
+    }
+  }
+
+  function setMappingFor(col: TaskStatus, label: string) {
+    setStatusMapping((prev) => {
+      const next = { ...prev };
+      if (label) next[col] = label;
+      else delete next[col];
+      return next;
+    });
   }
 
   // `Number('')` is 0, not NaN, so the empty-string case is checked
@@ -150,6 +219,12 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
         group_id: groupId,
         rollup: { enabled: rollupEnabled, column_id: rollupColumnId, column_type: rollupColumnType },
         updates: { enabled: updatesEnabled, min_interval_minutes: parsedMinInterval },
+        status_sync: {
+          enabled: statusSyncEnabled,
+          column_id: statusColumnId,
+          forward_only: forwardOnly,
+          mapping: statusMapping,
+        },
       };
       const saved = await saveMondayProjectConfig(projectId, config);
       // The PUT returns the clamped, canonical config it actually stored
@@ -165,6 +240,13 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
         setRollupColumnType(saved.rollup.column_type);
         setUpdatesEnabled(saved.updates.enabled);
         setMinIntervalMinutes(String(saved.updates.min_interval_minutes));
+        // status_sync is optional in the stored shape; adopt it when present.
+        if (saved.status_sync) {
+          setStatusSyncEnabled(saved.status_sync.enabled);
+          setStatusColumnId(saved.status_sync.column_id);
+          setForwardOnly(saved.status_sync.forward_only);
+          setStatusMapping(saved.status_sync.mapping ?? {});
+        }
       }
       onSaved();
     } catch (err) {
@@ -176,6 +258,7 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
 
   const canSave = Boolean(boardId)
     && (!rollupEnabled || Boolean(rollupColumnId))
+    && (!statusSyncEnabled || Boolean(statusColumnId))
     && minIntervalIsValid
     && !saving;
 
@@ -199,117 +282,214 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
         server&apos;s MONDAY_TOKEN — it is never entered here.
       </p>
 
-      <div>
-        <label htmlFor="monday-scope-board" className="block text-xs uppercase tracking-wide text-zinc-500 mb-1">
-          Board
-        </label>
-        {boards === null ? (
-          boardsError ? (
-            <p role="alert" className="text-sm text-red-400">{boardsError}</p>
-          ) : (
-            <p className="text-sm text-zinc-500">Loading boards…</p>
-          )
-        ) : (
-          <select
-            id="monday-scope-board"
-            aria-label="Board"
-            value={boardId}
-            onChange={(event) => handleBoardChange(event.target.value)}
-            className="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-sm"
-          >
-            <option value="">Select a board…</option>
-            {boards.map((board) => (
-              <option key={board.id} value={board.id}>
-                {board.name}{board.workspace ? ` (${board.workspace})` : ''}
-              </option>
-            ))}
-          </select>
-        )}
-      </div>
+      <section className="space-y-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Scope</h3>
 
-      {boardId ? (
         <div>
-          <label htmlFor="monday-scope-group" className="block text-xs uppercase tracking-wide text-zinc-500 mb-1">
-            Group
+          <label htmlFor="monday-scope-board" className="block text-xs uppercase tracking-wide text-zinc-500 mb-1">
+            Board
           </label>
-          {metaLoading ? (
-            <p className="text-sm text-zinc-500">Loading groups and columns…</p>
-          ) : metaError ? (
-            <p role="alert" className="text-sm text-red-400">{metaError}</p>
+          {boards === null ? (
+            boardsError ? (
+              <p role="alert" className="text-sm text-red-400">{boardsError}</p>
+            ) : (
+              <p className="text-sm text-zinc-500">Loading boards…</p>
+            )
           ) : (
             <select
-              id="monday-scope-group"
-              aria-label="Group"
-              value={groupId ?? ''}
-              onChange={(event) => setGroupId(event.target.value || null)}
+              id="monday-scope-board"
+              aria-label="Board"
+              value={boardId}
+              onChange={(event) => handleBoardChange(event.target.value)}
               className="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-sm"
             >
-              <option value="">Whole board</option>
-              {(meta?.groups ?? []).map((group) => (
-                <option key={group.id} value={group.id}>{group.title}</option>
+              <option value="">Select a board…</option>
+              {boards.map((board) => (
+                <option key={board.id} value={board.id}>
+                  {board.name}{board.workspace ? ` (${board.workspace})` : ''}
+                </option>
               ))}
             </select>
           )}
         </div>
-      ) : null}
 
-      <div className="space-y-1.5">
-        <label className="flex items-center gap-2 text-sm text-zinc-300">
-          <input
-            type="checkbox"
-            checked={rollupEnabled}
-            onChange={(event) => setRollupEnabled(event.target.checked)}
-          />
-          Write task roll-up to a column
-        </label>
-        <select
-          aria-label="Roll-up column"
-          value={rollupColumnId ?? ''}
-          disabled={rollupSelectDisabled}
-          onChange={(event) => handleColumnChange(event.target.value)}
-          className="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-        >
-          <option value="">{rollupPlaceholder}</option>
-          {(meta?.columns ?? []).map((column) => (
-            <option key={column.id} value={column.id}>{column.title} ({column.type})</option>
-          ))}
-        </select>
-      </div>
-
-      <div className="space-y-1.5">
-        <label className="flex items-center gap-2 text-sm text-zinc-300">
-          <input
-            type="checkbox"
-            checked={updatesEnabled}
-            onChange={(event) => {
-              const checked = event.target.checked;
-              setUpdatesEnabled(checked);
-              // Turning updates off while the interval field holds an
-              // invalid value (e.g. emptied while it was still editable)
-              // would otherwise leave Save permanently disabled with no
-              // visible input to fix, since the field is greyed out whenever
-              // the toggle is off. Restore a sane value instead.
-              if (!checked && !minIntervalIsValid) setMinIntervalMinutes(String(DEFAULT_MIN_INTERVAL_MINUTES));
-            }}
-          />
-          Post progress to the item&apos;s updates feed
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="number"
-            min={MIN_UPDATE_INTERVAL_MINUTES}
-            aria-label="Update interval (minutes)"
-            disabled={!updatesEnabled}
-            value={minIntervalMinutes}
-            onChange={(event) => setMinIntervalMinutes(event.target.value)}
-            className="w-24 rounded border border-white/10 bg-transparent px-2 py-1 text-sm disabled:opacity-50"
-          />
-          <span className="text-sm text-zinc-500">minutes between updates (minimum {MIN_UPDATE_INTERVAL_MINUTES})</span>
-        </div>
-        {updatesEnabled && !minIntervalIsValid ? (
-          <p role="alert" className="text-xs text-red-400">Enter a positive number of minutes.</p>
+        {boardId ? (
+          <div>
+            <label htmlFor="monday-scope-group" className="block text-xs uppercase tracking-wide text-zinc-500 mb-1">
+              Group
+            </label>
+            {metaLoading ? (
+              <p className="text-sm text-zinc-500">Loading groups and columns…</p>
+            ) : metaError ? (
+              <p role="alert" className="text-sm text-red-400">{metaError}</p>
+            ) : (
+              <select
+                id="monday-scope-group"
+                aria-label="Group"
+                value={groupId ?? ''}
+                onChange={(event) => setGroupId(event.target.value || null)}
+                className="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="">Whole board</option>
+                {(meta?.groups ?? []).map((group) => (
+                  <option key={group.id} value={group.id}>{group.title}</option>
+                ))}
+              </select>
+            )}
+          </div>
         ) : null}
-      </div>
+      </section>
+
+      <section className="space-y-3 border-t border-white/10 pt-4">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-zinc-400">Write back to Monday</h3>
+
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={rollupEnabled}
+              onChange={(event) => setRollupEnabled(event.target.checked)}
+            />
+            Write task roll-up to a column
+          </label>
+          <select
+            aria-label="Roll-up column"
+            value={rollupColumnId ?? ''}
+            disabled={rollupSelectDisabled}
+            onChange={(event) => handleColumnChange(event.target.value)}
+            className="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-sm disabled:opacity-50"
+          >
+            <option value="">{rollupPlaceholder}</option>
+            {(meta?.columns ?? []).map((column) => (
+              <option key={column.id} value={column.id}>{column.title} ({column.type})</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1.5">
+          <label className="flex items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={updatesEnabled}
+              onChange={(event) => {
+                const checked = event.target.checked;
+                setUpdatesEnabled(checked);
+                // Turning updates off while the interval field holds an
+                // invalid value (e.g. emptied while it was still editable)
+                // would otherwise leave Save permanently disabled with no
+                // visible input to fix, since the field is greyed out whenever
+                // the toggle is off. Restore a sane value instead.
+                if (!checked && !minIntervalIsValid) setMinIntervalMinutes(String(DEFAULT_MIN_INTERVAL_MINUTES));
+              }}
+            />
+            Post progress to the item&apos;s updates feed
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={MIN_UPDATE_INTERVAL_MINUTES}
+              aria-label="Update interval (minutes)"
+              disabled={!updatesEnabled}
+              value={minIntervalMinutes}
+              onChange={(event) => setMinIntervalMinutes(event.target.value)}
+              className="w-24 rounded border border-white/10 bg-transparent px-2 py-1 text-sm disabled:opacity-50"
+            />
+            <span className="text-sm text-zinc-500">minutes between updates (minimum {MIN_UPDATE_INTERVAL_MINUTES})</span>
+          </div>
+          {updatesEnabled && !minIntervalIsValid ? (
+            <p role="alert" className="text-xs text-red-400">Enter a positive number of minutes.</p>
+          ) : null}
+        </div>
+
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-sm text-zinc-300">
+            <input
+              type="checkbox"
+              checked={statusSyncEnabled}
+              onChange={(event) => handleStatusSyncToggle(event.target.checked)}
+            />
+            Sync task status to the Monday board
+          </label>
+
+          {statusSyncEnabled ? (
+            !boardId ? (
+              <p className="text-sm text-zinc-500 pl-6">Select a board first.</p>
+            ) : metaLoading ? (
+              <p className="text-sm text-zinc-500 pl-6">Loading columns…</p>
+            ) : metaError ? (
+              <p role="alert" className="text-sm text-red-400 pl-6">{metaError}</p>
+            ) : statusColumns.length === 0 ? (
+              <p role="alert" className="text-sm text-amber-400 pl-6">This board has no status column to write to.</p>
+            ) : (
+              <div className="space-y-3 pl-6">
+                {statusColumns.length > 1 ? (
+                  <div>
+                    <label htmlFor="monday-status-column" className="block text-xs uppercase tracking-wide text-zinc-500 mb-1">
+                      Status column
+                    </label>
+                    <select
+                      id="monday-status-column"
+                      aria-label="Status column"
+                      value={statusColumnId ?? ''}
+                      onChange={(event) => handleStatusColumnChange(event.target.value)}
+                      className="w-full rounded border border-white/10 bg-transparent px-2 py-1 text-sm"
+                    >
+                      <option value="">Select a status column…</option>
+                      {statusColumns.map((column) => (
+                        <option key={column.id} value={column.id}>{column.title}</option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+
+                {statusColumnId ? (
+                  <div className="space-y-1.5">
+                    <p className="text-xs uppercase tracking-wide text-zinc-500">Kanban column → Monday status</p>
+                    {KANBAN_COLUMNS.map((col) => {
+                      const selectedLabel = statusMapping[col] ?? '';
+                      const swatch = statusLabels.find((l) => l.text === selectedLabel)?.color ?? null;
+                      return (
+                        <div key={col} className="flex items-center gap-2">
+                          <span className="w-24 shrink-0 text-sm text-zinc-300">{KANBAN_COLUMN_LABELS[col]}</span>
+                          <span
+                            aria-hidden
+                            data-testid={`swatch-${col}`}
+                            className="inline-block h-3 w-3 shrink-0 rounded-sm border border-white/10"
+                            style={{ backgroundColor: swatch ?? 'transparent' }}
+                          />
+                          <select
+                            aria-label={`Monday status for ${KANBAN_COLUMN_LABELS[col]}`}
+                            value={selectedLabel}
+                            onChange={(event) => setMappingFor(col, event.target.value)}
+                            className="flex-1 rounded border border-white/10 bg-transparent px-2 py-1 text-sm"
+                          >
+                            <option value="">— don&apos;t change —</option>
+                            {statusLabels.map((label) => (
+                              <option key={label.index} value={label.text}>{label.text}</option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })}
+                    <label className="flex items-center gap-2 text-sm text-zinc-300 pt-1">
+                      <input
+                        type="checkbox"
+                        checked={forwardOnly}
+                        onChange={(event) => setForwardOnly(event.target.checked)}
+                      />
+                      Only advance status, never move it backwards
+                    </label>
+                    <p className="text-xs text-zinc-500">
+                      Nexus never sets the human-owned inbox status, and won&apos;t overwrite a status you set to a
+                      label outside this mapping.
+                    </p>
+                  </div>
+                ) : null}
+              </div>
+            )
+          ) : null}
+        </div>
+      </section>
 
       {saveError ? <p role="alert" className="text-sm text-red-400">{saveError}</p> : null}
 

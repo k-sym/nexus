@@ -338,9 +338,18 @@ export interface MondayBoardSummary {
   workspace: string | null;
 }
 
+/** One selectable label on a Monday status column (mirror of the backend's
+ *  MondayStatusLabel — this crosses as JSON, so the shape is restated here). */
+export interface MondayStatusLabel {
+  index: number;
+  text: string;
+  color: string | null;
+}
+
 export interface MondayBoardMetaResult {
   groups: Array<{ id: string; title: string }>;
-  columns: Array<{ id: string; title: string; type: string }>;
+  /** Status columns carry their selectable `labels`; other column types omit it. */
+  columns: Array<{ id: string; title: string; type: string; labels?: MondayStatusLabel[] }>;
 }
 
 export async function fetchMondayBoards(): Promise<MondayBoardSummary[]> {

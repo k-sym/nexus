@@ -547,6 +547,19 @@ export const MONDAY_ROLLUP_BUCKETS: Record<TaskStatus, 'open' | 'inProgress' | '
   deploy: 'done',
 };
 
+/** Recommended Kanban-column → Monday status-label mapping, used purely to
+ *  prefill the status-sync config UI the first time it is enabled. Only labels
+ *  whose text actually exists on the chosen board are applied; the stored
+ *  config is whatever the user saves. Deliberately maps nothing to the
+ *  human-owned inbox label ("Wants attention"). */
+export const MONDAY_STATUS_SYNC_DEFAULT_MAPPING: Partial<Record<TaskStatus, string>> = {
+  triage: 'Planned',
+  todo: 'Planned',
+  in_progress: 'In flight',
+  review: 'Near done',
+  deploy: 'Complete',
+};
+
 /** A mirrored Monday item. Disposable — Monday stays canonical. */
 export interface MondayItem {
   item_id: string;
@@ -606,6 +619,30 @@ export interface MondayProjectConfig {
     column_type: 'text' | 'numeric';
   };
   updates: { enabled: boolean; min_interval_minutes: number };
+  /** Push the Nexus task lifecycle onto the item's Monday status column.
+   *  Opt-in and off by default — it is the third Nexus→Monday write path
+   *  (alongside `rollup` and `updates`), and the only one that writes a
+   *  column a human also owns, so it carries extra guardrails (see
+   *  backend/monday/status-sync.ts). Optional so a legacy or hand-written
+   *  `monday` block with no `status_sync` sub-key at all stays valid input —
+   *  the write path guards it with the same optional chaining `rollup`/
+   *  `updates` already rely on. */
+  status_sync?: {
+    enabled: boolean;
+    /** The status column to write. Chosen from the board's status columns in
+     *  the config UI; required whenever `enabled` is true. */
+    column_id: string | null;
+    /** When true (the default), Nexus only ever advances an item to a later
+     *  lifecycle stage — a card dragged backwards never regresses a status a
+     *  human may be relying on. */
+    forward_only: boolean;
+    /** Kanban column → Monday status **label text**. A column with no entry
+     *  (or an empty string) means "don't drive the status from this column".
+     *  Text, not the label index: it is what the mirror already stores, so
+     *  the no-op/forward-only/hold comparisons need no extra fetch. Nothing
+     *  here should map to the human-owned inbox label ("Wants attention"). */
+    mapping: Partial<Record<TaskStatus, string>>;
+  };
 }
 
 export interface ProjectConfig {

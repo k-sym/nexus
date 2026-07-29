@@ -8,8 +8,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { MondayProjectConfig, Project } from '@nexus/shared';
 import { getDb } from '../db';
-import { scheduleRollup, disableRollupForProject } from '../monday/trigger';
+import {
+  scheduleRollup, disableRollupForProject, scheduleStatusSync, disableStatusSyncForProject,
+} from '../monday/trigger';
 import { __resetWriteState } from '../monday/writes';
+import { __resetStatusSyncState } from '../monday/status-sync';
 import { upsertItems, linkTask } from '../monday/store';
 import { MondayError } from '../monday/client';
 import { loadConfig, saveConfig } from '../config';
@@ -23,7 +26,7 @@ const NEXUS_HOME = mkdtempSync(join(tmpdir(), 'nexus-monday-trigger-home-'));
 process.env.NEXUS_HOME = NEXUS_HOME;
 after(() => rmSync(NEXUS_HOME, { recursive: true, force: true }));
 
-beforeEach(() => __resetWriteState());
+beforeEach(() => { __resetWriteState(); __resetStatusSyncState(); });
 
 /**
  * scheduleRollup reads `loadConfig().monday.enabled` as its global kill
@@ -223,6 +226,87 @@ test('scheduleRollup degrades to a no-op, not a throw, on a project config with 
   // unexpected failure.
   assert.equal(events.length, 0);
   assert.equal(loggedErrors.length, 0, 'a guarded no-op must not be logged as "failed unexpectedly"');
+  delete process.env.MONDAY_TOKEN;
+  db.close();
+});
+
+// --- status sync ---------------------------------------------------------
+
+function seedStatus(db: ReturnType<typeof getDb>) {
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','','', ?, 0, '', 'now','now')`)
+    .run(JSON.stringify({
+      monday: {
+        board_id: 'b1', group_id: null,
+        rollup: { enabled: false, column_id: null, column_type: 'text' },
+        updates: { enabled: false, min_interval_minutes: 30 },
+        status_sync: {
+          enabled: true, column_id: 'color_1', forward_only: true,
+          mapping: { in_progress: 'In flight', deploy: 'Complete' },
+        },
+      },
+    }));
+  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
+              VALUES ('t1','p1','A','','in_progress','medium','now','now')`).run();
+  upsertItems(db, [{
+    item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
+    name: 'Initiative', state: 'active', status_label: null, status_color: null,
+    owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
+  }]);
+  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  process.env.MONDAY_TOKEN = 'tok';
+}
+
+function readStatusConfig(db: ReturnType<typeof getDb>): NonNullable<MondayProjectConfig['status_sync']> {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get('p1') as Project;
+  return (JSON.parse(project.config_json) as { monday: MondayProjectConfig }).monday.status_sync!;
+}
+
+test('a status sync emits a monday_write operation titled "Monday status"', async () => {
+  const db = getDb(':memory:');
+  seedStatus(db);
+  const events: ActivityEvent[] = [];
+  await withMondayEnabled(() =>
+    scheduleStatusSync(db, 't1', null, false, (e) => events.push(e), { setStatus: async () => {} } as never),
+  );
+  assert.equal(events[0].kind, 'monday_write');
+  assert.equal(events[0].title, 'Monday status');
+  assert.equal(events.at(-1)!.status, 'succeeded');
+  delete process.env.MONDAY_TOKEN;
+  db.close();
+});
+
+test('a rejected status label self-disables status sync and notifies once', async () => {
+  const db = getDb(':memory:');
+  seedStatus(db);
+  const fail = { setStatus: async () => { throw new MondayError('Label not found', 'ColumnValueException', 200); } };
+  await withMondayEnabled(async () => {
+    await scheduleStatusSync(db, 't1', null, false, undefined, fail as never);
+    assert.equal(readStatusConfig(db).enabled, false);
+    assert.equal((db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c, 1);
+
+    // Now disabled, a second call must not write or notify again.
+    await scheduleStatusSync(db, 't1', null, false, undefined, fail as never);
+    assert.equal((db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c, 1);
+  });
+  delete process.env.MONDAY_TOKEN;
+  db.close();
+});
+
+test('disableStatusSyncForProject is idempotent — calling it twice notifies exactly once', () => {
+  const db = getDb(':memory:');
+  seedStatus(db);
+  disableStatusSyncForProject(db, 'p1', 'label deleted');
+  assert.equal(readStatusConfig(db).enabled, false);
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c, 1);
+
+  disableStatusSyncForProject(db, 'p1', 'label deleted');
+  assert.equal(readStatusConfig(db).enabled, false);
+  assert.equal(
+    (db.prepare('SELECT COUNT(*) AS c FROM notifications').get() as { c: number }).c,
+    1,
+    'a second call against an already-disabled project must not notify again',
+  );
   delete process.env.MONDAY_TOKEN;
   db.close();
 });

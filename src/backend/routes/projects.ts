@@ -13,7 +13,9 @@ import { detectGitRemote } from '../github/repo.js';
 import { syncGitHubIssues, ensureProjectGitRemote, noteSyncError, clearSyncError } from '../github/sync.js';
 import { GitHubError } from '../github/client.js';
 import { loadConfig } from '../config.js';
-import { scheduleRollup, scheduleRollupForItem } from '../monday/trigger.js';
+import {
+  scheduleRollup, scheduleRollupForItem, scheduleStatusSync, scheduleStatusSyncForItem,
+} from '../monday/trigger.js';
 import { getLinkForTask, unlinkTask } from '../monday/store.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
@@ -571,7 +573,12 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     // delay or fail it. Uses the same `fastify.activity?.bus.emit` seam the
     // GitHub sync call above already reaches the ActivityManager through.
     if (body.status != null && body.status !== existing.status) {
-      void scheduleRollup(db, id, `task moved to ${body.status}`, fastify.activity?.bus.emit.bind(fastify.activity.bus));
+      const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
+      void scheduleRollup(db, id, `task moved to ${body.status}`, emit);
+      // Same fire-and-forget seam: push the item's Monday status from the new
+      // aggregate stage. `false` — a plain move never advances an item off a
+      // label a human set outside the mapping (see status-sync.ts's hold rule).
+      void scheduleStatusSync(db, id, `task moved to ${body.status}`, false, emit);
     }
 
     // Summarize a completed task-chat into memory + Obsidian when its card is
@@ -621,10 +628,11 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       // or fail it. Same `fastify.activity?.bus.emit` seam the Kanban
       // status-change path above uses, so this write shows up in the
       // Activity Console too.
-      void scheduleRollupForItem(
-        db, existing.item_id, existing.project_id, null,
-        fastify.activity?.bus.emit.bind(fastify.activity.bus),
-      );
+      const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
+      void scheduleRollupForItem(db, existing.item_id, existing.project_id, null, emit);
+      // Re-derive the item's status too — deleting a linked task can change the
+      // aggregate stage. `false`: never advance off a human-held label.
+      void scheduleStatusSyncForItem(db, existing.item_id, existing.project_id, null, false, emit);
     }
     return { success: true };
   });

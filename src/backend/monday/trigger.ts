@@ -14,6 +14,7 @@ import { loadConfig } from '../config.js';
 import { resolveMondayToken } from './poll.js';
 import { getLinkForTask } from './store.js';
 import { writeRollup, type RollupWriteDeps } from './writes.js';
+import { writeStatus, type StatusWriteDeps } from './status-sync.js';
 import { MondayError, type MondayClientOptions } from './client.js';
 import { insertNotification } from '../notifications/index.js';
 import type { ActivityEvent } from '../activity/events.js';
@@ -48,6 +49,24 @@ export function disableRollupForProject(db: Database.Database, projectId: string
     level: 'error',
     title: 'Monday roll-up disabled',
     message: `${reason}. Re-select a roll-up column in the project's Monday settings to turn it back on.`,
+  });
+}
+
+/** Turn status sync off for a project, leaving every other setting intact.
+ *  Same idempotent shape as disableRollupForProject: a racing pair of task
+ *  moves that both hit a stale-label write must not each insert a notification. */
+export function disableStatusSyncForProject(db: Database.Database, projectId: string, reason: string): void {
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
+  if (!project) return;
+  const parsed = JSON.parse(project.config_json || '{}') as { monday?: MondayProjectConfig };
+  if (!parsed.monday?.status_sync?.enabled) return;
+  parsed.monday.status_sync.enabled = false;
+  db.prepare('UPDATE projects SET config_json = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(parsed), new Date().toISOString(), projectId);
+  insertNotification(db, {
+    level: 'error',
+    title: 'Monday status sync disabled',
+    message: `${reason}. Re-check the status mapping in the project's Monday settings to turn it back on.`,
   });
 }
 
@@ -127,5 +146,83 @@ export async function scheduleRollup(
     await scheduleRollupForItem(db, link.item_id, link.project_id, taskId, emit, deps);
   } catch (err) {
     console.error('[monday] scheduleRollup failed unexpectedly:', (err as Error)?.message ?? err);
+  }
+}
+
+/**
+ * Push a specific item's status from its linked tasks' aggregate stage. The
+ * item-addressed form, mirroring scheduleRollupForItem: fire-and-forget, one
+ * outer try/catch so nothing here can fail the already-committed caller, and a
+ * configuration error (bad column/label) self-disables status sync after one
+ * notification rather than failing on every future move.
+ *
+ * `allowAdvanceFromUnmanaged` is the ownership handoff: only the link-create
+ * call site passes true, letting the first sync advance an item off the human-
+ * owned inbox label. Every other trigger passes false, so a status a human set
+ * outside the mapping is left untouched.
+ */
+export async function scheduleStatusSyncForItem(
+  db: Database.Database,
+  itemId: string,
+  projectId: string,
+  taskId: string | null,
+  allowAdvanceFromUnmanaged: boolean,
+  emit?: (event: ActivityEvent) => void,
+  deps?: StatusWriteDeps,
+): Promise<void> {
+  try {
+    const cfg = loadConfig().monday;
+    const token = resolveMondayToken();
+    if (!cfg.enabled || !token) return;
+
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
+    const projectCfg = projectMondayConfig(project);
+    if (!projectCfg || !projectCfg.status_sync?.enabled || !projectCfg.status_sync?.column_id) return;
+
+    const opts: MondayClientOptions = { token, apiVersion: cfg.api_version };
+    const operationId = crypto.randomUUID();
+    const startedAt = Date.now();
+    emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday status', projectId, taskId });
+
+    try {
+      const result = await writeStatus(db, opts, projectCfg, itemId, deps, { allowAdvanceFromUnmanaged });
+      emit?.({
+        type: 'stop', operationId, kind: 'monday_write', title: 'Monday status',
+        projectId, taskId, status: 'succeeded', durationMs: Date.now() - startedAt, lastEvent: result,
+      });
+    } catch (err) {
+      const monday = err as MondayError;
+      emit?.({
+        type: 'stop', operationId, kind: 'monday_write', title: 'Monday status',
+        projectId, taskId, status: 'failed', durationMs: Date.now() - startedAt, error: monday.message,
+      });
+      // A missing column or a label the column no longer has (e.g. renamed on
+      // Monday, leaving the mapping stale) is a configuration problem: retrying
+      // it on every future move would fail forever and bury the Activity Console.
+      if (monday.code && CONFIG_ERROR_CODES.has(monday.code)) {
+        disableStatusSyncForProject(db, projectId, `Monday rejected the status write: ${monday.message}`);
+      }
+    }
+  } catch (err) {
+    console.error('[monday] scheduleStatusSyncForItem failed unexpectedly:', (err as Error)?.message ?? err);
+  }
+}
+
+/** Sync the status of whatever item this task is linked to. Silent no-op when
+ *  unlinked. `allowAdvanceFromUnmanaged` true only from the link-create site. */
+export async function scheduleStatusSync(
+  db: Database.Database,
+  taskId: string,
+  _event: string | null,
+  allowAdvanceFromUnmanaged: boolean,
+  emit?: (event: ActivityEvent) => void,
+  deps?: StatusWriteDeps,
+): Promise<void> {
+  try {
+    const link = getLinkForTask(db, taskId);
+    if (!link) return;
+    await scheduleStatusSyncForItem(db, link.item_id, link.project_id, taskId, allowAdvanceFromUnmanaged, emit, deps);
+  } catch (err) {
+    console.error('[monday] scheduleStatusSync failed unexpectedly:', (err as Error)?.message ?? err);
   }
 }
