@@ -8,7 +8,10 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MondayItemWithLinks, MondayProjectConfig } from '@nexus/shared';
-import { fetchMondayItems, fetchMondayProjectConfig, unlinkTaskFromMondayItem, type FetchJsonError } from '../api';
+import {
+  api, fetchMondayItems, fetchMondayProjectConfig, linkTaskToMondayItem, unlinkTaskFromMondayItem,
+  type FetchJsonError,
+} from '../api';
 import { MondayScopeSettings } from './MondayScopeSettings';
 
 interface Props {
@@ -58,6 +61,11 @@ export function ProjectManagementView({ projectId }: Props) {
   // state while the second is still pending).
   const [unlinkingTaskIds, setUnlinkingTaskIds] = useState<Set<string>>(new Set());
   const [unlinkError, setUnlinkError] = useState<string | null>(null);
+
+  // Item-scoped, same shape as the unlink state: a Set so two concurrent
+  // "create task in Triage" clicks on different rows don't clobber each other.
+  const [creatingItemIds, setCreatingItemIds] = useState<Set<string>>(new Set());
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Not-yet-configured (backend 409 `code: 'unconfigured'`) and "reopened via
   // the header's Configure control" both render the same setup panel, keyed
@@ -136,6 +144,27 @@ export function ProjectManagementView({ projectId }: Props) {
       });
     }
   }, [load]);
+
+  // Create a Triage task from an item and link it in one click, then reload so
+  // the new link (and, when status sync is on, the "Planned" push it triggers)
+  // is reflected. The two existing endpoints are reused — no bespoke backend.
+  const handleCreateTask = useCallback(async (item: MondayItemWithLinks) => {
+    setCreatingItemIds(prev => new Set([...prev, item.item_id]));
+    setCreateError(null);
+    try {
+      const task = await api.projects.createTask(projectId, { title: item.name, status: 'triage' });
+      await linkTaskToMondayItem(projectId, task.id, item.item_id);
+      await load(false);
+    } catch (err) {
+      setCreateError((err as Error).message);
+    } finally {
+      setCreatingItemIds(prev => {
+        const next = new Set(prev);
+        next.delete(item.item_id);
+        return next;
+      });
+    }
+  }, [projectId, load]);
 
   // Rendered both for a genuinely unconfigured project (no already-loaded
   // view exists, so no Cancel) and for a reopened Configure (items !== null,
@@ -258,6 +287,19 @@ export function ProjectManagementView({ projectId }: Props) {
         </div>
       ) : null}
 
+      {createError ? (
+        <div role="alert" className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <span>{createError}</span>
+          <button
+            type="button"
+            className="text-xs text-red-300 underline shrink-0"
+            onClick={() => setCreateError(null)}
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
         {!error && items.length === 0 ? (
           <div className="text-sm text-zinc-600 text-center py-10">No Monday items in this project&apos;s scope.</div>
@@ -280,6 +322,15 @@ export function ProjectManagementView({ projectId }: Props) {
                       {degradedLabel(item.state) ? (
                         <span className="text-amber-300">{degradedLabel(item.state)}</span>
                       ) : null}
+                      <button
+                        type="button"
+                        disabled={creatingItemIds.has(item.item_id) || item.state !== 'active'}
+                        onClick={() => void handleCreateTask(item)}
+                        aria-label={`Create a Triage task from ${item.name}`}
+                        className="ml-auto shrink-0 text-zinc-400 hover:text-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {creatingItemIds.has(item.item_id) ? 'Creating…' : '＋ Create task in Triage'}
+                      </button>
                     </div>
                     {item.task_ids.length > 0 ? (
                       <ul className="mt-2 flex flex-wrap gap-1.5">

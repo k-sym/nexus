@@ -6,7 +6,9 @@ import {
   fetchBoardItems,
   fetchBoards,
   fetchBoardMeta,
+  parseStatusLabels,
   setSimpleColumnValue,
+  setStatusColumnValue,
   createUpdate,
   MondayError,
 } from '../monday/client';
@@ -387,10 +389,77 @@ test('fetchBoardMeta returns groups and columns for one board', async () => {
   const meta = await fetchBoardMeta({ ...OPTS, fetchImpl: fakeFetch as any }, 'board-1');
   assert.deepEqual(seenVariables, { boardId: 'board-1' });
   assert.deepEqual(meta.groups, [{ id: 'g1', title: 'Q3' }]);
+  // A status column always carries a `labels` array (empty here — the stub
+  // returns no settings_str); non-status columns omit the field.
   assert.deepEqual(meta.columns, [
     { id: 'text_1', title: 'Points', type: 'numbers' },
-    { id: 'status', title: 'Status', type: 'status' },
+    { id: 'status', title: 'Status', type: 'status', labels: [] },
   ]);
+});
+
+test('fetchBoardMeta parses a status column\'s labels from settings_str', async () => {
+  const fakeFetch = async () => jsonResponse({
+    data: {
+      boards: [{
+        groups: [],
+        columns: [{
+          id: 'color_1', title: 'Status', type: 'status',
+          settings_str: JSON.stringify({
+            labels: { 0: 'In flight', 1: 'Complete', 2: 'Wants attention' },
+            labels_colors: { 0: { color: '#fdab3d' }, 1: { color: '#00c875' }, 2: { color: '#df2f4a' } },
+            labels_positions_v2: { 1: 0, 0: 1, 2: 2 },
+            deactivated_labels: [],
+          }),
+        }],
+      }],
+    },
+  });
+  const meta = await fetchBoardMeta({ ...OPTS, fetchImpl: fakeFetch as any }, 'board-1');
+  // Ordered by display position (Complete=0, In flight=1, Wants attention=2),
+  // each carrying its index and colour.
+  assert.deepEqual(meta.columns[0].labels, [
+    { index: 1, text: 'Complete', color: '#00c875' },
+    { index: 0, text: 'In flight', color: '#fdab3d' },
+    { index: 2, text: 'Wants attention', color: '#df2f4a' },
+  ]);
+});
+
+test('parseStatusLabels drops deactivated labels and fails open on junk', () => {
+  const settings = JSON.stringify({
+    labels: { 0: 'Alive', 1: 'Dead', 2: '' },
+    labels_colors: { 0: { color: '#111' } },
+    deactivated_labels: [1],
+  });
+  assert.deepEqual(parseStatusLabels(settings), [{ index: 0, text: 'Alive', color: '#111' }]);
+  // A blank/absent/unparseable settings string degrades to [], never throws.
+  assert.deepEqual(parseStatusLabels(null), []);
+  assert.deepEqual(parseStatusLabels('{not json'), []);
+  assert.deepEqual(parseStatusLabels('{}'), []);
+});
+
+test('setStatusColumnValue sends the label as the simple value', async () => {
+  let seenVariables: unknown;
+  let seenQuery: string | undefined;
+  const fakeFetch = async (_url: string, init?: RequestInit) => {
+    const parsed = JSON.parse(init!.body as string);
+    seenVariables = parsed.variables;
+    seenQuery = parsed.query;
+    return jsonResponse({ data: { change_simple_column_value: { id: '900' } } });
+  };
+  await setStatusColumnValue(
+    { ...OPTS, fetchImpl: fakeFetch as any },
+    'board-1',
+    'item-900',
+    'color_1',
+    'In flight',
+  );
+  assert.deepEqual(seenVariables, {
+    boardId: 'board-1',
+    itemId: 'item-900',
+    columnId: 'color_1',
+    value: 'In flight',
+  });
+  assert.match(seenQuery!, /change_simple_column_value/);
 });
 
 test('fetchBoardMeta throws instead of returning empty when boards[] comes back empty', async () => {

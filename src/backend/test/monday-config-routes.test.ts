@@ -433,6 +433,77 @@ test('PUT does not accept or store a token even if one is sent under a plausible
   db.close();
 });
 
+// --- status_sync validation ---------------------------------------------
+
+test('PUT project config persists status_sync and it round-trips through GET', async () => {
+  const db = getDb(':memory:');
+  seedProjectWithoutMonday(db);
+  const app = await buildApp(db);
+  const status_sync = {
+    enabled: true, column_id: 'color_1', forward_only: true,
+    mapping: { in_progress: 'In flight', deploy: 'Complete' },
+  };
+  const res = await app.inject({
+    method: 'PUT', url: '/api/monday/projects/p1/config',
+    payload: { ...VALID_CONFIG, status_sync },
+  });
+  assert.equal(res.statusCode, 200);
+  const get = await app.inject({ method: 'GET', url: '/api/monday/projects/p1/config' });
+  assert.deepEqual(get.json().config.status_sync, status_sync);
+  await app.close();
+  db.close();
+});
+
+test('PUT project config rejects status_sync.enabled true with no column_id', async () => {
+  const db = getDb(':memory:');
+  seedProjectWithoutMonday(db);
+  const app = await buildApp(db);
+  const res = await app.inject({
+    method: 'PUT', url: '/api/monday/projects/p1/config',
+    payload: { ...VALID_CONFIG, status_sync: { enabled: true, column_id: '', forward_only: true, mapping: {} } },
+  });
+  assert.equal(res.statusCode, 400);
+  assert.equal(res.json().error, 'status_sync.column_id is required when status_sync.enabled is true');
+  await app.close();
+  db.close();
+});
+
+test('PUT project config sanitizes the status_sync mapping (drops unknown keys and non-string labels)', async () => {
+  const db = getDb(':memory:');
+  seedProjectWithoutMonday(db);
+  const app = await buildApp(db);
+  const res = await app.inject({
+    method: 'PUT', url: '/api/monday/projects/p1/config',
+    payload: {
+      ...VALID_CONFIG,
+      status_sync: {
+        enabled: false, column_id: null, forward_only: true,
+        mapping: { in_progress: 'In flight', not_a_column: 'X', deploy: 123 },
+      },
+    },
+  });
+  assert.equal(res.statusCode, 200);
+  const row = db.prepare('SELECT config_json FROM projects WHERE id = ?').get('p1') as { config_json: string };
+  const parsed = JSON.parse(row.config_json);
+  assert.deepEqual(parsed.monday.status_sync.mapping, { in_progress: 'In flight' });
+  await app.close();
+  db.close();
+});
+
+test('PUT project config defaults status_sync.forward_only to true when omitted', async () => {
+  const db = getDb(':memory:');
+  seedProjectWithoutMonday(db);
+  const app = await buildApp(db);
+  const res = await app.inject({
+    method: 'PUT', url: '/api/monday/projects/p1/config',
+    payload: { ...VALID_CONFIG, status_sync: { enabled: false, column_id: null, mapping: {} } },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().config.status_sync.forward_only, true);
+  await app.close();
+  db.close();
+});
+
 // --- Distinguishing "unconfigured" from "disabled/tokenless" on the
 // existing items/search 409s (the ambiguity the frontend setup panel needs
 // resolved) --------------------------------------------------------------

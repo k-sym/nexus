@@ -320,19 +320,67 @@ export async function fetchBoards(opts: MondayClientOptions): Promise<MondayBoar
     .map((b) => ({ id: b.id, name: b.name, workspace: b.workspace?.name ?? null }));
 }
 
+export interface MondayStatusLabel {
+  /** The label's numeric key in the column settings — its stable id, distinct
+   *  from its display position. */
+  index: number;
+  text: string;
+  /** Hex swatch (e.g. "#00c875") when the settings carry one, for the UI. */
+  color: string | null;
+}
+
 export interface MondayBoardMeta {
   groups: Array<{ id: string; title: string }>;
-  columns: Array<{ id: string; title: string; type: string }>;
+  /** Status columns additionally carry their selectable `labels`; other column
+   *  types omit the field. */
+  columns: Array<{ id: string; title: string; type: string; labels?: MondayStatusLabel[] }>;
 }
 
 const BOARD_META_QUERY = `
   query BoardMeta($boardId: ID!) {
     boards(ids: [$boardId]) {
       groups { id title }
-      columns { id title type }
+      columns { id title type settings_str }
     }
   }
 `;
+
+/** The fields we read out of a status column's `settings_str` (JSON). */
+interface StatusColumnSettings {
+  labels?: Record<string, string>;
+  labels_colors?: Record<string, { color?: string } | undefined>;
+  labels_positions_v2?: Record<string, number>;
+  deactivated_labels?: number[];
+}
+
+/**
+ * A status column's selectable labels, parsed from its `settings_str`. Monday
+ * keys labels by a numeric index (a stable id, separate from the display
+ * position — both live in the settings). Deactivated labels are dropped so the
+ * config UI never offers a value a write would reject, and the result is
+ * ordered by display position (falling back to index) to read as it does in
+ * Monday. Fails open to [] on anything unparseable: a status column with no
+ * readable labels degrades to an empty picker, it never throws the board-meta
+ * load (same posture as the defensive parsing in map.ts).
+ */
+export function parseStatusLabels(settingsStr: string | null | undefined): MondayStatusLabel[] {
+  if (!settingsStr) return [];
+  let settings: StatusColumnSettings;
+  try {
+    settings = JSON.parse(settingsStr) as StatusColumnSettings;
+  } catch {
+    return [];
+  }
+  const labels = settings.labels;
+  if (!labels || typeof labels !== 'object') return [];
+  const deactivated = new Set((settings.deactivated_labels ?? []).map(Number));
+  const positions = settings.labels_positions_v2 ?? {};
+  const colors = settings.labels_colors ?? {};
+  return Object.entries(labels)
+    .filter(([idx, text]) => typeof text === 'string' && text.trim() !== '' && !deactivated.has(Number(idx)))
+    .map(([idx, text]) => ({ index: Number(idx), text, color: colors[idx]?.color ?? null }))
+    .sort((a, b) => (positions[String(a.index)] ?? a.index) - (positions[String(b.index)] ?? b.index));
+}
 
 /**
  * One board's groups and columns, for the project-config picker. `type` here
@@ -340,12 +388,16 @@ const BOARD_META_QUERY = `
  * this is the one place that value is available, which is why column_type in
  * MondayProjectConfig is captured at selection time rather than re-derived
  * later from the (user-renamable) column id.
+ *
+ * Each status column additionally carries its selectable `labels`, parsed from
+ * `settings_str` — the only source of a board's status values, needed by the
+ * status-sync mapping UI.
  */
 export async function fetchBoardMeta(opts: MondayClientOptions, boardId: string): Promise<MondayBoardMeta> {
   const data = await mondayGraphql<{
     boards?: Array<{
       groups?: Array<{ id: string; title: string }>;
-      columns?: Array<{ id: string; title: string; type: string }>;
+      columns?: Array<{ id: string; title: string; type: string; settings_str?: string | null }>;
     }>;
   }>(opts, BOARD_META_QUERY, { boardId });
   const board = data.boards?.[0];
@@ -355,7 +407,14 @@ export async function fetchBoardMeta(opts: MondayClientOptions, boardId: string)
     // like "a board with no groups or columns".
     throw new MondayError(`Monday returned no board for id ${boardId} — the board may not exist or the token cannot see it`);
   }
-  return { groups: board.groups ?? [], columns: board.columns ?? [] };
+  return {
+    groups: board.groups ?? [],
+    columns: (board.columns ?? []).map((c) => (
+      c.type === 'status'
+        ? { id: c.id, title: c.title, type: c.type, labels: parseStatusLabels(c.settings_str) }
+        : { id: c.id, title: c.title, type: c.type }
+    )),
+  };
 }
 
 const SET_COLUMN_MUTATION = `
@@ -365,9 +424,10 @@ const SET_COLUMN_MUTATION = `
 `;
 
 /**
- * Write one column. The ONLY column any caller may pass is the project's
- * configured roll-up column — see the write invariant in the spec. There is
- * deliberately no status-column helper here.
+ * Write one simple column value. Used for the project's configured roll-up
+ * column — see the write invariant in the spec. Status writes go through
+ * setStatusColumnValue below rather than this, so each write path names the
+ * kind of column it touches at its call site.
  */
 export async function setSimpleColumnValue(
   opts: MondayClientOptions,
@@ -377,6 +437,25 @@ export async function setSimpleColumnValue(
   value: string,
 ): Promise<void> {
   await mondayGraphql(opts, SET_COLUMN_MUTATION, { boardId, itemId, columnId, value });
+}
+
+/**
+ * Set a status column to one of its labels, by label text. Monday's
+ * change_simple_column_value accepts a status label's text as the simple value
+ * (an all-numeric string would be read as a label *index* instead — not a
+ * concern for real word-based labels). This is the one write path that touches
+ * a column a human also owns, so it is opt-in per project and guarded in
+ * status-sync.ts (only-writes-mapped-labels, never-overwrite-a-hold,
+ * forward-only, no-op-if-unchanged).
+ */
+export async function setStatusColumnValue(
+  opts: MondayClientOptions,
+  boardId: string,
+  itemId: string,
+  columnId: string,
+  label: string,
+): Promise<void> {
+  await mondayGraphql(opts, SET_COLUMN_MUTATION, { boardId, itemId, columnId, value: label });
 }
 
 const CREATE_UPDATE_MUTATION = `
