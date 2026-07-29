@@ -18,8 +18,9 @@ public struct ToolCallView: Identifiable, Hashable, Sendable {
 
 /// An attachment shown on the user's own turn (image thumbnail). Platform-neutral
 /// (raw base64, no UIKit) so NexusCore stays testable on macOS; the app decodes it
-/// for display. Live/optimistic only — a persisted reload carries none.
-public struct RenderedAttachment: Identifiable, Hashable, Sendable {
+/// for display. `Codable` so the app can persist the sent-thumbnail cache to disk
+/// (thumbnails then survive a cold restart, not just an in-app reload).
+public struct RenderedAttachment: Identifiable, Hashable, Sendable, Codable {
     public let id: String
     public let name: String?
     public let mimeType: String
