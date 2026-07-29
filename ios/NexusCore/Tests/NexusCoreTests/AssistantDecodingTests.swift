@@ -115,6 +115,39 @@ final class AssistantDecodingTests: XCTestCase {
         XCTAssertEqual(assistant.toolCalls.first?.args["query"]?.string, "x")
     }
 
+    func testDetailToleratesNumericMessageId() throws {
+        // The local-store fallback surfaces the integer PK as a JSON *number*
+        // (e.g. `"id": 31`). Decoding that into `String?` used to throw and reach
+        // the user as "The server sent an unexpected response". It must now decode.
+        let json = Data("""
+        { "session": { "id": "s1", "title": "T", "status": "idle" },
+          "messages": [
+            { "id": 31, "role": "user", "content": "Hey Baker. Just testing" },
+            { "id": 32, "role": "assistant", "content": "hi" }
+          ],
+          "latestRun": null }
+        """.utf8)
+        let detail = try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: json)
+        let persisted = detail.persistedMessages
+        XCTAssertEqual(persisted.map(\.id), ["31", "32"])   // numeric ids stringified
+        XCTAssertEqual(persisted[0].content, "Hey Baker. Just testing")
+
+        // Folds through the shared reducer unchanged.
+        var reducer = TranscriptReducer()
+        reducer.loadPersisted(persisted)
+        XCTAssertEqual(reducer.messages.count, 2)
+    }
+
+    func testMessageIdVariants() throws {
+        func decodeId(_ body: String) throws -> String? {
+            try JSONDecoder.nexusCamel.decode(AssistantMessage.self, from: Data(body.utf8)).id
+        }
+        XCTAssertEqual(try decodeId(#"{"id": 31, "role":"user"}"#), "31")        // number
+        XCTAssertEqual(try decodeId(#"{"id": "m-1", "role":"user"}"#), "m-1")    // string
+        XCTAssertNil(try decodeId(#"{"role":"user"}"#))                          // absent
+        XCTAssertNil(try decodeId(#"{"id": null, "role":"user"}"#))             // null
+    }
+
     func testDetailKeepsExplicitMessageId() throws {
         let json = Data("""
         { "session": { "id": "s1", "title": "T", "status": "idle" },

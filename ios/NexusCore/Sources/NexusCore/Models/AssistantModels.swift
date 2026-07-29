@@ -108,6 +108,12 @@ public struct AssistantRun: Decodable, Hashable, Sendable {
 /// — so this tolerant type keeps `id` optional and synthesizes an index-based id
 /// when mapping into the shared, non-optional `PersistedMessage`. (Loosening
 /// `PersistedMessage.id` would break the thread-chat path that depends on it.)
+///
+/// `id` also arrives as a **number** on the local-store fallback path (the
+/// `assistant_session_messages` PK is an integer, surfaced whenever the Hermes
+/// `/messages` transport is skipped) — decoding that into `String?` would throw
+/// and surface as "The server sent an unexpected response", so `init(from:)`
+/// tolerates a String, an Int, or an absent id.
 public struct AssistantMessage: Decodable, Sendable {
     public let id: String?
     public let role: String
@@ -118,6 +124,34 @@ public struct AssistantMessage: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case id, role, content, thinking
         case toolCalls = "tool_calls"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // Tolerate a string id, a numeric id (local-store PK), or absent/null.
+        if let stringId = try? c.decode(String.self, forKey: .id) {
+            id = stringId
+        } else if let intId = try? c.decode(Int.self, forKey: .id) {
+            id = String(intId)
+        } else {
+            id = nil
+        }
+        role = try c.decode(String.self, forKey: .role)
+        content = try c.decodeIfPresent(String.self, forKey: .content)
+        thinking = try c.decodeIfPresent(String.self, forKey: .thinking)
+        toolCalls = try c.decodeIfPresent([PersistedToolCall].self, forKey: .toolCalls)
+    }
+
+    /// Memberwise init for tests/previews.
+    public init(
+        id: String? = nil, role: String, content: String? = nil,
+        thinking: String? = nil, toolCalls: [PersistedToolCall]? = nil
+    ) {
+        self.id = id
+        self.role = role
+        self.content = content
+        self.thinking = thinking
+        self.toolCalls = toolCalls
     }
 
     /// Project onto the shared `PersistedMessage` so the existing
