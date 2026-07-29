@@ -24,17 +24,34 @@ struct AttachmentDraft: Identifiable {
 /// In-memory cache of sent-attachment thumbnails, keyed by session + the user
 /// message's 0-based ordinal. The server transcript is text-only, so on every
 /// rehydrate `ChatViewModel` re-attaches from here — thumbnails then survive a
-/// foreground reconcile, a 5s background-run sync poll, and reopening the session
-/// (the singleton outlives the view). Process-lifetime only; a cold launch falls
-/// back to the server's text-only transcript.
+/// foreground reconcile, a 5s background-run sync poll, reopening the session
+/// (the singleton outlives the view), AND a cold app relaunch — the cache mirrors
+/// to a JSON file in Caches, reloaded on init. A byte budget evicts the oldest
+/// sets (LRU by insertion) so it can't grow without bound; Caches is also
+/// OS-reclaimable, which is fine for best-effort thumbnails.
 @MainActor
 final class AssistantAttachmentStore {
     static let shared = AssistantAttachmentStore()
+
+    private struct Key: Hashable, Codable { let scope: String; let ordinal: Int }
+    private struct Entry: Codable { let key: Key; let attachments: [RenderedAttachment] }
+
     private var byScope: [String: [Int: [RenderedAttachment]]] = [:]
+    private var order: [Key] = []                 // insertion order, oldest first
+    private let maxBytes = 8 * 1024 * 1024         // ~8 MB of base64 thumbnails
+
+    private static let fileURL: URL? =
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("assistant-attachment-cache.json")
+
+    init() { load() }
 
     func record(scope: String, ordinal: Int, _ attachments: [RenderedAttachment]) {
         guard !attachments.isEmpty else { return }
+        if byScope[scope]?[ordinal] == nil { order.append(Key(scope: scope, ordinal: ordinal)) }
         byScope[scope, default: [:]][ordinal] = attachments
+        evictIfNeeded()
+        save()
     }
 
     /// The whole ordinal→attachments map for a session, snapshotted so a
@@ -44,7 +61,54 @@ final class AssistantAttachmentStore {
     }
 
     /// Drop a session's cache (on hard delete).
-    func purge(scope: String) { byScope[scope] = nil }
+    func purge(scope: String) {
+        guard byScope[scope] != nil else { return }
+        byScope[scope] = nil
+        order.removeAll { $0.scope == scope }
+        save()
+    }
+
+    // MARK: Budget + disk
+
+    /// Evict the oldest sets until under the byte budget.
+    private func evictIfNeeded() {
+        var total = byScope.values.reduce(0) { $0 + $1.values.reduce(0) { $0 + $1.reduce(0) { $0 + $1.base64.count } } }
+        var dropped = 0
+        while total > maxBytes, dropped < order.count {
+            let key = order[dropped]; dropped += 1
+            if let set = byScope[key.scope]?[key.ordinal] {
+                total -= set.reduce(0) { $0 + $1.base64.count }
+                byScope[key.scope]?[key.ordinal] = nil
+                if byScope[key.scope]?.isEmpty == true { byScope[key.scope] = nil }
+            }
+        }
+        if dropped > 0 { order.removeFirst(dropped) }
+    }
+
+    private func load() {
+        guard let url = Self.fileURL, let data = try? Data(contentsOf: url),
+              let entries = try? JSONDecoder().decode([Entry].self, from: data) else { return }
+        for entry in entries {
+            byScope[entry.key.scope, default: [:]][entry.key.ordinal] = entry.attachments
+            order.append(entry.key)
+        }
+    }
+
+    /// Snapshot in insertion order (so a reload restores LRU ordering) and write
+    /// off the main actor — thumbnails aren't worth blocking the UI for.
+    /// Snapshot in insertion order (so a reload restores LRU ordering) and write
+    /// off the main actor — thumbnails aren't worth blocking the UI for.
+    private func save() {
+        guard let url = Self.fileURL else { return }
+        let entries: [Entry] = order.compactMap { key in
+            guard let set = byScope[key.scope]?[key.ordinal] else { return nil }
+            return Entry(key: key, attachments: set)
+        }
+        Task.detached(priority: .utility) {
+            guard let data = try? JSONEncoder().encode(entries) else { return }
+            try? data.write(to: url, options: .atomic)
+        }
+    }
 }
 
 /// Turns picked photos and files into send-ready attachments.

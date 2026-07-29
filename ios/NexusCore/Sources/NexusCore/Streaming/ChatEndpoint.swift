@@ -45,6 +45,11 @@ public protocol ChatEndpoint: Sendable {
     /// Whether the composer offers attachments (assistant only). Images route
     /// through the backend's vision path; threads don't accept attachments here.
     var supportsAttachments: Bool { get }
+    /// A stable per-conversation key for the sent-attachment thumbnail cache; nil
+    /// where there are no attachments (threads). **Declared here (not just in the
+    /// extension) so it dispatches through the witness table** — an extension-only
+    /// property would statically resolve to the `nil` default via the existential.
+    var attachmentScopeId: String? { get }
 
     /// Rehydrate history + seeds.
     func loadDetail() async throws -> ChatDetail

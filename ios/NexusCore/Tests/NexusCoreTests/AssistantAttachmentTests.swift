@@ -78,6 +78,30 @@ final class AssistantAttachmentTests: XCTestCase {
         XCTAssertFalse(thread.supportsAttachments)
     }
 
+    /// Regression: `attachmentScopeId` must dispatch through the witness table —
+    /// as an extension-only member it statically resolved to the `nil` default via
+    /// the existential, silently disabling the whole thumbnail cache.
+    func testAttachmentScopeIdDispatchesThroughExistential() {
+        let assistant: ChatEndpoint = AssistantChatEndpoint(api: APIClient(), sessionId: "sess-42")
+        let thread: ChatEndpoint = ThreadChatEndpoint(api: APIClient(), threadId: "t1")
+        XCTAssertEqual(assistant.attachmentScopeId, "sess-42")
+        XCTAssertNil(thread.attachmentScopeId)
+    }
+
+    // MARK: RenderedAttachment Codable (the on-disk thumbnail cache round-trips it)
+
+    func testRenderedAttachmentCodableRoundTrips() throws {
+        let originals = [
+            RenderedAttachment(id: "a0", name: "p.jpg", mimeType: "image/jpeg", base64: "Zm9v"),
+            RenderedAttachment(id: "a1", name: "notes.txt", mimeType: "text/plain", base64: ""),
+        ]
+        let data = try JSONEncoder().encode(originals)
+        let decoded = try JSONDecoder().decode([RenderedAttachment].self, from: data)
+        XCTAssertEqual(decoded, originals)
+        XCTAssertTrue(decoded[0].isImage)
+        XCTAssertFalse(decoded[1].isImage)
+    }
+
     // MARK: Preserve attachments across a reload (ordinal-keyed)
 
     func testLoadPersistedReattachesByUserOrdinal() throws {
