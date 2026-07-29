@@ -78,6 +78,10 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   // monotonic counter covers both call sites correctly.
   const generationRef = useRef(0);
 
+  // Throttles the focus/visibility auto-refresh so rapid window toggles don't
+  // fire a full Monday sync each time. 0 = "never auto-synced yet".
+  const lastAutoSyncRef = useRef(0);
+
   // Task-scoped, separate from the row-level `error` above: unlinking one
   // task must not be confused with (or clobber) a full load/refresh failure.
   // Use a Set to track multiple concurrent unlinks; a single scalar would break
@@ -166,6 +170,35 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   // that scope sync has never populated, and "No Monday items in this
   // project's scope" is indistinguishable from a genuinely empty board.
   useEffect(() => { void load(true); }, [load]);
+
+  // Keep the panel live without a manual Refresh. Two triggers, skipped while
+  // the config panel is open:
+  //  - window focus / tab becoming visible → a full Monday sync (load(true)),
+  //    throttled to once per 10s so rapid focus toggles don't hammer the API;
+  //    this is what picks up a status you edited directly in Monday.
+  //  - a slow interval while the tab is visible → the cheap mirror-read
+  //    (load(false)), which still recomputes the roll-up from current task
+  //    statuses, so a card moved on the Kanban is reflected here on its own.
+  useEffect(() => {
+    if (configPanel) return;
+    const syncFromMonday = () => {
+      const now = Date.now();
+      if (now - lastAutoSyncRef.current < 10_000) return;
+      lastAutoSyncRef.current = now;
+      void load(true);
+    };
+    const onVisible = () => { if (document.visibilityState === 'visible') syncFromMonday(); };
+    window.addEventListener('focus', syncFromMonday);
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load(false);
+    }, 30_000);
+    return () => {
+      window.removeEventListener('focus', syncFromMonday);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.clearInterval(interval);
+    };
+  }, [configPanel, load]);
 
   // Unlink a task from an item row, then refresh so the roll-up (and this
   // row's task_ids) reflects the change — no stale state left on screen.

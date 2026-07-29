@@ -334,6 +334,18 @@ describe('ProjectManagementView', () => {
     expect(screen.queryByText('t1')).toBeNull();
   });
 
+  it('auto-refreshes from Monday when the window regains focus', async () => {
+    const spy = vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    await screen.findByText('Ship the thing');
+    expect(spy).toHaveBeenCalledTimes(1); // the on-open sync
+
+    fireEvent(window, new Event('focus'));
+
+    await waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    expect(spy).toHaveBeenLastCalledWith('p1', true);
+  });
+
   // --- Task 15: per-project Monday scope configuration --------------------
 
   it('renders the Monday scope settings panel instead of the error screen when the project is unconfigured', async () => {
