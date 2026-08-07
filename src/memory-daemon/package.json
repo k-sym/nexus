@@ -20,9 +20,9 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^13.0.1",
+    "better-sqlite3": "^13.0.2",
     "chokidar": "^5.0.0",
-    "fastify": "^5.2.0",
+    "fastify": "^5.11.2",
     "gray-matter": "^4.0.3",
     "js-yaml": "^5.2.2",
     "sqlite-vec": "^0.1.7-alpha.2",
@@ -32,8 +32,8 @@
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.12",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^26.1.1",
-    "tsx": "^4.19.2",
+    "@types/node": "^26.1.2",
+    "tsx": "^4.23.5",
     "typescript": "^7.0.2"
   },
   "comment:overrides": "find-my-way ^9.7.0 clears GHSA-c96f-x56v-gq3h (HTTP/2 DDoS in <=9.6.0), reached transitively through fastify. The daemon installs standalone (--no-workspaces), so the root override does not apply here — this mirrors it. Drop once fastify ships a lockfile carrying >=9.7.0. @hono/node-server ^2.0.5 clears GHSA-frvp-7c67-39w9 (path traversal in serve-static): it arrives via @modelcontextprotocol/sdk, whose 1.30.0 now declares `^1.19.9 || ^2.0.5`, so lifting the floor to the patched 2.0.5 stays within the SDK's range. The daemon speaks MCP over stdio only and never loads the node-server adapter, so this is defence-in-depth. Drop once the SDK's lockfile carries >=2.0.5 itself.",
