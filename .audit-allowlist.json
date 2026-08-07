@@ -15,34 +15,74 @@
   ],
   "allow": [
     {
-      "id": "GHSA-3jxr-9vmj-r5cp",
+      "id": "GHSA-mh99-v99m-4gvg",
       "package": "brace-expansion",
       "directory": ".",
       "severity": "high",
-      "reason": "DoS via exponential-time expansion of consecutive non-expanding {} groups. Reached only through @earendil-works/pi-coding-agent's own minimatch, expanding glob patterns we author ourselves — not attacker-supplied input.",
-      "blocker": "pi-coding-agent 0.80.10 ships an npm-shrinkwrap.json pinning brace-expansion 5.0.6, and a dependency's shrinkwrap wins over a consumer's overrides, so neither `overrides` nor `npm dedupe` nor `npm audit fix` can move it. 0.80.10 is the latest published version, so there is nothing newer to upgrade to. The root's own copy is already patched at 5.0.7.",
+      "reason": "DoS via unbounded expansion length causing an out-of-memory crash. Reached only through @earendil-works/pi-coding-agent's bundled minimatch, expanding glob patterns we author ourselves — not attacker-supplied input.",
+      "blocker": "pi-coding-agent 0.83.0 (the latest published version) ships an npm-shrinkwrap.json pinning brace-expansion 5.0.7, and a dependency's shrinkwrap wins over a consumer's overrides, so neither `overrides` nor `npm dedupe` nor `npm audit fix` can move it. The advisory is patched in 5.0.8; the root's own copy is already at 5.0.9.",
       "expires": "2026-10-21",
-      "review": "Check for a pi-coding-agent release above 0.80.10 whose shrinkwrap carries brace-expansion >= 5.0.7."
+      "review": "Check for a pi-coding-agent release above 0.83.0 whose shrinkwrap carries brace-expansion >= 5.0.8."
     },
     {
-      "id": "GHSA-j3f2-48v5-ccww",
-      "package": "protobufjs",
+      "id": "GHSA-rgw5-rvv9-x895",
+      "package": "brace-expansion",
+      "directory": ".",
+      "severity": "high",
+      "reason": "DoS via unbounded intermediate arrays, bypassing the CVE-2026-14257 mitigation. Same bundled-minimatch path as GHSA-mh99-v99m-4gvg — the glob patterns are ours, not attacker-supplied input.",
+      "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.83.0 (brace-expansion 5.0.7); a dependency's shrinkwrap wins over a consumer's overrides. The advisory is patched in 5.0.9; the root's own copy is already at 5.0.9.",
+      "expires": "2026-10-21",
+      "review": "Check for a pi-coding-agent release above 0.83.0 whose shrinkwrap carries brace-expansion >= 5.0.9."
+    },
+    {
+      "id": "GHSA-4cwx-7wf7-3272",
+      "package": "undici",
+      "directory": ".",
+      "severity": "high",
+      "reason": "Cross-user information disclosure and parse-time crash via degenerate private cache directives. undici here is pi-coding-agent's HTTP client for its own model-provider endpoints, which we control — not a shared proxy fronting untrusted upstreams.",
+      "blocker": "pi-coding-agent 0.83.0 (the latest published version) ships an npm-shrinkwrap.json pinning undici 8.5.0, and a dependency's shrinkwrap wins over a consumer's overrides, so it cannot be moved. The advisory is patched in 8.9.0; the root's own copy is already at 7.29.0.",
+      "expires": "2026-10-21",
+      "review": "Check for a pi-coding-agent release above 0.83.0 whose shrinkwrap carries undici >= 8.9.0."
+    },
+    {
+      "id": "GHSA-8xcm-r25x-g524",
+      "package": "undici",
       "directory": ".",
       "severity": "moderate",
-      "reason": "DoS via infinite loop when parsing .proto options. Reached only through pi-coding-agent's nested @google/genai; we do not parse untrusted .proto files.",
-      "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.80.10, which fixes protobufjs at 7.6.4. The root's own copy is already patched at 7.6.5.",
+      "reason": "Downstream response desynchronization via the retry interceptor. undici here is pi-coding-agent's HTTP client for its own model-provider endpoints, which we control — not a shared proxy fronting untrusted upstreams.",
+      "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.83.0 (undici 8.5.0); a dependency's shrinkwrap wins over a consumer's overrides. The advisory is patched in 8.9.0; the root's own copy is already at 7.29.0.",
       "expires": "2026-10-21",
-      "review": "Check for a pi-coding-agent release above 0.80.10 whose shrinkwrap carries protobufjs >= 7.6.5."
+      "review": "Check for a pi-coding-agent release above 0.83.0 whose shrinkwrap carries undici >= 8.9.0."
     },
     {
-      "id": "GHSA-frvp-7c67-39w9",
-      "package": "@hono/node-server",
-      "directory": "src/memory-daemon",
+      "id": "GHSA-m8rv-5g2x-5cg5",
+      "package": "undici",
+      "directory": ".",
       "severity": "moderate",
-      "reason": "Path traversal in `serve-static` on Windows via an encoded backslash. Not reachable here on two counts: the daemon speaks MCP over stdio only (src/mcp/stdio.ts uses StdioServerTransport; nothing imports the SDK's HTTP/SSE transports or hono itself), so the node-server adapter is never loaded — and the advisory is Windows-specific, while the daemon runs on macOS.",
-      "blocker": "It arrives via @modelcontextprotocol/sdk 1.29.0, which declares `@hono/node-server: ^1.19.9`. The patch lands in 2.0.5, outside that range, so an override would force a semver-major on a dependency the SDK has not adapted to. npm's own suggestion is to downgrade the SDK to 1.24.3, which loses 5 minor versions of MCP fixes to dodge code we do not execute.",
+      "reason": "CRLF injection via a blob-like body's `type` property. undici here is pi-coding-agent's HTTP client for its own model-provider endpoints; request bodies are the agent's, not attacker-supplied.",
+      "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.83.0 (undici 8.5.0); a dependency's shrinkwrap wins over a consumer's overrides. The advisory is patched in 8.9.0; the root's own copy is already at 7.29.0.",
       "expires": "2026-10-21",
-      "review": "Check for an @modelcontextprotocol/sdk release that declares @hono/node-server >= 2.0.5; then drop this entry and bump the SDK."
+      "review": "Check for a pi-coding-agent release above 0.83.0 whose shrinkwrap carries undici >= 8.9.0."
+    },
+    {
+      "id": "GHSA-jr45-8vmc-qm54",
+      "package": "undici",
+      "directory": ".",
+      "severity": "moderate",
+      "reason": "Cross-user information disclosure via whitespace around equals in Cache-Control directives. undici here is pi-coding-agent's HTTP client for its own model-provider endpoints, which we control — not a shared proxy fronting untrusted upstreams.",
+      "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.83.0 (undici 8.5.0); a dependency's shrinkwrap wins over a consumer's overrides. The advisory is patched in 8.9.0; the root's own copy is already at 7.29.0.",
+      "expires": "2026-10-21",
+      "review": "Check for a pi-coding-agent release above 0.83.0 whose shrinkwrap carries undici >= 8.9.0."
+    },
+    {
+      "id": "GHSA-v3r7-h72x-cjcm",
+      "package": "undici",
+      "directory": ".",
+      "severity": "moderate",
+      "reason": "Cookie attribute injection via unsanitized domain and unparsed setCookie fields. undici here is pi-coding-agent's HTTP client for its own model-provider endpoints, which we control — not a shared proxy fronting untrusted upstreams.",
+      "blocker": "Same pinned shrinkwrap in pi-coding-agent 0.83.0 (undici 8.5.0); a dependency's shrinkwrap wins over a consumer's overrides. The advisory is patched in 8.9.0; the root's own copy is already at 7.29.0.",
+      "expires": "2026-10-21",
+      "review": "Check for a pi-coding-agent release above 0.83.0 whose shrinkwrap carries undici >= 8.9.0."
     }
   ]
 }
