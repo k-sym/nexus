@@ -16,7 +16,7 @@
     "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.12",
+    "@evenrealities/even_hub_sdk": "^0.0.13",
     "even-toolkit": "^1.7.7",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -25,12 +25,12 @@
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.1.13",
     "@evenrealities/evenhub-simulator": "^0.8.0",
-    "@types/node": "^26.1.1",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^6.0.4",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
     "typescript": "~5.9.3",
-    "vite": "^8.1.5"
+    "vite": "^8.2.0"
   },
   "comment": "Phase 3b adds even-toolkit + @evenrealities/even_hub_sdk for the HUD; kept out of the first install so the dashboard installs clean. typescript is held at 5.9 (not ^7 like the root workspace) because @evenrealities/evenhub-cli peers on `typescript: ^5` — TS 6+ fails the install and breaks `npm run pack`. Dependabot ignores the major bump; see .github/dependabot.yml."
 }
