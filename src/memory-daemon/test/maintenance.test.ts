@@ -318,7 +318,43 @@ test("session archive summary route uses the daemon generation model", async () 
     assert.match(prompts[0].prompt, /Project: Demo/);
     assert.match(prompts[0].prompt, /Remote memory session/);
     assert.match(prompts[0].prompt, /remote archive decision/);
-    assert.match(prompts[0].system ?? "", /long-term project memory/);
+    // Default mode ('single') is the structured summary contract.
+    assert.match(prompts[0].system ?? "", /## Summary/);
+    assert.match(prompts[0].system ?? "", /## Decisions/);
+    assert.match(prompts[0].system ?? "", /distil/);
+  } finally {
+    await app.close();
+    f.close();
+  }
+});
+
+test("session archive summary route selects prompt + label by mode", async () => {
+  const f = fixture();
+  const seen: Array<{ prompt: string; system?: string }> = [];
+  f.ctx.models.complete = async (prompt: string, opts?: { system?: string }) => {
+    seen.push({ prompt, system: opts?.system });
+    return "notes";
+  };
+  const app = buildServer(f.ctx);
+  try {
+    // 'chunk' mode → the note-extraction prompt; transcript is still labelled Transcript.
+    const chunk = await app.inject({
+      method: "POST",
+      url: "/operations/summarize-session-archive",
+      payload: { projectName: "Demo", threadTitle: "T", transcript: "USER: hi", mode: "chunk" },
+    });
+    assert.equal(chunk.statusCode, 200);
+    assert.match(seen[0].system ?? "", /extracting durable notes/);
+
+    // 'synthesis' mode → structured summary prompt, and the input is labelled as notes.
+    const synth = await app.inject({
+      method: "POST",
+      url: "/operations/summarize-session-archive",
+      payload: { projectName: "Demo", threadTitle: "T", transcript: "note a\n\nnote b", mode: "synthesis" },
+    });
+    assert.equal(synth.statusCode, 200);
+    assert.match(seen[1].system ?? "", /## Summary/);
+    assert.match(seen[1].prompt, /Notes from consecutive windows/);
   } finally {
     await app.close();
     f.close();

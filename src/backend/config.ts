@@ -89,6 +89,14 @@ function defaultConfig(): NexusConfig {
     },
     memory: {
       daemon_url: 'http://127.0.0.1:4100',
+      // Session-archiving controls; deepMerge backfills this block onto older
+      // configs. See project_docs/design/2026-08-10-session-archiving-design.md.
+      archive: {
+        max_single_pass_chars: 30000,
+        max_chunks: 6,
+        summary_target_tokens: 800,
+        undo_retention_days: 30,
+      },
     },
     obsidian: {
       vault_path: defaultVaultPath(),

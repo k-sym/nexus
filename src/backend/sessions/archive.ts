@@ -19,10 +19,34 @@ interface TranscriptMessage {
   text: string;
 }
 
+/** Archiving controls, mirrors NexusConfig.memory.archive. Defaulted from config;
+ *  overridable in tests via ArchiveDeps.settings. */
+export interface ArchiveSettings {
+  max_single_pass_chars: number;
+  max_chunks: number;
+  summary_target_tokens: number;
+  undo_retention_days: number;
+}
+
+type SummarizeMode = 'single' | 'chunk' | 'synthesis';
+
+interface SummarizeWindowInput {
+  mode: SummarizeMode;
+  thread: ChatThread;
+  project: Project;
+  text: string;
+  maxTokens?: number;
+}
+
 interface ArchiveDeps {
+  /** Single-pass summariser for a whole in-budget transcript (backward compatible). */
   summarize?: (input: { thread: ChatThread; project: Project; transcript: string }) => Promise<string>;
+  /** Mode-aware summariser driving the multi-pass roll-up (chunk notes + synthesis). */
+  summarizeWindow?: (input: SummarizeWindowInput) => Promise<string>;
   storeMemory?: (input: MemoryInput) => Promise<{ id: string } | null>;
   resolveFilters?: (repoPath: string) => ResolvedSignalFilterConfig;
+  /** Override the config-derived archive settings (tests). */
+  settings?: ArchiveSettings;
 }
 
 export async function archiveThreadToMemory(
@@ -30,13 +54,14 @@ export async function archiveThreadToMemory(
   pi: Pick<PiRuntime, 'readMessages' | 'dropSession'>,
   threadId: string,
   deps: ArchiveDeps = {},
-): Promise<{ memoryId: string | null }> {
+): Promise<{ memoryId: string | null; elided: boolean }> {
   const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
   if (!thread) throw new ArchiveThreadError(404, 'Thread not found');
 
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(thread.project_id) as Project | undefined;
   if (!project) throw new ArchiveThreadError(404, 'Project not found');
 
+  const settings = deps.settings ?? loadConfig().memory.archive;
   const resolveFilters = deps.resolveFilters
     ?? ((repoPath: string) => resolveSignalFilterConfig(loadConfig(), repoPath));
   const transcript = await loadTranscript(db, pi, thread.id, project.repo_path, resolveFilters);
@@ -44,27 +69,118 @@ export async function archiveThreadToMemory(
     throw new ArchiveThreadError(400, 'Session has no meaningful chat history to archive');
   }
 
-  const summarize = deps.summarize ?? summarizeWithMemoryDaemon;
-  const summary = (await summarize({ thread, project, transcript })).trim();
+  const { summary, elided } = await summarizeTranscript({ thread, project, transcript }, settings, deps);
   if (!summary) throw new ArchiveThreadError(502, 'Archive summary model returned an empty summary');
+
+  // Never drop content without a trace: when the transcript was too large to roll up
+  // in full, the summary carries an explicit in-body note (the recall-visible trace).
+  const content = elided
+    ? `> _Note: this session was long; some middle sections were elided from this summary (start and end preserved)._\n\n${summary}`
+    : summary;
 
   const storeMemory = deps.storeMemory ?? ((input: MemoryInput) => addMemory(db, input));
   const stored = await storeMemory({
     project_id: project.id,
     agent_id: 'session-archive',
     category: 'session_archive',
-    content: summary,
+    content,
     metadata: {
       source: 'session-archive',
       thread_id: thread.id,
       thread_title: thread.title,
+      elided,
     },
   });
   if (!stored) throw new ArchiveThreadError(502, 'Failed to write archive summary to memory');
 
   db.prepare('DELETE FROM chat_threads WHERE id = ?').run(thread.id);
-  pi.dropSession(thread.id, project.repo_path);
-  return { memoryId: stored.id };
+  // Tombstone the raw session for the configured undo window instead of an immediate
+  // unlink (0 ⇒ hard-delete, preserving the old behaviour).
+  pi.dropSession(thread.id, project.repo_path, { tombstoneRetentionDays: settings.undo_retention_days });
+  return { memoryId: stored.id, elided };
+}
+
+/**
+ * Turn a transcript into the stored summary. In-budget transcripts summarise in one
+ * pass. Oversized ones are rolled up: split into ordered windows, extract durable
+ * notes per window, then synthesise the final structured summary from the ordered
+ * notes — so the session's *ending* is never silently dropped. Past `max_chunks`
+ * windows we keep head + tail and mark the result elided.
+ */
+async function summarizeTranscript(
+  input: { thread: ChatThread; project: Project; transcript: string },
+  settings: ArchiveSettings,
+  deps: ArchiveDeps,
+): Promise<{ summary: string; elided: boolean }> {
+  const { thread, project, transcript } = input;
+
+  if (transcript.length <= settings.max_single_pass_chars) {
+    const summarize = deps.summarize ?? summarizeWithMemoryDaemon;
+    return { summary: (await summarize({ thread, project, transcript })).trim(), elided: false };
+  }
+
+  const summarizeWindow = deps.summarizeWindow ?? summarizeWindowWithDaemon;
+  const windows = buildTranscriptWindows(transcript, settings.max_single_pass_chars);
+  const { selected, elided } = selectWindows(windows, settings.max_chunks);
+
+  const notes: string[] = [];
+  for (let i = 0; i < selected.length; i++) {
+    const note = (await summarizeWindow({ mode: 'chunk', thread, project, text: selected[i] })).trim();
+    if (note && note.toUpperCase() !== 'NONE') notes.push(`Window ${i + 1} of ${selected.length}:\n${note}`);
+  }
+
+  // Nothing durable surfaced across the windows — fall back to summarising the final
+  // window directly rather than storing an empty memory for a large session.
+  if (notes.length === 0) {
+    const tail = selected[selected.length - 1];
+    const summary = (await summarizeWindow({
+      mode: 'single', thread, project, text: tail, maxTokens: settings.summary_target_tokens,
+    })).trim();
+    return { summary, elided };
+  }
+
+  const summary = (await summarizeWindow({
+    mode: 'synthesis', thread, project, text: notes.join('\n\n'), maxTokens: settings.summary_target_tokens,
+  })).trim();
+  return { summary, elided };
+}
+
+/**
+ * Split a transcript into ordered windows each at most `maxChars`, preferring to break
+ * on blank-line (message) boundaries so a window rarely cuts mid-message. A single
+ * paragraph larger than a whole window is hard-split as a last resort.
+ */
+export function buildTranscriptWindows(transcript: string, maxChars: number): string[] {
+  const max = Math.max(1, Math.floor(maxChars));
+  if (transcript.length <= max) return [transcript];
+  const windows: string[] = [];
+  let cur = '';
+  const flush = () => { if (cur) { windows.push(cur); cur = ''; } };
+  for (const para of transcript.split('\n\n')) {
+    if (para.length > max) {
+      flush();
+      for (let i = 0; i < para.length; i += max) windows.push(para.slice(i, i + max));
+      continue;
+    }
+    const piece = cur ? `${cur}\n\n${para}` : para;
+    if (piece.length <= max) cur = piece;
+    else { flush(); cur = para; }
+  }
+  flush();
+  return windows;
+}
+
+/**
+ * Keep every window when within `maxChunks`; otherwise keep the first `ceil(n/2)` and
+ * last `floor(n/2)` windows (head + tail) and flag elision. The tail is always kept, so
+ * the session's ending survives.
+ */
+export function selectWindows(windows: string[], maxChunks: number): { selected: string[]; elided: boolean } {
+  const cap = Math.max(2, Math.floor(maxChunks));
+  if (windows.length <= cap) return { selected: windows, elided: false };
+  const head = Math.ceil(cap / 2);
+  const tail = cap - head;
+  return { selected: [...windows.slice(0, head), ...windows.slice(windows.length - tail)], elided: true };
 }
 
 async function loadTranscript(
@@ -86,10 +202,12 @@ async function loadTranscript(
     console.error(`[archive] failed to read pi session ${threadId}:`, err?.message);
   }
   if (messages.length === 0) messages = dbTranscriptMessages(db, threadId);
+  // Return the whole filtered transcript. Bounding the work for oversized sessions is
+  // the roll-up's job (buildTranscriptWindows + max_chunks), so nothing is truncated
+  // here — the previous fixed 30k slice silently dropped long sessions' endings.
   return messages
     .map((message) => `${message.role.startsWith('TOOL ') ? message.role : message.role.toUpperCase()}: ${message.text}`)
-    .join('\n\n')
-    .slice(0, 30000);
+    .join('\n\n');
 }
 
 function entriesToTranscriptMessages(
@@ -190,16 +308,30 @@ export async function summarizeWithLocalModel(input: {
   return String(json?.choices?.[0]?.message?.content ?? '').trim();
 }
 
+/** Default single-pass summariser: one structured summary over the whole transcript. */
 export async function summarizeWithMemoryDaemon(input: {
   thread: ChatThread;
   project: Project;
   transcript: string;
 }): Promise<string> {
+  return summarizeWindowWithDaemon({
+    mode: 'single',
+    thread: input.thread,
+    project: input.project,
+    text: input.transcript,
+    maxTokens: loadConfig().memory.archive.summary_target_tokens,
+  });
+}
+
+/** Mode-aware daemon call used by both the single-pass and multi-pass paths. */
+async function summarizeWindowWithDaemon(input: SummarizeWindowInput): Promise<string> {
   try {
     const res = await daemon.summarizeSessionArchive({
       projectName: input.project.name,
       threadTitle: input.thread.title,
-      transcript: input.transcript,
+      transcript: input.text,
+      mode: input.mode,
+      maxTokens: input.maxTokens,
     });
     return String(res.summary ?? '').trim();
   } catch (err) {

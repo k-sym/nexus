@@ -438,6 +438,22 @@ export interface NexusConfig {
   memory: {
     // The standalone @nexus/memory-daemon (markdown-canonical vault + index).
     daemon_url: string;
+    /** Session-archiving controls. See
+     *  project_docs/design/2026-08-10-session-archiving-design.md. */
+    archive: {
+      /** Filtered transcripts up to this many chars summarise in one pass. Above
+       *  it, the transcript is rolled up in ordered windows so the session's
+       *  ending is never silently dropped. */
+      max_single_pass_chars: number;
+      /** Hard cap on roll-up windows. Beyond it, head+tail windows are used and
+       *  the summary is marked `elided` rather than dropping content silently. */
+      max_chunks: number;
+      /** Length budget (model max_tokens) for the stored structured summary. */
+      summary_target_tokens: number;
+      /** Days a tombstoned raw session (.jsonl) is kept in .trash before the
+       *  sweep purges it. 0 = hard-delete immediately on archive (old behaviour). */
+      undo_retention_days: number;
+    };
   };
   obsidian: {
     vault_path: string;

@@ -7,7 +7,7 @@
  * sessions" runtime; AgentSessionRuntime wraps a single session and we use
  * createAgentSession() per chat thread instead.
  */
-import { mkdirSync, unlinkSync, readdirSync } from 'node:fs';
+import { mkdirSync, unlinkSync, readdirSync, renameSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AgentSession, ExtensionFactory } from '@earendil-works/pi-coding-agent';
 import { AGENT_RUN_CUSTOM_TYPE } from '@nexus/shared';
@@ -513,13 +513,18 @@ export class PiRuntime {
   }
 
   /**
-   * Drop a session (e.g. on thread delete). Removes the in-memory cache
+   * Drop a session (e.g. on thread delete or archive). Removes the in-memory cache
    * AND the on-disk session file(s). Pi names files
    * `${fileTimestamp}_${sessionId}.jsonl`, so we look for any file
    * ending in `_${threadId}.jsonl` in the session dir. Best-effort —
    * missing files are fine (an empty session was never flushed).
+   *
+   * `opts.tombstoneRetentionDays > 0` moves the raw `.jsonl` into a `.trash/`
+   * sub-dir (an undo window for archiving) instead of unlinking it; the
+   * companion sweep (`sweepExpiredTombstones`) purges it once expired. Omitted or
+   * 0 ⇒ immediate hard-delete, the behaviour thread *delete* relies on.
    */
-  dropSession(threadId: string, cwd: string): void {
+  dropSession(threadId: string, cwd: string, opts?: { tombstoneRetentionDays?: number }): void {
     const key = `${threadId}::${cwd}`;
     this.sessions.delete(key);
     this.sessionPromises.delete(key);
@@ -542,13 +547,51 @@ export class PiRuntime {
       this.closeBrowser?.(threadId);
     } catch { /* best effort */ }
     const sessionDir = this.sessionDirFor(cwd);
+    const retainDays = opts?.tombstoneRetentionDays ?? 0;
     try {
       for (const name of readdirSync(sessionDir)) {
-        if (name.endsWith(`_${threadId}.jsonl`)) {
-          try { unlinkSync(join(sessionDir, name)); } catch { /* already gone */ }
+        if (!name.endsWith(`_${threadId}.jsonl`)) continue;
+        const src = join(sessionDir, name);
+        if (retainDays > 0) {
+          // Tombstone: move to .trash for the undo window. If the move fails for any
+          // reason, fall back to unlink — dropping the session must still complete.
+          try {
+            const trashDir = join(sessionDir, '.trash');
+            mkdirSync(trashDir, { recursive: true });
+            renameSync(src, join(trashDir, name));
+          } catch {
+            try { unlinkSync(src); } catch { /* already gone */ }
+          }
+        } else {
+          try { unlinkSync(src); } catch { /* already gone */ }
         }
       }
     } catch { /* dir doesn't exist = nothing to drop */ }
+  }
+
+  /**
+   * Purge tombstoned session files older than `retentionDays` from every project's
+   * `.trash/` dir. Best-effort and cheap; called opportunistically (e.g. on archive).
+   * Returns the number of files purged. `retentionDays <= 0` is a no-op.
+   */
+  sweepExpiredTombstones(retentionDays: number): number {
+    if (!(retentionDays > 0)) return 0;
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    let purged = 0;
+    let projectDirs: string[] = [];
+    try { projectDirs = readdirSync(this.paths.sessionsDir); } catch { return 0; }
+    for (const proj of projectDirs) {
+      const trashDir = join(this.paths.sessionsDir, proj, '.trash');
+      let entries: string[] = [];
+      try { entries = readdirSync(trashDir); } catch { continue; }
+      for (const name of entries) {
+        const p = join(trashDir, name);
+        try {
+          if (statSync(p).mtimeMs < cutoff) { unlinkSync(p); purged++; }
+        } catch { /* gone or unreadable */ }
+      }
+    }
+    return purged;
   }
 
   /** Find a model by `provider/id` shape. Returns undefined if not available. */

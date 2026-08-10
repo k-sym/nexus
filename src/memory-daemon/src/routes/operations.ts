@@ -4,14 +4,48 @@ import { clearNexusMemory, maintenanceCoordinatorFor, type ClearNexusResult } fr
 import { ModelError } from "../models/client.js";
 import { reindexAll, type ReindexStats } from "../sync/reindex.js";
 
-const SESSION_ARCHIVE_SYSTEM_PROMPT =
-  "Summarize this Nexus session for long-term project memory. Keep only durable decisions, constraints, implementation notes, discoveries, user preferences, and follow-up context. Exclude chat filler and transient status.";
+/** Final structured summary — used for 'single' (whole transcript) and 'synthesis'
+ *  (ordered chunk-notes). Sections are omitted when empty so recall never indexes
+ *  filler. See project_docs/design/2026-08-10-session-archiving-design.md. */
+const STRUCTURED_ARCHIVE_SYSTEM_PROMPT =
+  "You summarize a Nexus coding/agent session into durable project memory as Markdown. " +
+  "Output ONLY these sections, in this order, and OMIT any section that would be empty (never write \"None\"): " +
+  "## Summary — 2-4 sentences on what the session was about and its outcome. " +
+  "## Decisions — durable decisions taken, as bullets. " +
+  "## Constraints — architecture, invariants, or rules future work must respect, as bullets. " +
+  "## Discoveries — non-obvious findings, with `file:line` anchors where known, as bullets. " +
+  "## Follow-ups — open items or next steps, as bullets. " +
+  "Keep it tight and factual; record durable knowledge only and exclude chat filler, transient status, and tool noise. " +
+  "Do not echo the transcript — distil it. Start directly with the `## Summary` heading.";
 
-/** A full-size archive is the heaviest gen call we make: the backend caps transcripts
- *  at 30k chars (~10k tokens), and on a local 9B that measures at ~53s of prompt eval
- *  plus ~54s to generate the 700-token summary — ~107s before any queueing behind
- *  other work sharing the gen server. The old 120s budget left no margin and failed
- *  intermittently; this is sized so a queued archive still completes. */
+/** Chunk-notes — extract durable points from ONE window of an oversized transcript,
+ *  to be combined by a later 'synthesis' pass. */
+const CHUNK_NOTES_SYSTEM_PROMPT =
+  "You are extracting durable notes from ONE window of a longer Nexus session transcript, to be combined with other windows later. " +
+  "List the concrete durable points in this window as terse bullets, each prefixed with its kind: " +
+  "\"- decision:\", \"- constraint:\", \"- discovery:\" (add `file:line` where known), or \"- follow-up:\". " +
+  "Exclude chat filler, transient status, and tool noise. If the window contains nothing durable, reply with the single word NONE.";
+
+const DEFAULT_SUMMARY_MAX_TOKENS = 800;
+const DEFAULT_CHUNK_MAX_TOKENS = 400;
+const MAX_ALLOWED_SUMMARY_TOKENS = 2000;
+
+/** Resolve the model max_tokens for a mode: honour a positive request (clamped to a
+ *  sane ceiling), else the per-mode default. */
+function resolveArchiveMaxTokens(requested: unknown, mode: "single" | "chunk" | "synthesis"): number {
+  const fallback = mode === "chunk" ? DEFAULT_CHUNK_MAX_TOKENS : DEFAULT_SUMMARY_MAX_TOKENS;
+  if (typeof requested === "number" && Number.isFinite(requested) && requested > 0) {
+    return Math.min(Math.floor(requested), MAX_ALLOWED_SUMMARY_TOKENS);
+  }
+  return fallback;
+}
+
+/** A full-size archive is the heaviest gen call we make: a single-pass transcript is
+ *  capped (backend-side) at ~30k chars (~10k tokens), and on a local 9B that measures
+ *  at ~53s of prompt eval plus generation — ~107s before any queueing behind other
+ *  work sharing the gen server. The old 120s budget left no margin and failed
+ *  intermittently; this is sized so a queued archive still completes. Chunk/synthesis
+ *  passes work on smaller inputs and finish well inside it. */
 const SESSION_ARCHIVE_TIMEOUT_MS = 300_000;
 
 const SESSION_TITLE_SYSTEM_PROMPT =
@@ -115,6 +149,8 @@ export function registerOperationRoutes(
       projectName?: string;
       threadTitle?: string;
       transcript?: string;
+      mode?: string;
+      maxTokens?: number;
     };
     const projectName = body.projectName?.trim();
     const threadTitle = body.threadTitle?.trim();
@@ -122,11 +158,17 @@ export function registerOperationRoutes(
     if (!projectName || !threadTitle || !transcript) {
       return reply.code(400).send({ error: "projectName, threadTitle, and transcript are required" });
     }
+    const mode = body.mode === "chunk" || body.mode === "synthesis" ? body.mode : "single";
+    const system = mode === "chunk" ? CHUNK_NOTES_SYSTEM_PROMPT : STRUCTURED_ARCHIVE_SYSTEM_PROMPT;
+    const maxTokens = resolveArchiveMaxTokens(body.maxTokens, mode);
+    // 'synthesis' folds ordered per-window notes; 'single'/'chunk' read the transcript.
+    const label = mode === "synthesis" ? "Notes from consecutive windows of the session, in order" : "Transcript";
+    const userPrompt = `Project: ${projectName}\nSession: ${threadTitle}\n\n${label}:\n${transcript}`;
 
     try {
       const summary = (await ctx.models.complete(
-        `Project: ${projectName}\nSession: ${threadTitle}\n\nTranscript:\n${transcript}`,
-        { system: SESSION_ARCHIVE_SYSTEM_PROMPT, temperature: 0.1, maxTokens: 700, timeoutMs: SESSION_ARCHIVE_TIMEOUT_MS },
+        userPrompt,
+        { system, temperature: 0.1, maxTokens, timeoutMs: SESSION_ARCHIVE_TIMEOUT_MS },
       )).trim();
       if (!summary) return reply.code(502).send({ error: "Archive summary model returned empty content" });
       return { summary };
