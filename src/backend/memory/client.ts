@@ -84,6 +84,12 @@ export interface SessionArchiveSummaryRequest {
   projectName: string;
   threadTitle: string;
   transcript: string;
+  /** Which prompt/shape to apply. 'single' (default) and 'synthesis' both produce
+   *  the final structured summary; 'chunk' extracts durable notes from one window
+   *  of an oversized transcript. See the session-archiving design spec. */
+  mode?: 'single' | 'chunk' | 'synthesis';
+  /** Model max_tokens override; defaults are chosen per mode on the daemon. */
+  maxTokens?: number;
 }
 
 export interface SessionArchiveSummaryResponse {

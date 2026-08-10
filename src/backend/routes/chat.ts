@@ -873,13 +873,18 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     });
     try {
       const result = await archiveThreadToMemory(db, pi, threadId);
+      // Opportunistic, best-effort purge of expired session tombstones — keeps the
+      // undo window self-cleaning without a dedicated scheduler.
+      try {
+        pi.sweepExpiredTombstones(loadConfig().memory.archive.undo_retention_days);
+      } catch { /* sweeping must never fail an archive */ }
       fastify.activity?.bus.emit({
         type: 'stop',
         operationId,
         kind: 'memory_archive',
         title: `${project?.name ?? 'unknown'} / ${thread?.title ?? threadId}`,
         status: 'succeeded',
-        diagnostics: { memoryId: result.memoryId },
+        diagnostics: { memoryId: result.memoryId, elided: result.elided },
       });
       return result;
     } catch (err: any) {
