@@ -9,6 +9,26 @@ import { PiRuntime } from '../pi/runtime.js';
 import { registerTrustRoutes } from '../routes/trust.js';
 import { DaemonRequestError } from '../memory/client.js';
 
+// Force pi's model runtime fully offline for this whole test file, BEFORE any
+// PiRuntime.create() runs. The `fixture()` below calls `pi.auth.login(...)`,
+// and pi-coding-agent's ModelRuntime.login() unconditionally does a post-login
+// `refresh({ allowNetwork: modelNetworkEnabled })` that fetches the remote model
+// catalog for every provider. Unlike the create-time refresh — which PiRuntime
+// suppresses with allowModelNetwork:false AND bounds with a 15s AbortController —
+// this login refresh has no timeout and ignores allowModelNetwork, so on flaky
+// CI egress its bare fetch() hangs for undici's default 300s headersTimeout.
+// Enough of these tests stalling ~300s each blows the 20-min backend job budget
+// (observed on PR #333). `modelNetworkEnabled` is derived solely from
+// `process.env.PI_OFFLINE === undefined`, so setting it flips the login refresh
+// to allowNetwork:false and the catalog fetch is skipped entirely (verified
+// against a cold model store: login drops from an unbounded hang to ~2ms). The
+// login still writes the credential to the (temp) auth.json, which is all these
+// trust assertions read via listCredentials(), so the asserted output is
+// unchanged. Assigned at module scope (before any test body runs, and none of
+// the imports above construct a runtime) and unconditionally, so it holds even
+// if PI_OFFLINE was already present in the environment.
+process.env.PI_OFFLINE = '1';
+
 function config(root: string): NexusConfig {
   return {
     server: { port: 4173 },
