@@ -158,7 +158,7 @@ test('PUT /api/models/curation saves enabled model keys', async () => {
     sessionsDir: join(dir, 'sessions'),
   });
   runtime.auth.setRuntimeApiKey('openrouter', 'test-key');
-  runtime.models.refresh();
+  await runtime.models.refresh();
   const first = runtime.models.getAvailable().find((model) => model.provider === 'openrouter');
   assert.ok(first, 'expected configured OpenRouter model');
   const key = `${first.provider}/${first.id}`;
