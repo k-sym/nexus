@@ -58,12 +58,24 @@ export interface HermesSessionChatInput {
   sessionKey?: string;
   input: string | HermesContentPart[];
   instructions?: string;
+  /** Model alias for this turn (partner adapter: sonnet|opus|haiku). Omit for
+   * the session's persisted choice / service default. Hermes ignored it. */
+  model?: string;
+}
+
+/** Context-window usage as the partner adapter reports it (#75 wire shape). */
+export interface HermesContextUsage {
+  used?: number;
+  limit?: number;
+  model?: string;
 }
 
 export interface HermesSessionChatResult {
   sessionId: string;
   output: string;
   usage?: unknown;
+  model?: string;
+  context?: HermesContextUsage;
 }
 
 export interface HermesSessionChatStreamInput {
@@ -72,6 +84,8 @@ export interface HermesSessionChatStreamInput {
   input: string | HermesContentPart[];
   /** Ephemeral system prompt for this turn (Hermes `system_message`). */
   instructions?: string;
+  /** Model alias for this turn; see HermesSessionChatInput.model. */
+  model?: string;
   signal?: AbortSignal;
 }
 
@@ -87,7 +101,9 @@ export type HermesChatStreamEvent =
   | { kind: 'reasoning_delta'; delta: string }
   | { kind: 'tool_started'; toolName: string; args?: Record<string, unknown> }
   | { kind: 'tool_completed'; toolName: string; preview: string; isError: boolean }
-  | { kind: 'completed' }
+  // The partner adapter enriches `run.completed` with model/usage/context (#75);
+  // plain Hermes (and the trailing `done`) yields a bare completed.
+  | { kind: 'completed'; model?: string; usage?: unknown; context?: HermesContextUsage }
   | { kind: 'failed'; error: string };
 
 export interface HermesListSessionsInput {
@@ -119,6 +135,24 @@ export interface HermesListedSession {
   ended_at?: number | null;
   preview?: string;
   message_count?: number;
+  // Partner adapter meter fields (#75): the session's persisted model alias and
+  // the context tokens its last turn ended at. Absent on Hermes rows.
+  model?: string | null;
+  context_used?: number | null;
+  context_limit?: number;
+}
+
+/** One choice from the partner adapter's `GET /v1/models` (#75). */
+export interface HermesModelChoice {
+  id: string;
+  label?: string;
+  context_limit?: number;
+  default?: boolean;
+}
+
+export interface HermesModelsResult {
+  models: HermesModelChoice[];
+  default?: string;
 }
 
 export interface HermesListSessionsResult {
@@ -175,6 +209,7 @@ export interface HermesClient {
   startRun(input: HermesRunInput): Promise<HermesRunStart>;
   getRun(runId: string): Promise<HermesRunStatus>;
   stopRun(runId: string): Promise<void>;
+  listModels(): Promise<HermesModelsResult>;
   createSession(input: HermesSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
   listSessions(input?: HermesListSessionsInput): Promise<HermesListSessionsResult>;
@@ -242,6 +277,12 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
         chatCompletions: Boolean(features.chat_completions),
         sessionKeyHeader: (body as any)?.session_key_header,
       };
+    },
+
+    async listModels(): Promise<HermesModelsResult> {
+      const body = (await requestJson('/v1/models')) as any;
+      const models = Array.isArray(body?.models) ? (body.models as HermesModelChoice[]) : [];
+      return { models, ...(typeof body?.default === 'string' ? { default: body.default } : {}) };
     },
 
     async startRun(input: HermesRunInput): Promise<HermesRunStart> {
@@ -324,21 +365,27 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
     async sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult> {
       const body: Record<string, unknown> = { input: input.input };
       if (input.instructions) body.instructions = input.instructions;
+      if (input.model) body.model = input.model;
       const response = await requestJson(`/api/sessions/${encodeURIComponent(input.sessionId)}/chat`, {
         method: 'POST',
         headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
         body: JSON.stringify(body),
       });
-      return {
+      const result: HermesSessionChatResult = {
         sessionId: String((response as any).session_id ?? (response as any).sessionId ?? input.sessionId),
         output: String((response as any).message?.content ?? (response as any).output ?? ''),
         usage: (response as any).usage,
       };
+      if (typeof (response as any).model === 'string') result.model = (response as any).model;
+      const context = (response as any).context;
+      if (context && typeof context === 'object') result.context = context as HermesContextUsage;
+      return result;
     },
 
     async *sessionChatStream(input: HermesSessionChatStreamInput): AsyncIterable<HermesChatStreamEvent> {
       const body: Record<string, unknown> = { message: input.input };
       if (input.instructions) body.system_message = input.instructions;
+      if (input.model) body.model = input.model;
       const response = await fetchImpl(`${baseUrl}/api/sessions/${encodeURIComponent(input.sessionId)}/chat/stream`, {
         method: 'POST',
         headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
@@ -545,8 +592,15 @@ export function parseChatStreamFrame(frame: string): HermesChatStreamEvent | nul
     case 'tool.failed':
       return { kind: 'tool_completed', toolName: String(data.tool_name ?? ''), preview: String(data.preview ?? ''), isError: true };
     case 'run.completed':
-    case 'done':
-      return { kind: 'completed' };
+    case 'done': {
+      // The partner adapter enriches run.completed with model/usage/context
+      // (#75); anything absent (plain Hermes, the trailing `done`) stays bare.
+      const completed: Extract<HermesChatStreamEvent, { kind: 'completed' }> = { kind: 'completed' };
+      if (typeof data.model === 'string') completed.model = data.model;
+      if (data.usage !== undefined) completed.usage = data.usage;
+      if (data.context && typeof data.context === 'object') completed.context = data.context;
+      return completed;
+    }
     case 'error':
       return { kind: 'failed', error: String(data.message ?? 'Assistant run failed.') };
     default:

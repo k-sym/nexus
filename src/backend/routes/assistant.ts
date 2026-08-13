@@ -16,6 +16,7 @@ import {
   createHermesClient,
   type HermesClient,
   type HermesContentPart,
+  type HermesContextUsage,
   type HermesFetch,
   type HermesListedSession,
   type HermesRunStatus,
@@ -261,6 +262,31 @@ async function renderSessionMessages(
   return assistantMessages(db, session.id, sessionDir);
 }
 
+// Seeds for a session-detail payload (#75): the partner adapter's session row
+// carries the persisted model alias and last-turn context tokens. Fail-soft —
+// plain Hermes rows and pre-#75 adapters simply lack the fields.
+async function remoteSessionSeeds(
+  session: AssistantSession,
+  hermes: HermesClient | undefined,
+): Promise<{ lastModelKey?: string; contextUsage?: Record<string, unknown> }> {
+  if (!session.remote_session_id || !hermes) return {};
+  try {
+    const remote = await hermes.getSession(session.remote_session_id);
+    if (!remote) return {};
+    const seeds: { lastModelKey?: string; contextUsage?: Record<string, unknown> } = {};
+    if (typeof remote.model === 'string' && remote.model) seeds.lastModelKey = `partner/${remote.model}`;
+    const usage = contextUsagePayload(
+      typeof remote.context_used === 'number'
+        ? { used: remote.context_used, limit: remote.context_limit }
+        : undefined,
+    );
+    if (usage) seeds.contextUsage = usage;
+    return seeds;
+  } catch {
+    return {};
+  }
+}
+
 function getSession(db: FastifyInstance['db'], sessionId: string): AssistantSession | undefined {
   return db.prepare('SELECT * FROM assistant_sessions WHERE id = ? AND archived_at IS NULL').get(sessionId) as
     | AssistantSession
@@ -491,6 +517,27 @@ function hasImageAttachments(attachments: AssistantAttachment[]): boolean {
   return attachments.some((attachment) => attachment.type === 'image');
 }
 
+// The iOS picker sends thread-style `provider/id` model keys ("partner/opus");
+// the adapter wants the bare alias. Tolerate both, and reject junk early so the
+// turn fails before a run row is created.
+function assistantModelFromKey(modelKey: unknown): string | undefined {
+  if (modelKey === undefined || modelKey === null) return undefined;
+  const key = String(modelKey).trim();
+  if (!key) return undefined;
+  return key.split('/').pop() || undefined;
+}
+
+// Map the adapter's `{used, limit}` context onto the `context_usage` frame shape
+// the shared iOS/web chat meter already renders (`{tokens, contextWindow, percent}`,
+// mirroring normalizeContextUsage in usePiStream.ts).
+function contextUsagePayload(context: HermesContextUsage | undefined): Record<string, unknown> | null {
+  if (!context) return null;
+  const tokens = typeof context.used === 'number' && Number.isFinite(context.used) ? context.used : undefined;
+  const contextWindow = typeof context.limit === 'number' && Number.isFinite(context.limit) ? context.limit : undefined;
+  if (tokens === undefined || contextWindow === undefined || contextWindow <= 0) return null;
+  return { tokens, contextWindow, percent: Math.round((tokens / contextWindow) * 100) };
+}
+
 function hermesInlineImageInput(content: string, attachments: AssistantAttachment[]): HermesContentPart[] {
   const parts: HermesContentPart[] = [];
   if (content.trim()) parts.push({ type: 'text', text: content });
@@ -544,7 +591,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return remoteSessionId;
     };
 
-    const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, reply: any, request: FastifyRequest) => {
+    const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, modelKey: unknown, reply: any, request: FastifyRequest) => {
       const trimmed = content.trim();
       const attachmentsResult = validateAssistantAttachments(attachmentsInput);
       if (!attachmentsResult.ok) { reply.code(400); return { error: attachmentsResult.error }; }
@@ -555,10 +602,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       if (!hermes) { reply.code(400); return { error: 'Assistant URL and key must be configured in Settings.' }; }
       const session = getSession(db, sessionId);
       if (!session) { reply.code(404); return { error: 'Assistant session not found' }; }
+      // Optional (unlike the thread route): absent means the session's persisted
+      // choice, falling back to the adapter's service default. The adapter 400s
+      // on an id outside its allowlist before spawning anything.
+      const model = assistantModelFromKey(modelKey);
+      const displayModel = model ?? 'partner';
 
       const run = createRun(db, session.id, 'chat', promptContent);
       activeRemoteRuns.set(run.id, '');
-      fastify.activity?.bus.emit({ type: 'start', operationId: run.id, kind: 'assistant_stream', title: session.title, provider: 'assistant', model: 'hermes-agent' });
+      fastify.activity?.bus.emit({ type: 'start', operationId: run.id, kind: 'assistant_stream', title: session.title, provider: 'assistant', model: displayModel });
 
       reply.hijack();
       // Hijacked replies bypass @fastify-cors — add CORS by hand or the browser
@@ -566,7 +618,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       reply.raw.writeHead(200, { 'Content-Type': 'application/x-ndjson; charset=utf-8', 'Cache-Control': 'no-cache, no-transform', Connection: 'keep-alive', ...corsHeaders(request) });
       const write = (ev: unknown) => { try { reply.raw.write(JSON.stringify(ev) + '\n'); } catch { /* client gone */ } };
       const startedAtIso = new Date().toISOString();
-      write({ kind: 'run_start', run: { runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: 'hermes-agent' } });
+      write({ kind: 'run_start', run: { runId: run.id, threadId: session.id, startedAt: startedAtIso, provider: 'assistant', model: displayModel } });
 
       // Name the session from its opening prompt, in parallel with the turn.
       // See the matching call in routes/chat.ts for why this is fire-and-forget.
@@ -593,9 +645,11 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
 
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
-          const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey, input: hermesInlineImageInput(promptContent, savedAttachments) });
+          const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey, input: hermesInlineImageInput(promptContent, savedAttachments), model });
           accumulated = result.output ?? '';
           if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
+          const visionUsage = contextUsagePayload(result.context);
+          if (visionUsage) write({ type: 'context_usage', usage: visionUsage });
           completeRun(db, run, { runId: run.id, status: 'completed', sessionId: result.sessionId, output: accumulated, usage: result.usage });
         } else {
           const ac = new AbortController();
@@ -605,9 +659,10 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           // synthetic id. This drives the LIVE fold; the authoritative fold (real ids,
           // full output) comes from /messages on reload.
           let toolSeq = 0;
+          let streamUsage: unknown;
           const pendingTools: Array<{ name: string; id: string }> = [];
           try {
-            for await (const ev of hermes.sessionChatStream({ sessionId: remoteSessionId, sessionKey, input: promptContent, signal: ac.signal })) {
+            for await (const ev of hermes.sessionChatStream({ sessionId: remoteSessionId, sessionKey, input: promptContent, model, signal: ac.signal })) {
               if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
               else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
               else if (ev.kind === 'tool_started') {
@@ -619,6 +674,13 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
                 const idx = pendingTools.findIndex((t) => t.name === ev.toolName);
                 const id = idx >= 0 ? pendingTools.splice(idx, 1)[0].id : `t${toolSeq++}`;
                 write({ type: 'tool_execution_end', toolCallId: id, toolName: ev.toolName, result: { content: [{ type: 'text', text: ev.preview }] }, isError: ev.isError });
+              }
+              else if (ev.kind === 'completed') {
+                // The adapter's run.completed carries usage/context (#75); the
+                // trailing `done` maps to a bare completed and writes nothing.
+                if (ev.usage !== undefined) streamUsage = ev.usage;
+                const usagePayload = contextUsagePayload(ev.context);
+                if (usagePayload) write({ type: 'context_usage', usage: usagePayload });
               }
               else if (ev.kind === 'failed') { status = 'failed'; errorMsg = ev.error; write({ type: 'error', error: ev.error }); }
             }
@@ -647,7 +709,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
             ).run(accumulated, now, now, run.id);
             db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('cancelled', now, session.id);
           } else {
-            completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(errorMsg ? { error: errorMsg } : {}) });
+            completeRun(db, run, { runId: run.id, status: status as any, output: accumulated, ...(streamUsage !== undefined ? { usage: streamUsage } : {}), ...(errorMsg ? { error: errorMsg } : {}) });
           }
         }
       } catch (err: any) {
@@ -763,6 +825,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         session,
         messages: await renderSessionMessages(db, session, assistantSessionDir, hermes),
         latestRun: publicRun(latestRun(db, session.id)),
+        ...(await remoteSessionSeeds(session, hermes)),
       };
     });
 
@@ -773,10 +836,12 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
+      const hermes = client();
       return {
         session,
-        messages: await renderSessionMessages(db, session, assistantSessionDir, client()),
+        messages: await renderSessionMessages(db, session, assistantSessionDir, hermes),
         latestRun: publicRun(latestRun(db, id)),
+        ...(await remoteSessionSeeds(session, hermes)),
       };
     });
 
@@ -826,8 +891,36 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
 
     fastify.post('/api/assistant/sessions/:id/messages/stream', { bodyLimit: ASSISTANT_BODY_LIMIT_BYTES }, async (request, reply) => {
       const { id } = request.params as { id: string };
-      const body = (request.body ?? {}) as { content?: string; attachments?: unknown };
-      return streamSessionTurn(id, body.content ?? '', body.attachments, reply, request);
+      const body = (request.body ?? {}) as { content?: string; attachments?: unknown; modelKey?: string };
+      return streamSessionTurn(id, body.content ?? '', body.attachments, body.modelKey, reply, request);
+    });
+
+    // Model choices for the Assistant picker, in the same shape as GET
+    // /api/models (`{models: [{provider, id, name, contextWindow, ...}]}`) so
+    // the shared iOS picker decodes it unchanged. Sourced from the partner
+    // adapter's /v1/models; fail-soft to an empty list (the picker then only
+    // offers "Default") when the adapter predates #75 or is unreachable.
+    fastify.get('/api/assistant/models', async () => {
+      const hermes = client();
+      if (!hermes) return { models: [] };
+      try {
+        const catalog = await hermes.listModels();
+        return {
+          models: catalog.models
+            .filter((m) => m && typeof m.id === 'string' && m.id)
+            .map((m) => ({
+              provider: 'partner',
+              id: m.id,
+              name: m.label ?? m.id,
+              contextWindow: m.context_limit ?? null,
+              configured: true,
+              default: m.default === true,
+            })),
+          ...(catalog.default ? { default: `partner/${catalog.default}` } : {}),
+        };
+      } catch {
+        return { models: [] };
+      }
     });
 
     fastify.post('/api/assistant/sessions/:id/runs', { bodyLimit: ASSISTANT_BODY_LIMIT_BYTES }, async (request, reply) => {
@@ -940,9 +1033,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     });
 
     fastify.post('/api/assistant/messages/stream', async (request, reply) => {
-      const body = (request.body ?? {}) as { content?: string };
+      const body = (request.body ?? {}) as { content?: string; modelKey?: string };
       const session = ensureDefaultSession(db);
-      return streamSessionTurn(session.id, body.content ?? '', undefined, reply, request);
+      return streamSessionTurn(session.id, body.content ?? '', undefined, body.modelKey, reply, request);
     });
 
     fastify.post('/api/assistant/abort', async () => {

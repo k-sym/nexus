@@ -206,6 +206,9 @@ public struct Endpoint: Sendable {
     /// Abort the latest running assistant run (global, not session-scoped).
     public static let assistantAbort = Endpoint(path: "/api/assistant/abort", method: "POST")
 
+    /// Assistant model catalog (#75) — `{models}` in the `GET /api/models` shape.
+    public static let assistantModels = Endpoint(path: "/api/assistant/models")
+
     // MARK: M6 assistant — background handoff (Phase B)
 
     /// Hand a turn off to a durable server-side run → `{ run }`. Body an

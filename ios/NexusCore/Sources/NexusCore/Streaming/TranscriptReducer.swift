@@ -135,6 +135,14 @@ public struct TranscriptReducer: Sendable {
         errorText = nil
     }
 
+    /// Seed the context meter from persisted session state on rehydrate (#75 —
+    /// the assistant detail payload carries the adapter's last-turn usage).
+    /// Nil is a no-op so a seed-less reload (thread chat, background-run sync
+    /// polls) never blanks a meter a live `context_usage` frame populated.
+    public mutating func seedContextUsage(_ usage: ContextUsage?) {
+        if let usage { contextUsage = usage }
+    }
+
     private static func persistedStatus(_ raw: String) -> ToolStatus {
         switch raw {
         case "succeeded", "completed": return .completed

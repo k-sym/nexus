@@ -11,29 +11,35 @@ public struct ChatDetail: Sendable {
     /// The session's latest background run, where the endpoint has one (assistant
     /// only). Lets a reopened chat resume 5s sync polling for an in-flight handoff.
     public let latestRun: AssistantRun?
+    /// Last-turn context usage to seed the meter on rehydrate (assistant only —
+    /// threads get theirs from the live `context_usage` frame).
+    public let contextUsage: ContextUsage?
 
     public init(
         messages: [PersistedMessage],
         title: String? = nil,
         supervised: Bool? = nil,
         lastModelKey: String? = nil,
-        latestRun: AssistantRun? = nil
+        latestRun: AssistantRun? = nil,
+        contextUsage: ContextUsage? = nil
     ) {
         self.messages = messages
         self.title = title
         self.supervised = supervised
         self.lastModelKey = lastModelKey
         self.latestRun = latestRun
+        self.contextUsage = contextUsage
     }
 }
 
 /// The chat backend `ChatViewModel` drives. One protocol, two conformers, so the
 /// same streaming chat UI serves both project threads and assistant sessions —
-/// the assistant is simply thread-chat minus the model picker, Supervise, and the
-/// busy/takeover gate. Capability flags let the composer hide what an endpoint
-/// doesn't support; unsupported calls are cheap no-ops rather than errors.
+/// the assistant is simply thread-chat minus Supervise and the busy/takeover
+/// gate. Capability flags let the composer hide what an endpoint doesn't
+/// support; unsupported calls are cheap no-ops rather than errors.
 public protocol ChatEndpoint: Sendable {
-    /// Whether the composer offers a model picker (threads: yes, assistant: no).
+    /// Whether the composer offers a model picker (threads: pi catalog,
+    /// assistant: the partner adapter's allowlist).
     var supportsModelPicker: Bool { get }
     /// Whether the composer offers a Supervise toggle (threads: yes, assistant: no).
     var supportsSupervise: Bool { get }
@@ -133,8 +139,10 @@ public struct ThreadChatEndpoint: ChatEndpoint {
     }
 }
 
-/// Hermes-backed assistant session chat. Fixed `hermes-agent` model, no Supervise,
-/// no busy gate; abort is the global `POST /api/assistant/abort`.
+/// Partner-backed assistant session chat. No Supervise, no busy gate; abort is
+/// the global `POST /api/assistant/abort`. The model picker (#75) offers the
+/// adapter's allowlist (`partner/*` keys); the chosen model persists per session
+/// in the adapter and re-seeds via `lastModelKey` on reload.
 public struct AssistantChatEndpoint: ChatEndpoint {
     private let api: APIClient
     private let sessionId: String
@@ -144,7 +152,7 @@ public struct AssistantChatEndpoint: ChatEndpoint {
         self.sessionId = sessionId
     }
 
-    public var supportsModelPicker: Bool { false }
+    public var supportsModelPicker: Bool { true }
     public var supportsSupervise: Bool { false }
     public var supportsBackgroundHandoff: Bool { true }
     public var supportsAttachments: Bool { true }
@@ -156,13 +164,14 @@ public struct AssistantChatEndpoint: ChatEndpoint {
             messages: detail.persistedMessages,
             title: detail.session.title,
             supervised: nil,
-            lastModelKey: nil,
-            latestRun: detail.latestRun)
+            lastModelKey: detail.lastModelKey,
+            latestRun: detail.latestRun,
+            contextUsage: ContextUsage(detail.contextUsage))
     }
 
     public func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error> {
-        // The assistant endpoint takes no modelKey and has no confirm-cancel gate.
-        try await api.streamAssistantMessage(sessionId: sessionId, content: content, attachments: attachments)
+        // No confirm-cancel gate on the assistant path.
+        try await api.streamAssistantMessage(sessionId: sessionId, content: content, attachments: attachments, modelKey: modelKey)
     }
 
     public func abort() async throws {
@@ -172,7 +181,9 @@ public struct AssistantChatEndpoint: ChatEndpoint {
     @discardableResult
     public func setSupervised(_ on: Bool) async throws -> Bool { false }
 
-    public func models() async throws -> [Model] { [] }
+    public func models() async throws -> [Model] {
+        try await api.assistantModels()
+    }
 
     public func startBackgroundRun(content: String, attachments: [AssistantAttachment]) async throws -> AssistantRun {
         try await api.startAssistantRun(sessionId: sessionId, content: content, attachments: attachments)

@@ -183,9 +183,16 @@ public struct AssistantSessionDetail: Decodable, Sendable {
     public let session: AssistantSession
     public let messages: [AssistantMessage]
     public let latestRun: AssistantRun?
+    /// Model-picker seed (#75): the adapter session's persisted model as a
+    /// `partner/<alias>` key. Absent on Hermes rows and pre-#75 backends.
+    public let lastModelKey: String?
+    /// Context-meter seed (#75): `{tokens, contextWindow, percent}`, kept as raw
+    /// JSON so `ContextUsage.init?(_:)` applies the same validation it applies
+    /// to live `context_usage` frames.
+    public let contextUsage: JSONValue?
 
     enum CodingKeys: String, CodingKey {
-        case session, messages, latestRun
+        case session, messages, latestRun, lastModelKey, contextUsage
     }
 
     public init(from decoder: Decoder) throws {
@@ -193,6 +200,8 @@ public struct AssistantSessionDetail: Decodable, Sendable {
         session = try c.decode(AssistantSession.self, forKey: .session)
         messages = try c.decodeIfPresent([AssistantMessage].self, forKey: .messages) ?? []
         latestRun = try c.decodeIfPresent(AssistantRun.self, forKey: .latestRun)
+        lastModelKey = try c.decodeIfPresent(String.self, forKey: .lastModelKey)
+        contextUsage = try c.decodeIfPresent(JSONValue.self, forKey: .contextUsage)
     }
 
     /// The transcript-ready messages (synthesizing ids for id-less Hermes rows).
@@ -276,10 +285,15 @@ public struct AssistantAttachment: Encodable, Sendable, Equatable {
 public struct AssistantStreamRequest: Encodable, Sendable {
     public let content: String
     public let attachments: [AssistantAttachment]?
+    /// The picker's `partner/<alias>` choice (#75); nil (omitted) means the
+    /// session's persisted model, falling back to the adapter default. The runs
+    /// (background handoff) path ignores it today.
+    public let modelKey: String?
 
-    public init(content: String, attachments: [AssistantAttachment] = []) {
+    public init(content: String, attachments: [AssistantAttachment] = [], modelKey: String? = nil) {
         self.content = content
         self.attachments = attachments.isEmpty ? nil : attachments
+        self.modelKey = modelKey
     }
 }
 
