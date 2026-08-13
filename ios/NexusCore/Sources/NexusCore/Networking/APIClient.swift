@@ -363,10 +363,18 @@ public actor APIClient {
     /// this never throws `.busy`. Image attachments route through the backend's
     /// (non-streaming) vision path, surfaced as a single text delta.
     public func streamAssistantMessage(
-        sessionId: String, content: String, attachments: [AssistantAttachment] = []
+        sessionId: String, content: String, attachments: [AssistantAttachment] = [], modelKey: String? = nil
     ) throws -> AsyncThrowingStream<JSONValue, Error> {
-        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content, attachments: attachments))
+        let body = try JSONEncoder().encode(AssistantStreamRequest(content: content, attachments: attachments, modelKey: modelKey))
         return try events(.assistantSessionStream(sessionId, body: body))
+    }
+
+    /// The assistant model catalog (#75) — the partner adapter's allowlist in the
+    /// same `{models: [...]}` shape as `GET /api/models`, so the shared picker
+    /// decodes it unchanged. Empty when the backend/adapter predates the feature.
+    public func assistantModels() async throws -> [Model] {
+        let res: ModelsResponse = try await request(.assistantModels, decoder: plainDecoder)
+        return res.models
     }
 
     /// Abort the latest running assistant run (global).

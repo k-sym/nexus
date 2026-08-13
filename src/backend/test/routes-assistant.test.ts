@@ -1135,3 +1135,153 @@ test('foreground turns run against the same Hermes session for native continuity
     await cleanup(app, db, dir);
   }
 });
+
+test('Assistant stream passes modelKey to the adapter and relays context_usage (#75)', async () => {
+  let streamBody: any = null;
+  const fetchImpl = hermesChatMock({
+    onChatStream: (_url, init) => {
+      streamBody = JSON.parse(String(init?.body ?? '{}'));
+      return sseResponse([
+        'event: run.started\ndata: {"session_id":"s1","model":"opus"}\n\n',
+        'event: assistant.delta\ndata: {"delta":"hey"}\n\n',
+        'event: run.completed\ndata: {"model":"opus","usage":{"input_tokens":10,"cache_read_input_tokens":49990},"context":{"used":50000,"limit":200000,"model":"opus"}}\n\n',
+        'event: done\ndata: {}\n\n',
+      ]);
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
+    const sessionId = created.json().id;
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'hi', modelKey: 'partner/opus' },
+    });
+    assert.equal(res.statusCode, 200);
+    // The iOS `provider/id` key arrives at the adapter as the bare alias.
+    assert.equal(streamBody.model, 'opus');
+    const events = ndjsonEvents(res.body);
+    const runStart = events.find((e) => e.kind === 'run_start');
+    assert.equal(runStart.run.model, 'opus');
+    const usage = events.find((e) => e.type === 'context_usage');
+    assert.deepEqual(usage.usage, { tokens: 50000, contextWindow: 200000, percent: 25 });
+    // usage lands on the run row too
+    const run = db.prepare('SELECT usage_json FROM assistant_runs ORDER BY started_at DESC LIMIT 1').get() as any;
+    assert.deepEqual(JSON.parse(run.usage_json), { input_tokens: 10, cache_read_input_tokens: 49990 });
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant stream without modelKey stays off the wire and emits no context_usage on bare completions', async () => {
+  let streamBody: any = null;
+  const fetchImpl = hermesChatMock({
+    onChatStream: (_url, init) => {
+      streamBody = JSON.parse(String(init?.body ?? '{}'));
+      return sseResponse(['event: run.completed\ndata: {}\n\n', 'event: done\ndata: {}\n\n']);
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: {} });
+    const sessionId = created.json().id;
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'hi' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal('model' in streamBody, false);
+    const events = ndjsonEvents(res.body);
+    assert.equal(events.find((e) => e.type === 'context_usage'), undefined);
+    assert.equal(events.find((e) => e.kind === 'run_start').run.model, 'partner');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('GET /api/assistant/models proxies the adapter catalog into the /api/models shape (#75)', async () => {
+  const fetchImpl = hermesChatMock({
+    onOther: (url) => {
+      if (String(url).endsWith('/v1/models')) {
+        return jsonRes({
+          models: [
+            { id: 'sonnet', label: 'Sonnet', context_limit: 200000, default: true },
+            { id: 'opus', label: 'Opus', context_limit: 200000, default: false },
+            { id: 'haiku', label: 'Haiku', context_limit: 200000, default: false },
+          ],
+          default: 'sonnet',
+        });
+      }
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/assistant/models' });
+    assert.equal(res.statusCode, 200);
+    const body = res.json();
+    assert.equal(body.default, 'partner/sonnet');
+    assert.deepEqual(body.models[0], {
+      provider: 'partner',
+      id: 'sonnet',
+      name: 'Sonnet',
+      contextWindow: 200000,
+      configured: true,
+      default: true,
+    });
+    assert.equal(body.models.length, 3);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('GET /api/assistant/models fails soft to an empty list', async () => {
+  // hermesChatMock throws on /v1/models by default (unexpected request).
+  const { app, db, dir } = makeApp({ fetchImpl: hermesChatMock({}) });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/assistant/models' });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), { models: [] });
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Assistant session detail seeds lastModelKey + contextUsage from the adapter row (#75)', async () => {
+  const fetchImpl = hermesChatMock({
+    messages: [{ id: 1, role: 'user', content: 'hi' }],
+    onOther: (url, init) => {
+      if (/\/api\/sessions\/[^/]+$/.test(String(url)) && (!init?.method || init.method === 'GET')) {
+        return jsonRes({
+          session: {
+            id: String(url).split('/').pop(),
+            model: 'opus',
+            context_used: 50000,
+            context_limit: 200000,
+          },
+        });
+      }
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: {} });
+    const sessionId = created.json().id;
+    // First send establishes remote_session_id — the seed source.
+    await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/messages/stream`,
+      payload: { content: 'hi' },
+    });
+    const detail = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.equal(detail.statusCode, 200);
+    const body = detail.json();
+    assert.equal(body.lastModelKey, 'partner/opus');
+    assert.deepEqual(body.contextUsage, { tokens: 50000, contextWindow: 200000, percent: 25 });
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});

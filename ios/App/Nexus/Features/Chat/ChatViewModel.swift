@@ -98,6 +98,9 @@ final class ChatViewModel {
             supervised = detail.supervised ?? false
             if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
             if selectedModelKey == nil { selectedModelKey = detail.lastModelKey }
+            // Assistant sessions persist last-turn usage server-side (#75); seed
+            // the meter so a reopened session shows it before the next turn.
+            reducer.seedContextUsage(detail.contextUsage)
             backgroundRun = detail.latestRun
             historyState = .ready
             // Reopening a session with a handoff still in flight resumes polling.

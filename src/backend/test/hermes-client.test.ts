@@ -372,3 +372,73 @@ test('sessionChatStream posts message body + session key header and parses split
     { kind: 'completed' },
   ]);
 });
+
+test('parseChatStreamFrame surfaces model/usage/context on an enriched run.completed (#75)', () => {
+  assert.deepEqual(
+    parseChatStreamFrame('event: run.completed\ndata: {"model":"opus","usage":{"input_tokens":10},"context":{"used":50000,"limit":200000,"model":"opus"}}'),
+    {
+      kind: 'completed',
+      model: 'opus',
+      usage: { input_tokens: 10 },
+      context: { used: 50000, limit: 200000, model: 'opus' },
+    },
+  );
+  // Junk-shaped enrichment degrades to a bare completed rather than leaking.
+  assert.deepEqual(parseChatStreamFrame('event: run.completed\ndata: {"model":7,"context":"nope"}'), { kind: 'completed' });
+});
+
+test('sessionChatStream and sessionChat pass the model alias through (#75)', async () => {
+  let streamBody: any = null;
+  let chatBody: any = null;
+  const fetchImpl: HermesFetch = async (url, init) => {
+    const u = String(url);
+    if (u.endsWith('/chat/stream')) {
+      streamBody = JSON.parse(String(init?.body));
+      return sseResponse(['event: done\ndata: {}\n\n']);
+    }
+    chatBody = JSON.parse(String(init?.body));
+    return jsonResponse({
+      session_id: 's1',
+      message: { content: 'hi' },
+      usage: { input_tokens: 1 },
+      model: 'haiku',
+      context: { used: 135, limit: 200000, model: 'haiku' },
+    });
+  };
+  const client = createHermesClient({ url: 'http://127.0.0.1:8788', key: 'secret', fetchImpl });
+  await collect(client.sessionChatStream({ sessionId: 's1', input: 'go', model: 'opus' }));
+  assert.equal(streamBody.model, 'opus');
+  // No model given → the field stays off the wire (adapter default applies).
+  await collect(client.sessionChatStream({ sessionId: 's1', input: 'go' }));
+  assert.equal('model' in streamBody, false);
+
+  const result = await client.sessionChat({ sessionId: 's1', input: 'look', model: 'haiku' });
+  assert.equal(chatBody.model, 'haiku');
+  assert.equal(result.model, 'haiku');
+  assert.deepEqual(result.context, { used: 135, limit: 200000, model: 'haiku' });
+});
+
+test('listModels returns the adapter catalog and tolerates junk (#75)', async () => {
+  const fetchImpl: HermesFetch = async (url) => {
+    assert.equal(String(url), 'http://127.0.0.1:8788/v1/models');
+    return jsonResponse({
+      models: [
+        { id: 'sonnet', label: 'Sonnet', context_limit: 200000, default: true },
+        { id: 'opus', label: 'Opus', context_limit: 200000, default: false },
+      ],
+      default: 'sonnet',
+    });
+  };
+  const client = createHermesClient({ url: 'http://127.0.0.1:8788', key: 'secret', fetchImpl });
+  const catalog = await client.listModels();
+  assert.equal(catalog.default, 'sonnet');
+  assert.equal(catalog.models.length, 2);
+  assert.equal(catalog.models[0].id, 'sonnet');
+
+  const junkClient = createHermesClient({
+    url: 'http://127.0.0.1:8788',
+    key: 'secret',
+    fetchImpl: async () => jsonResponse({ nope: true }),
+  });
+  assert.deepEqual(await junkClient.listModels(), { models: [] });
+});
