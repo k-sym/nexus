@@ -469,10 +469,15 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         }
       }
     }
-    if (images.length > 0 && !modelSupportsImageInput(selectedModel)) {
-      reply.code(400);
-      return { error: 'Selected model does not support image input' };
-    }
+    // Model catalogs are advisory and can lag behind provider/runtime
+    // capabilities (notably OpenRouter and local multimodal projectors). Let an
+    // image turn reach the selected model instead of rejecting it from stale
+    // metadata. Pi uses the model's input list to decide whether to serialize
+    // images, so a per-turn clone opts in without mutating the shared registry.
+    const imageInputOverride = images.length > 0 && !modelSupportsImageInput(selectedModel);
+    const modelForTurn = imageInputOverride
+      ? { ...selectedModel, input: [...(Array.isArray(selectedModel?.input) ? selectedModel.input : ['text']), 'image'] }
+      : selectedModel;
 
     // This claim is deliberately synchronous and precedes sessionFor/setModel.
     // Reaching it after the confirm-cancel awaits also rechecks the thread in
@@ -536,9 +541,12 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
 
       if (body.modelKey && selectedModel) {
         const currentModel = pi.getSessionModel(threadId, cwd);
-        if (currentModel !== body.modelKey) {
+        // Re-apply the model for fail-open image turns even when its persisted
+        // key is unchanged; the session may still hold the catalog's text-only
+        // model object, which would cause Pi to silently strip the image.
+        if (currentModel !== body.modelKey || imageInputOverride) {
           try {
-            await session.setModel(selectedModel);
+            await session.setModel(modelForTurn);
             pi.setSessionModel(threadId, cwd, body.modelKey);
           } catch (err: any) {
             const message = err?.message || 'failed to select model';

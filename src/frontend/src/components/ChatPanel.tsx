@@ -14,7 +14,7 @@
  *   - Session resume: pi owns sessions natively; no terminal hand-off
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { usePiStream, ChatBusyError, type ChatAttachment, type ChatImageAttachment, type ContextUsage, type StreamMessage, type StreamState } from '../hooks/usePiStream';
+import { usePiStream, ChatBusyError, type ChatAttachment, type ContextUsage, type StreamMessage, type StreamState } from '../hooks/usePiStream';
 import { useModels, parseModelKey } from '../hooks/useModels';
 import { apiFetch } from '../api-base';
 import { api } from '../api';
@@ -198,11 +198,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     ? activeModel.thinkingLevels
     : EMPTY_THINKING_LEVELS;
   const thinkingLevel: ThinkingLevel = (threadId && thinkingByThread[threadId]) || 'off';
-  const pendingImages = pendingAttachments.filter((attachment): attachment is ChatImageAttachment => attachment.type === 'image');
-  const hasPendingImages = pendingImages.length > 0;
-  const selectedModelSupportsImages = activeModel?.input?.includes('image') ?? false;
   const noModelSelected = !activeModelId;
-  const imageModelBlocked = hasPendingImages && !!activeModelId && !selectedModelSupportsImages;
 
   // Clamp the sticky thinking level when the active model (or its levels) change.
   const thinkingLevelsKey = thinkingLevels.join(',');
@@ -589,14 +585,13 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       || (!text && pendingAttachments.length === 0)
       || !threadId
       || noModelSelected
-      || imageModelBlocked
     ) return;
     const attachments = pendingAttachments;
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, noModelSelected, imageModelBlocked, pendingAttachments, isRunning, projectRunBusy, submit]);
+  }, [input, threadId, noModelSelected, pendingAttachments, isRunning, projectRunBusy, submit]);
 
   // Cancel whichever run is active: a locally-streamed run (this instance
   // started it) goes through abortStream; a backend-owned run re-attached
@@ -880,11 +875,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             Choose a model for this task before sending.
           </div>
         )}
-        {imageModelBlocked && (
-          <div className="pb-2 text-xs text-amber-200">
-            The selected model does not support images. Pick a vision-capable model or remove the images.
-          </div>
-        )}
         {thinkingLevels.length > 0 && (
           <div className="pb-2">
             <ThinkingSelector
@@ -1002,7 +992,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
                 disabled={
                   noModelSelected
                   || (!input.trim() && pendingAttachments.length === 0)
-                  || imageModelBlocked
                   || projectRunBusy?.source === 'mission'
                 }
                 title={projectRunBusy?.source === 'mission' ? 'Wait for the autonomous mission to finish' : undefined}

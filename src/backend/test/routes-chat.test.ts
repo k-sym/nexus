@@ -1648,20 +1648,25 @@ test('POST /api/threads/:id/messages/stream stores document attachments and refe
   }
 });
 
-test('POST /api/threads/:id/messages/stream rejects images for text-only models', async () => {
-  let promptCalled = false;
+test('POST /api/threads/:id/messages/stream tries images when model metadata only advertises text input', async () => {
+  let selectedModel: any;
+  let promptArgs: unknown[] = [];
   const session = {
     subscribe: () => () => {},
-    setModel: async () => {},
-    prompt: async () => {
-      promptCalled = true;
+    setModel: async (model: unknown) => {
+      selectedModel = model;
+    },
+    prompt: async (...args: unknown[]) => {
+      promptArgs = args;
     },
     abort: async () => {},
   };
   const runtime = {
     readMessages: async () => [],
     sessionFor: async () => session,
-    getSessionModel: () => undefined,
+    // The session already has this model key; the route must still apply its
+    // per-turn image override so Pi does not silently strip the attachment.
+    getSessionModel: () => 'openai/text-only',
     setSessionModel: () => {},
     dropSession: () => {},
     models: { find: () => ({ provider: 'openai', id: 'text-only', input: ['text'] }) },
@@ -1674,9 +1679,9 @@ test('POST /api/threads/:id/messages/stream rejects images for text-only models'
       payload: { content: 'look', modelKey: 'openai/text-only', images: [pngImage] },
     });
 
-    assert.equal(res.statusCode, 400);
-    assert.match(res.json().error, /does not support image input/i);
-    assert.equal(promptCalled, false);
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(selectedModel.input, ['text', 'image']);
+    assert.deepEqual(promptArgs, ['look', { images: [pngImage] }]);
   } finally {
     await app.close();
     db.close();
