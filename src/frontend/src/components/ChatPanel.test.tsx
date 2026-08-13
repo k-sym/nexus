@@ -1072,8 +1072,10 @@ describe('ChatPanel', () => {
     await waitFor(() => expect(screen.getAllByTestId('pending-image-thumb')).toHaveLength(5));
   });
 
-  it('disables send when pending images are attached to a text-only model', async () => {
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+  it('sends pending images even when model metadata only advertises text input', async () => {
+    const encoder = new TextEncoder();
+    let streamBody: any;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url === '/api/models') {
         return {
@@ -1089,6 +1091,19 @@ describe('ChatPanel', () => {
       if (url === '/api/threads/t1') {
         return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'openai/text' }, messages: [] }) } as Response;
       }
+      if (url === '/api/threads/t1/messages/stream') {
+        streamBody = JSON.parse(String(init?.body));
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(JSON.stringify({ kind: 'done' }) + '\n'));
+              controller.close();
+            },
+          }),
+        } as Response;
+      }
       return { ok: true, json: async () => ({}) } as Response;
     });
 
@@ -1102,8 +1117,12 @@ describe('ChatPanel', () => {
     const pane = await screen.findByTestId('chat-drop-target');
     fireEvent.drop(pane, { dataTransfer: makeDataTransfer([imageFile()]) });
 
-    expect(await screen.findByText(/selected model does not support images/i)).toBeInTheDocument();
-    expect(screen.getByTestId('send-button')).toBeDisabled();
+    expect(await screen.findByText('screen.png')).toBeInTheDocument();
+    expect(screen.queryByText(/selected model does not support images/i)).not.toBeInTheDocument();
+    expect(screen.getByTestId('send-button')).toBeEnabled();
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => expect(streamBody.images).toHaveLength(1));
   });
 
   it('renders image attachments on reloaded user messages', async () => {
