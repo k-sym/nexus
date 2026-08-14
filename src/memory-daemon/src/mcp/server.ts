@@ -1,6 +1,8 @@
-// MCP tool surface for OpenClaw's CLI agents (Claude Code / Codex). Tools are thin wrappers
+// MCP tool surface for CLI agents (Claude Code / Codex). Tools are thin wrappers
 // over the daemon HTTP API via MemoryClient — no direct DB access, so the daemon stays the
-// single writer. Defaults target the `openclaw` namespace since that's the primary MCP caller.
+// single writer. Stores default to the `global` namespace (the one global recall reads) unless
+// env defaults pin a project scope — an omitted namespace must never file a memory where
+// recall can't see it (2026-08-14 incident: the old `openclaw` default swallowed vault pages).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { MemoryClient } from "../client.js";
@@ -41,7 +43,7 @@ export function buildMcpServer(client: MemoryClient, opts?: { defaults?: McpEnvD
   if (!defaults.readonly) {
     server.tool(
       "memory_store",
-      "Store a new memory. It is written to the canonical Obsidian vault and indexed.",
+      "Store a new memory. It is written to the canonical Obsidian vault and indexed. Defaults to the 'global' namespace when none is given.",
       {
         body: z.string(),
         title: z.string().optional(),
@@ -55,10 +57,10 @@ export function buildMcpServer(client: MemoryClient, opts?: { defaults?: McpEnvD
           await client.store({
             body: a.body,
             title: a.title,
-            namespace: a.namespace ?? "openclaw",
-            project: a.project ?? null,
+            namespace: a.namespace ?? defaults.namespace ?? "global",
+            project: a.project ?? defaults.project ?? null,
             category: a.category ?? null,
-            source: a.source ?? "openclaw",
+            source: a.source ?? "mcp",
           }),
         ),
     );
