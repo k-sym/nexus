@@ -210,6 +210,11 @@ export interface HermesClient {
   getRun(runId: string): Promise<HermesRunStatus>;
   stopRun(runId: string): Promise<void>;
   listModels(): Promise<HermesModelsResult>;
+  /** Partner adapter's routine fleet report (baker-internal#82). Passed through
+   * untyped — the nexus route proxies the payload as-is. Plain Hermes lacks the
+   * endpoint and the request throws; callers fail-soft. */
+  listRoutines(): Promise<unknown>;
+  getRoutine(name: string): Promise<unknown>;
   createSession(input: HermesSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
   listSessions(input?: HermesListSessionsInput): Promise<HermesListSessionsResult>;
@@ -283,6 +288,14 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       const body = (await requestJson('/v1/models')) as any;
       const models = Array.isArray(body?.models) ? (body.models as HermesModelChoice[]) : [];
       return { models, ...(typeof body?.default === 'string' ? { default: body.default } : {}) };
+    },
+
+    async listRoutines(): Promise<unknown> {
+      return requestJson('/v1/routines');
+    },
+
+    async getRoutine(name: string): Promise<unknown> {
+      return requestJson(`/v1/routines/${encodeURIComponent(name)}`);
     },
 
     async startRun(input: HermesRunInput): Promise<HermesRunStart> {

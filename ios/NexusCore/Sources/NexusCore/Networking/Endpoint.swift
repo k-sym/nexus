@@ -165,6 +165,17 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/settings", method: "PUT", body: body)
     }
 
+    // MARK: Routines (read-only fleet status, baker-internal#82)
+
+    /// Scheduled partner routine fleet → `RoutinesResponse`.
+    public static let routines = Endpoint(path: "/api/routines")
+
+    /// One routine's status + recent log tail → `Routine` (with `logTail`).
+    public static func routineDetail(_ name: String) -> Endpoint {
+        let encoded = name.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? name
+        return Endpoint(path: "/api/routines/\(encoded)")
+    }
+
     // MARK: M6 assistant
 
     /// Merged local + adoptable-remote Hermes sessions → `AssistantSessionsResponse`.

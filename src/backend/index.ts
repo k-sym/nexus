@@ -22,6 +22,7 @@ import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerMemoryRoutes } from './routes/memory.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerStatusRoutes } from './routes/status.js';
+import { registerRoutinesRoutes } from './routes/routines.js';
 import { registerTicketRoutes } from './routes/tickets.js';
 import { registerBraindumpRoutes } from './routes/braindump.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
@@ -239,6 +240,7 @@ async function main() {
   app.register(registerMemoryRoutes);
   app.register(registerSettingsRoutes);
   app.register(registerStatusRoutes);
+  app.register(registerRoutinesRoutes);
   app.register(registerTicketRoutes);
   app.register(registerBraindumpRoutes);
   app.register(registerNotificationRoutes);

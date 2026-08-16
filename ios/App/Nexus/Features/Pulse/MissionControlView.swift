@@ -20,9 +20,11 @@ final class MissionControlViewModel {
 }
 
 struct MissionControlView: View {
+    private let api: APIClient
     @State private var vm: MissionControlViewModel
 
     init(api: APIClient) {
+        self.api = api
         _vm = State(initialValue: MissionControlViewModel(api: api))
     }
 
@@ -41,6 +43,7 @@ struct MissionControlView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     memoryCard(status.memory)
+                    RoutinesCard(api: api)
                     if let counts = status.modelCounts {
                         modelsCard(counts)
                     }

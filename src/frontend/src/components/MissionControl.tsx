@@ -1,5 +1,6 @@
 import { Gauge } from '@phosphor-icons/react';
 import { MissionStatus } from '../api';
+import RoutinesCard from './RoutinesCard';
 
 interface MissionControlProps {
   status: MissionStatus | null;
@@ -195,6 +196,9 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
               </div>
             </Card>
           </div>
+
+          {/* Partner routine fleet (self-polling; independent of /api/mission-control) */}
+          <RoutinesCard />
 
           <div>
             <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Stats</div>
