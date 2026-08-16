@@ -374,6 +374,40 @@ export async function saveMondayProjectConfig(projectId: string, config: MondayP
   return data.config;
 }
 
+// Partner routine fleet — proxied from the assistant adapter's /v1/routines
+// (baker-internal#82). Snake_case mirrors the adapter wire shape.
+export type RoutineHealth = 'ok' | 'failed' | 'stale' | 'pending';
+
+export interface RoutineLastRun {
+  started: number | null;
+  ended: number | null;
+  rc: number | null;
+  timed_out: boolean;
+  source: 'status' | 'stamp';
+}
+
+export interface Routine {
+  name: string;
+  label: string;
+  schedule: Array<Record<string, number>>;
+  schedule_display: string;
+  last_run: RoutineLastRun | null;
+  health: RoutineHealth;
+  last_expected: number | null;
+  next_due: number | null;
+}
+
+export interface RoutineDetail extends Routine {
+  log_tail: string[];
+}
+
+export interface RoutinesResponse {
+  configured?: boolean;
+  routines: Routine[];
+  generated_at?: number;
+  error?: string;
+}
+
 export const api = {
   projects: {
     list: () => fetchJson<Project[]>(`/api/projects`),
@@ -468,6 +502,10 @@ export const api = {
   },
   missionControl: {
     get: () => fetchJson<MissionStatus>(`/api/mission-control`),
+  },
+  routines: {
+    list: () => fetchJson<RoutinesResponse>(`/api/routines`),
+    get: (name: string) => fetchJson<RoutineDetail>(`/api/routines/${encodeURIComponent(name)}`),
   },
   tickets: {
     list: () => fetchJson<Ticket[]>(`/api/tickets`),

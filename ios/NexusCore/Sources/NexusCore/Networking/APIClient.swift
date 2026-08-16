@@ -323,6 +323,20 @@ public actor APIClient {
         return try await request(.updateSettings(body: body), decoder: plainDecoder)
     }
 
+    // MARK: Routines (baker-internal#82)
+
+    /// The scheduled partner routine fleet — read-only observability. Snake_case
+    /// payload → default decoder. Fail-soft shapes (`configured: false`,
+    /// `error`) come through as data, not thrown errors.
+    public func routines() async throws -> RoutinesResponse {
+        try await request(.routines)
+    }
+
+    /// One routine's status plus its recent log tail.
+    public func routineDetail(name: String) async throws -> Routine {
+        try await request(.routineDetail(name))
+    }
+
     // MARK: Assistant (M6)
 
     /// Merged local + adoptable-remote Hermes sessions. Mixed snake/camel keys →
