@@ -10,13 +10,14 @@
  * confirm-gated here: api.ideas.graduateIssues is called from exactly one
  * place, the dialog's Confirm button.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowSquareOut, Brain, CaretDown, CaretRight, Flask, GraduationCap, PaperPlaneRight, Plus, Stop, Trash, X } from '@phosphor-icons/react';
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { ArrowSquareOut, Brain, CaretDown, CaretRight, Flask, GraduationCap, Paperclip, PaperPlaneRight, Plus, Stop, Trash, X } from '@phosphor-icons/react';
 import { Idea, IdeaState, IDEA_STATES, Project, UpdateIdeaInput } from '@nexus/shared';
 import { api, type CreatedIssue, type GraduateIssuesError } from '../api';
 import { apiFetch } from '../api-base';
 import { useIdeaThread } from '../hooks/useIdeaThread';
 import type { AssistantMessage } from '../hooks/useAssistantStream';
+import { AttachmentChip, usePendingAttachments } from '../lib/attachments';
 import { AgentRunCard } from './AgentRunCard';
 import { RunStatusStrip } from './RunStatusStrip';
 
@@ -37,6 +38,16 @@ const TERMINAL_STATES: readonly IdeaState[] = ['graduated', 'discarded'];
 
 function isTerminal(state: IdeaState): boolean {
   return TERMINAL_STATES.includes(state);
+}
+
+/** Backend copy for the idea-session attachment gate, shown client-side too. */
+const REPO_GATE_MESSAGE = 'Set a valid target repo (owner/repo) on this idea before attaching files.';
+
+/** Same shapes the backend accepts: "owner/repo" or a GitHub URL/remote. */
+function isValidTargetRepo(value: string | null | undefined): boolean {
+  const v = (value ?? '').trim();
+  if (!v) return false;
+  return /^[\w.-]+\/[\w.-]+$/.test(v) || /github\.com[/:][\w.-]+\/[\w.-]+/.test(v);
 }
 
 interface PartnerModel {
@@ -90,12 +101,27 @@ export default function IdeasView({ projects }: IdeasViewProps) {
   const [researchOpen, setResearchOpen] = useState(false);
   const [graduateOpen, setGraduateOpen] = useState(false);
 
+  // The attachment gate (#352 follow-up): attaching needs a valid target repo
+  // so the backend can file uploads under project_docs/uploads/ideas/<id>/.
+  const [repoNotice, setRepoNotice] = useState(false);
+  const repoInputRef = useRef<HTMLInputElement | null>(null);
+
   const thread = useIdeaThread(sessionId);
 
   const selected = useMemo(
     () => ideas.find((i) => i.id === selectedId) ?? done.find((i) => i.id === selectedId) ?? null,
     [ideas, done, selectedId],
   );
+
+  const repoValid = isValidTargetRepo(selected?.target_repo);
+
+  const triggerRepoGate = useCallback(() => {
+    setRepoNotice(true);
+    repoInputRef.current?.focus();
+  }, []);
+
+  useEffect(() => { setRepoNotice(false); }, [selectedId]);
+  useEffect(() => { if (repoValid) setRepoNotice(false); }, [repoValid]);
 
   const load = useCallback(async () => {
     try {
@@ -208,7 +234,7 @@ export default function IdeasView({ projects }: IdeasViewProps) {
     if (!selected) return;
     setResearchOpen(false);
     await patchIdea(selected.id, { state: 'researching' });
-    void thread.send(brief, modelKey);
+    void thread.send(brief, { modelKey });
   }, [selected, patchIdea, thread]);
 
   const handleAskPartnerToDraft = useCallback((repo: string) => {
@@ -319,12 +345,20 @@ export default function IdeasView({ projects }: IdeasViewProps) {
               key={selected.id}
               idea={selected}
               projects={projects}
+              repoInputRef={repoInputRef}
+              repoAttention={repoNotice}
               onPatch={(data) => patchIdea(selected.id, data)}
               onOpenResearch={() => setResearchOpen(true)}
               onOpenGraduate={() => setGraduateOpen(true)}
               onDiscard={() => void handleDiscard()}
             />
-            <IdeaThreadPane thread={thread} sessionReady={!!sessionId} />
+            <IdeaThreadPane
+              thread={thread}
+              sessionReady={!!sessionId}
+              repoValid={repoValid}
+              repoNotice={repoNotice}
+              onRepoGate={triggerRepoGate}
+            />
           </>
         )}
       </section>
@@ -421,9 +455,12 @@ function IdeaRow({ idea, selected, projects, onSelect, onDelete }: {
   );
 }
 
-function IdeaHeader({ idea, projects, onPatch, onOpenResearch, onOpenGraduate, onDiscard }: {
+function IdeaHeader({ idea, projects, repoInputRef, repoAttention, onPatch, onOpenResearch, onOpenGraduate, onDiscard }: {
   idea: Idea;
   projects: Project[];
+  /** Focused (and highlighted) when the attachment repo-gate trips. */
+  repoInputRef: RefObject<HTMLInputElement | null>;
+  repoAttention: boolean;
   onPatch: (data: UpdateIdeaInput) => Promise<Idea | null>;
   onOpenResearch: () => void;
   onOpenGraduate: () => void;
@@ -535,13 +572,18 @@ function IdeaHeader({ idea, projects, onPatch, onOpenResearch, onOpenGraduate, o
         <label className="block">
           <span className="text-[10px] uppercase tracking-wider text-zinc-500/80 font-medium">Target repo</span>
           <input
+            ref={repoInputRef}
             value={repo}
             onChange={(e) => setRepo(e.target.value)}
             onBlur={commitRepo}
             onKeyDown={blurOnEnter}
             placeholder="owner/repo"
             aria-label="Target repo"
-            className="mt-0.5 w-full bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1 text-xs text-zinc-200 placeholder:text-faint focus:outline-hidden focus:border-strong"
+            className={`mt-0.5 w-full bg-zinc-950 border rounded-md px-2 py-1 text-xs text-zinc-200 placeholder:text-faint focus:outline-hidden ${
+              repoAttention
+                ? 'border-amber-400 ring-1 ring-amber-400/60'
+                : 'border-zinc-800 focus:border-strong'
+            }`}
           />
         </label>
       </div>
@@ -575,28 +617,101 @@ function IdeaHeader({ idea, projects, onPatch, onOpenResearch, onOpenGraduate, o
   );
 }
 
-function IdeaThreadPane({ thread, sessionReady }: {
+function IdeaThreadPane({ thread, sessionReady, repoValid, repoNotice, onRepoGate }: {
   thread: ReturnType<typeof useIdeaThread>;
   sessionReady: boolean;
+  /** The idea has a usable target repo, so attaching files is allowed. */
+  repoValid: boolean;
+  /** The gate tripped — show the notice inline by the composer. */
+  repoNotice: boolean;
+  onRepoGate: () => void;
 }) {
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [draggingAttachments, setDraggingAttachments] = useState(false);
+  const {
+    pendingAttachments,
+    attachmentWarning,
+    addAttachmentFiles,
+    removePendingAttachment,
+    clearPendingAttachments,
+  } = usePendingAttachments();
 
   useEffect(() => {
     // jsdom has no scrollIntoView; guard so tests don't need a stub.
     bottomRef.current?.scrollIntoView?.({ block: 'end' });
   }, [thread.messages]);
 
+  // Every attach entry point (picker button, drop, paste) funnels through the
+  // repo gate: without a valid target repo the backend has nowhere stable to
+  // file the upload, so we don't even open the dialog.
+  const guardedAddFiles = (files: File[]) => {
+    if (files.length === 0) return;
+    if (!repoValid) {
+      onRepoGate();
+      return;
+    }
+    void addAttachmentFiles(files);
+  };
+
+  const handleAttachClick = () => {
+    if (!repoValid) {
+      onRepoGate();
+      return;
+    }
+    fileInputRef.current?.click();
+  };
+
   const handleSend = async () => {
     const text = input.trim();
-    if (!text || thread.isRunning) return;
+    if ((!text && pendingAttachments.length === 0) || thread.isRunning) return;
+    // Attachments pending but the repo got cleared after picking: same notice.
+    if (pendingAttachments.length > 0 && !repoValid) {
+      onRepoGate();
+      return;
+    }
+    const attachments = pendingAttachments;
     setInput('');
-    const sent = await thread.send(text);
-    if (!sent) setInput(text);
+    const sent = await thread.send(text, {
+      attachments,
+      onError: (message) => {
+        // The backend's own gate (e.g. repo invalidated server-side mid-turn).
+        if (/target repo/i.test(message)) onRepoGate();
+      },
+    });
+    if (sent) clearPendingAttachments();
+    else setInput(text);
   };
 
   return (
-    <div className="flex-1 flex flex-col min-h-0" data-testid="idea-thread">
+    <div
+      className="flex-1 flex flex-col min-h-0 relative"
+      data-testid="idea-thread"
+      onDragEnter={(e) => {
+        if (Array.from(e.dataTransfer.types).includes('Files')) {
+          e.preventDefault();
+          setDraggingAttachments(true);
+        }
+      }}
+      onDragOver={(e) => {
+        if (Array.from(e.dataTransfer.types).includes('Files')) e.preventDefault();
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDraggingAttachments(false);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDraggingAttachments(false);
+        guardedAddFiles(Array.from(e.dataTransfer.files));
+      }}
+    >
+      {draggingAttachments && (
+        <div className="absolute inset-3 z-20 rounded-lg border border-dashed border-cyan-300/50 bg-slate-950/70 flex items-center justify-center text-sm text-primary pointer-events-none">
+          Release to attach files
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto p-4 space-y-3">
         {thread.loading ? (
           <p className="text-faint text-sm">Loading dialogue…</p>
@@ -637,42 +752,89 @@ function IdeaThreadPane({ thread, sessionReady }: {
         />
       )}
 
-      <div className="border-t border-subtle surface-glass p-3 flex gap-2 items-end">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault();
-              void handleSend();
-            }
-          }}
-          placeholder={sessionReady ? 'Discuss this idea…' : 'Opening the dialogue…'}
-          rows={2}
-          disabled={!sessionReady}
-          data-testid="idea-chat-input"
-          className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong disabled:opacity-50"
-        />
-        {thread.isRunning ? (
-          <button
-            type="button"
-            onClick={() => void thread.abort()}
-            aria-label="Stop current run"
-            className="h-10 px-4 accent-button rounded-lg transition-colors flex items-center gap-2"
-          >
-            <Stop size={17} weight="fill" /> Stop
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => void handleSend()}
-            disabled={!sessionReady || !input.trim()}
-            data-testid="idea-send-button"
-            className="h-10 px-4 accent-button rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2"
-          >
-            <PaperPlaneRight size={17} weight="fill" /> Send
-          </button>
+      <div className="border-t border-subtle surface-glass p-3">
+        {repoNotice && (
+          <div className="pb-2 text-xs text-amber-200" role="alert" data-testid="repo-gate-notice">
+            {REPO_GATE_MESSAGE}
+          </div>
         )}
+        {attachmentWarning && <div className="pb-2 text-xs text-amber-200">{attachmentWarning}</div>}
+        {pendingAttachments.length > 0 && (
+          <div className="flex gap-2 overflow-x-auto pb-2">
+            {pendingAttachments.map((attachment, index) => (
+              <AttachmentChip
+                key={`${attachment.name ?? attachment.type}-${index}`}
+                attachment={attachment}
+                index={index}
+                onRemove={removePendingAttachment}
+              />
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 items-end">
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            className="hidden"
+            data-testid="idea-file-input"
+            onChange={(e) => {
+              guardedAddFiles(Array.from(e.target.files ?? []));
+              e.currentTarget.value = '';
+            }}
+          />
+          <button
+            type="button"
+            onClick={handleAttachClick}
+            disabled={!sessionReady}
+            className="h-10 w-10 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40"
+            title="Attach files (needs a valid target repo on this idea)"
+            aria-label="Attach files"
+          >
+            <Paperclip size={17} />
+          </button>
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void handleSend();
+              }
+            }}
+            onPaste={(e) => {
+              const files = Array.from(e.clipboardData.files);
+              if (files.length === 0) return;
+              e.preventDefault();
+              guardedAddFiles(files);
+            }}
+            placeholder={sessionReady ? 'Discuss this idea…' : 'Opening the dialogue…'}
+            rows={2}
+            disabled={!sessionReady}
+            data-testid="idea-chat-input"
+            className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong disabled:opacity-50"
+          />
+          {thread.isRunning ? (
+            <button
+              type="button"
+              onClick={() => void thread.abort()}
+              aria-label="Stop current run"
+              className="h-10 px-4 accent-button rounded-lg transition-colors flex items-center gap-2"
+            >
+              <Stop size={17} weight="fill" /> Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void handleSend()}
+              disabled={!sessionReady || (!input.trim() && pendingAttachments.length === 0)}
+              data-testid="idea-send-button"
+              className="h-10 px-4 accent-button rounded-lg disabled:opacity-40 transition-colors flex items-center gap-2"
+            >
+              <PaperPlaneRight size={17} weight="fill" /> Send
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -688,6 +850,27 @@ function IdeaBubble({ message }: { message: AssistantMessage }) {
           isUser ? 'chat-request-bubble' : 'surface-glass border border-subtle text-primary'
         }`}
       >
+        {isUser && message.attachments && message.attachments.length > 0 && (
+          <div className="mb-2 grid grid-cols-2 gap-2">
+            {message.attachments.map((attachment, index) => (
+              attachment.type === 'image' ? (
+                <img
+                  key={`${attachment.name ?? 'image'}-${index}`}
+                  src={`data:${attachment.mimeType};base64,${attachment.data}`}
+                  alt={attachment.name ?? `Attached image ${index + 1}`}
+                  className="max-h-40 rounded-lg border border-subtle object-cover"
+                />
+              ) : (
+                <div
+                  key={`${attachment.name}-${index}`}
+                  className="min-w-0 rounded-md border border-subtle bg-zinc-950/35 px-2 py-1.5 text-xs text-primary"
+                >
+                  <span className="break-all">{attachment.name}</span>
+                </div>
+              )
+            ))}
+          </div>
+        )}
         <p className="whitespace-pre-wrap">{message.content || (message.isStreaming ? 'Running...' : '')}</p>
       </div>
     </div>
@@ -778,6 +961,7 @@ function GraduateDialog({ idea, projects, onClose, onAskPartner, onGraduated, on
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState<CreatedIssue[] | null>(null);
+  const [movedFiles, setMovedFiles] = useState<number | null>(null);
 
   const validDrafts = drafts.every((d) => d.title.trim() && d.body.trim());
   const canFile = !busy && repo.trim().length > 0 && drafts.length > 0 && validDrafts;
@@ -812,12 +996,26 @@ function GraduateDialog({ idea, projects, onClose, onAskPartner, onGraduated, on
 
   const handleConfirmProject = async () => {
     setBusy(true);
+    setError(null);
     try {
-      await onPatch({
-        state: 'graduated',
-        ...(projectId ? { graduated_to: { kind: 'project', projectId } } : {}),
-      });
-      onClose();
+      if (!projectId) {
+        // "No project": plain state change, nothing to move.
+        await onPatch({ state: 'graduated' });
+        onClose();
+        return;
+      }
+      // Records graduation AND moves the idea's uploads into the project repo.
+      // A 400 (repo path unusable with files to move) leaves the idea
+      // un-graduated — surface the message verbatim and stay open.
+      const result = await api.ideas.graduateProject(idea.id, projectId);
+      onGraduated(result.idea);
+      if (result.movedFiles > 0) {
+        setMovedFiles(result.movedFiles);
+      } else {
+        onClose();
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to graduate idea.');
     } finally {
       setBusy(false);
     }
@@ -955,8 +1153,9 @@ function GraduateDialog({ idea, projects, onClose, onAskPartner, onGraduated, on
             <select
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
+              disabled={movedFiles !== null}
               aria-label="Graduate into project"
-              className="mt-0.5 w-full bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1.5 text-sm text-zinc-200 focus:outline-hidden focus:border-strong"
+              className="mt-0.5 w-full bg-zinc-950 border border-zinc-800 rounded-md px-2 py-1.5 text-sm text-zinc-200 focus:outline-hidden focus:border-strong disabled:opacity-50"
             >
               <option value="">No project (just mark graduated)</option>
               {projects.map((p) => (
@@ -964,19 +1163,33 @@ function GraduateDialog({ idea, projects, onClose, onAskPartner, onGraduated, on
               ))}
             </select>
           </label>
+          <p className="text-xs text-faint">
+            Graduating into a project also moves this idea's uploaded files into the project repo.
+          </p>
+
+          {error && <div className="text-xs text-red-300" role="alert">{error}</div>}
+
+          {movedFiles !== null && (
+            <div className="text-xs text-emerald-300" data-testid="graduate-project-result">
+              Graduated. {movedFiles} file{movedFiles === 1 ? '' : 's'} moved into the project.
+            </div>
+          )}
+
           <div className="flex justify-end gap-2 pt-1">
             <button type="button" onClick={onClose} className="h-9 px-3 surface-elevated border border-subtle rounded-lg text-sm text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors">
-              Cancel
+              {movedFiles !== null ? 'Done' : 'Cancel'}
             </button>
-            <button
-              type="button"
-              onClick={() => void handleConfirmProject()}
-              disabled={busy}
-              data-testid="confirm-graduate-project"
-              className="h-9 px-4 accent-button rounded-lg text-sm disabled:opacity-40 transition-colors"
-            >
-              {busy ? 'Graduating…' : 'Graduate'}
-            </button>
+            {movedFiles === null && (
+              <button
+                type="button"
+                onClick={() => void handleConfirmProject()}
+                disabled={busy}
+                data-testid="confirm-graduate-project"
+                className="h-9 px-4 accent-button rounded-lg text-sm disabled:opacity-40 transition-colors"
+              >
+                {busy ? 'Graduating…' : 'Graduate'}
+              </button>
+            )}
           </div>
         </>
       )}

@@ -8,10 +8,12 @@
  */
 import { FastifyInstance } from 'fastify';
 import { v4 as uuid } from 'uuid';
+import path from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { Idea, IdeaState, IdeaGraduation, IdeaIssueDraft, IDEA_STATES } from '@nexus/shared';
 import { createIssue, GitHubError, GitHubRepoRef } from '../github/client.js';
 import { resolveGitHubToken } from '../github/token.js';
-import { parseGitHubRepo } from '../github/repo.js';
+import { parseRepoShorthand } from '../github/repo.js';
 
 /** States hidden from the default list (terminal, shown behind ?all=1). */
 const TERMINAL_STATES: readonly IdeaState[] = ['graduated', 'discarded'];
@@ -59,20 +61,25 @@ function httpError(message: string, statusCode: number): Error {
 
 /** Accept "owner/repo" or any GitHub remote URL parseGitHubRepo understands. */
 export function parseRepoInput(value: string): GitHubRepoRef | null {
-  const trimmed = value.trim();
-  const plain = /^([\w.-]+)\/([\w.-]+)$/.exec(trimmed);
-  if (plain) return { owner: plain[1], repo: plain[2].replace(/\.git$/, '') };
-  return parseGitHubRepo(trimmed);
+  return parseRepoShorthand(value);
+}
+
+/** Where an idea's thread attachments are filed (under <uploadRoot>/project_docs/uploads). */
+export function ideaUploadsSubdir(ideaId: string): string {
+  return path.join('ideas', ideaId);
 }
 
 export interface IdeaRouteOptions {
   fetchImpl?: typeof fetch;
   resolveToken?: () => Promise<string | undefined>;
+  /** Root the assistant routes save attachments under; defaults to cwd, like theirs. */
+  uploadRoot?: string;
 }
 
 export async function registerIdeaRoutes(fastify: FastifyInstance, options: IdeaRouteOptions = {}) {
   const db = fastify.db;
   const resolveToken = options.resolveToken ?? resolveGitHubToken;
+  const uploadRoot = options.uploadRoot ?? process.cwd();
 
   const getIdea = (id: string): IdeaRow | undefined =>
     db.prepare('SELECT * FROM ideas WHERE id = ?').get(id) as IdeaRow | undefined;
@@ -204,6 +211,44 @@ export async function registerIdeaRoutes(fastify: FastifyInstance, options: Idea
     ).run(sessionId, `Idea: ${idea.title}`, now, now);
     db.prepare('UPDATE ideas SET session_id = ?, updated_at = ? WHERE id = ?').run(sessionId, now, id);
     return { sessionId };
+  });
+
+  // Graduation into an existing project. Beyond recording the link, this
+  // moves the idea's filed attachments (project_docs/uploads/ideas/<id>/,
+  // written there by the assistant routes for idea-origin sessions) into the
+  // project's own project_docs/uploads/ideas/<id>/ — the files follow the
+  // work. Copy-then-remove rather than rename so a repo on another volume
+  // works. A project without a usable repo path is a 400, not a silent
+  // no-move: the caller should surface it and let the user fix the project.
+  fastify.post('/api/ideas/:id/graduate/project', async (request) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { projectId?: string };
+    const idea = getIdea(id);
+    if (!idea) throw httpError('Idea not found', 404);
+    const projectId = (body.projectId ?? '').trim();
+    if (!projectId) throw httpError('projectId is required', 400);
+    const project = db.prepare('SELECT id, repo_path FROM projects WHERE id = ?').get(projectId) as
+      | { id: string; repo_path: string }
+      | undefined;
+    if (!project) throw httpError('Project not found', 404);
+
+    const sourceDir = path.join(uploadRoot, 'project_docs', 'uploads', ideaUploadsSubdir(id));
+    let movedFiles = 0;
+    if (existsSync(sourceDir)) {
+      if (!project.repo_path || !existsSync(project.repo_path)) {
+        throw httpError('The project has no usable repo path to move this idea’s files into — fix the project first.', 400);
+      }
+      const destDir = path.join(project.repo_path, 'project_docs', 'uploads', ideaUploadsSubdir(id));
+      movedFiles = readdirSync(sourceDir).length;
+      mkdirSync(path.dirname(destDir), { recursive: true });
+      cpSync(sourceDir, destDir, { recursive: true });
+      rmSync(sourceDir, { recursive: true, force: true });
+    }
+
+    const graduation: IdeaGraduation = { kind: 'project', projectId };
+    db.prepare("UPDATE ideas SET state = 'graduated', graduated_to = ?, updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(graduation), new Date().toISOString(), id);
+    return { idea: publicIdea(getIdea(id)!), movedFiles };
   });
 
   // Confirm-gated graduation into a GitHub issue set. The drafts arrive

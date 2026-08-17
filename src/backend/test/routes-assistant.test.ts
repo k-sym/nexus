@@ -543,6 +543,81 @@ test('Assistant runs persist attachments and send Hermes saved file references',
   }
 });
 
+test('Idea dialogue attachments are gated on a valid target repo and filed per idea', async () => {
+  let hermesMessage = '';
+  const fetchImpl = hermesChatMock({
+    onChatStream: (_url, init) => {
+      hermesMessage = JSON.parse(String(init?.body)).message;
+      return sseResponse([
+        'event: assistant.delta\ndata: {"delta":"Got the file."}\n\n',
+        'event: done\ndata: {}\n\n',
+      ]);
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO assistant_sessions (id, title, status, origin, created_at, updated_at) VALUES ('idea-sess', 'Idea: X', 'idle', 'idea', ?, ?)",
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO ideas (id, title, seed, state, tags, session_id, source, created_at, updated_at)
+       VALUES ('idea-1', 'X', '', 'discussing', '[]', 'idea-sess', 'idea_watcher', ?, ?)`,
+    ).run(now, now);
+
+    const attachment = {
+      type: 'file',
+      name: 'shot.txt',
+      mimeType: 'text/plain',
+      data: Buffer.from('evidence').toString('base64'),
+      size: 8,
+    };
+
+    // No target repo yet → the upload is refused before anything hits disk,
+    // for the web composer and iOS alike (server-side gate).
+    const blocked = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/idea-sess/messages/stream',
+      payload: { content: 'see attached', attachments: [attachment] },
+    });
+    assert.equal(blocked.statusCode, 400);
+    assert.match(blocked.json().error, /target repo/);
+    assert.equal(existsSync(join(dir, 'project_docs', 'uploads', 'ideas')), false, 'nothing saved while gated');
+
+    // An invalid repo string is still gated; a valid owner/repo opens it.
+    db.prepare("UPDATE ideas SET target_repo = 'not a repo' WHERE id = 'idea-1'").run();
+    const stillBlocked = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/idea-sess/messages/stream',
+      payload: { content: 'see attached', attachments: [attachment] },
+    });
+    assert.equal(stillBlocked.statusCode, 400);
+
+    db.prepare("UPDATE ideas SET target_repo = 'k-sym/nexus' WHERE id = 'idea-1'").run();
+    const streamed = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/idea-sess/messages/stream',
+      payload: { content: 'see attached', attachments: [attachment] },
+    });
+    assert.equal(streamed.statusCode, 200);
+    // Filed under the per-idea directory (so graduation can move it), and the
+    // reference threaded into the prompt points there.
+    const savedPath = join(dir, 'project_docs', 'uploads', 'ideas', 'idea-1', 'shot.txt');
+    assert.equal(existsSync(savedPath), true, 'attachment filed under ideas/<id>/');
+    assert.match(hermesMessage, /ideas\/idea-1\/shot\.txt/);
+
+    // Text-only turns are never gated — the repo requirement is upload-only.
+    const textOnly = await app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/idea-sess/messages/stream',
+      payload: { content: 'just talking' },
+    });
+    assert.equal(textOnly.statusCode, 200);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant foreground stream sends image attachments to Hermes as inline data images', async () => {
   let createdRemoteSession = '';
   let hermesChatBody: any = null;

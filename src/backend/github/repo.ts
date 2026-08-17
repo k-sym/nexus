@@ -57,3 +57,14 @@ export function parseGitHubRepo(url: string): { owner: string; repo: string } | 
   if (https) return { owner: https[1], repo: https[2] };
   return null;
 }
+
+/**
+ * Parse user-entered repo input: bare "owner/repo" shorthand, or any remote
+ * URL parseGitHubRepo understands. Returns null for anything else.
+ */
+export function parseRepoShorthand(value: string): { owner: string; repo: string } | null {
+  const trimmed = value.trim();
+  const plain = /^([\w.-]+)\/([\w.-]+)$/.exec(trimmed);
+  if (plain) return { owner: plain[1], repo: plain[2].replace(/\.git$/, '') };
+  return parseGitHubRepo(trimmed);
+}
