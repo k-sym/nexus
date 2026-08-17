@@ -45,40 +45,19 @@ function insertThread(db: ReturnType<typeof tempDb>['db'], id: string, projectId
   ).run(id, projectId, 'agent', 'T', now, now);
 }
 
-test('liveThreadIds covers chat threads and both mission thread forms', () => {
+test('liveThreadIds covers chat threads, archived included', () => {
   const { db, cleanup } = tempDb();
   try {
     insertProject(db, 'p1');
     insertThread(db, 'thread-alive', 'p1');
-    const now = new Date().toISOString();
-    db.prepare(
-      'INSERT INTO missions (id, project_id, title, config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run('m1', 'p1', 'Mission', JSON.stringify({ thread_id: 'pinned-thread' }), now, now);
-    db.prepare(
-      'INSERT INTO missions (id, project_id, title, config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run('m2', 'p1', 'Mission 2', '{}', now, now);
+    insertThread(db, 'thread-archived', 'p1');
+    db.prepare('UPDATE chat_threads SET archived_at = ? WHERE id = ?')
+      .run(new Date().toISOString(), 'thread-archived');
 
     const ids = liveThreadIds(db);
     assert.ok(ids.includes('thread-alive'));
-    // Missions default to `mission-<id>` but may pin their own thread id; both
-    // are live sessions and both must be protected.
-    assert.ok(ids.includes('mission-m1'));
-    assert.ok(ids.includes('pinned-thread'));
-    assert.ok(ids.includes('mission-m2'));
-  } finally {
-    cleanup();
-  }
-});
-
-test('a malformed mission config still protects the default thread id', () => {
-  const { db, cleanup } = tempDb();
-  try {
-    insertProject(db, 'p1');
-    const now = new Date().toISOString();
-    db.prepare(
-      'INSERT INTO missions (id, project_id, title, config_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run('m1', 'p1', 'Mission', 'not json at all', now, now);
-    assert.ok(liveThreadIds(db).includes('mission-m1'));
+    // Archiving does not drop the pi session, so archived threads stay live.
+    assert.ok(ids.includes('thread-archived'));
   } finally {
     cleanup();
   }

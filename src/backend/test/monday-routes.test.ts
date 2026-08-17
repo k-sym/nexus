@@ -39,11 +39,11 @@ function seed(db: ReturnType<typeof getDb>) {
   }]);
 }
 
-// The neighbouring route modules (routes/tickets.ts, routes/braindump.ts) take
+// The neighbouring route modules (routes/tickets.ts, routes/ideas.ts) take
 // only a FastifyInstance and read `fastify.db`, decorated once at app-boot in
 // index.ts. registerMondayRoutes follows the same convention rather than
 // taking a { db } deps argument, so tests decorate 'db' the same way
-// routes-status.test.ts / braindump-routes.test.ts do.
+// routes-status.test.ts / routes-ideas.test.ts do.
 async function buildApp(db: ReturnType<typeof getDb>) {
   const app = Fastify();
   app.decorate('db', db);
@@ -52,8 +52,7 @@ async function buildApp(db: ReturnType<typeof getDb>) {
 }
 
 /**
- * A minimal stand-in for the real ActivityManager, matching the same shape
- * test/routes-missions.test.ts already decorates with — `{ bus: { emit } }`
+ * A minimal stand-in for the real ActivityManager — `{ bus: { emit } }`
  * is all routes/monday.ts reads (`fastify.activity?.bus.emit`).
  */
 async function buildAppWithActivity(db: ReturnType<typeof getDb>): Promise<{ app: Awaited<ReturnType<typeof buildApp>>; events: ActivityEvent[] }> {

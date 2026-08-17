@@ -23,11 +23,10 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
   - [Memory](#memory)
   - [Sessions](#sessions)
   - [Assistant](#assistant)
-  - [Braindump](#braindump)
+  - [Idea Watcher](#idea-watcher)
   - [Activity Console](#activity-console)
   - [Tickets (Jira mirror)](#tickets-jira-mirror)
   - [Mission Control](#mission-control)
-  - [Missions](#missions)
 - [Model Routing](#model-routing)
 - [API Reference](#api-reference)
 - [Glasses (Even G2 HUD)](#glasses-even-g2-hud)
@@ -44,11 +43,10 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Projects** | Link existing local git repos. NEXUS scaffolds a `project_docs/` structure (`specs`, `plans`, `design`, `uploads`) and, when the repo has none, a starter `AGENTS.md` — so a new project starts agent-aware. Existing agent-instruction files are never overwritten. |
 | **Kanban** | 5-column board (Triage → To Do → In Progress → Review → Deploy) with drag-and-drop. |
 | **Interactive task chat** | Moving a task into **In Progress** opens an interactive chat thread bound to a model you pick — the old headless dispatch loop is gone. The agent works the task in the conversation while you steer it. |
-| **Missions** | Bounded, recurring or self-paced autonomous jobs against a project's tasks/tickets. Hard ceilings (iterations / wall-clock / token budget / run window), a per-iteration audit ledger, and pause/resume/stop controls. Off by default; can never run unbounded. |
 | **Models & curation** | A model registry (the Pi runtime) knows every model reachable from your configured auth — API keys (OpenRouter, local servers) and OAuth (Anthropic, OpenAI/Codex, GitHub Copilot). You curate which models show up in the picker; per-thread model selection with image/document attachments. No more YAML "personas". |
 | **Multi-provider chat** | One runtime drives Claude Code, Codex, OpenCode, OpenRouter, local OpenAI-compatible servers (omlx, LM Studio, llama.cpp), and remote Hermes-style endpoints — each reached through the Pi SDK's provider bridges. |
 | **Assistant** | A separate, project-less Hermes Assistant surface with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs that can be reconciled after restart. |
-| **Braindump** | Capture free-form ideas before they become tasks; triage them into a project's Kanban from the Braindump view. |
+| **Idea Watcher** | Park free-form ideas frictionlessly, then ripen each through a dialogue with the partner assistant — commission research into the thread, pull the findings apart, and graduate the idea into a new project or a detailed GitHub issue set (confirm-gated filing). |
 | **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Agents pull it on demand via a `memory_recall` tool; exposed over HTTP + MCP. |
 | **Sessions** | Per-project conversational interface with live token streaming, file drag-and-drop, structured question cards, image + PDF/document attachments, and manual archival into memory. |
@@ -74,7 +72,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 │  ┌────────────────────────────────────────────────────┐ │
 │  │               React Dashboard (Vite)                │ │
 │  │  Mission Control | Kanban | Sessions | Tickets |    │ │
-│  │  Braindump | Assistant | Activity | Memory |Usage   │ │
+│  │  Ideas | Assistant | Activity | Memory | Usage      │ │
 │  └─────────────────────────────┬──────────────────────┘ │
 │                        │ HTTP (localhost:4173)           │
 │  ┌─────────────────────▼──────────────────────────────┐ │
@@ -99,7 +97,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 └─────────────────────────────────────────────────────────┘
 ```
 
-The backend runs the Fastify HTTP API, the Jira polling loop, and the mission scheduler loop in a single Node process. **Model execution is driven by the [Pi runtime](https://github.com/earendil-works/pi-coding-agent)** (`@earendil-works/pi-coding-agent`): one `PiRuntime` per backend owns an `AuthStorage` (credentials in `~/.nexus/auth.json`) and a `ModelRegistry` (every model reachable from that auth), and creates one `AgentSession` per chat thread. The old headless orchestrator dispatch loop has been removed — task work now happens interactively in chat threads. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/tickets/missions; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Tauri app for production. The desktop shell is **Tauri v2** (a small Rust core using the OS WebView) — it supervises the daemon/backend services and hosts the UI; it replaced the previous Electron shell (~15× smaller, ~177 MB less idle RAM).
+The backend runs the Fastify HTTP API and the Jira polling loop in a single Node process. **Model execution is driven by the [Pi runtime](https://github.com/earendil-works/pi-coding-agent)** (`@earendil-works/pi-coding-agent`): one `PiRuntime` per backend owns an `AuthStorage` (credentials in `~/.nexus/auth.json`) and a `ModelRegistry` (every model reachable from that auth), and creates one `AgentSession` per chat thread. The old headless orchestrator dispatch loop has been removed — task work now happens interactively in chat threads. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/tickets/ideas; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Tauri app for production. The desktop shell is **Tauri v2** (a small Rust core using the OS WebView) — it supervises the daemon/backend services and hosts the UI; it replaced the previous Electron shell (~15× smaller, ~177 MB less idle RAM).
 
 ### Packages
 
@@ -560,7 +558,7 @@ All config lives under `~/.nexus/`:
 │   └── <repo-slug>/<threadId>.jsonl
 ├── workspaces/            # Per-project agent output logs (legacy)
 │   └── <project-slug>/outputs/<task-id>.log
-├── nexus.db               # SQLite database (projects/tasks/threads/tickets/missions)
+├── nexus.db               # SQLite database (projects/tasks/threads/tickets/ideas)
 └── logs/                  # Application logs
 ```
 
@@ -796,9 +794,11 @@ On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `g
 
 A project-less Hermes Assistant surface against the configured endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It is independent of project sessions and stores its own local Assistant sessions, transcripts, and run ledger in `assistant_sessions`, `assistant_session_messages`, and `assistant_runs`. Each session can be reopened from the Assistant rail, foreground turns stream over NDJSON, and detached background runs store the remote Hermes run ID so Nexus can poll `/api/assistant/sync` after restart. When Hermes exposes session listing, the Assistant rail can also show filtered remote API sessions; selecting one adopts it into Nexus, imports message history, and resumes future turns against the mapped Hermes `remote_session_id`. The legacy single-thread Assistant endpoints remain as wrappers over the newest/default session for compatibility.
 
-### Braindump
+### Idea Watcher
 
-Free-form idea capture *before* something is a task. The **Braindump** view lists active ideas; each idea can be triaged into a project (which creates a Triage Kanban task) and is then marked `triaged` and drops out of the active list. Triaged rows are retained for future history. Backed by the `braindump_ideas` table.
+Successor to the old Braindump (#352): capture stays frictionless (type a title, Enter, it's **parked**), but instead of a passive list each idea ripens through a **dialogue** with the partner assistant before it's categorised. An idea's thread *is* an assistant session (created lazily on first discussion, hidden from the Assistant rail); from it you can commission research — a canned, editable brief plus a model pick, dispatched as a turn — and pull the findings apart in the same thread.
+
+Lifecycle: `parked → discussing → researching → reviewed → graduated | discarded`. The tab groups ideas by attention — **Waiting on you** (reviewed), **Ripening** (discussing/researching), **Parked**, and a collapsed **Done**. Graduation goes one of two ways: into a **new project**, or into a **detailed GitHub issue set** on an existing repo — the partner drafts from the thread, you edit, and nothing is filed until you explicitly confirm (`POST /api/ideas/:id/graduate/issues`, the codebase's only GitHub write). Backed by the `ideas` table; old `braindump_ideas` rows are migrated in once (and the legacy table is left in place as an export path).
 
 ### Activity Console
 
@@ -833,55 +833,6 @@ The landing dashboard. A single `GET /api/mission-control` call aggregates:
 - **Memory daemon health** (reachability + the local model stack's status),
 - **Curated models** — your enabled models with per-provider auth health (the legacy "persona roster" surface is gone; the model registry is the new ground truth, filtered by your curation choices), plus `active`/`available` counts,
 - **Usage stats** — Claude / Codex / OpenRouter session and weekly usage windows (sampled from the OS, the CodexBar history, and the OpenRouter credit balance).
-
-### Missions
-
-> Not to be confused with **Mission Control** (the landing dashboard, above). A **mission** is a bounded,
-> recurring or self-paced autonomous job.
-
-Missions run a project-bound job on a schedule with hard ceilings, a full per-iteration audit trail, and
-explicit pause/resume/stop control. Where the orchestrator *reacts* to a task entering **In Progress**, a
-mission runs *itself* on a cadence until it hits a configured limit or drains its backlog — the building
-block for bounded "overnight" autonomous work.
-
-A single in-backend **scheduler** (5s tick, alongside the orchestrator and Jira poll) wakes, claims every
-`active` mission whose `next_run_at` is due, and runs one iteration through a handler keyed by the
-mission's `kind`. Bounds are evaluated **before and again after** every iteration, so a mission can never
-overshoot. Due-ness is persisted (`next_run_at`), so the loop is restart-safe.
-
-- **Off by default.** A mission is created **paused** with no scheduled run; it only starts after an
-  explicit **Resume**. The scheduler only ever touches `active` missions, and `stopped` is terminal
-  (both pause and resume reject a stopped mission).
-- **Always bounded.** Create/update is rejected (HTTP 400) unless the mission has a terminating ceiling —
-  at least one of `max_iterations` / `max_wall_clock_seconds`, **or** `backlog_drain` pacing (which
-  self-terminates when work runs out). A mission cannot be configured to run forever.
-
-**Pacing** — how the next run is scheduled:
-
-| Pacing | Next run |
-|---|---|
-| `fixed` | every `interval_seconds` |
-| `self_paced` | the handler chooses the delay per iteration |
-| `backlog_drain` | runs until the handler reports no work left, then stops with reason `drained` |
-
-**Ceilings & window:** `max_iterations`, `max_wall_clock_seconds`, `max_tokens`, plus an optional
-local-time **run window** (`HH:MM`–`HH:MM`, may wrap midnight) that defers a due run to the next time the
-window opens.
-
-**Kinds** — the pluggable handler a mission runs each iteration:
-
-| Kind | What it does |
-|---|---|
-| `echo` | deterministic built-in (testing / demo); no side effects |
-| `triage_tickets` | mirrors un-triaged Jira/GitHub tickets into `triage` tasks for the project; backlog-drains |
-| `review_stale_tasks` | reports tasks idle past a threshold (pure read — it *proposes*, never mutates tasks) |
-| `assistant_turn` | drives an LLM session in the project repo — the only model-calling kind. Claims the project-wide concurrency slot the same way a chat turn does, so it never races an interactive run on the same working tree (issue #95). Guardrails: bounded iterations/wall-clock/tokens, run window, full audit ledger. |
-
-**Audit ledger.** Every executed iteration writes a `mission_runs` row — intent, selected work, result
-summary, tokens used, errors, the next scheduled run, and the stop reason — and emits a `mission_tick`
-event into the Activity feed. The **Missions** top-bar view shows the mission list with live status, a
-create form, and the per-mission run ledger with controls. Drive it from there or via the
-[Missions API](#missions-1).
 
 ---
 
@@ -983,13 +934,15 @@ Base URL: `http://127.0.0.1:4173`
 | POST | `/api/assistant/messages/stream` | Compatibility wrapper for foreground stream on the newest/default session |
 | POST | `/api/assistant/abort` | Abort the latest active Assistant run when possible |
 
-### Braindump
+### Idea Watcher
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/braindump` | List active ideas |
-| POST | `/api/braindump` | Create an idea (`{ title, body }`) |
-| PATCH | `/api/braindump/:id` | Update / triage (`{ status, project_id, task_id }`) |
-| DELETE | `/api/braindump/:id` | Delete an idea |
+| GET | `/api/ideas` | List non-terminal ideas (`?all=1` includes graduated/discarded, `?state=` filters) |
+| POST | `/api/ideas` | Park an idea (`{ title, seed? }`) |
+| PATCH | `/api/ideas/:id` | Update (`{ title, seed, state, tags, target_repo, graduated_to }`) |
+| DELETE | `/api/ideas/:id` | Hard-delete an idea (deliberate drops use `state: discarded`) |
+| POST | `/api/ideas/:id/session` | Ensure the idea's dialogue session (idempotent) → `{ sessionId }` |
+| POST | `/api/ideas/:id/graduate/issues` | File the confirmed issue set on GitHub (`{ repo, issues: [{ title, body, labels? }] }`) |
 
 ### Activity
 | Method | Path | Description |
@@ -1037,19 +990,6 @@ Base URL: `http://127.0.0.1:4173`
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/mission-control` | Aggregated dashboard: daemon health, curated models + auth health + counts, usage stats |
-
-### Missions
-| Method | Path | Description |
-|---|---|---|
-| GET | `/api/projects/:projectId/missions` | List a project's missions |
-| POST | `/api/projects/:projectId/missions` | Create a mission — starts **paused**; rejects an unbounded config with 400 |
-| GET | `/api/missions/:id` | Get a mission |
-| PUT | `/api/missions/:id` | Update (allowed only while paused; 409 otherwise) |
-| DELETE | `/api/missions/:id` | Delete |
-| POST | `/api/missions/:id/resume` | Activate a paused mission (sets `started_at`, schedules the next run) |
-| POST | `/api/missions/:id/pause` | Pause an active mission (clears `next_run_at`) |
-| POST | `/api/missions/:id/stop` | Stop a mission — terminal, `stop_reason = manual` |
-| GET | `/api/missions/:id/runs` | Per-iteration audit ledger (`mission_runs`) |
 
 ### Settings
 | Method | Path | Description |
@@ -1191,13 +1131,12 @@ nexus/
 │   │   │   ├── settings.ts      # ~/.nexus/config.yaml read/write (masked)
 │   │   │   ├── status.ts        # /mission-control (daemon health + curated models + usage)
 │   │   │   ├── tickets.ts       # Jira mirror + /jira/sync
-│   │   │   ├── braindump.ts     # ideas capture + triage
+│   │   │   ├── ideas.ts         # Idea Watcher: capture, dialogue session, graduation
 │   │   │   ├── notifications.ts
 │   │   │   ├── auth.ts          # Pi AuthStorage transport (keys + OAuth flows)
 │   │   │   ├── pi.ts            # /api/models + curation + active
 │   │   │   ├── activity.ts      # /api/activity operations console
 │   │   │   ├── trust.ts         # trust snapshot + memory maintenance controls
-│   │   │   └── missions.ts      # bounded recurring missions (CRUD + controls + runs)
 │   │   ├── pi/                  # Pi runtime bridge (@earendil-works/pi-coding-agent)
 │   │   │   ├── runtime.ts       # one PiRuntime per process: AuthStorage + ModelRegistry + per-thread sessions
 │   │   │   ├── index.ts
@@ -1210,12 +1149,6 @@ nexus/
 │   │   │   ├── archive.ts       # thread → memory summarization
 │   │   │   └── export.ts
 │   │   ├── activity/            # operations event bus + DB persistence (ActivityManager)
-│   │   ├── missions/
-│   │   │   ├── runner.ts        # scheduler loop + single-iteration runner
-│   │   │   ├── bounds.ts        # ceilings, run-window, next-run scheduling (pure)
-│   │   │   ├── store.ts         # missions / mission_runs DB access
-│   │   │   ├── types.ts
-│   │   │   └── handlers/        # echo, triage_tickets, review_stale_tasks, assistant_turn (+ registry)
 │   │   ├── signal-filters/      # trims noisy tool output before chat history (config + pipeline + extension)
 │   │   ├── trust/
 │   │   │   └── snapshot.ts      # builds the read-only trust snapshot for Settings + /api/trust
@@ -1243,15 +1176,15 @@ nexus/
 │       ├── vite.config.ts
 │       └── src/
 │           ├── main.tsx
-│           ├── App.tsx          # GlobalView: dashboard / activity / missions / tickets / braindump / assistant / settings
+│           ├── App.tsx          # GlobalView: dashboard / activity / tickets / ideas / assistant / settings
 │           ├── api.ts           # Typed API client
 │           ├── api-base.ts
 │           ├── appearance.ts
 │           ├── chat/            # chat-stream hooks + helpers
 │           ├── hooks/           # usePiStream, useAssistantStream, useModels, useFollowAtBottom
 │           ├── lib/
-│           └── components/      # MissionControl, KanbanBoard, ChatPanel, AssistantView, BraindumpView,
-│                                # ActivityConsole, MissionsView, MemoryView, MemoryRail, TicketsView,
+│           └── components/      # MissionControl, KanbanBoard, ChatPanel, AssistantView, IdeasView,
+│                                # ActivityConsole, MemoryView, MemoryRail, TicketsView,
 │                                # TaskModelPicker, ModelSelector, ModelCurationSection, PiAuthSection,
 │                                # TrustPrivacySection, SettingsPage, DiffReviewPanel, ArtifactPreviewRail,
 │                                # ChatArtifactLinks, RightRail, QuestionCard, ThinkingBlock,
@@ -1314,7 +1247,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 
 ### Tables
 
-`projects`, `tasks`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`, `braindump_ideas`, `notifications`, `assistant_messages`, `assistant_sessions`, `assistant_session_messages`, `assistant_runs`, `operations`, `missions`, `mission_runs`.
+`projects`, `tasks`, `chat_threads`, `chat_messages`, `agent_runs`, `tickets`, `ideas`, `notifications`, `assistant_messages`, `assistant_sessions`, `assistant_session_messages`, `assistant_runs`, `operations`. (Pre-#353 databases may also carry legacy `braindump_ideas`, `missions`, and `mission_runs` tables — kept as data tombstones, no longer created or used.)
 
 (The legacy `personas` and `providers` tables are still created by `db.ts` for one more release as back-compat shims and are not surfaced in the UI or API. There is no `memories` table — memory lives in the daemon's own index, not `nexus.db`.)
 

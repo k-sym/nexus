@@ -61,11 +61,55 @@ test('migrations add ticket description columns', () => {
   for (const ext of ['', '-wal', '-shm']) fs.rmSync(base + ext, { force: true });
 });
 
-test('migrations create braindump_ideas table', () => {
+test('migrations create ideas table but no legacy braindump/missions tables', () => {
   const base = join(tmpdir(), `nexus-dbmig2-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
   const db = getDb(base);
-  const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='braindump_ideas'").get();
-  assert.ok(row, 'braindump_ideas table should exist');
+  const tableNames = (db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as { name: string }[])
+    .map((t) => t.name);
+  assert.ok(tableNames.includes('ideas'), 'ideas table should exist');
+  // Fresh DBs no longer grow the removed features' tables (#352/#353) —
+  // existing DBs keep them, which migrateBraindumpRows below exercises.
+  assert.ok(!tableNames.includes('braindump_ideas'), 'fresh db should not create braindump_ideas');
+  assert.ok(!tableNames.includes('missions'), 'fresh db should not create missions');
+  assert.ok(!tableNames.includes('mission_runs'), 'fresh db should not create mission_runs');
+  db.close();
+  for (const ext of ['', '-wal', '-shm']) fs.rmSync(base + ext, { force: true });
+});
+
+test('braindump rows migrate into ideas once, preserving triage links', () => {
+  const base = join(tmpdir(), `nexus-dbmig3-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+  let db = getDb(base);
+  // Recreate the legacy table the way a pre-#352 DB would have it.
+  db.exec(`
+    CREATE TABLE braindump_ideas (
+      id TEXT PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'active', project_id TEXT, task_id TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    INSERT INTO braindump_ideas VALUES
+      ('b1', 'Active idea', 'some notes', 'active', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'),
+      ('b2', 'Triaged idea', '', 'triaged', 'proj-1', 'task-1', '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z');
+  `);
+  db.close();
+
+  // Re-open: getDb re-runs migrations, which should copy the rows.
+  db = getDb(base);
+  const rows = db.prepare('SELECT * FROM ideas ORDER BY id').all() as any[];
+  assert.equal(rows.length, 2);
+  assert.equal(rows[0].id, 'b1');
+  assert.equal(rows[0].state, 'parked');
+  assert.equal(rows[0].seed, 'some notes');
+  assert.equal(rows[0].source, 'braindump');
+  assert.equal(rows[1].state, 'graduated');
+  const graduated = JSON.parse(rows[1].graduated_to);
+  assert.equal(graduated.kind, 'project');
+  assert.equal(graduated.projectId, 'proj-1');
+  assert.equal(graduated.taskId, 'task-1');
+  // Legacy rows stay put (soft path), and re-running migrations is idempotent.
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM braindump_ideas').get() as any).n, 2);
+  db.close();
+  db = getDb(base);
+  assert.equal((db.prepare('SELECT COUNT(*) AS n FROM ideas').get() as any).n, 2);
   db.close();
   for (const ext of ['', '-wal', '-shm']) fs.rmSync(base + ext, { force: true });
 });

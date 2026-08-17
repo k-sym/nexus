@@ -202,90 +202,60 @@ export interface TicketDescription {
   empty: boolean;
 }
 
-/** A free-form idea captured in the Braindump view before it becomes a project task. */
-export interface BraindumpIdea {
+/**
+ * Idea Watcher (#352) — an idea ripens through a dialogue with the partner
+ * assistant before graduating into a project or a GitHub issue set.
+ * `parked → discussing → researching → reviewed → graduated | discarded`;
+ * the terminal states are soft (rows are kept, not deleted).
+ */
+export type IdeaState = 'parked' | 'discussing' | 'researching' | 'reviewed' | 'graduated' | 'discarded';
+
+export const IDEA_STATES: readonly IdeaState[] = ['parked', 'discussing', 'researching', 'reviewed', 'graduated', 'discarded'];
+
+/** Where a graduated idea went. */
+export type IdeaGraduation =
+  | { kind: 'project'; projectId: string; taskId?: string }
+  | { kind: 'issues'; urls: string[] };
+
+export interface Idea {
   id: string;
+  title: string;
+  /** The parked notes / original one-liner the idea was captured with. */
+  seed: string;
+  state: IdeaState;
+  /** Free-form tag strings. */
+  tags: string[];
+  /** "owner/repo" the idea would graduate into; null when undecided. */
+  target_repo: string | null;
+  /** The assistant session holding the idea's dialogue; null until first discussed. */
+  session_id: string | null;
+  graduated_to: IdeaGraduation | null;
+  /** 'idea_watcher', or 'braindump' for rows migrated from the old table. */
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CreateIdeaInput {
+  title: string;
+  seed?: string;
+}
+
+export interface UpdateIdeaInput {
+  title?: string;
+  seed?: string;
+  state?: IdeaState;
+  tags?: string[];
+  target_repo?: string | null;
+  graduated_to?: IdeaGraduation | null;
+}
+
+/** One issue of a graduation set, as reviewed and confirmed by the user. */
+export interface IdeaIssueDraft {
   title: string;
   body: string;
-  status: 'active' | 'triaged';
-  /** Set when triaged into a project. */
-  project_id: string | null;
-  /** The task created on triage. */
-  task_id: string | null;
-  created_at: string;
-  updated_at: string;
+  labels?: string[];
 }
-
-export type MissionStatus = 'paused' | 'active' | 'stopped';
-export type MissionPacing = 'fixed' | 'self_paced' | 'backlog_drain';
-export type MissionStopReason =
-  | 'manual'
-  | 'max_iterations'
-  | 'max_wall_clock'
-  | 'token_budget'
-  | 'drained'
-  | 'error';
-export type MissionKind = 'echo' | 'triage_tickets' | 'review_stale_tasks' | 'assistant_turn';
-export type MissionRunStatus = 'running' | 'succeeded' | 'failed' | 'skipped';
-
-export interface Mission {
-  id: string;
-  project_id: string;
-  title: string;
-  description: string;
-  kind: MissionKind;
-  config_json: string;
-  pacing: MissionPacing;
-  interval_seconds: number;
-  max_iterations: number | null;
-  max_wall_clock_seconds: number | null;
-  max_tokens: number | null;
-  run_window_start: string | null; // 'HH:MM' local
-  run_window_end: string | null;   // 'HH:MM' local
-  status: MissionStatus;
-  iteration_count: number;
-  tokens_used: number;
-  next_run_at: string | null;
-  started_at: string | null;
-  last_run_at: string | null;
-  stopped_at: string | null;
-  stop_reason: MissionStopReason | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface MissionRun {
-  id: string;
-  mission_id: string;
-  run_number: number;
-  started_at: string;
-  completed_at: string | null;
-  status: MissionRunStatus;
-  intent: string;
-  selected_work_json: string | null;
-  result_summary: string;
-  tokens_used: number;
-  error: string | null;
-  next_run_at: string | null;
-  stop_reason: MissionStopReason | null;
-  created_at: string;
-}
-
-export interface CreateMissionInput {
-  title: string;
-  description?: string;
-  kind?: MissionKind;
-  config?: Record<string, unknown>;
-  pacing?: MissionPacing;
-  interval_seconds?: number;
-  max_iterations?: number | null;
-  max_wall_clock_seconds?: number | null;
-  max_tokens?: number | null;
-  run_window_start?: string | null;
-  run_window_end?: string | null;
-}
-
-export type UpdateMissionInput = Partial<CreateMissionInput>;
 
 /** A chat thread — one conversation per row, linked to a project. */
 export interface ChatThread {
@@ -695,6 +665,8 @@ export const OPERATION_KINDS = [
   'monday_write',
   'memory_archive',
   'memory_index',
+  // Missions were removed (#353); the kind stays so legacy `operations` rows
+  // in existing DBs remain renderable and filterable.
   'mission_tick',
 ] as const;
 

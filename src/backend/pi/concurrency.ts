@@ -4,22 +4,21 @@
  * Chat context is isolated by Pi session (`threadId + cwd`), so the selected
  * model is not a shared resource and must not be used as a concurrency key.
  *
- * The project working tree is shared, however. Chat turns and autonomous
- * missions can both mutate it, so only one run may own a project at a time.
- * The source is retained so callers can distinguish a cancellable chat run
- * from an autonomous mission and present an accurate explanation.
+ * The project working tree is shared, however, so only one run may own a
+ * project at a time. (Missions — the other historical claimant — were
+ * removed in #353; chat turns are the sole source now, and the field remains
+ * for the wire shapes that expose it.)
  *
  * State is lost on backend restart by design. A restart should never leave a
  * project permanently busy.
  */
-export type ProjectRunSource = 'chat' | 'mission';
+export type ProjectRunSource = 'chat';
 
 export interface ProjectRun {
   threadId: string;
   title: string;
   scope: 'project';
   source: ProjectRunSource;
-  /** Present for chat runs; missions resolve their model inside the session. */
   modelKey?: string;
 }
 

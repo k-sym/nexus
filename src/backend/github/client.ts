@@ -1,7 +1,12 @@
 /**
- * Minimal GitHub REST client for fetching a repo's open issues. Auth is an
- * optional bearer token from GITHUB_TOKEN (public repos work without one).
+ * Minimal GitHub REST client: fetch a repo's open issues, and create issues
+ * for Idea Watcher graduation (#352). Reads work with an optional bearer token
+ * from GITHUB_TOKEN (public repos need none); creating an issue requires one.
  * Mirrors the shape of the Jira client (typed error, injectable fetch).
+ *
+ * createIssue is the codebase's only GitHub write. It is reachable solely from
+ * the confirm-gated graduation route — never expose it as an agent tool
+ * without revisiting the tool-policy treatment (see #352).
  */
 export class GitHubError extends Error {
   constructor(message: string, readonly status?: number, readonly bodySnippet?: string) {
@@ -77,4 +82,51 @@ export async function fetchOpenIssues(
     if (batch.length < PER_PAGE) break; // last page reached
   }
   return all;
+}
+
+export interface CreateIssueInput {
+  title: string;
+  body: string;
+  labels?: string[];
+}
+
+/** The subset of a created issue the graduation flow records. */
+export interface CreatedIssue {
+  number: number;
+  html_url: string;
+}
+
+/** Create an issue. Requires a token — GitHub rejects anonymous writes. */
+export async function createIssue(
+  ref: GitHubRepoRef,
+  input: CreateIssueInput,
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<CreatedIssue> {
+  const url = `https://api.github.com/repos/${ref.owner}/${ref.repo}/issues`;
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      method: 'POST',
+      headers: {
+        accept: 'application/vnd.github+json',
+        'user-agent': 'nexus',
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        title: input.title,
+        body: input.body,
+        ...(input.labels?.length ? { labels: input.labels } : {}),
+      }),
+    });
+  } catch (err) {
+    throw new GitHubError(`GitHub request failed: ${(err as Error).message}`);
+  }
+  if (!res.ok) {
+    const snippet = (await res.text().catch(() => '')).trim().replace(/\s+/g, ' ').slice(0, 300);
+    throw new GitHubError(`GitHub ${ref.owner}/${ref.repo} -> HTTP ${res.status}${snippet ? `: ${snippet}` : ''}`, res.status, snippet || undefined);
+  }
+  const raw = (await res.json()) as { number: number; html_url: string };
+  return { number: raw.number, html_url: raw.html_url };
 }

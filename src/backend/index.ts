@@ -24,7 +24,7 @@ import { registerSettingsRoutes } from './routes/settings.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { registerRoutinesRoutes } from './routes/routines.js';
 import { registerTicketRoutes } from './routes/tickets.js';
-import { registerBraindumpRoutes } from './routes/braindump.js';
+import { registerIdeaRoutes } from './routes/ideas.js';
 import { registerNotificationRoutes } from './routes/notifications.js';
 import { registerDeviceRoutes } from './routes/devices.js';
 import { ApnsSender } from './apns/sender.js';
@@ -35,12 +35,10 @@ import { registerApprovalRoutes } from './routes/approvals.js';
 import { DockerAvailability, buildDockerToolDeps, buildTearDownServices } from './docker/session-deps.js';
 import { sweepOrphanedProjects, describeSweep } from './docker/sweep.js';
 import { createBrowserSupport } from './browser/session-deps.js';
-import { registerDockerRoutes } from './routes/docker.js';
 import { registerBrowserRoutes } from './routes/browser.js';
 import { resolveToolPolicy, EMPTY_TOOL_POLICY } from './pi/tool-policy-config.js';
 import { DbApprovalAudit } from './approvals/audit.js';
 import { registerTrustRoutes } from './routes/trust.js';
-import { registerMissionRoutes } from './routes/missions.js';
 import { registerMondayRoutes } from './routes/monday.js';
 import { registerDevRoutes } from './routes/dev.js';
 import { registerNextMessageRoutes } from './routes/next-message.js';
@@ -49,7 +47,6 @@ import { startJiraSync } from './jira/poll.js';
 import { startMondayPoll } from './monday/poll.js';
 import { buildMondayContext, buildMondayToolDeps } from './monday/session-deps.js';
 import { buildHelpersToolDeps } from './helpers/resolve.js';
-import { startMissionScheduler } from './missions/runner.js';
 import { ActivityManager } from './activity/manager.js';
 import { PiRuntime, defaultPiRuntimePaths } from './pi/runtime.js';
 import { ConcurrencyTracker } from './pi/concurrency.js';
@@ -191,15 +188,8 @@ async function main() {
 
   startJiraSync(db, activityManager);
   startMondayPoll(db, activityManager.bus.emit.bind(activityManager.bus));
-  // Shared between chat routes and the mission scheduler so every potentially
-  // mutating run claims the same project working-tree slot.
-  // Created here (before the scheduler), then decorated onto the app below.
+  // Every potentially mutating chat run claims a per-project working-tree slot.
   const chatConcurrency = new ConcurrencyTracker();
-  startMissionScheduler(db, {
-    emit: activityManager.bus.emit.bind(activityManager.bus),
-    pi,
-    concurrency: chatConcurrency,
-  });
 
   const app = Fastify({ logger: false });
 
@@ -242,14 +232,13 @@ async function main() {
   app.register(registerStatusRoutes);
   app.register(registerRoutinesRoutes);
   app.register(registerTicketRoutes);
-  app.register(registerBraindumpRoutes);
+  app.register(registerIdeaRoutes);
   app.register(registerNotificationRoutes);
   app.register(registerDeviceRoutes);
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
   app.register(registerActivityRoutes);
   app.register(registerApprovalRoutes);
-  app.register(async (f) => { await registerDockerRoutes(f, { isAvailable: () => dockerAvailability.isAvailable() }); });
   // The human-facing view of a thread's headless browser. Wired to the same
   // browser support the tools use, so the panel reports available only when the
   // feature is on AND a browser was found. Peeks — polling never launches one.
@@ -260,7 +249,6 @@ async function main() {
     });
   });
   app.register(registerTrustRoutes);
-  app.register(registerMissionRoutes);
   app.register(registerMondayRoutes);
 
   // Dev-only helpers (e.g. POST /api/dev/test-push). Never registered in

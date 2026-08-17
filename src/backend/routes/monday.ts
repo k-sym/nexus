@@ -6,7 +6,7 @@
  * else reads the mirror.
  *
  * Follows the same registration convention as the neighbouring route modules
- * (routes/tickets.ts, routes/braindump.ts): a FastifyInstance decorated with
+ * (routes/tickets.ts, routes/ideas.ts): a FastifyInstance decorated with
  * `db` at app-boot in index.ts, not a bespoke `{ db }` deps argument.
  */
 import type { FastifyInstance } from 'fastify';

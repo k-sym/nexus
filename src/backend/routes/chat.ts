@@ -6,8 +6,8 @@
  *
  * Concurrency: Pi context is isolated per thread, while the repository working
  * tree is shared per project. `chatConcurrency` therefore serializes runs by
- * project (not by model). A chat holder can be cancelled explicitly; a mission
- * holder must finish before another project run starts.
+ * project (not by model). A holder can be cancelled explicitly from another
+ * thread (confirmCancel).
  */
 import { FastifyInstance } from 'fastify';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -209,20 +209,13 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         error: 'Another run already has this project reserved',
       };
     }
-    return run.source === 'chat'
-      ? {
-          kind: 'chat_busy',
-          error: 'Another session already has a run in progress for this project',
-          activeThreadId: run.threadId,
-          activeTitle: run.title,
-          modelKey: run.modelKey,
-        }
-      : {
-          kind: 'project_busy',
-          error: 'An autonomous mission already has a run in progress for this project',
-          activeThreadId: run.threadId,
-          activeTitle: run.title,
-        };
+    return {
+      kind: 'chat_busy',
+      error: 'Another session already has a run in progress for this project',
+      activeThreadId: run.threadId,
+      activeTitle: run.title,
+      modelKey: run.modelKey,
+    };
   };
 
   const claimThreadRun = (threadId: string, title: string, modelKey: string): symbol | undefined => {
@@ -426,24 +419,20 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     }
     // Pi sessions are isolated by threadId + cwd, so using the same model in
     // two sessions is not itself a conflict. The shared project working tree
-    // is the exclusive resource: any chat turn or autonomous mission may edit
-    // it, regardless of which model it uses.
+    // is the exclusive resource: any chat turn may edit it, regardless of
+    // which model it uses.
     const projectBusy = concurrency.getProject(thread.project_id);
     if (projectBusy && projectBusy.threadId !== threadId) {
       if (confirmCancel) {
-        if (projectBusy.source === 'chat') {
-          const existing = activeStreams.get(projectBusy.threadId);
-          if (existing) {
-            try {
-              await existing.session.abort();
-            } catch (err: any) {
-              console.error(`[chat] failed to abort active thread ${projectBusy.threadId}:`, err?.message);
-            }
+        const existing = activeStreams.get(projectBusy.threadId);
+        if (existing) {
+          try {
+            await existing.session.abort();
+          } catch (err: any) {
+            console.error(`[chat] failed to abort active thread ${projectBusy.threadId}:`, err?.message);
           }
-          pi.questions?.cancelThread(projectBusy.threadId, 'Cancelled by another thread');
         }
-        // A mission cannot be cancelled from chat. The short wait still lets a
-        // mission that is already finishing release without a spurious retry.
+        pi.questions?.cancelThread(projectBusy.threadId, 'Cancelled by another thread');
         await concurrency.waitForProjectRelease(thread.project_id, projectBusy, ABORT_GRACE_MS);
         const stillBusy = concurrency.getProject(thread.project_id);
         if (stillBusy) {
@@ -930,9 +919,9 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         source: active.source,
         modelKey: active.modelKey,
         sameModel: !!modelKey && active.modelKey === modelKey,
-        // Kept for older frontends. It now means specifically "mission", not
-        // merely that the project-wide slot is occupied.
-        projectBusy: active.source === 'mission',
+        // Kept for older frontends. Historically "an uncancellable mission
+        // holds the slot"; always false since missions were removed (#353).
+        projectBusy: false,
       };
     }
     return { busy: false };

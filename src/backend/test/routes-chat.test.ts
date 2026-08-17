@@ -513,17 +513,16 @@ test('POST /api/threads/:id/messages/stream reports a different active session e
 
 // ── Project-wide concurrency (issue #95) ─────────────────────────────────────
 //
-// An assistant_turn mission holds the project-wide slot. A chat turn on the
-// SAME project but a DIFFERENT model must be blocked (the original bug: the
-// mission claimed 'default', so a chat turn on an explicit model slipped
-// past and the two could race on the same working tree).
+// Another run holds the project-wide slot. A chat turn on the SAME project
+// but a DIFFERENT model must be blocked (the original bug: the holder claimed
+// 'default', so a chat turn on an explicit model slipped past and the two
+// could race on the same working tree).
 
-test('POST /api/threads/:id/messages/stream returns 409 project_busy when a mission holds the project-wide slot, even on a different model', async () => {
+test('POST /api/threads/:id/messages/stream returns 409 when another run holds the project-wide slot, even on a different model', async () => {
   const { app, db, dir, concurrency } = await makeApp();
   try {
-    // Simulate an assistant_turn mission claiming the project-wide slot.
-    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Overnight mission', 'mission');
-    assert.ok(missionOwner);
+    const owner = concurrency.claimProject('proj-1', 'other-thread', 'Other session', 'chat', 'openai/gpt-5');
+    assert.ok(owner);
 
     // Chat on a different, explicit model — must NOT slip past the project guard.
     const res = await app.inject({
@@ -533,31 +532,9 @@ test('POST /api/threads/:id/messages/stream returns 409 project_busy when a miss
     });
     assert.equal(res.statusCode, 409);
     const body = res.json();
-    assert.equal(body.kind, 'project_busy');
-    assert.equal(body.activeThreadId, 'mission-thread');
-    assert.equal(body.activeTitle, 'Overnight mission');
-  } finally {
-    await app.close();
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-test('GET /api/projects/:id/model-status reports busy=true (projectBusy) when a mission holds the project-wide slot', async () => {
-  const { app, db, dir, concurrency } = await makeApp();
-  try {
-    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission', 'mission');
-    assert.ok(missionOwner);
-    const res = await app.inject({
-      method: 'GET',
-      url: '/api/projects/proj-1/model-status?modelKey=anthropic/sonnet',
-    });
-    assert.equal(res.statusCode, 200);
-    const body = res.json();
-    assert.equal(body.busy, true);
-    assert.equal(body.projectBusy, true);
-    assert.equal(body.source, 'mission');
-    assert.equal(body.activeThreadId, 'mission-thread');
+    assert.equal(body.kind, 'chat_busy');
+    assert.equal(body.activeThreadId, 'other-thread');
+    assert.equal(body.activeTitle, 'Other session');
   } finally {
     await app.close();
     db.close();
@@ -597,7 +574,7 @@ test('GET /api/projects/:id/model-status identifies a chat holder without treati
   }
 });
 
-test('POST /api/threads/:id/messages/stream proceeds once the mission releases the project-wide slot', async () => {
+test('POST /api/threads/:id/messages/stream proceeds once the holder releases the project-wide slot', async () => {
   const session = {
     subscribe: () => () => {},
     setModel: async () => {},
@@ -614,12 +591,13 @@ test('POST /api/threads/:id/messages/stream proceeds once the mission releases t
   };
   const { app, db, dir, concurrency } = await makeApp(runtime);
   try {
-    const missionOwner = concurrency.claimProject('proj-1', 'mission-thread', 'Mission', 'mission');
-    assert.ok(missionOwner);
+    const owner = concurrency.claimProject('proj-1', 'other-thread', 'Other session', 'chat', 'openai/gpt-5');
+    assert.ok(owner);
 
     // With confirm-cancel, the route waits up to ABORT_GRACE_MS (200ms) for
-    // the project slot to free. Release it well inside the window.
-    setTimeout(() => concurrency.releaseProject('proj-1', missionOwner!), 5);
+    // the project slot to free. Release it well inside the window (the holder
+    // has no live stream in this test, so the abort path is a no-op).
+    setTimeout(() => concurrency.releaseProject('proj-1', owner!), 5);
 
     const res = await app.inject({
       method: 'POST',
@@ -629,7 +607,7 @@ test('POST /api/threads/:id/messages/stream proceeds once the mission releases t
     });
     // The stream completes (fake session resolves immediately); we assert
     // the route did NOT return the 409 project_busy and actually streamed.
-    assert.equal(res.statusCode, 200, `expected 200 after mission release, got ${res.statusCode}: ${res.body}`);
+    assert.equal(res.statusCode, 200, `expected 200 after slot release, got ${res.statusCode}: ${res.body}`);
   } finally {
     await app.close();
     db.close();
@@ -661,7 +639,7 @@ test('POST /api/threads/:id/messages/stream releases the project-wide slot on co
     });
     assert.equal(res.statusCode, 200);
     // After the stream completes, the shared working-tree slot must be
-    // released so a subsequent chat turn or mission can claim it.
+    // released so a subsequent chat turn can claim it.
     assert.equal(concurrency.getProject('proj-1'), undefined);
   } finally {
     await app.close();
