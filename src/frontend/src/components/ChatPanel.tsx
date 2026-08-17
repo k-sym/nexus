@@ -22,7 +22,6 @@ import { buildQuestionAnswerSummary, parseTerminalAskBlock, type QuestionAnswer,
 import { useNextSuggestion } from '../hooks/useNextSuggestion';
 import { ModelSelector } from './ModelSelector';
 import { ThinkingSelector } from './ThinkingSelector';
-import ThreadServicesPanel from './ThreadServicesPanel';
 import BrowserViewPanel from './BrowserViewPanel';
 import { ToolCallTimeline, QuestionCards } from './ToolCallTimeline';
 import { ThinkingBlock } from './ThinkingBlock';
@@ -160,10 +159,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [loadedMessages, setLoadedMessages] = useState<StreamMessage[]>([]);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{ activeThreadId: string; activeTitle: string; pendingText: string; pendingAttachments: ChatAttachment[] } | null>(null);
+  // Another chat session in this project owns the working tree right now.
+  // (Missions are gone: /api/projects/:id/model-status only ever reports a
+  // chat holder, and 409s from the stream are always kind 'chat_busy'.)
   const [projectRunBusy, setProjectRunBusy] = useState<{
     threadId: string;
     title: string;
-    source: 'chat' | 'mission';
   } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
@@ -274,7 +275,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             setProjectRunBusy({
               threadId: data.activeThreadId,
               title: data.activeTitle,
-              source: data.source === 'mission' || data.projectBusy === true ? 'mission' : 'chat',
             });
           } else {
             setProjectRunBusy(null);
@@ -581,7 +581,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     const text = input.trim();
     if (
       isRunning
-      || projectRunBusy?.source === 'mission'
       || (!text && pendingAttachments.length === 0)
       || !threadId
       || noModelSelected
@@ -591,7 +590,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, noModelSelected, pendingAttachments, isRunning, projectRunBusy, submit]);
+  }, [input, threadId, noModelSelected, pendingAttachments, isRunning, submit]);
 
   // Cancel whichever run is active: a locally-streamed run (this instance
   // started it) goes through abortStream; a backend-owned run re-attached
@@ -783,9 +782,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse motion-reduce:animate-none"
             />
             <span>
-              {projectRunBusy.source === 'mission'
-                ? `An autonomous mission is running in "${projectRunBusy.title}". To protect shared project files, another run cannot start until it finishes.`
-                : `Another session is running in "${projectRunBusy.title}". Nexus allows one run per project to prevent conflicting file changes; sending here will ask before cancelling it.`}
+              {`Another session is running in "${projectRunBusy.title}". Nexus allows one run per project to prevent conflicting file changes; sending here will ask before cancelling it.`}
             </span>
           </span>
         </div>
@@ -811,7 +808,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         </div>
       )}
 
-      <ThreadServicesPanel threadId={threadId} />
       <BrowserViewPanel threadId={threadId} />
 
       <div
@@ -989,12 +985,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
                 type="button"
                 onClick={handleSend}
                 data-testid="send-button"
-                disabled={
-                  noModelSelected
-                  || (!input.trim() && pendingAttachments.length === 0)
-                  || projectRunBusy?.source === 'mission'
-                }
-                title={projectRunBusy?.source === 'mission' ? 'Wait for the autonomous mission to finish' : undefined}
+                disabled={noModelSelected || (!input.trim() && pendingAttachments.length === 0)}
                 className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
               >
                 Send

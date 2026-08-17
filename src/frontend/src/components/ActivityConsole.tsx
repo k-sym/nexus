@@ -36,6 +36,8 @@ const KIND_LABELS: Record<OperationKind, string> = {
   monday_write: 'Monday write',
   memory_archive: 'Memory archive',
   memory_index: 'Memory index',
+  // Missions were removed (#353), but legacy `operations` rows in existing DBs
+  // still carry this kind — keep the label so they render, not crash or blank.
   mission_tick: 'Mission tick',
 };
 
