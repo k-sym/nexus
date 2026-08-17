@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { ThinkingLevel } from './thinking.js';
+import type { ModelCapabilities } from './model-capabilities.js';
 
 export interface ModelCatalogItem {
   provider: string;
@@ -14,6 +15,7 @@ export interface ModelCatalogItem {
   input?: Array<'text' | 'image'>;
   /** Supported Pi thinking levels; empty when the model has no extended thinking. */
   thinkingLevels?: ThinkingLevel[];
+  capabilities?: ModelCapabilities;
 }
 
 interface CurationFile {

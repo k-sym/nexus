@@ -1,4 +1,5 @@
 export type ThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ThinkingSelection = 'auto' | ThinkingLevel;
 
 export const THINKING_LEVEL_ORDER: ThinkingLevel[] = [
   'off',
@@ -28,6 +29,10 @@ export function isThinkingLevel(value: unknown): value is ThinkingLevel {
 
 export function thinkingLevelLabel(level: ThinkingLevel): string {
   return THINKING_LEVEL_LABELS[level];
+}
+
+export function thinkingSelectionLabel(selection: ThinkingSelection): string {
+  return selection === 'auto' ? 'Auto' : thinkingLevelLabel(selection);
 }
 
 /**

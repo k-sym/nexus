@@ -5,14 +5,15 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { CaretUp, Check } from '@phosphor-icons/react';
 import {
-  thinkingLevelLabel,
+  thinkingSelectionLabel,
   type ThinkingLevel,
+  type ThinkingSelection,
 } from '../lib/thinking';
 
 interface ThinkingSelectorProps {
   levels: ThinkingLevel[];
-  value: ThinkingLevel;
-  onChange: (level: ThinkingLevel) => void;
+  value: ThinkingSelection;
+  onChange: (level: ThinkingSelection) => void;
   disabled?: boolean;
 }
 
@@ -52,7 +53,8 @@ export function ThinkingSelector({ levels, value, onChange, disabled }: Thinking
 
   if (levels.length === 0) return null;
 
-  const label = `Thinking: ${thinkingLevelLabel(value)}`;
+  const label = `Thinking: ${thinkingSelectionLabel(value)}`;
+  const options: ThinkingSelection[] = ['auto', ...levels];
 
   return (
     <div className="relative inline-block">
@@ -103,7 +105,7 @@ export function ThinkingSelector({ levels, value, onChange, disabled }: Thinking
           }
         >
           <div className="max-h-64 overflow-y-auto py-1">
-            {levels.map((level) => {
+            {options.map((level) => {
               const isCurrent = level === value;
               return (
                 <button
@@ -117,7 +119,7 @@ export function ThinkingSelector({ levels, value, onChange, disabled }: Thinking
                   }}
                   className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-primary hover:bg-[var(--surface-hover)]"
                 >
-                  <span className="flex-1 truncate">{thinkingLevelLabel(level)}</span>
+                  <span className="flex-1 truncate">{thinkingSelectionLabel(level)}</span>
                   {isCurrent && <Check className="w-3 h-3 accent-text" />}
                 </button>
               );
