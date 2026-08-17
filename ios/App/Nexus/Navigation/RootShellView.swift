@@ -84,8 +84,7 @@ struct RootShellView: View {
         case "achat": StreamingChatView(endpoint: AssistantChatEndpoint(api: api, sessionId: arg), title: "Assistant")
         case "board": KanbanBoardView(api: api, projectId: arg).navigationTitle("Board").navigationBarTitleDisplayMode(.inline)
         case "memory": MemoryView(api: api, projectId: arg).navigationTitle("Memory").navigationBarTitleDisplayMode(.inline)
-        case "missions": MissionsView(api: api, projectId: arg).navigationTitle("Missions").navigationBarTitleDisplayMode(.inline)
-        case "braindump": BraindumpView(api: api)
+        case "ideas": IdeasView(api: api)
         case "approvals": ApprovalsView()
         case "monday": MondayView(api: api, projectId: arg).navigationTitle("Monday").navigationBarTitleDisplayMode(.inline)
         case "diff": DiffView(api: api, projectId: arg).navigationTitle("Diff").navigationBarTitleDisplayMode(.inline)
@@ -138,7 +137,7 @@ struct RootShellView: View {
     private var moreTab: some View {
         NavigationStack {
             List {
-                ForEach([AppSection.tickets, .braindump, .settings]) { section in
+                ForEach([AppSection.tickets, .ideas, .settings]) { section in
                     NavigationLink {
                         destination(for: section)
                     } label: {
@@ -182,8 +181,8 @@ struct RootShellView: View {
             PulseView(api: api)
         case .tickets:
             TicketsView(api: api)
-        case .braindump:
-            BraindumpView(api: api)
+        case .ideas:
+            IdeasView(api: api)
         case .settings:
             SettingsView()
         }

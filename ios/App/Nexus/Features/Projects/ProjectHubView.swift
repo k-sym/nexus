@@ -2,7 +2,7 @@ import SwiftUI
 import NexusCore
 
 /// Per-project hub. A drill-down list of the project's surfaces (Chat, Board,
-/// Missions, Diff, Memory, Monday), each pushing a full-height destination.
+/// Diff, Memory, Monday), each pushing a full-height destination.
 ///
 /// Replaces the old 6-item segmented control: that packed six destinations into
 /// a fixed-width control that couldn't scroll, so labels truncated and tap
@@ -25,7 +25,6 @@ struct ProjectHubView: View {
             Section {
                 row(.chat) { ThreadsListView(api: api, project: project) }
                 row(.board) { KanbanBoardView(api: api, projectId: project.id) }
-                row(.missions) { MissionsView(api: api, projectId: project.id) }
                 row(.diff) { DiffView(api: api, projectId: project.id) }
                 row(.memory) { MemoryView(api: api, projectId: project.id) }
                 row(.monday) { MondayView(api: api, projectId: project.id) }
@@ -76,14 +75,6 @@ struct ProjectHubView: View {
                 Text("\(count) task\(count == 1 ? "" : "s")")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        case .missions:
-            if let count = summary.runningMissions, count > 0 {
-                Text("\(count) running")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(.red.opacity(0.12), in: Capsule())
-            }
         case .diff:
             if let diff = summary.diff {
                 HStack(spacing: 5) {
@@ -105,13 +96,12 @@ struct ProjectHubView: View {
 // MARK: - Surfaces
 
 private enum Surface: Equatable {
-    case chat, board, missions, diff, memory, monday
+    case chat, board, diff, memory, monday
 
     var title: String {
         switch self {
         case .chat: return "Chat"
         case .board: return "Board"
-        case .missions: return "Missions"
         case .diff: return "Diff"
         case .memory: return "Memory"
         case .monday: return "Monday"
@@ -122,7 +112,6 @@ private enum Surface: Equatable {
         switch self {
         case .chat: return "bubble.left.and.text.bubble.right.fill"
         case .board: return "rectangle.split.3x1.fill"
-        case .missions: return "flag.checkered"
         case .diff: return "arrow.triangle.branch"
         case .memory: return "brain.head.profile"
         case .monday: return "calendar"
@@ -144,7 +133,6 @@ final class ProjectHubSummary {
     private let project: Project
 
     var threadCount: Int?
-    var runningMissions: Int?
     var diff: DiffStat?
     var memoryCount: Int?
 
@@ -156,14 +144,10 @@ final class ProjectHubSummary {
     func load() async {
         let id = project.id
         async let threads = api.projectThreads(projectId: id)
-        async let missions = api.missions(projectId: id)
         async let diffState = api.gitDiff(projectId: id)
         async let memories = api.memories(projectId: id)
 
         threadCount = (try? await threads)?.count
-        if let missions = try? await missions {
-            runningMissions = missions.filter { $0.status == .active }.count
-        }
         if case .available(let d)? = try? await diffState, d.hasChanges {
             diff = DiffStat(added: d.summary.added, deleted: d.summary.deleted)
         }
