@@ -44,8 +44,6 @@ const EMPTY: SweepResult = { found: [], removed: [], kept: [], failed: [] };
  * has to be represented here:
  *
  *   - chat threads, whose row id IS the pi thread id (routes/chat.ts)
- *   - missions, which use `mission-<id>` unless their config names a thread
- *     (missions/handlers/assistant-turn.ts)
  *
  * Archived chat threads count as live: archiving does not drop the session.
  */
@@ -56,20 +54,6 @@ export function liveThreadIds(db: Database.Database): string[] {
       if (row?.id) ids.push(String(row.id));
     }
   } catch { /* table missing on a fresh db — nothing to protect */ }
-
-  try {
-    const rows = db.prepare('SELECT id, config_json FROM missions').all() as Array<{ id: string; config_json: string }>;
-    for (const row of rows) {
-      if (!row?.id) continue;
-      ids.push(`mission-${row.id}`);
-      // A mission may pin an explicit thread id; that session is just as live.
-      try {
-        const config = JSON.parse(row.config_json || '{}');
-        const pinned = config?.thread_id;
-        if (typeof pinned === 'string' && pinned.trim()) ids.push(pinned.trim());
-      } catch { /* malformed config: the mission-<id> form above still covers it */ }
-    }
-  } catch { /* no missions table */ }
 
   return ids;
 }

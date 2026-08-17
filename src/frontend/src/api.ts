@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, BraindumpIdea, GitDiffState, ReviewActionRequest, ReviewActionResult, Mission, MissionRun, CreateMissionInput, UpdateMissionInput, MondayItem, MondayItemWithLinks, TaskMondayLink, MondayProjectConfig } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, GitDiffState, ReviewActionRequest, ReviewActionResult, Idea, IdeaState, CreateIdeaInput, UpdateIdeaInput, IdeaIssueDraft, MondayItem, MondayItemWithLinks, TaskMondayLink, MondayProjectConfig } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -238,36 +238,6 @@ export async function fetchToolDecisions(limit = 100): Promise<ToolDecisionEntry
   return data.decisions;
 }
 
-// Docker services — the Services view's read path and teardown (#264 Phase 2).
-export interface ServiceContainer {
-  name: string;
-  image: string;
-  state: string;
-  status: string;
-  ports: string;
-}
-export interface ServiceGroup {
-  project: string;
-  /** No live chat thread or mission owns this project — a leak. */
-  orphaned: boolean;
-  containers: ServiceContainer[];
-}
-export interface DockerServicesResponse {
-  available: boolean;
-  groups: ServiceGroup[];
-}
-
-/** All Nexus service groups, or — with `threadId` — just that thread's. */
-export async function fetchDockerServices(threadId?: string): Promise<DockerServicesResponse> {
-  const query = threadId ? `?thread=${encodeURIComponent(threadId)}` : '';
-  return fetchJson<DockerServicesResponse>(`/api/docker/services${query}`);
-}
-
-/** Tear down one Nexus service group by project name. */
-export async function dockerServiceDown(project: string): Promise<void> {
-  await fetchJson(`/api/docker/services/${encodeURIComponent(project)}/down`, { method: 'POST' });
-}
-
 // Agent browser — the human-facing preview of a thread's headless page (#283).
 export interface BrowserView {
   image: { data: string; mimeType: string };
@@ -408,6 +378,23 @@ export interface RoutinesResponse {
   error?: string;
 }
 
+// Idea Watcher (#352) — one created GitHub issue of a graduation set.
+export interface CreatedIssue {
+  number: number;
+  html_url: string;
+}
+
+export interface GraduateIssuesResult {
+  issues: CreatedIssue[];
+  idea: Idea;
+}
+
+/** Thrown when issue filing fails part-way: `issues` are the ones that DID
+ *  land on GitHub (the backend records them on the idea either way). */
+export interface GraduateIssuesError extends Error {
+  issues?: CreatedIssue[];
+}
+
 export const api = {
   projects: {
     list: () => fetchJson<Project[]>(`/api/projects`),
@@ -512,26 +499,37 @@ export const api = {
     description: (key: string, refresh = false) =>
       fetchJson<TicketDescription>(`/api/tickets/${encodeURIComponent(key)}/description${refresh ? '?refresh=1' : ''}`),
   },
-  braindump: {
-    list: () => fetchJson<BraindumpIdea[]>(`/api/braindump`),
-    create: (data: { title: string; body?: string }) =>
-      fetchJson<BraindumpIdea>(`/api/braindump`, { method: 'POST', body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<Pick<BraindumpIdea, 'title' | 'body' | 'status' | 'project_id' | 'task_id'>>) =>
-      fetchJson<BraindumpIdea>(`/api/braindump/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
-    delete: (id: string) => fetchJson<void>(`/api/braindump/${id}`, { method: 'DELETE' }),
-  },
-  missions: {
-    listForProject: (projectId: string) => fetchJson<Mission[]>(`/api/projects/${projectId}/missions`),
-    create: (projectId: string, input: CreateMissionInput) =>
-      fetchJson<Mission>(`/api/projects/${projectId}/missions`, { method: 'POST', body: JSON.stringify(input) }),
-    get: (id: string) => fetchJson<Mission>(`/api/missions/${id}`),
-    update: (id: string, input: UpdateMissionInput) =>
-      fetchJson<Mission>(`/api/missions/${id}`, { method: 'PUT', body: JSON.stringify(input) }),
-    delete: (id: string) => fetchJson<void>(`/api/missions/${id}`, { method: 'DELETE' }),
-    resume: (id: string) => fetchJson<Mission>(`/api/missions/${id}/resume`, { method: 'POST' }),
-    pause: (id: string) => fetchJson<Mission>(`/api/missions/${id}/pause`, { method: 'POST' }),
-    stop: (id: string) => fetchJson<Mission>(`/api/missions/${id}/stop`, { method: 'POST' }),
-    runs: (id: string) => fetchJson<MissionRun[]>(`/api/missions/${id}/runs`),
+  ideas: {
+    /** Non-terminal ideas by default; `all` includes graduated/discarded. */
+    list: (all = false) => fetchJson<Idea[]>(`/api/ideas${all ? '?all=1' : ''}`),
+    listByState: (state: IdeaState) => fetchJson<Idea[]>(`/api/ideas?state=${encodeURIComponent(state)}`),
+    create: (data: CreateIdeaInput) =>
+      fetchJson<Idea>(`/api/ideas`, { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: UpdateIdeaInput) =>
+      fetchJson<Idea>(`/api/ideas/${id}`, { method: 'PATCH', body: JSON.stringify(data) }),
+    remove: (id: string) => fetchJson<{ success: true }>(`/api/ideas/${id}`, { method: 'DELETE' }),
+    /** Idempotent: creates the idea's assistant session lazily (parked → discussing). */
+    ensureSession: (id: string) =>
+      fetchJson<{ sessionId: string }>(`/api/ideas/${id}/session`, { method: 'POST' }),
+    /**
+     * CONFIRM-GATED GitHub write: only call after the user explicitly
+     * confirmed the reviewed drafts in the UI. On partial failure the thrown
+     * error carries the already-created `issues` (GraduateIssuesError).
+     */
+    graduateIssues: async (id: string, data: { repo: string; issues: IdeaIssueDraft[] }): Promise<GraduateIssuesResult> => {
+      const res = await apiFetch(`/api/ideas/${id}/graduate/issues`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err: GraduateIssuesError = new Error((body as any).error || res.statusText);
+        if (Array.isArray((body as any).issues)) err.issues = (body as any).issues;
+        throw err;
+      }
+      return body as GraduateIssuesResult;
+    },
   },
   assistant: {
     thread: () => fetchJson<{ id: 'global'; messages: any[] }>(`/api/assistant/thread`),

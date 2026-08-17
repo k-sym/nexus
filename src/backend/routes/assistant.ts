@@ -71,6 +71,8 @@ interface AssistantSession {
   status: string;
   last_run_id: string | null;
   last_response_id: string | null;
+  /** NULL for ordinary assistant chats; 'idea' for Idea Watcher dialogues (#352). */
+  origin: string | null;
   created_at: string;
   updated_at: string;
   archived_at: string | null;
@@ -294,8 +296,10 @@ function getSession(db: FastifyInstance['db'], sessionId: string): AssistantSess
 }
 
 function newestSession(db: FastifyInstance['db']): AssistantSession | undefined {
+  // origin IS NULL: the legacy global-thread default must be an ordinary
+  // assistant chat, never an Idea Watcher dialogue (#352).
   return db
-    .prepare('SELECT * FROM assistant_sessions WHERE archived_at IS NULL ORDER BY updated_at DESC LIMIT 1')
+    .prepare('SELECT * FROM assistant_sessions WHERE archived_at IS NULL AND origin IS NULL ORDER BY updated_at DESC LIMIT 1')
     .get() as AssistantSession | undefined;
 }
 
@@ -733,11 +737,16 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const localSessions = db
         .prepare('SELECT * FROM assistant_sessions WHERE archived_at IS NULL ORDER BY updated_at DESC')
         .all() as AssistantSession[];
-      const localRows = localSessions.map((session) => ({
-        ...session,
-        remoteOnly: false,
-        latestRun: publicRun(latestRun(db, session.id)),
-      }));
+      // Idea Watcher dialogues (#352) belong to their idea's thread view, not
+      // the rail — but they stay in `localSessions` so the claimed-set below
+      // still stops their remote halves resurfacing as adoptable rows.
+      const localRows = localSessions
+        .filter((session) => session.origin !== 'idea')
+        .map((session) => ({
+          ...session,
+          remoteOnly: false,
+          latestRun: publicRun(latestRun(db, session.id)),
+        }));
 
       // Local-first: only augment with adoptable remote Hermes sessions when the
       // assistant is configured and listing succeeds. Any failure falls back to locals.

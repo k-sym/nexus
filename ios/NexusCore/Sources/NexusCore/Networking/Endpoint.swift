@@ -126,22 +126,29 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/memories/\(id)", method: "DELETE")
     }
 
-    public static let braindump = Endpoint(path: "/api/braindump")
-    public static func createBraindump(body: Data) -> Endpoint {
-        Endpoint(path: "/api/braindump", method: "POST", body: body)
-    }
-    public static func updateBraindump(_ id: String, body: Data) -> Endpoint {
-        Endpoint(path: "/api/braindump/\(id)", method: "PATCH", body: body)
-    }
-    public static func deleteBraindump(_ id: String) -> Endpoint {
-        Endpoint(path: "/api/braindump/\(id)", method: "DELETE")
-    }
+    // MARK: Ideas (#352, replaces Braindump)
 
-    public static func projectMissions(_ projectId: String) -> Endpoint {
-        Endpoint(path: "/api/projects/\(projectId)/missions")
+    /// Idea Watcher rows → `[Idea]`. Non-terminal states by default;
+    /// `all: true` includes graduated/discarded.
+    public static func ideas(all: Bool = false) -> Endpoint {
+        Endpoint(path: "/api/ideas", queryItems: all ? [URLQueryItem(name: "all", value: "1")] : [])
     }
-    public static func missionAction(_ id: String, _ action: String) -> Endpoint {
-        Endpoint(path: "/api/missions/\(id)/\(action)", method: "POST")
+    /// Quick capture → `Idea`. Body a `CreateIdeaRequest`.
+    public static func createIdea(body: Data) -> Endpoint {
+        Endpoint(path: "/api/ideas", method: "POST", body: body)
+    }
+    /// Partial update (title/seed/state/tags/target_repo) → `Idea`.
+    public static func updateIdea(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/ideas/\(id)", method: "PATCH", body: body)
+    }
+    /// Hard delete (true junk; deliberate drops PATCH state=discarded) → `{ success }`.
+    public static func deleteIdea(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/ideas/\(id)", method: "DELETE")
+    }
+    /// Ensure/attach the idea's dialogue session → `{ sessionId }` (camelCase —
+    /// route-built object, not a DB row). Idempotent; flips parked → discussing.
+    public static func ideaSession(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/ideas/\(id)/session", method: "POST")
     }
 
     // MARK: M4

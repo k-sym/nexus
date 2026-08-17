@@ -80,47 +80,10 @@ describe('ChatPanel', () => {
     expect(await screen.findByText(/Another session is running in "Other session"/)).toHaveTextContent(
       /one run per project to prevent conflicting file changes/,
     );
-    expect(screen.queryByText(/autonomous mission/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/This model is currently streaming/i)).not.toBeInTheDocument();
 
     await userEvent.type(screen.getByTestId('chat-input'), 'replacement prompt');
     expect(screen.getByTestId('send-button')).toBeEnabled();
-  });
-
-  it('allows drafting but blocks Send while an autonomous mission owns the project', async () => {
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url === '/api/models') {
-        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
-      }
-      if (url.startsWith('/api/projects/p1/model-status')) {
-        return {
-          ok: true,
-          json: async () => ({
-            busy: true,
-            activeThreadId: 'mission-1',
-            activeTitle: 'Adding status badges',
-            source: 'mission',
-            projectBusy: true,
-          }),
-        } as Response;
-      }
-      if (url === '/api/threads/t1') {
-        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
-      }
-      return { ok: true, json: async () => ({}) } as Response;
-    });
-
-    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
-
-    expect(await screen.findByText(/An autonomous mission is running in "Adding status badges"/)).toHaveTextContent(
-      /protect shared project files/,
-    );
-    const input = screen.getByTestId('chat-input');
-    expect(input).toBeEnabled();
-    await userEvent.type(input, 'draft while waiting');
-    expect(screen.getByTestId('send-button')).toBeDisabled();
-    expect(screen.getByTestId('send-button')).toHaveAttribute('title', 'Wait for the autonomous mission to finish');
   });
 
   it('disables the composer and ignores Enter while a turn is running', async () => {

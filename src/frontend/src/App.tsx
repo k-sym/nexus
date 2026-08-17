@@ -7,17 +7,15 @@ import CommandPalette, { Command } from './components/CommandPalette';
 import Sidebar, { SubView, ThreadMeta, type SidebarSession, type SessionActivity } from './components/Sidebar';
 import MissionControl from './components/MissionControl';
 import TicketsView from './components/TicketsView';
-import BraindumpView from './components/BraindumpView';
+import IdeasView from './components/IdeasView';
 import DaemonToasts from './components/DaemonToasts';
 import NotificationToasts from './components/NotificationToasts';
 import ConfirmHost from './components/ConfirmHost';
 import ApprovalQueue from './components/ApprovalQueue';
-import ServicesView from './components/ServicesView';
 import ToolDecisionsView from './components/ToolDecisionsView';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import AssistantView from './components/AssistantView';
-import MissionsView from './components/MissionsView';
 import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
 import { ProjectManagementView } from './components/ProjectManagementView';
@@ -30,7 +28,7 @@ import DiffReviewPanel from './components/DiffReviewPanel';
 import type { ActivityResponse, ChatSessionSummary, OperationKind, OperationStatus, ReviewActionResult } from './api';
 import { loadViewState, saveViewState } from './viewState';
 
-type GlobalView = 'dashboard' | 'activity' | 'missions' | 'tickets' | 'braindump' | 'assistant' | 'services' | 'decisions' | 'settings';
+type GlobalView = 'dashboard' | 'activity' | 'tickets' | 'ideas' | 'assistant' | 'decisions' | 'settings';
 
 /** The slice of an in-flight run the sidebar needs: which project owns it and
  *  whether it is blocked on the user. */
@@ -566,17 +564,6 @@ export default function App() {
     if (projectId === activeProjectId) await loadTasks(projectId);
   };
 
-  const handleTriageIdea = async (projectId: string, idea: { title: string; body: string }): Promise<string> => {
-    const task = await api.projects.createTask(projectId, {
-      title: idea.title,
-      description: idea.body || '',
-      status: 'triage',
-      priority: 'medium',
-    });
-    if (projectId === activeProjectId) await loadTasks(projectId);
-    return task.id;
-  };
-
   // --- navigation helpers ---------------------------------------------------
   const selectGlobal = (v: GlobalView) => {
     setGlobalView(v);
@@ -686,8 +673,7 @@ export default function App() {
       { id: 'view-dashboard', label: 'Dashboard', hint: 'View', keywords: 'mission control', run: () => selectGlobal('dashboard') },
       { id: 'view-activity', label: 'Activity Console', hint: 'View', keywords: 'operations running recent', run: () => selectGlobal('activity') },
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
-      { id: 'view-braindump', label: 'Braindump', hint: 'View', keywords: 'ideas capture', run: () => selectGlobal('braindump') },
-      { id: 'view-services', label: 'Services', hint: 'View', keywords: 'docker compose containers running orphaned', run: () => selectGlobal('services') },
+      { id: 'view-ideas', label: 'Ideas', hint: 'View', keywords: 'ideas capture ripen park', run: () => selectGlobal('ideas') },
       { id: 'view-decisions', label: 'Decisions', hint: 'View', keywords: 'tool policy approval audit gated', run: () => selectGlobal('decisions') },
       { id: 'view-assistant', label: 'Assistant', hint: 'View', keywords: 'hermes openclaw remote chat', run: () => selectGlobal('assistant') },
     ];
@@ -731,14 +717,10 @@ export default function App() {
       );
     if (globalView === 'tickets')
       return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
-    if (globalView === 'braindump')
-      return <BraindumpView projects={projects} onTriage={handleTriageIdea} />;
-    if (globalView === 'missions')
-      return <MissionsView projects={projects} />;
+    if (globalView === 'ideas')
+      return <IdeasView projects={projects} />;
     if (globalView === 'assistant')
       return <AssistantView />;
-    if (globalView === 'services')
-      return <ServicesView />;
     if (globalView === 'decisions')
       return <ToolDecisionsView />;
 

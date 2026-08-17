@@ -434,17 +434,18 @@ describe('usePiStream', () => {
     expect(thrown).toEqual(new ChatBusyError('thread-2', 'Other thread', 'anthropic/sonnet'));
   });
 
-  it('surfaces an autonomous mission conflict as a non-cancellable error', async () => {
+  it('surfaces a 409 without a confirmable kind as a plain error', async () => {
+    // The backend's project-busy 409s are always kind 'chat_busy' now (missions
+    // are gone); anything else on a 409 has no cancel-and-retry path and must
+    // surface as a plain error.
     const onError = vi.fn();
     global.fetch = vi.fn().mockResolvedValue({
       ok: false,
       status: 409,
       body: null,
       json: async () => ({
-        kind: 'project_busy',
-        error: 'An autonomous mission already has a run in progress for this project',
-        activeThreadId: 'mission-1',
-        activeTitle: 'Nightly checks',
+        kind: 'something_else',
+        error: 'Conflicting run in progress for this project',
       }),
     } as Response);
     const { result } = renderHook(() => usePiStream());
@@ -457,9 +458,9 @@ describe('usePiStream', () => {
     expect(response).toBeNull();
     expect(result.current.state).toMatchObject({
       status: 'error',
-      error: 'An autonomous mission already has a run in progress for this project',
+      error: 'Conflicting run in progress for this project',
     });
-    expect(onError).toHaveBeenCalledWith('An autonomous mission already has a run in progress for this project');
+    expect(onError).toHaveBeenCalledWith('Conflicting run in progress for this project');
   });
 
   it('keeps a question running when message_end arrives before tool_execution_end', async () => {

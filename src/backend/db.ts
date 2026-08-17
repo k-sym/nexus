@@ -152,13 +152,20 @@ function runMigrations(db: Database.Database) {
       created_at TEXT NOT NULL
     );
 
-    CREATE TABLE IF NOT EXISTS braindump_ideas (
+    -- Idea Watcher (#352). An idea's dialogue lives in the assistant session
+    -- referenced by session_id; this row is just the metadata. Successor to
+    -- braindump_ideas, whose table is retained (not dropped) in existing DBs
+    -- as the export path — see the one-time copy migration below.
+    CREATE TABLE IF NOT EXISTS ideas (
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
-      body TEXT NOT NULL DEFAULT '',
-      status TEXT NOT NULL DEFAULT 'active',
-      project_id TEXT,
-      task_id TEXT,
+      seed TEXT NOT NULL DEFAULT '',
+      state TEXT NOT NULL DEFAULT 'parked',
+      tags TEXT NOT NULL DEFAULT '[]',
+      target_repo TEXT,
+      session_id TEXT,
+      graduated_to TEXT,
+      source TEXT NOT NULL DEFAULT 'idea_watcher',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -259,7 +266,7 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_task_monday_links_item ON task_monday_links(item_id);
     CREATE INDEX IF NOT EXISTS idx_task_monday_links_project ON task_monday_links(project_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
-    CREATE INDEX IF NOT EXISTS idx_braindump_status ON braindump_ideas(status);
+    CREATE INDEX IF NOT EXISTS idx_ideas_state ON ideas(state);
     CREATE INDEX IF NOT EXISTS idx_assistant_messages_created ON assistant_messages(created_at);
     CREATE INDEX IF NOT EXISTS idx_assistant_sessions_updated ON assistant_sessions(updated_at);
     CREATE INDEX IF NOT EXISTS idx_assistant_session_messages_session ON assistant_session_messages(session_id, created_at);
@@ -293,6 +300,41 @@ function runMigrations(db: Database.Database) {
   const assistantSessionCols = db.pragma('table_info(assistant_sessions)') as { name: string }[];
   if (!assistantSessionCols.some((c) => c.name === 'last_response_id')) {
     db.exec('ALTER TABLE assistant_sessions ADD COLUMN last_response_id TEXT');
+  }
+  // Idea Watcher (#352): idea dialogues are assistant sessions, but they belong
+  // to their idea's thread view — `origin` lets the Assistant rail exclude them.
+  // NULL means an ordinary assistant session.
+  if (!assistantSessionCols.some((c) => c.name === 'origin')) {
+    db.exec('ALTER TABLE assistant_sessions ADD COLUMN origin TEXT');
+  }
+
+  // One-time copy of the old Braindump rows into the Idea Watcher (#352).
+  // Idempotent (same ids + INSERT OR IGNORE) and conditional on the legacy
+  // table existing — fresh DBs never had it. active → parked; triaged →
+  // graduated, preserving the project/task link in graduated_to. The legacy
+  // rows are left in place as the export/tombstone path.
+  const hasBraindump = (db.pragma('table_info(braindump_ideas)') as { name: string }[]).length > 0;
+  if (hasBraindump) {
+    db.exec(`
+      INSERT OR IGNORE INTO ideas (id, title, seed, state, tags, target_repo, session_id, graduated_to, source, created_at, updated_at)
+      SELECT
+        id,
+        title,
+        body,
+        CASE status WHEN 'triaged' THEN 'graduated' ELSE 'parked' END,
+        '[]',
+        NULL,
+        NULL,
+        CASE
+          WHEN status = 'triaged' AND project_id IS NOT NULL THEN
+            json_object('kind', 'project', 'projectId', project_id, 'taskId', task_id)
+          ELSE NULL
+        END,
+        'braindump',
+        created_at,
+        updated_at
+      FROM braindump_ideas;
+    `);
   }
 
   const ticketCols = db.pragma('table_info(tickets)') as { name: string }[];
@@ -426,56 +468,9 @@ function runMigrations(db: Database.Database) {
     db.exec('ALTER TABLE chat_threads ADD COLUMN last_model_key TEXT');
   }
 
-  // Mission scheduler — bounded recurring missions and their run history.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS missions (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      title TEXT NOT NULL,
-      description TEXT NOT NULL DEFAULT '',
-      kind TEXT NOT NULL DEFAULT 'echo',
-      config_json TEXT NOT NULL DEFAULT '{}',
-      pacing TEXT NOT NULL DEFAULT 'fixed',
-      interval_seconds INTEGER NOT NULL DEFAULT 3600,
-      max_iterations INTEGER,
-      max_wall_clock_seconds INTEGER,
-      max_tokens INTEGER,
-      run_window_start TEXT,
-      run_window_end TEXT,
-      status TEXT NOT NULL DEFAULT 'paused',
-      iteration_count INTEGER NOT NULL DEFAULT 0,
-      tokens_used INTEGER NOT NULL DEFAULT 0,
-      next_run_at TEXT,
-      started_at TEXT,
-      last_run_at TEXT,
-      stopped_at TEXT,
-      stop_reason TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-  `);
-  db.exec('CREATE INDEX IF NOT EXISTS idx_missions_project ON missions(project_id)');
-  db.exec('CREATE INDEX IF NOT EXISTS idx_missions_status_due ON missions(status, next_run_at)');
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS mission_runs (
-      id TEXT PRIMARY KEY,
-      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
-      run_number INTEGER NOT NULL,
-      started_at TEXT NOT NULL,
-      completed_at TEXT,
-      status TEXT NOT NULL,
-      intent TEXT NOT NULL DEFAULT '',
-      selected_work_json TEXT,
-      result_summary TEXT NOT NULL DEFAULT '',
-      tokens_used INTEGER NOT NULL DEFAULT 0,
-      error TEXT,
-      next_run_at TEXT,
-      stop_reason TEXT,
-      created_at TEXT NOT NULL
-    );
-  `);
-  db.exec('CREATE INDEX IF NOT EXISTS idx_mission_runs_mission ON mission_runs(mission_id, run_number)');
+  // Missions were removed (#353). Existing DBs keep their `missions` /
+  // `mission_runs` tables and rows (the audit ledger) untouched — soft path,
+  // no DROP — but fresh DBs no longer grow them.
 
   // Monday item updates mirror: the most recent entries from the item's own
   // update thread (see monday/client.ts's ITEM_FIELDS and monday/map.ts).

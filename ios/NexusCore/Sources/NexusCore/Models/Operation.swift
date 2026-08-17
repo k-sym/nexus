@@ -4,6 +4,8 @@ import Foundation
 /// `OperationKind` in `src/shared/index.ts`; forward-compatible via `.unknown`.
 public enum OperationKind: Codable, Hashable, Sendable {
     case chatTurn, assistantStream, jiraSync, githubSync, mondaySync, mondayWrite
+    // missionTick is legacy: Missions were removed (#353), but existing DBs
+    // keep old `operations` rows of this kind, so decode tolerance stays.
     case memoryArchive, memoryIndex, missionTick
     case unknown(String)
 

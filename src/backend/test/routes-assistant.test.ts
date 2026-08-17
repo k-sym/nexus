@@ -144,6 +144,28 @@ test('Assistant session routes create list read rename and delete sessions', asy
   }
 });
 
+test('Idea Watcher dialogue sessions are hidden from the rail but readable by id', async () => {
+  const { app, db, dir } = makeApp();
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Ordinary' } });
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO assistant_sessions (id, title, status, origin, created_at, updated_at) VALUES ('idea-s1', 'Idea: X', 'idle', 'idea', ?, ?)",
+    ).run(now, now);
+
+    const list = await app.inject({ method: 'GET', url: '/api/assistant/sessions' });
+    assert.deepEqual(list.json().sessions.map((s: any) => s.id), [created.json().id]);
+
+    // The idea's thread view still reads/streams the session through the
+    // ordinary per-id routes.
+    const detail = await app.inject({ method: 'GET', url: '/api/assistant/sessions/idea-s1' });
+    assert.equal(detail.statusCode, 200);
+    assert.equal(detail.json().session.id, 'idea-s1');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('session detail reconstructs a rich transcript from Pi entries', async () => {
   const { app, db, dir, assistantSessionDir } = makeApp({});
   try {

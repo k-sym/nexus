@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// Top-level destinations. On iPhone these map onto a 5-tab bar (Assistant,
-/// Projects, Approvals, Pulse, More→{Tickets, Braindump, Settings}); on iPad
+/// Projects, Approvals, Pulse, More→{Tickets, Ideas, Settings}); on iPad
 /// they all sit in the split-view sidebar.
 enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case assistant
@@ -9,7 +9,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
     case approvals
     case pulse
     case tickets
-    case braindump
+    case ideas
     case settings
 
     var id: String { rawValue }
@@ -21,7 +21,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .approvals: return "Approvals"
         case .pulse: return "Pulse"
         case .tickets: return "Tickets"
-        case .braindump: return "Braindump"
+        case .ideas: return "Ideas"
         case .settings: return "Settings"
         }
     }
@@ -33,7 +33,7 @@ enum AppSection: String, CaseIterable, Identifiable, Hashable {
         case .approvals: return "checkmark.shield.fill"
         case .pulse: return "waveform.path.ecg"
         case .tickets: return "ticket.fill"
-        case .braindump: return "lightbulb.fill"
+        case .ideas: return "lightbulb.max.fill"
         case .settings: return "gearshape.fill"
         }
     }

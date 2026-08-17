@@ -262,31 +262,39 @@ public actor APIClient {
         _ = try await requestData(.deleteMemory(id))
     }
 
-    public func braindump() async throws -> [BraindumpIdea] {
-        try await request(.braindump)
+    // MARK: Ideas (#352, replaces Braindump)
+
+    /// Idea Watcher rows, newest-updated first. Non-terminal states by default;
+    /// `includeDone: true` fetches `?all=1` (graduated/discarded too).
+    public func ideas(includeDone: Bool = false) async throws -> [Idea] {
+        try await request(.ideas(all: includeDone))
     }
 
-    public func createBraindump(title: String, body: String? = nil) async throws {
-        let data = try JSONEncoder().encode(CreateBraindumpRequest(title: title, body: body))
-        _ = try await requestData(.createBraindump(body: data))
+    /// Quick capture: park a one-liner (plus optional seed notes).
+    @discardableResult
+    public func createIdea(title: String, seed: String? = nil) async throws -> Idea {
+        let data = try JSONEncoder().encode(CreateIdeaRequest(title: title, seed: seed))
+        return try await request(.createIdea(body: data))
     }
 
-    public func updateBraindump(id: String, patch: UpdateBraindumpRequest) async throws {
+    @discardableResult
+    public func updateIdea(id: String, patch: UpdateIdeaRequest) async throws -> Idea {
         let data = try JSONEncoder().encode(patch)
-        _ = try await requestData(.updateBraindump(id, body: data))
+        return try await request(.updateIdea(id, body: data))
     }
 
-    public func deleteBraindump(id: String) async throws {
-        _ = try await requestData(.deleteBraindump(id))
+    /// Hard delete — for true junk. The deliberate drop is
+    /// `updateIdea(patch: .init(state: .discarded))`.
+    public func deleteIdea(id: String) async throws {
+        _ = try await requestData(.deleteIdea(id))
     }
 
-    public func missions(projectId: String) async throws -> [Mission] {
-        try await request(.projectMissions(projectId))
-    }
-
-    /// `action` ∈ resume | pause | stop.
-    public func missionAction(id: String, action: String) async throws {
-        _ = try await requestData(.missionAction(id, action))
+    /// Ensure the idea's dialogue session exists and return its id. Idempotent;
+    /// the backend flips parked → discussing. Chat then flows through the
+    /// ordinary assistant session routes (`AssistantChatEndpoint`).
+    public func ideaSession(id: String) async throws -> String {
+        let res: IdeaSessionResponse = try await request(.ideaSession(id))
+        return res.sessionId
     }
 
     // MARK: M4

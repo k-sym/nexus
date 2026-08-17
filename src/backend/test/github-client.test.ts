@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchOpenIssues, GitHubError } from '../github/client';
+import { createIssue, fetchOpenIssues, GitHubError } from '../github/client';
 
 const ISSUE = (n: number, extra: Record<string, unknown> = {}) => ({
   number: n,
@@ -63,6 +63,42 @@ test('fetchOpenIssues stops after one page when fewer than per_page results', as
   const issues = await fetchOpenIssues({ owner: 'o', repo: 'r' }, undefined, fakeFetch as any);
   assert.equal(calls, 1);
   assert.equal(issues.length, 1);
+});
+
+test('createIssue POSTs the draft with auth and returns number + url', async () => {
+  let calledUrl = '';
+  let init: any;
+  const fakeFetch = async (url: string, i?: any) => {
+    calledUrl = String(url);
+    init = i;
+    return new Response(JSON.stringify({ number: 42, html_url: 'https://github.com/o/r/issues/42', extra: 'ignored' }), { status: 201 });
+  };
+  const created = await createIssue({ owner: 'o', repo: 'r' }, { title: 'T', body: 'B', labels: ['enhancement'] }, 'tok', fakeFetch as any);
+  assert.equal(calledUrl, 'https://api.github.com/repos/o/r/issues');
+  assert.equal(init.method, 'POST');
+  assert.equal(init.headers['authorization'], 'Bearer tok');
+  assert.deepEqual(JSON.parse(init.body), { title: 'T', body: 'B', labels: ['enhancement'] });
+  assert.deepEqual(created, { number: 42, html_url: 'https://github.com/o/r/issues/42' });
+});
+
+test('createIssue omits empty labels and surfaces GitHubError on failure', async () => {
+  let body: any;
+  const okFetch = async (_url: string, i?: any) => {
+    body = JSON.parse(i.body);
+    return new Response(JSON.stringify({ number: 1, html_url: 'u' }), { status: 201 });
+  };
+  await createIssue({ owner: 'o', repo: 'r' }, { title: 'T', body: 'B' }, 'tok', okFetch as any);
+  assert.equal('labels' in body, false);
+
+  const failFetch = async () => new Response('Validation Failed', { status: 422 });
+  await assert.rejects(
+    () => createIssue({ owner: 'o', repo: 'r' }, { title: 'T', body: 'B' }, 'tok', failFetch as any),
+    (err: unknown) => {
+      assert.ok(err instanceof GitHubError);
+      assert.equal((err as GitHubError).status, 422);
+      return true;
+    },
+  );
 });
 
 test('fetchOpenIssues throws GitHubError with status on non-2xx', async () => {

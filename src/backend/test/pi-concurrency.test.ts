@@ -14,14 +14,14 @@ test('ConcurrencyTracker.claimProject + getProject round-trip for a chat run', (
   });
 });
 
-test('ConcurrencyTracker.claimProject + getProject round-trip for a mission', () => {
+test('ConcurrencyTracker.claimProject + getProject round-trip without a modelKey', () => {
   const t = new ConcurrencyTracker();
-  assert.ok(t.claimProject('project-a', 'mission-1', 'Mission A', 'mission'));
+  assert.ok(t.claimProject('project-a', 'thread-1', 'Chat A', 'chat'));
   assert.deepEqual(t.getProject('project-a'), {
-    threadId: 'mission-1',
-    title: 'Mission A',
+    threadId: 'thread-1',
+    title: 'Chat A',
     scope: 'project',
-    source: 'mission',
+    source: 'chat',
   });
 });
 
@@ -50,7 +50,7 @@ test('ConcurrencyTracker isolates project working-tree claims', () => {
 
 test('ConcurrencyTracker.releaseProject removes the project slot', () => {
   const t = new ConcurrencyTracker();
-  const owner = t.claimProject('project-a', 'thread-1', 'Mission', 'mission');
+  const owner = t.claimProject('project-a', 'thread-1', 'A', 'chat');
   assert.ok(owner);
   assert.equal(t.releaseProject('project-a', owner), true);
   assert.equal(t.getProject('project-a'), undefined);
@@ -70,7 +70,7 @@ test('ConcurrencyTracker stale owner cannot release a replacement claim', () => 
 
 test('ConcurrencyTracker.releaseProject wakes waitForProjectRelease waiters', async () => {
   const t = new ConcurrencyTracker();
-  const owner = t.claimProject('project-a', 'thread-1', 'Mission', 'mission');
+  const owner = t.claimProject('project-a', 'thread-1', 'A', 'chat');
   assert.ok(owner);
   const observed = t.getProject('project-a')!;
   const released = t.waitForProjectRelease('project-a', observed, 1000);
@@ -85,7 +85,7 @@ test('ConcurrencyTracker.waitForProjectRelease resolves immediately when not hel
     threadId: 'gone',
     title: 'gone',
     scope: 'project' as const,
-    source: 'mission' as const,
+    source: 'chat' as const,
   };
   assert.equal(await t.waitForProjectRelease('project-a', observed, 100), true);
 });
