@@ -65,9 +65,19 @@ fi
 
 if launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
   echo "==> Restarting $LABEL"
-  # kickstart -k stops the running instance and starts a fresh one under
-  # launchd, which `kill` alone would not do correctly.
-  launchctl kickstart -k "gui/$(id -u)/$LABEL"
+  # bootout + bootstrap, not `kickstart -k`. A backend wedged the way the
+  # 2026-08 incidents wedged it (process alive, listener gone) ignores
+  # kickstart -k entirely — same pid, no new boot — and only a full teardown of
+  # the job recovers it. bootout returns nonzero when the job is already gone,
+  # which is fine here, so it is allowed to fail under `set -e`.
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  # bootout is not synchronous; bootstrap fails with "service already loaded"
+  # if it lands before launchd has finished reaping the old instance.
+  for _ in $(seq 1 20); do
+    launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
+    sleep 0.5
+  done
+  launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$LABEL.plist"
 else
   echo "==> $LABEL is not loaded — starting the backend in the foreground instead."
   echo "    (ctrl-c to stop; install the LaunchAgent to run it as a service)"
