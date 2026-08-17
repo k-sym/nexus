@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getDb } from '../db';
@@ -202,6 +202,76 @@ test('a mid-set GitHub failure still records what was filed', async () => {
 
   await app.close();
   cleanup();
+});
+
+test('graduate/project moves the idea\'s filed attachments into the project repo', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-ideas-grad-'));
+  const db = getDb(join(dir, 'test.db'));
+  const app = Fastify({ logger: false });
+  app.decorate('db', db);
+  app.register(async (f) => { await registerIdeaRoutes(f, { uploadRoot: dir }); });
+  const cleanup = () => { db.close(); rmSync(dir, { recursive: true, force: true }); };
+
+  const now = new Date().toISOString();
+  const repoPath = join(dir, 'the-project');
+  mkdirSync(repoPath, { recursive: true });
+  db.prepare(
+    'INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run('proj-1', 'proj-1', 'The Project', repoPath, now, now);
+
+  const id = (await app.inject({ method: 'POST', url: '/api/ideas', payload: { title: 'Grad' } })).json().id;
+  // Simulate attachments the assistant routes filed for this idea.
+  const ideaUploads = join(dir, 'project_docs', 'uploads', 'ideas', id);
+  mkdirSync(ideaUploads, { recursive: true });
+  writeFileSync(join(ideaUploads, 'shot.png'), 'png-bytes');
+
+  const res = await app.inject({ method: 'POST', url: `/api/ideas/${id}/graduate/project`, payload: { projectId: 'proj-1' } });
+  assert.equal(res.statusCode, 200, res.body);
+  assert.equal(res.json().movedFiles, 1);
+  assert.equal(res.json().idea.state, 'graduated');
+  assert.deepEqual(res.json().idea.graduated_to, { kind: 'project', projectId: 'proj-1' });
+
+  const moved = join(repoPath, 'project_docs', 'uploads', 'ideas', id, 'shot.png');
+  assert.equal(existsSync(moved), true, 'file moved into the project repo');
+  assert.equal(readFileSync(moved, 'utf8'), 'png-bytes');
+  assert.equal(existsSync(ideaUploads), false, 'source dir removed after the move');
+
+  await app.close();
+  cleanup();
+});
+
+test('graduate/project refuses to strand files when the project repo path is unusable', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-ideas-grad2-'));
+  const db = getDb(join(dir, 'test.db'));
+  const app = Fastify({ logger: false });
+  app.decorate('db', db);
+  app.register(async (f) => { await registerIdeaRoutes(f, { uploadRoot: dir }); });
+  const now = new Date().toISOString();
+  db.prepare(
+    'INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run('proj-x', 'proj-x', 'Ghost', join(dir, 'does-not-exist'), now, now);
+
+  const id = (await app.inject({ method: 'POST', url: '/api/ideas', payload: { title: 'Grad' } })).json().id;
+  const ideaUploads = join(dir, 'project_docs', 'uploads', 'ideas', id);
+  mkdirSync(ideaUploads, { recursive: true });
+  writeFileSync(join(ideaUploads, 'keep.txt'), 'x');
+
+  const res = await app.inject({ method: 'POST', url: `/api/ideas/${id}/graduate/project`, payload: { projectId: 'proj-x' } });
+  assert.equal(res.statusCode, 400);
+  assert.match(res.json().message, /repo path/);
+  // Not graduated, files untouched — the user fixes the project and retries.
+  assert.equal(existsSync(join(ideaUploads, 'keep.txt')), true);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/ideas' })).json()[0].state, 'parked');
+
+  // With no files to move, a missing repo path is not a blocker.
+  rmSync(ideaUploads, { recursive: true, force: true });
+  const res2 = await app.inject({ method: 'POST', url: `/api/ideas/${id}/graduate/project`, payload: { projectId: 'proj-x' } });
+  assert.equal(res2.statusCode, 200);
+  assert.equal(res2.json().movedFiles, 0);
+
+  await app.close();
+  db.close();
+  rmSync(dir, { recursive: true, force: true });
 });
 
 test('parseRepoInput accepts owner/repo and GitHub URLs', () => {

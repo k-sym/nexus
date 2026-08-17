@@ -14,21 +14,33 @@ vi.mock('../api', () => ({
       remove: vi.fn(),
       ensureSession: vi.fn(),
       graduateIssues: vi.fn(),
+      graduateProject: vi.fn(),
     },
   },
 }));
 
 // The idea thread + the research model picker speak apiFetch directly; give
-// them a benign backend so selecting an idea can load its (empty) dialogue.
+// them a benign backend so selecting an idea can load its (empty) dialogue and
+// message sends stream an immediately-closed body.
 vi.mock('../api-base', () => ({
-  apiFetch: vi.fn(async (url: string) => ({
-    ok: true,
-    json: async () =>
-      String(url).includes('/api/assistant/models')
-        ? { models: [] }
-        : { session: { id: 's1', title: 'Idea: x', status: 'idle' }, messages: [], latestRun: null },
-  })),
+  apiFetch: vi.fn(async (url: string) => {
+    if (String(url).endsWith('/messages/stream')) {
+      return {
+        ok: true,
+        status: 200,
+        body: new ReadableStream({ start(controller) { controller.close(); } }),
+      };
+    }
+    return {
+      ok: true,
+      json: async () =>
+        String(url).includes('/api/assistant/models')
+          ? { models: [] }
+          : { session: { id: 's1', title: 'Idea: x', status: 'idle' }, messages: [], latestRun: null },
+    };
+  }),
 }));
+import { apiFetch } from '../api-base';
 
 const projects = [{ id: 'p1', name: 'Alpha' }] as Project[];
 
@@ -154,6 +166,108 @@ describe('IdeasView', () => {
 
     // The created links render after filing.
     expect(await within(dialog).findByText(/#7 —/)).toBeInTheDocument();
+  });
+
+  it('blocks attaching when the idea has no valid target repo: notice shown, no file dialog, nothing sent', async () => {
+    (api.ideas.list as any).mockResolvedValue([
+      idea({ id: 'i1', title: 'Repo-less idea', state: 'discussing', session_id: 's1', target_repo: null }),
+    ]);
+    const clickSpy = vi.spyOn(HTMLInputElement.prototype, 'click');
+    render(<IdeasView projects={projects} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Repo-less idea' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Attach files' }));
+
+    expect(await screen.findByTestId('repo-gate-notice')).toHaveTextContent(
+      'Set a valid target repo (owner/repo) on this idea before attaching files.',
+    );
+    // The hidden file input was never opened…
+    expect(clickSpy).not.toHaveBeenCalled();
+    // …and nothing went to the stream endpoint.
+    expect(
+      (apiFetch as any).mock.calls.filter(([url]: [string]) => String(url).endsWith('/messages/stream')),
+    ).toHaveLength(0);
+    // The target-repo input in the header takes focus for the fix.
+    expect(screen.getByLabelText('Target repo')).toHaveFocus();
+    clickSpy.mockRestore();
+  });
+
+  it('sends attachments in the stream body when the target repo is valid', async () => {
+    (api.ideas.list as any).mockResolvedValue([
+      idea({ id: 'i1', title: 'Repo-ful idea', state: 'discussing', session_id: 's1', target_repo: 'k-sym/nexus' }),
+    ]);
+    render(<IdeasView projects={projects} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Repo-ful idea' }));
+    await screen.findByTestId('idea-chat-input');
+
+    const file = new File(['file-bytes'], 'notes.pdf', { type: 'application/pdf' });
+    fireEvent.change(screen.getByTestId('idea-file-input'), { target: { files: [file] } });
+
+    // The pending chip renders (no repo-gate notice).
+    expect(await screen.findByTestId('pending-assistant-attachment')).toHaveTextContent('notes.pdf');
+    expect(screen.queryByTestId('repo-gate-notice')).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByTestId('idea-chat-input'), { target: { value: 'read this' } });
+    fireEvent.click(screen.getByTestId('idea-send-button'));
+
+    await waitFor(() => {
+      const streamCalls = (apiFetch as any).mock.calls.filter(([url]: [string]) => String(url).endsWith('/messages/stream'));
+      expect(streamCalls).toHaveLength(1);
+      const body = JSON.parse(String(streamCalls[0][1].body));
+      expect(body.content).toBe('read this');
+      expect(body.attachments).toHaveLength(1);
+      expect(body.attachments[0]).toMatchObject({ type: 'file', name: 'notes.pdf', mimeType: 'application/pdf' });
+      expect(body.attachments[0].data).toBeTruthy();
+    });
+    // Pending chips clear once the turn is sent.
+    await waitFor(() => expect(screen.queryByTestId('pending-assistant-attachment')).not.toBeInTheDocument());
+  });
+
+  it('graduates into a project via graduateProject and surfaces moved files', async () => {
+    const reviewed = idea({ id: 'i1', title: 'Ship the widget', state: 'reviewed', session_id: 's1' });
+    (api.ideas.list as any).mockResolvedValue([reviewed]);
+    (api.ideas.graduateProject as any).mockResolvedValue({
+      idea: { ...reviewed, state: 'graduated', graduated_to: { kind: 'project', projectId: 'p1' } },
+      movedFiles: 3,
+    });
+    render(<IdeasView projects={projects} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Ship the widget' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Graduate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Graduate idea' });
+
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Project' }));
+    fireEvent.change(within(dialog).getByLabelText('Graduate into project'), { target: { value: 'p1' } });
+    expect(api.ideas.graduateProject).not.toHaveBeenCalled();
+
+    fireEvent.click(within(dialog).getByTestId('confirm-graduate-project'));
+
+    await waitFor(() => expect(api.ideas.graduateProject).toHaveBeenCalledWith('i1', 'p1'));
+    expect(await within(dialog).findByTestId('graduate-project-result')).toHaveTextContent(
+      '3 files moved into the project',
+    );
+  });
+
+  it('surfaces the repo-path 400 verbatim and leaves the idea un-graduated', async () => {
+    const reviewed = idea({ id: 'i1', title: 'Ship the widget', state: 'reviewed', session_id: 's1' });
+    (api.ideas.list as any).mockResolvedValue([reviewed]);
+    (api.ideas.graduateProject as any).mockRejectedValue(
+      new Error('The project has no usable repo path to move this idea’s files into — fix the project first.'),
+    );
+    render(<IdeasView projects={projects} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Ship the widget' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Graduate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Graduate idea' });
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Project' }));
+    fireEvent.change(within(dialog).getByLabelText('Graduate into project'), { target: { value: 'p1' } });
+    fireEvent.click(within(dialog).getByTestId('confirm-graduate-project'));
+
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent(/no usable repo path/);
+    // Not graduated: the idea stays in the active (Waiting) list.
+    expect(within(screen.getByTestId('section-waiting')).getByText('Ship the widget')).toBeInTheDocument();
+    expect(api.ideas.update).not.toHaveBeenCalledWith('i1', expect.objectContaining({ state: 'graduated' }));
   });
 
   it('closing the graduate dialog without confirming never files issues', async () => {

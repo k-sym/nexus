@@ -512,6 +512,17 @@ export const api = {
     ensureSession: (id: string) =>
       fetchJson<{ sessionId: string }>(`/api/ideas/${id}/session`, { method: 'POST' }),
     /**
+     * Graduate into a project: records graduation AND moves the idea's upload
+     * folder (project_docs/uploads/ideas/<id>/) into the project repo. A 400
+     * mentioning "repo path" means files exist but the project's repo path is
+     * unusable — surface it verbatim; the idea is NOT graduated in that case.
+     */
+    graduateProject: (id: string, projectId: string) =>
+      fetchJson<{ idea: Idea; movedFiles: number }>(`/api/ideas/${id}/graduate/project`, {
+        method: 'POST',
+        body: JSON.stringify({ projectId }),
+      }),
+    /**
      * CONFIRM-GATED GitHub write: only call after the user explicitly
      * confirmed the reviewed drafts in the UI. On partial failure the thrown
      * error carries the already-created `issues` (GraduateIssuesError).

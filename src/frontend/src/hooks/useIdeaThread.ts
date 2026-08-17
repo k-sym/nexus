@@ -14,7 +14,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api-base';
 import { agentRunReducer, type AgentRunView } from '../chat/agent-run-state';
 import { agentRunActionsFor } from '../chat/agent-run-events';
-import type { AssistantMessage, AssistantRun } from './useAssistantStream';
+import type { AssistantAttachment, AssistantMessage, AssistantRun } from './useAssistantStream';
+import { nextUserOrdinal, reattachAttachments, recordAttachments } from './assistantAttachmentCache';
+
+export interface IdeaSendOptions {
+  /** 'partner/<id>'; omitted → the session's/adapter's default. */
+  modelKey?: string;
+  attachments?: AssistantAttachment[];
+  /** Called with the failure message (e.g. the backend's target-repo gate 400). */
+  onError?: (message: string) => void;
+}
 
 function toAssistantMessage(raw: any): AssistantMessage {
   return {
@@ -23,11 +32,12 @@ function toAssistantMessage(raw: any): AssistantMessage {
   } as AssistantMessage;
 }
 
-function localMessage(role: AssistantMessage['role'], content: string): AssistantMessage {
+function localMessage(role: AssistantMessage['role'], content: string, attachments?: AssistantAttachment[]): AssistantMessage {
   return {
     id: `local-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     role,
     content,
+    ...(attachments && attachments.length > 0 ? { attachments } : {}),
     created_at: new Date().toISOString(),
   };
 }
@@ -54,6 +64,12 @@ export function useIdeaThread(sessionId: string | null) {
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const sessionIdRef = useRef<string | null>(sessionId);
   sessionIdRef.current = sessionId;
+  // Mirrors `messages` so send can read the current user-row count
+  // synchronously (to key the sent-attachment cache) without a stale closure.
+  const messagesRef = useRef<AssistantMessage[]>([]);
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
 
   const cancelActiveReader = useCallback(() => {
     const reader = readerRef.current;
@@ -77,7 +93,8 @@ export function useIdeaThread(sessionId: string | null) {
     };
     if (sessionIdRef.current !== id) return false;
     const run = data.latestRun ?? null;
-    setMessages((data.messages ?? []).map(toAssistantMessage));
+    // The server transcript is text-only; re-attach cached sent thumbnails.
+    setMessages(reattachAttachments((data.messages ?? []).map(toAssistantMessage), id));
     setLatestRun(run);
     return true;
   }, []);
@@ -103,18 +120,27 @@ export function useIdeaThread(sessionId: string | null) {
     return () => { cancelled = true; };
   }, [sessionId, reload, cancelActiveReader]);
 
-  const send = useCallback(async (content: string, modelKey?: string): Promise<boolean> => {
+  const send = useCallback(async (content: string, opts: IdeaSendOptions = {}): Promise<boolean> => {
     const trimmed = content.trim();
     const id = sessionIdRef.current;
-    if (!trimmed || !id || sendingRef.current) return false;
+    const attachments = opts.attachments ?? [];
+    if ((!trimmed && attachments.length === 0) || !id || sendingRef.current) return false;
     sendingRef.current = true;
     setError(null);
 
+    const fail = (message: string) => {
+      setError(message);
+      opts.onError?.(message);
+    };
+
+    // Cache the sent thumbnails at this turn's ordinal so they survive a
+    // reload (the server transcript comes back text-only).
+    recordAttachments(id, nextUserOrdinal(messagesRef.current), attachments);
     // Render the user's message + a streaming draft BEFORE the request, so a
     // transport failure can never leave the UI blank.
     const assistantDraft = localMessage('assistant', '');
     assistantDraft.isStreaming = true;
-    setMessages((current) => [...current, localMessage('user', trimmed), assistantDraft]);
+    setMessages((current) => [...current, localMessage('user', trimmed, attachments), assistantDraft]);
     setIsStreaming(true);
     setLatestRun((run) => run ? { ...run, status: 'running' } : run);
 
@@ -136,16 +162,21 @@ export function useIdeaThread(sessionId: string | null) {
     try {
       const res = await apiFetch(`/api/assistant/sessions/${id}/messages/stream`, {
         method: 'POST',
-        body: JSON.stringify({ content: trimmed, ...(modelKey ? { modelKey } : {}) }),
+        body: JSON.stringify({
+          content: trimmed,
+          ...(opts.modelKey ? { modelKey: opts.modelKey } : {}),
+          ...(attachments.length > 0 ? { attachments } : {}),
+        }),
         headers: { 'Content-Type': 'application/json' },
       });
       if (!res.ok) {
-        setError(await responseError(res));
+        // e.g. the idea-session attachment gate: 400 "Set a valid target repo…"
+        fail(await responseError(res));
         dropOrFinalizeDraft();
         return false;
       }
       if (!res.body) {
-        setError('Assistant response did not include a stream.');
+        fail('Assistant response did not include a stream.');
         dropOrFinalizeDraft();
         return false;
       }
@@ -227,7 +258,7 @@ export function useIdeaThread(sessionId: string | null) {
     } catch (err) {
       // Reader cancelled by abort or session switch: leave messages as-is.
       if (reader && readerRef.current !== reader) return false;
-      setError(err instanceof Error ? err.message : String(err));
+      fail(err instanceof Error ? err.message : String(err));
       dropOrFinalizeDraft();
       return false;
     } finally {

@@ -23,6 +23,7 @@ import {
 } from '../hermes/client.js';
 import { hermesMessagesToTranscript } from '../hermes/transcript.js';
 import { autoTitleSession, NEW_ASSISTANT_SESSION_TITLE } from '../sessions/auto-title.js';
+import { parseRepoShorthand } from '../github/repo.js';
 import { flattenEntries } from './chat.js';
 
 interface AssistantMessage {
@@ -472,9 +473,9 @@ function parseStoredAttachments(value: string | null): AssistantAttachment[] {
   }
 }
 
-function saveAssistantAttachments(attachments: AssistantAttachment[], uploadRoot: string): AssistantAttachment[] {
+function saveAssistantAttachments(attachments: AssistantAttachment[], uploadRoot: string, subdir?: string): AssistantAttachment[] {
   if (attachments.length === 0) return attachments;
-  const uploadsDir = path.join(uploadRoot, 'project_docs', 'uploads');
+  const uploadsDir = path.join(uploadRoot, 'project_docs', 'uploads', subdir ?? '');
   mkdirSync(uploadsDir, { recursive: true });
   return attachments.map((attachment, index) => {
     const originalName = attachment.name?.trim() || `assistant-image-${index + 1}${extensionForMime(attachment.mimeType)}`;
@@ -595,17 +596,42 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return remoteSessionId;
     };
 
+    // Idea dialogues (#352) file attachments under a per-idea directory so
+    // graduation can move them into the project the idea becomes — and an idea
+    // must declare a valid target repo before it may accumulate files, so
+    // every upload has a determined home. Enforced here (not client-side) so
+    // web and iOS get the same gate.
+    const ideaAttachmentScope = (session: AssistantSession): { subdir?: string; repoGateError?: string } => {
+      if (session.origin !== 'idea') return {};
+      const idea = db.prepare('SELECT id, target_repo FROM ideas WHERE session_id = ?').get(session.id) as
+        | { id: string; target_repo: string | null }
+        | undefined;
+      if (!idea) return {};
+      const repoOk = !!idea.target_repo && parseRepoShorthand(idea.target_repo) != null;
+      return {
+        subdir: path.join('ideas', idea.id),
+        repoGateError: repoOk
+          ? undefined
+          : 'Set a valid target repo (owner/repo) on this idea before attaching files.',
+      };
+    };
+
     const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, modelKey: unknown, reply: any, request: FastifyRequest) => {
       const trimmed = content.trim();
       const attachmentsResult = validateAssistantAttachments(attachmentsInput);
       if (!attachmentsResult.ok) { reply.code(400); return { error: attachmentsResult.error }; }
-      const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot);
-      const promptContent = promptWithFileReferences(trimmed, savedAttachments);
-      if (!trimmed && savedAttachments.length === 0) { reply.code(400); return { error: 'Message content is required.' }; }
+      if (!trimmed && attachmentsResult.attachments.length === 0) { reply.code(400); return { error: 'Message content is required.' }; }
       const hermes = client();
       if (!hermes) { reply.code(400); return { error: 'Assistant URL and key must be configured in Settings.' }; }
       const session = getSession(db, sessionId);
       if (!session) { reply.code(404); return { error: 'Assistant session not found' }; }
+      const ideaScope = ideaAttachmentScope(session);
+      if (attachmentsResult.attachments.length > 0 && ideaScope.repoGateError) {
+        reply.code(400);
+        return { error: ideaScope.repoGateError };
+      }
+      const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot, ideaScope.subdir);
+      const promptContent = promptWithFileReferences(trimmed, savedAttachments);
       // Optional (unlike the thread route): absent means the session's persisted
       // choice, falling back to the adapter's service default. The adapter 400s
       // on an id outside its allowlist before spawning anything.
@@ -941,13 +967,11 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: attachmentsResult.error };
       }
-      const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot);
-      const promptContent = promptWithFileReferences(content, savedAttachments);
-      if (hasImageAttachments(savedAttachments)) {
+      if (hasImageAttachments(attachmentsResult.attachments)) {
         reply.code(400);
         return { error: 'Background Handoff does not support image attachments yet. Use Send for vision turns.' };
       }
-      if (!content && savedAttachments.length === 0) {
+      if (!content && attachmentsResult.attachments.length === 0) {
         reply.code(400);
         return { error: 'Message content is required.' };
       }
@@ -961,6 +985,13 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
+      const ideaScope = ideaAttachmentScope(session);
+      if (attachmentsResult.attachments.length > 0 && ideaScope.repoGateError) {
+        reply.code(400);
+        return { error: ideaScope.repoGateError };
+      }
+      const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot, ideaScope.subdir);
+      const promptContent = promptWithFileReferences(content, savedAttachments);
       // The background run executes against its Hermes session (the run agent is
       // created with session_id), so the whole turn persists to Hermes SessionDB
       // and renders from /messages — no local mirror. Ensure the session exists in
