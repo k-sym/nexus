@@ -57,6 +57,15 @@ import { loadLocalEnvFile } from './env.js';
 import { registerBackendAuth } from './auth-gate.js';
 import { writeLocalModelsFile } from './pi/local-models.js';
 import { backfillLocalCuratedModels } from './pi/local-model-curation-backfill.js';
+import {
+  createHealthProbe,
+  createListenerWatchdog,
+  installProcessGuards,
+  installShutdownHandlers,
+  logError,
+  logInfo,
+  watchServerClose,
+} from './supervise.js';
 
 async function main() {
   loadLocalEnvFile();
@@ -84,17 +93,14 @@ async function main() {
   // Located once at startup: unlike a Docker daemon, a browser binary does not
   // come and go. Null when the machine has none — the tools are then omitted.
   const browserSupport = createBrowserSupport();
-  if (browserSupport) {
-    // A browser is a real OS process; a backend that exits without closing its
-    // browsers leaves them running headless with nothing driving them. Both
-    // signals, and `once` so a second Ctrl-C still kills us promptly rather
-    // than queueing another close.
-    for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-      process.once(signal, () => {
-        void browserSupport.pool.closeAll().finally(() => process.exit(0));
-      });
-    }
-  }
+  // A browser is a real OS process; a backend that exits without closing its
+  // browsers leaves them running headless with nothing driving them. Installed
+  // unconditionally (cleanup is a no-op without a browser) so that SIGTERM
+  // always produces a prompt, logged exit — an unbounded close was why a wedged
+  // backend could ignore `launchctl kickstart -k` indefinitely.
+  const shutdown = installShutdownHandlers({
+    cleanup: async () => { await browserSupport?.pool.closeAll(); },
+  });
   const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
     recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
     mondayContext: (threadId) => buildMondayContext(db, threadId),
@@ -212,8 +218,6 @@ async function main() {
   app.decorate('db', db);
   app.decorate('pi', pi);
   const modelCuration = new ModelCurationStore(join(getNexusDir(), 'model-curation.json'));
-  await backfillOAuthCuratedModels(pi, modelCuration);
-  await backfillLocalCuratedModels(pi, modelCuration);
 
   app.decorate('chatConcurrency', chatConcurrency);
   app.decorate('modelCuration', modelCuration);
@@ -259,8 +263,10 @@ async function main() {
 
   app.get('/api/health', async () => ({ status: 'ok' }));
 
-  app.setErrorHandler((error, _request, reply) => {
-    app.log.error(error);
+  app.setErrorHandler((error, request, reply) => {
+    // Fastify's logger is disabled, so app.log.error writes nowhere; without
+    // this every 500 left the launchd log completely silent.
+    logError('request', `${request.method} ${request.url} failed`, error);
     const err = error as any;
     const statusCode = err.statusCode || 500;
     reply.status(statusCode).send({ error: err.message });
@@ -268,10 +274,36 @@ async function main() {
 
   try {
     await app.listen({ port: config.server.port, host: '127.0.0.1' });
-    console.log(`NEXUS backend running on http://127.0.0.1:${config.server.port}`);
+    logInfo('backend', `NEXUS backend running on http://127.0.0.1:${config.server.port}`);
   } catch (err) {
-    app.log.error(err);
+    // app.log.error wrote nowhere (logger:false), so a failed bind used to exit
+    // 1 with an empty log and launchd restarted into the same failure forever.
+    logError('backend', `could not listen on 127.0.0.1:${config.server.port}`, err);
     process.exit(1);
+  }
+
+  // Losing the listener while the process lives is the failure this guards
+  // against: launchd's KeepAlive only restarts a process that exits, so a
+  // backend serving nothing must take itself down rather than sit there.
+  const die = (reason: string): never => {
+    logError('backend', `${reason} — exiting so launchd restarts the service`);
+    process.exit(1);
+  };
+  watchServerClose(app.server, die, shutdown.isShuttingDown);
+  createListenerWatchdog({
+    probe: createHealthProbe({ port: config.server.port }),
+    onDead: die,
+  }).start();
+
+  // Curating the model catalog can reach the network, and pi's catalog fetch
+  // has no timeout of its own — awaited before listen it could stall the whole
+  // boot short of binding the port. Nothing serves stale results in the
+  // meantime: an unsynced provider simply curates on the next request.
+  try {
+    await backfillOAuthCuratedModels(pi, modelCuration);
+    await backfillLocalCuratedModels(pi, modelCuration);
+  } catch (err) {
+    logError('model-curation', 'curated-model backfill failed; continuing', err);
   }
 
   // Glasses cockpit gateway — a LAN listener sharing this process's pi + db so
@@ -313,8 +345,13 @@ async function main() {
       },
     });
   } catch (err) {
-    console.error('[gateway] failed to start glasses gateway:', err);
+    logError('gateway', 'failed to start the glasses gateway', err);
   }
 }
 
-main();
+installProcessGuards();
+
+main().catch((err) => {
+  logError('backend', 'backend failed to start', err);
+  process.exit(1);
+});
