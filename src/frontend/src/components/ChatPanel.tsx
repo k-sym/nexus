@@ -33,8 +33,8 @@ import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
 import ArtifactPreviewRail from './ArtifactPreviewRail';
 import ChatMessageContent from './ChatMessageContent';
 import {
-  clampToSupportedThinkingLevel,
   type ThinkingLevel,
+  type ThinkingSelection,
 } from '../lib/thinking';
 
 const EMPTY_THINKING_LEVELS: ThinkingLevel[] = [];
@@ -152,7 +152,7 @@ function fileToAttachment(file: File): Promise<ChatAttachment> {
 }
 
 export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, backendActiveThreadIds, seed, onSeedConsumed }: ChatPanelProps) {
-  const { models, activeModelId, setModel, setThread } = useModels();
+  const { models, activeModelId, capabilitiesLoading, setModel, setThread } = useModels();
   const { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread, lastOutcomeRef } = usePiStream();
   const [input, setInput] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -173,7 +173,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
   const [artifactPath, setArtifactPath] = useState<string | null>(null);
   const [artifactRailOpen, setArtifactRailOpen] = useState(false);
-  const [thinkingByThread, setThinkingByThread] = useState<Record<string, ThinkingLevel>>({});
+  const [thinkingByThread, setThinkingByThread] = useState<Record<string, ThinkingSelection>>({});
   // Per-thread Supervise (tool-gate every call). Ephemeral on the pi runtime;
   // seeded from GET /api/threads/:id and toggled via POST .../supervise.
   const [supervised, setSupervised] = useState(false);
@@ -195,21 +195,33 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const { containerRef: messagesRef, isFollowing, onScroll, jumpToLatest } = useFollowAtBottom(streamContentVersion);
 
   const activeModel = models.find((model) => `${model.provider}/${model.id}` === activeModelId);
-  const thinkingLevels = activeModel?.thinkingLevels?.length
-    ? activeModel.thinkingLevels
-    : EMPTY_THINKING_LEVELS;
-  const thinkingLevel: ThinkingLevel = (threadId && thinkingByThread[threadId]) || 'off';
+  const reasoningCapabilities = activeModel?.capabilities?.reasoning;
+  const thinkingLevels = reasoningCapabilities?.levels
+    ?? activeModel?.thinkingLevels
+    ?? EMPTY_THINKING_LEVELS;
+  const reasoningSupported = reasoningCapabilities?.supported ?? thinkingLevels.length > 0;
+  const reasoningMandatory = reasoningCapabilities?.mandatory
+    ?? (reasoningSupported && !thinkingLevels.includes('off'));
+  const storedThinkingSelection: ThinkingSelection = (threadId && thinkingByThread[threadId]) || 'auto';
+  const thinkingSelection: ThinkingSelection = storedThinkingSelection === 'auto'
+    || thinkingLevels.includes(storedThinkingSelection)
+    ? storedThinkingSelection
+    : 'auto';
+  const imageInputCapability = activeModel?.capabilities?.imageInput
+    ?? (activeModel?.input?.includes('image') ? 'supported' : 'unknown');
   const noModelSelected = !activeModelId;
+  const hasUnsupportedPendingImages = imageInputCapability === 'unsupported'
+    && pendingAttachments.some((attachment) => attachment.type === 'image');
 
-  // Clamp the sticky thinking level when the active model (or its levels) change.
+  // A sticky explicit choice that the newly-selected model cannot honour falls
+  // back to Auto. Crucially, Auto is not the same thing as an explicit Off.
   const thinkingLevelsKey = thinkingLevels.join(',');
   useEffect(() => {
-    if (!threadId || thinkingLevels.length === 0) return;
+    if (!threadId) return;
     setThinkingByThread((prev) => {
-      const current = prev[threadId] ?? 'off';
-      const clamped = clampToSupportedThinkingLevel(current, thinkingLevels) ?? 'off';
-      if (prev[threadId] === clamped) return prev;
-      return { ...prev, [threadId]: clamped };
+      const current = prev[threadId];
+      if (!current || current === 'auto' || thinkingLevels.includes(current)) return prev;
+      return { ...prev, [threadId]: 'auto' };
     });
   }, [threadId, thinkingLevelsKey]); // eslint-disable-line react-hooks/exhaustive-deps -- levels keyed by thinkingLevelsKey
 
@@ -431,8 +443,10 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     if (seededThreadRef.current === threadId) return;
     seededThreadRef.current = threadId;
     const parsed = parseModelKey(seed.modelKey);
-    if (parsed) void setModel(parsed.provider, parsed.id);
-    void submit(seed.prompt, { modelKey: seed.modelKey });
+    void (async () => {
+      if (parsed) await setModel(parsed.provider, parsed.id);
+      await submit(seed.prompt, { modelKey: seed.modelKey });
+    })();
     onSeedConsumed?.();
     // submit/setModel are stable enough; we intentionally key only on the seed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -470,7 +484,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         const contextUsage = await startStream(threadId, text, {
           confirmCancel: opts.confirmCancel,
           modelKey: selectedModelKey,
-          thinkingLevel,
+          thinkingLevel: thinkingSelection === 'auto' ? undefined : thinkingSelection,
           attachments,
           onError: (message) => {
             streamError = message;
@@ -514,7 +528,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
         return false;
       }
     },
-    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, thinkingLevel, pendingAttachments, fetchThreadMessages, dispatch],
+    [threadId, startStream, onBusyConflict, onThreadsChanged, activeModelId, thinkingSelection, pendingAttachments, fetchThreadMessages, dispatch],
   );
 
   const answerNativeQuestion = useCallback(async (toolCallId: string, answers: QuestionAnswer[]) => {
@@ -584,13 +598,15 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
       || (!text && pendingAttachments.length === 0)
       || !threadId
       || noModelSelected
+      || capabilitiesLoading
+      || hasUnsupportedPendingImages
     ) return;
     const attachments = pendingAttachments;
     setInput('');
     setPendingAttachments([]);
     setAttachmentWarning(null);
     void submit(text, { attachments });
-  }, [input, threadId, noModelSelected, pendingAttachments, isRunning, submit]);
+  }, [input, threadId, noModelSelected, capabilitiesLoading, hasUnsupportedPendingImages, pendingAttachments, isRunning, submit]);
 
   // Cancel whichever run is active: a locally-streamed run (this instance
   // started it) goes through abortStream; a backend-owned run re-attached
@@ -635,13 +651,21 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   }, [pendingConfirm, submit]);
 
   const addAttachmentFiles = useCallback(async (files: File[]) => {
-    const supportedFiles = files.filter(isSupportedAttachment);
-    const rejected = files.length - supportedFiles.length;
+    const capabilityRejected = imageInputCapability === 'unsupported'
+      ? files.filter((file) => SUPPORTED_IMAGE_MIME_TYPES.has(inferMimeType(file))).length
+      : 0;
+    const supportedFiles = files.filter((file) =>
+      isSupportedAttachment(file)
+      && !(imageInputCapability === 'unsupported' && SUPPORTED_IMAGE_MIME_TYPES.has(inferMimeType(file))),
+    );
+    const rejected = files.length - supportedFiles.length - capabilityRejected;
     const slots = Math.max(0, MAX_PENDING_ATTACHMENTS - pendingAttachments.length);
     const accepted = supportedFiles.slice(0, slots);
     const overLimit = supportedFiles.length > slots;
 
-    if (rejected > 0) {
+    if (capabilityRejected > 0) {
+      setAttachmentWarning('This model does not support image input. Choose a vision-capable model to attach images.');
+    } else if (rejected > 0) {
       setAttachmentWarning('Attach images, PDFs, text, Word, Excel, or CSV files.');
     } else if (overLimit) {
       setAttachmentWarning(`Only ${MAX_PENDING_ATTACHMENTS} files can be attached to one message.`);
@@ -656,7 +680,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
     } catch (err) {
       setAttachmentWarning(err instanceof Error ? err.message : 'Failed to read attachment.');
     }
-  }, [pendingAttachments.length]);
+  }, [imageInputCapability, pendingAttachments.length]);
 
   const handleDrop = useCallback((e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -866,22 +890,37 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
 
       <div className="border-t border-subtle surface-glass p-3">
         {attachmentWarning && <div className="pb-2 text-xs text-amber-200">{attachmentWarning}</div>}
+        {hasUnsupportedPendingImages && (
+          <div className="pb-2 text-xs text-amber-200" role="alert">
+            This model cannot receive the attached image. Remove it or choose a vision-capable model.
+          </div>
+        )}
         {noModelSelected && (
           <div className="pb-2 text-xs text-amber-200">
             Choose a model for this task before sending.
           </div>
         )}
-        {thinkingLevels.length > 0 && (
+        {capabilitiesLoading && (
+          <div className="pb-2 text-xs text-muted" role="status" aria-live="polite">
+            Checking model capabilities…
+          </div>
+        )}
+        {reasoningSupported && thinkingLevels.length > 0 && (
           <div className="pb-2">
             <ThinkingSelector
               levels={thinkingLevels}
-              value={thinkingLevels.includes(thinkingLevel) ? thinkingLevel : (thinkingLevels[0] ?? 'off')}
+              value={thinkingSelection}
               onChange={(level) => {
                 if (!threadId) return;
                 setThinkingByThread((prev) => ({ ...prev, [threadId]: level }));
               }}
-              disabled={isRunning}
+              disabled={isRunning || capabilitiesLoading}
             />
+          </div>
+        )}
+        {reasoningSupported && reasoningMandatory && thinkingLevels.length === 0 && (
+          <div className="pb-2 text-xs text-muted" data-testid="thinking-required">
+            Thinking: Required
           </div>
         )}
         {pendingAttachments.length > 0 && (
@@ -985,7 +1024,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
                 type="button"
                 onClick={handleSend}
                 data-testid="send-button"
-                disabled={noModelSelected || (!input.trim() && pendingAttachments.length === 0)}
+                disabled={
+                  noModelSelected
+                  || capabilitiesLoading
+                  || hasUnsupportedPendingImages
+                  || (!input.trim() && pendingAttachments.length === 0)
+                }
                 className="px-4 py-2 accent-button rounded-lg disabled:opacity-40 transition-colors"
               >
                 Send

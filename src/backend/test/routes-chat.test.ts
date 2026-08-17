@@ -9,6 +9,7 @@ import Database from 'better-sqlite3';
 import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import { ConcurrencyTracker } from '../pi/concurrency';
 import { QuestionBroker, type QuestionRequest } from '../pi/questions';
+import { capabilitiesFromModel } from '../pi/model-capabilities';
 import { flattenEntries, registerChatRoutes } from '../routes/chat';
 import type { AgentRunWireEvent } from '@nexus/shared';
 
@@ -235,7 +236,11 @@ test('run history keeps a mid-run prompt below the turn it answered', () => {
   );
 });
 
-async function makeApp(runtimeOverride?: unknown, options: { includeSecondThread?: boolean; detectGitBranch?: (repoPath: string) => Promise<string> } = {}) {
+async function makeApp(runtimeOverride?: unknown, options: {
+  includeSecondThread?: boolean;
+  detectGitBranch?: (repoPath: string) => Promise<string>;
+  capabilityResolver?: { peek: (model: any) => any; resolve: (model: any) => Promise<any> };
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-chat-test-'));
   const db = new Database(join(dir, 'test.db'));
   // Minimal schema: projects + chat_threads + chat_messages. (chat_messages
@@ -296,7 +301,14 @@ async function makeApp(runtimeOverride?: unknown, options: { includeSecondThread
   app.decorate('db', db);
   app.decorate('pi', runtime);
   app.decorate('chatConcurrency', concurrency);
-  app.register(registerChatRoutes, { detectGitBranch: options.detectGitBranch });
+  const capabilityResolver = options.capabilityResolver ?? {
+    peek: capabilitiesFromModel,
+    resolve: async (model: any) => capabilitiesFromModel(model),
+  };
+  app.register(registerChatRoutes, {
+    detectGitBranch: options.detectGitBranch,
+    capabilityResolver,
+  });
   return { app, db, dir, runtime, concurrency };
 }
 
@@ -1667,6 +1679,56 @@ test('POST /api/threads/:id/messages/stream tries images when model metadata onl
   }
 });
 
+test('POST /api/threads/:id/messages/stream blocks a definitive unsupported image capability', async () => {
+  let promptCalled = false;
+  let resolveCalled = false;
+  const runtime = {
+    readMessages: async () => [],
+    sessionFor: async () => ({
+      subscribe: () => () => {},
+      setModel: async () => {},
+      prompt: async () => { promptCalled = true; },
+      abort: async () => {},
+    }),
+    getSessionModel: () => undefined,
+    setSessionModel: () => {},
+    dropSession: () => {},
+    models: { find: () => ({ provider: 'openrouter', id: 'text-only', input: ['text'] }) },
+  };
+  const capabilityResolver = {
+    peek: () => ({
+      source: 'catalog',
+      imageInput: 'unknown',
+      reasoning: { supported: false, mandatory: false, levels: [] },
+    }),
+    resolve: async () => {
+      resolveCalled = true;
+      return {
+        source: 'provider',
+        imageInput: 'unsupported',
+        reasoning: { supported: false, mandatory: false, levels: [] },
+      };
+    },
+  };
+  const { app, db, dir } = await makeApp(runtime, { capabilityResolver });
+  try {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'look', modelKey: 'openrouter/text-only', images: [pngImage] },
+    });
+
+    assert.equal(res.statusCode, 400);
+    assert.match(res.json().error, /does not support image input/i);
+    assert.equal(resolveCalled, true);
+    assert.equal(promptCalled, false);
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('POST /api/threads/:id/messages/stream rejects images without an explicit model', async () => {
   let promptCalled = false;
   const session = {
@@ -2976,7 +3038,7 @@ test('POST /api/threads/:id/messages/stream ignores thinkingLevel when model lac
   }
 });
 
-test('POST /api/threads/:id/messages/stream leaves thinking unchanged when thinkingLevel is omitted', async () => {
+test('POST /api/threads/:id/messages/stream resolves omitted thinkingLevel to Auto', async () => {
   const calls: string[] = [];
   const session = {
     subscribe: () => () => {},
@@ -3002,7 +3064,7 @@ test('POST /api/threads/:id/messages/stream leaves thinking unchanged when think
       payload: { content: 'hi', modelKey: 'anthropic/sonnet' },
     });
     assert.equal(res.statusCode, 200, res.body);
-    assert.deepEqual(calls, ['prompt']);
+    assert.deepEqual(calls, ['think:medium', 'prompt']);
   } finally {
     await app.close();
     db.close();

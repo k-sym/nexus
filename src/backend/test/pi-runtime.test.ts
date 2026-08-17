@@ -575,7 +575,9 @@ test('buildModelCatalog exposes model input capabilities', () => {
     },
   } as any;
 
-  assert.deepEqual(buildModelCatalog(fastify)[0].input, ['text', 'image']);
+  const model = buildModelCatalog(fastify)[0];
+  assert.deepEqual(model.input, ['text', 'image']);
+  assert.equal(model.capabilities.imageInput, 'supported');
 });
 
 test('buildModelCatalog exposes thinkingLevels for reasoning models only', () => {

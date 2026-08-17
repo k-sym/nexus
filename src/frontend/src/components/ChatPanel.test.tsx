@@ -1369,6 +1369,106 @@ describe('ChatPanel', () => {
     expect(screen.queryByTestId('thinking-selector')).not.toBeInTheDocument();
   });
 
+  it('keeps untouched thinking on Auto and omits thinkingLevel from the request', async () => {
+    const streamBodies: any[] = [];
+    const capabilities = {
+      source: 'provider',
+      imageInput: 'supported',
+      reasoning: {
+        supported: true,
+        mandatory: false,
+        levels: ['off', 'low', 'high'],
+        defaultLevel: 'low',
+      },
+    };
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'reasoner', name: 'Reasoner', provider: 'openrouter', configured: true, capabilities }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({ thread: { id: 't1', last_model_key: 'openrouter/reasoner' }, messages: [] }),
+        } as Response;
+      }
+      if (url === '/api/models/active') {
+        return { ok: true, json: async () => ({ ok: true, capabilities }) } as Response;
+      }
+      if (url === '/api/threads/t1/messages/stream') {
+        streamBodies.push(JSON.parse(String(init?.body ?? '{}')));
+        return {
+          ok: true,
+          status: 200,
+          body: new ReadableStream({ start(controller) { controller.close(); } }),
+        } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const selector = await screen.findByTestId('thinking-selector');
+    await waitFor(() => expect(selector).toHaveTextContent('Thinking: Auto'));
+    await userEvent.type(screen.getByTestId('chat-input'), 'use the default');
+    await userEvent.click(screen.getByTestId('send-button'));
+
+    await waitFor(() => expect(streamBodies).toHaveLength(1));
+    expect(streamBodies[0]).not.toHaveProperty('thinkingLevel');
+  });
+
+  it('removes Off for mandatory reasoning models', async () => {
+    const capabilities = {
+      source: 'provider',
+      imageInput: 'supported',
+      reasoning: {
+        supported: true,
+        mandatory: true,
+        levels: ['low', 'medium', 'high'],
+        defaultLevel: 'medium',
+      },
+    };
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ id: 'required', name: 'Required', provider: 'openrouter', configured: true, capabilities }],
+          }),
+        } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return { ok: true, json: async () => ({ busy: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return {
+          ok: true,
+          json: async () => ({ thread: { id: 't1', last_model_key: 'openrouter/required' }, messages: [] }),
+        } as Response;
+      }
+      if (url === '/api/models/active') {
+        return { ok: true, json: async () => ({ ok: true, capabilities }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const selector = await screen.findByTestId('thinking-selector');
+    await userEvent.click(selector);
+
+    expect(screen.getByRole('option', { name: 'Auto' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Off' })).not.toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Medium' })).toBeInTheDocument();
+  });
+
   it('sends the selected thinkingLevel on stream and disables the control while running', async () => {
     const streamBodies: unknown[] = [];
     global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -1413,7 +1513,7 @@ describe('ChatPanel', () => {
 
     render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
     const selector = await screen.findByTestId('thinking-selector');
-    expect(selector).toHaveTextContent('Thinking: Off');
+    expect(selector).toHaveTextContent('Thinking: Auto');
 
     await userEvent.click(selector);
     await userEvent.click(screen.getByRole('option', { name: 'High' }));

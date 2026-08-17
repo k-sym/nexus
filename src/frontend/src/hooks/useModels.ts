@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../api-base';
 import type { ThinkingLevel } from '../lib/thinking';
 
@@ -12,6 +12,21 @@ export interface ModelInfo {
   input?: Array<'text' | 'image'>;
   configured?: boolean;
   thinkingLevels?: ThinkingLevel[];
+  capabilities?: ModelCapabilities;
+}
+
+export type ImageInputCapability = 'supported' | 'unsupported' | 'unknown';
+
+export interface ModelCapabilities {
+  source: 'catalog' | 'provider';
+  imageInput: ImageInputCapability;
+  reasoning: {
+    supported: boolean;
+    mandatory: boolean;
+    levels: ThinkingLevel[];
+    defaultLevel?: ThinkingLevel;
+    defaultEnabled?: boolean;
+  };
 }
 
 /** Encode a model as `provider/id` for use as a key. */
@@ -45,6 +60,8 @@ export function useModels() {
   const [activeModels, setActiveModels] = useState<Record<string, string>>({});
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [capabilityLoadingByThread, setCapabilityLoadingByThread] = useState<Record<string, boolean>>({});
+  const selectionGenerationRef = useRef<Record<string, number>>({});
 
   const loadModels = useCallback(async (cancelled?: () => boolean) => {
     const clearModels = () => {
@@ -116,31 +133,51 @@ export function useModels() {
 
   const setModel = useCallback(async (provider: string, id: string) => {
     if (!currentThreadId) return;
+    const targetThreadId = currentThreadId;
+    const generation = (selectionGenerationRef.current[targetThreadId] ?? 0) + 1;
+    selectionGenerationRef.current[targetThreadId] = generation;
     
     // Allow clearing the model by passing empty strings
     if (!provider || !id) {
       setActiveModels(prev => {
         const next = { ...prev };
-        delete next[currentThreadId];
+        delete next[targetThreadId];
         return next;
       });
+      setCapabilityLoadingByThread((prev) => ({ ...prev, [targetThreadId]: false }));
       return;
     }
     
     const key = modelKey(provider, id);
     setActiveModels(prev => ({
       ...prev,
-      [currentThreadId]: key,
+      [targetThreadId]: key,
     }));
+    setCapabilityLoadingByThread((prev) => ({ ...prev, [targetThreadId]: true }));
     
     try {
-      await apiFetch('/api/models/active', {
+      const res = await apiFetch('/api/models/active', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider, model: id }),
       });
+      if (!res.ok) throw new Error(`active model: ${res.status}`);
+      const data = (await res.json()) as { ok?: boolean; capabilities?: ModelCapabilities };
+      if (data.capabilities) {
+        const applyCapabilities = (items: ModelInfo[]) => items.map((model) =>
+          model.provider === provider && model.id === id
+            ? { ...model, capabilities: data.capabilities }
+            : model,
+        );
+        setModels(applyCapabilities);
+        setAllModels(applyCapabilities);
+      }
     } catch (err) {
       console.error('useModels: failed to set active model', err);
+    } finally {
+      if (selectionGenerationRef.current[targetThreadId] === generation) {
+        setCapabilityLoadingByThread((prev) => ({ ...prev, [targetThreadId]: false }));
+      }
     }
   }, [currentThreadId]);
 
@@ -164,6 +201,18 @@ export function useModels() {
   }, []);
 
   const activeModelId = currentThreadId ? activeModels[currentThreadId] : undefined;
+  const capabilitiesLoading = currentThreadId ? capabilityLoadingByThread[currentThreadId] === true : false;
 
-  return { models, allModels, enabledModelKeys, customized, activeModelId, loading, setModel, setThread, saveCuration };
+  return {
+    models,
+    allModels,
+    enabledModelKeys,
+    customized,
+    activeModelId,
+    loading,
+    capabilitiesLoading,
+    setModel,
+    setThread,
+    saveCuration,
+  };
 }

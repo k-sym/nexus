@@ -22,7 +22,6 @@ import {
   type AgentRunTerminalStatus,
   type ChatThread,
 } from '@nexus/shared';
-import { clampThinkingLevel } from '@earendil-works/pi-ai';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
 import { autoTitleSession, NEW_THREAD_TITLE } from '../sessions/auto-title.js';
@@ -31,6 +30,11 @@ import { resolveSignalFilterConfig } from '../signal-filters/config.js';
 import { projectToolResultMessages, type SignalProjection } from '../signal-filters/messages.js';
 import { detectGitBranch as detectProjectGitBranch } from '../github/repo.js';
 import { isThinkingLevel, type ThinkingLevel } from '../pi/thinking.js';
+import {
+  modelCapabilityResolver,
+  normalizeThinkingLevel,
+  type ModelCapabilityResolver,
+} from '../pi/model-capabilities.js';
 import type { ProjectRun } from '../pi/concurrency.js';
 
 const ABORT_GRACE_MS = 200;
@@ -76,6 +80,7 @@ interface ThreadRunClaim {
 
 interface RegisterChatRoutesOptions {
   detectGitBranch?: (repoPath: string) => Promise<string>;
+  capabilityResolver?: Pick<ModelCapabilityResolver, 'peek' | 'resolve'>;
 }
 
 interface ChatImageAttachment {
@@ -187,6 +192,7 @@ function dbMessages(db: FastifyInstance['db'], threadId: string) {
 }
 
 export async function registerChatRoutes(fastify: FastifyInstance, options: RegisterChatRoutesOptions = {}) {
+  const capabilityResolver = options.capabilityResolver ?? modelCapabilityResolver;
   const db = fastify.db;
   const pi = fastify.pi;
   const concurrency = fastify.chatConcurrency;
@@ -458,12 +464,20 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         }
       }
     }
-    // Model catalogs are advisory and can lag behind provider/runtime
-    // capabilities (notably OpenRouter and local multimodal projectors). Let an
-    // image turn reach the selected model instead of rejecting it from stale
-    // metadata. Pi uses the model's input list to decide whether to serialize
-    // images, so a per-turn clone opts in without mutating the shared registry.
-    const imageInputOverride = images.length > 0 && !modelSupportsImageInput(selectedModel);
+    // Re-resolve here as well as on selection: UI hydration improves the
+    // experience, but the send boundary remains authoritative for direct API
+    // clients, stale tabs, and expired provider metadata.
+    const capabilities = await capabilityResolver.resolve(selectedModel);
+    if (images.length > 0 && capabilities.imageInput === 'unsupported') {
+      reply.code(400);
+      return { error: 'Selected model does not support image input. Remove the image or choose a vision-capable model.' };
+    }
+    // Unknown remains fail-open: provider catalogs and local runtime metadata
+    // can lag behind real endpoint capability. A live, definitive unsupported
+    // result is blocked above; supported/unknown image turns are serialized.
+    const imageInputOverride = images.length > 0
+      && capabilities.imageInput !== 'unsupported'
+      && !modelSupportsImageInput(selectedModel);
     const modelForTurn = imageInputOverride
       ? { ...selectedModel, input: [...(Array.isArray(selectedModel?.input) ? selectedModel.input : ['text']), 'image'] }
       : selectedModel;
@@ -547,12 +561,9 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         }
       }
 
-      if (
-        requestedThinkingLevel !== undefined
-        && selectedModel
-        && session.supportsThinking?.()
-      ) {
-        session.setThinkingLevel(clampThinkingLevel(selectedModel, requestedThinkingLevel));
+      const effectiveThinkingLevel = normalizeThinkingLevel(capabilities, requestedThinkingLevel);
+      if (effectiveThinkingLevel !== undefined && selectedModel && session.supportsThinking?.()) {
+        session.setThinkingLevel(effectiveThinkingLevel);
       }
 
       db.prepare('UPDATE chat_threads SET updated_at = ?, last_model_key = ? WHERE id = ?').run(

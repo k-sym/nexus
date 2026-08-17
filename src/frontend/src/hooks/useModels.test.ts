@@ -31,6 +31,39 @@ describe('useModels', () => {
     await waitFor(() => expect(result.current.activeModelId).toBe('openai/gpt-5'));
   });
 
+  it('hydrates the selected model with provider capabilities', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/models') {
+        return { ok: true, json: async () => ({ models: mockModels }) } as Response;
+      }
+      return {
+        ok: true,
+        json: async () => ({
+          ok: true,
+          capabilities: {
+            source: 'provider',
+            imageInput: 'supported',
+            reasoning: {
+              supported: true,
+              mandatory: true,
+              levels: ['low', 'medium', 'high'],
+              defaultLevel: 'medium',
+            },
+          },
+        }),
+      } as Response;
+    });
+    const { result } = renderHook(() => useModels());
+    await waitFor(() => expect(result.current.models.length).toBe(2));
+    act(() => result.current.setThread('thread-1'));
+
+    await act(async () => result.current.setModel('openai', 'gpt-5'));
+
+    expect(result.current.models[1].capabilities?.imageInput).toBe('supported');
+    expect(result.current.models[1].capabilities?.reasoning.mandatory).toBe(true);
+    expect(result.current.capabilitiesLoading).toBe(false);
+  });
+
   it('handles fetch errors by leaving models empty', async () => {
     global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
     const { result } = renderHook(() => useModels());

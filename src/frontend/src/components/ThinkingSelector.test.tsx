@@ -6,7 +6,7 @@ import { ThinkingSelector } from './ThinkingSelector';
 describe('ThinkingSelector', () => {
   it('returns null when there are no levels', () => {
     const { container } = render(
-      <ThinkingSelector levels={[]} value="off" onChange={() => {}} />,
+      <ThinkingSelector levels={[]} value="auto" onChange={() => {}} />,
     );
     expect(container).toBeEmptyDOMElement();
   });
@@ -16,6 +16,16 @@ describe('ThinkingSelector', () => {
       <ThinkingSelector levels={['off', 'high']} value="high" onChange={() => {}} />,
     );
     expect(screen.getByTestId('thinking-selector')).toHaveTextContent('Thinking: High');
+  });
+
+  it('offers Auto separately from an explicit Off', async () => {
+    render(
+      <ThinkingSelector levels={['off', 'high']} value="auto" onChange={() => {}} />,
+    );
+    expect(screen.getByTestId('thinking-selector')).toHaveTextContent('Thinking: Auto');
+    await userEvent.click(screen.getByTestId('thinking-selector'));
+    expect(screen.getByRole('option', { name: 'Auto' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Off' })).toBeInTheDocument();
   });
 
   it('lists levels and reports selection', async () => {
