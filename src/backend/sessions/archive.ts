@@ -79,10 +79,14 @@ export async function archiveThreadToMemory(
     : summary;
 
   const storeMemory = deps.storeMemory ?? ((input: MemoryInput) => addMemory(db, input));
+  // Explicit title: without it the daemon derives one from the body's first line, which
+  // the structured-summary prompt forces to be the literal heading "## Summary".
+  const threadTitle = thread.title?.trim();
   const stored = await storeMemory({
     project_id: project.id,
     agent_id: 'session-archive',
     category: 'session_archive',
+    title: threadTitle ? `${project.name} — ${threadTitle}` : project.name,
     content,
     metadata: {
       source: 'session-archive',

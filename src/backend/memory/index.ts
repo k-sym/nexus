@@ -31,6 +31,8 @@ export interface MemoryInput {
   project_id: string;
   agent_id?: string;
   category?: string;
+  /** Explicit display title; without it the daemon derives one from the body's first line. */
+  title?: string;
   content: string;
   metadata?: Record<string, unknown>;
 }
@@ -60,6 +62,7 @@ export async function addMemory(db: Database.Database, input: MemoryInput): Prom
       project: slug,
       category: input.category || 'general',
       source: input.agent_id ? `nexus:${input.agent_id}` : 'nexus',
+      title: input.title,
       body: input.content,
     });
   } catch (err: any) {
