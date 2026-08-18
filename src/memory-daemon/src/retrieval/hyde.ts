@@ -11,7 +11,7 @@ export async function generateHyde(ctx: AppContext, query: string): Promise<stri
   if (!ctx.cfg.retrieval.hyde) return null;
   let out: string;
   try {
-    out = await ctx.models.complete(query, { system: SYSTEM, temperature: 0.3, maxTokens: 128, timeoutMs: 20_000 });
+    out = await ctx.models.complete(query, { system: SYSTEM, temperature: 0.3, maxTokens: 128, timeoutMs: 20_000, task: "hyde" });
   } catch (err) {
     // Gen model unavailable — skip HyDE, recall proceeds with the raw query.
     console.warn(`[hyde] failed, skipping: ${(err as Error).message}`);

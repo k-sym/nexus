@@ -26,6 +26,7 @@ function fixture() {
       embedModel: "test",
       rerankUrl: "http://127.0.0.1:1",
       rerankModel: "test",
+      prefer: "local",
     },
     retrieval: { hyde: false, sentenceThreshold: 0, sentenceK: 1, chunkK: 1, rerankK: 1, rerankTimeoutMs: 2000, tokenBudget: 100 },
   };
