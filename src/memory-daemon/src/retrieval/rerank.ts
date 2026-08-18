@@ -6,6 +6,7 @@ export async function rerankSentences(
   ctx: AppContext,
   query: string,
   sentenceIds: number[],
+  timeoutMs?: number,
 ): Promise<Map<number, number> | null> {
   if (sentenceIds.length === 0) return new Map();
   const placeholders = sentenceIds.map(() => "?").join(",");
@@ -15,7 +16,7 @@ export async function rerankSentences(
 
   let scores: number[];
   try {
-    scores = await ctx.models.rerank(query, rows.map((r) => r.text));
+    scores = await ctx.models.rerank(query, rows.map((r) => r.text), timeoutMs);
   } catch (err) {
     // Reranker unavailable — caller degrades to fusion order.
     console.warn(`[rerank] failed, degrading to fusion order: ${(err as Error).message}`);

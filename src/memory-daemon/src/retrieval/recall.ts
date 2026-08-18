@@ -9,6 +9,7 @@ import { assemble } from "./assemble.js";
 import { factsForQuery } from "../kg/fuse.js";
 
 const TOP_MEMORIES_FOR_RERANK = 10;
+const SLOW_RECALL_MS = 2500;
 
 export async function recall(
   ctx: AppContext,
@@ -17,8 +18,17 @@ export async function recall(
   opts: { limit?: number } = {},
 ): Promise<RecallResponse> {
   let degraded = false;
+  const timings: Record<string, number> = {};
+  const t0 = performance.now();
+  let mark = t0;
+  const lap = (stage: string) => {
+    const now = performance.now();
+    timings[stage] = Math.round(now - mark);
+    mark = now;
+  };
 
   const hyde = await generateHyde(ctx, query);
+  lap("hyde");
   const texts = hyde ? [query, hyde] : [query];
   let embedded: number[][] | null = null;
   try {
@@ -27,17 +37,27 @@ export async function recall(
     // Embedder down or misconfigured — degrade to FTS-only rather than failing recall.
     console.warn(`[recall] embed failed, degrading to FTS-only: ${(err as Error).message}`);
   }
+  lap("embed");
   const queryVecs = embedded ?? [];
   if (!embedded) degraded = true;
 
   const search = hybridSearch(ctx, query, queryVecs, filter);
+  lap("search");
 
-  // Rerank the candidate sentences of the top fused memories.
+  // Rerank the candidate sentences of the top fused memories. Bounded by a deadline:
+  // the reranker serializes documents, so under concurrent recall load it is the stage
+  // that queues — past the deadline we keep fusion order rather than hold the caller.
   const rerankIds: number[] = [];
   for (const memoryId of search.rankedMemories.slice(0, TOP_MEMORIES_FOR_RERANK)) {
     rerankIds.push(...(search.candidateSentences.get(memoryId) ?? []));
   }
-  const sentenceScores = await rerankSentences(ctx, query, rerankIds.slice(0, ctx.cfg.retrieval.rerankK));
+  const sentenceScores = await rerankSentences(
+    ctx,
+    query,
+    rerankIds.slice(0, ctx.cfg.retrieval.rerankK),
+    ctx.cfg.retrieval.rerankTimeoutMs,
+  );
+  lap("rerank");
   if (sentenceScores === null) degraded = true;
 
   const qFacts = factsForQuery(ctx, query, filter);
@@ -49,9 +69,16 @@ export async function recall(
     sentenceScores,
     factsByMemory: qFacts.byMemory,
   });
+  lap("assemble");
   if (opts.limit) items = items.slice(0, opts.limit);
 
-  return { query, hyde, degraded, items };
+  const total = Math.round(performance.now() - t0);
+  timings.total = total;
+  if (total > SLOW_RECALL_MS) {
+    console.warn(`[recall] slow (${total}ms): ${JSON.stringify(timings)}`);
+  }
+
+  return { query, hyde, degraded, items, timings };
 }
 
 /** Render a recall response as an injection-ready context block with citations. */

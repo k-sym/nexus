@@ -33,6 +33,9 @@ export interface DaemonConfig {
     sentenceK: number;
     chunkK: number;
     rerankK: number;
+    /** Deadline for the cross-encoder call inside recall; on expiry recall degrades to
+     *  fusion order instead of holding the response (interactive callers budget ~2.5s). */
+    rerankTimeoutMs: number;
     tokenBudget: number;
   };
 }
@@ -100,6 +103,7 @@ export function loadConfig(): DaemonConfig {
       sentenceK: num(pick(raw, "memory.retrieval.sentence_k"), 100),
       chunkK: num(pick(raw, "memory.retrieval.chunk_k"), 20),
       rerankK: num(pick(raw, "memory.retrieval.rerank_k"), 25),
+      rerankTimeoutMs: num(pick(raw, "memory.retrieval.rerank_timeout_ms"), 2000),
       tokenBudget: num(pick(raw, "memory.retrieval.token_budget"), 1500),
     },
   };

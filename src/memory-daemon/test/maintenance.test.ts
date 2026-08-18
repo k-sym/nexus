@@ -27,7 +27,7 @@ function fixture() {
       rerankUrl: "http://127.0.0.1:1",
       rerankModel: "test",
     },
-    retrieval: { hyde: false, sentenceThreshold: 0, sentenceK: 1, chunkK: 1, rerankK: 1, tokenBudget: 100 },
+    retrieval: { hyde: false, sentenceThreshold: 0, sentenceK: 1, chunkK: 1, rerankK: 1, rerankTimeoutMs: 2000, tokenBudget: 100 },
   };
   const models = {
     embed: async (input: string | string[]) =>
