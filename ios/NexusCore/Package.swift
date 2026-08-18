@@ -14,9 +14,15 @@ let package = Package(
     products: [
         .library(name: "NexusCore", targets: ["NexusCore"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/swiftlang/swift-markdown.git", exact: "0.7.3"),
+    ],
     targets: [
         .target(
             name: "NexusCore",
+            dependencies: [
+                .product(name: "Markdown", package: "swift-markdown"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
         .testTarget(
