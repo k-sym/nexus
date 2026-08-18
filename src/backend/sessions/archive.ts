@@ -84,8 +84,9 @@ export async function archiveThreadToMemory(
     agent_id: 'session-archive',
     category: 'session_archive',
     content,
+    // `source` is not repeated here: agent_id already yields the canonical
+    // frontmatter source (`nexus:session-archive`), and the daemon reserves it.
     metadata: {
-      source: 'session-archive',
       thread_id: thread.id,
       thread_title: thread.title,
       elided,

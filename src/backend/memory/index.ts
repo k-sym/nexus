@@ -32,6 +32,9 @@ export interface MemoryInput {
   agent_id?: string;
   category?: string;
   content: string;
+  /** Extra frontmatter persisted with the vault file (e.g. thread_id). The daemon
+   *  ignores reserved identity/scope keys: id, namespace, project, category,
+   *  source, title, created, updated. */
   metadata?: Record<string, unknown>;
 }
 
@@ -61,6 +64,7 @@ export async function addMemory(db: Database.Database, input: MemoryInput): Prom
       category: input.category || 'general',
       source: input.agent_id ? `nexus:${input.agent_id}` : 'nexus',
       body: input.content,
+      metadata: input.metadata,
     });
   } catch (err: any) {
     console.error('[memory] store failed:', err.message);
