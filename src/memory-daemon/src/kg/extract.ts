@@ -51,7 +51,7 @@ export async function extractTriples(ctx: AppContext, memoryId: string): Promise
 
   // Throws ModelError (transport vs HTTP, with status/body) if the gen server is
   // down or misconfigured — surfaces the real cause in jobs.last_error.
-  const out = await ctx.models.complete(mem.body, { system: SYSTEM, temperature: 0, maxTokens: 700, timeoutMs: 60_000 });
+  const out = await ctx.models.complete(mem.body, { system: SYSTEM, temperature: 0, maxTokens: 700, timeoutMs: 60_000, task: "kg_extraction" });
 
   // null = the model returned no parseable JSON array; treat as zero triples and skip
   // (the transaction below still clears any stale facts, keeping re-index idempotent).

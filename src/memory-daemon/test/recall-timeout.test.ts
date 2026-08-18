@@ -27,6 +27,7 @@ function fixture(models: Partial<ModelClient>) {
       embedModel: "test",
       rerankUrl: "http://127.0.0.1:1",
       rerankModel: "test",
+      prefer: "local",
     },
     retrieval: { hyde: false, sentenceThreshold: 0, sentenceK: 10, chunkK: 10, rerankK: 25, rerankTimeoutMs: 1234, tokenBudget: 1000 },
   };

@@ -18,10 +18,14 @@
     <key>Label</key>
     <string>com.k-sym.nexus-memory</string>
 
+    <!-- sh wrapper: source ~/.partner/env (bare KEY=value lines, chmod 600) so
+         config.yaml env refs like ${OPENROUTER_API_KEY} interpolate — launchd does
+         not read shell profiles. Missing env file is fine (cloud tier disables). -->
     <key>ProgramArguments</key>
     <array>
-        <string>/opt/homebrew/bin/node</string>
-        <string>__REPLACE_WITH_ABS_PATH__/nexus/src/memory-daemon/dist/src/index.js</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>set -a; . "$HOME/.partner/env" 2>/dev/null; set +a; exec /opt/homebrew/bin/node __REPLACE_WITH_ABS_PATH__/nexus/src/memory-daemon/dist/src/index.js</string>
     </array>
 
     <key>WorkingDirectory</key>
