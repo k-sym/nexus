@@ -43,4 +43,6 @@ export interface RecallResponse {
   hyde?: string | null;
   degraded: boolean; // true if embed/rerank were unavailable
   items: RecallItem[];
+  /** Per-stage wall-clock ms (hyde/embed/search/rerank/assemble/total) for latency triage. */
+  timings?: Record<string, number>;
 }
