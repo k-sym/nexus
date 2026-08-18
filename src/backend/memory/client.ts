@@ -166,7 +166,7 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
 }
 
 export const daemon = {
-  store(input: { namespace: string; project?: string | null; category?: string | null; source: string; title?: string; body: string }) {
+  store(input: { namespace: string; project?: string | null; category?: string | null; source: string; title?: string; body: string; metadata?: Record<string, unknown> }) {
     return req<{ id: string; action: string }>('POST', '/memories', input);
   },
   recall(query: string, scope: DaemonScope = {}, limit?: number) {

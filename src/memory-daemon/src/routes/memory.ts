@@ -15,6 +15,12 @@ interface StoreBody {
   source?: string;
   title?: string;
   body?: string;
+  /** Extra frontmatter persisted with the vault file; reserved scope keys are ignored. */
+  metadata?: Record<string, unknown>;
+}
+
+function plainObject(v: unknown): Record<string, unknown> | undefined {
+  return typeof v === "object" && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined;
 }
 
 function scopeFromQuery(q: Record<string, unknown>): ScopeFilter {
@@ -42,6 +48,7 @@ export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): voi
       source,
       title: b.title,
       body,
+      metadata: plainObject(b.metadata),
     }));
     return reply.code(201).send(res);
   });

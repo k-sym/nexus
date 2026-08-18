@@ -151,10 +151,15 @@ export function removeFile(ctx: AppContext, filePath: string): string | null {
   return row.id;
 }
 
+/** Frontmatter keys owned by the store contract; caller metadata may not override them. */
+const RESERVED_FRONTMATTER_KEYS = new Set([
+  "id", "namespace", "project", "category", "source", "title", "created", "updated",
+]);
+
 /** Programmatic store (API/agents, Phase 4). Builds the path + frontmatter, writes, ingests. */
 export async function storeMemory(
   ctx: AppContext,
-  input: { namespace: string; project?: string | null; category?: string | null; source: string; title?: string; body: string; id?: string },
+  input: { namespace: string; project?: string | null; category?: string | null; source: string; title?: string; body: string; id?: string; metadata?: Record<string, unknown> },
 ): Promise<IngestResult> {
   const id = input.id ?? ulid();
   const now = new Date().toISOString();
@@ -168,6 +173,11 @@ export async function storeMemory(
   if (input.project) fm.project = input.project;
   if (input.category) fm.category = input.category;
   if (input.title) fm.title = input.title;
+  // Caller metadata persists as extra frontmatter (e.g. session-archive's
+  // thread_id/elided), but identity/scope keys stay owned by the fields above.
+  for (const [k, v] of Object.entries(input.metadata ?? {})) {
+    if (!RESERVED_FRONTMATTER_KEYS.has(k) && v !== undefined) fm[k] = v;
+  }
 
   const filePath = scopeToPath(ctx.cfg.vaultPath, input, id);
   writeMemoryFile(ctx, filePath, fm, input.body);

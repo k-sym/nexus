@@ -107,7 +107,7 @@ async function extractAndStoreMemory(
         agent_id: 'task-chat',
         category: 'agent_run',
         content: insight.slice(0, 500),
-        metadata: { task_id: task.id, source: 'task-chat' },
+        metadata: { task_id: task.id },
       });
     } catch {
       /* best-effort */
@@ -119,7 +119,7 @@ async function extractAndStoreMemory(
       agent_id: 'task-chat',
       category: 'decision',
       content: `Completed "${task.title}": ${output.slice(0, 300)}`,
-      metadata: { task_id: task.id, source: 'task-chat-summary' },
+      metadata: { task_id: task.id },
     });
   } catch {
     /* best-effort */

@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, utimesSync } from 'n
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
+import Fastify from 'fastify';
 import { PiRuntime, type PiRuntimePaths } from '../pi/runtime';
 import {
   archiveThreadToMemory,
@@ -155,6 +156,47 @@ test('archive uses single-pass summarize for in-budget transcripts', async () =>
   assert.equal(singleCalls, 1);
   assert.equal(windowCalls.length, 0);
   db.close();
+});
+
+// Regression for the silent metadata drop: with no storeMemory stub, the archive
+// goes through the real addMemory → daemon.store path, and the daemon must receive
+// thread_id/thread_title/elided (they used to vanish before reaching the daemon).
+test('archive forwards metadata through the real daemon store path', async () => {
+  const { db } = makeDb(MESSAGES);
+  const drops: Array<{ threadId: string; opts?: { tombstoneRetentionDays?: number } }> = [];
+
+  const storeBodies: any[] = [];
+  const daemon = Fastify({ logger: false });
+  daemon.post('/memories', async (req, reply) => {
+    storeBodies.push(req.body);
+    return reply.code(201).send({ id: 'mem-real-1', action: 'insert' });
+  });
+  await daemon.listen({ host: '127.0.0.1', port: 0 });
+  const address = daemon.server.address() as { port: number };
+  const previousUrl = process.env.MEMORY_DAEMON_URL;
+  process.env.MEMORY_DAEMON_URL = `http://127.0.0.1:${address.port}`;
+
+  try {
+    const result = await archiveThreadToMemory(db, stubPi(drops), 'thread-1', {
+      settings: SETTINGS({ max_single_pass_chars: 100_000 }),
+      summarize: async () => 'One-pass structured summary.',
+    });
+
+    assert.equal(result.memoryId, 'mem-real-1');
+    assert.equal(storeBodies.length, 1);
+    assert.equal(storeBodies[0].source, 'nexus:session-archive');
+    assert.equal(storeBodies[0].category, 'session_archive');
+    assert.deepEqual(storeBodies[0].metadata, {
+      thread_id: 'thread-1',
+      thread_title: 'T1',
+      elided: false,
+    });
+  } finally {
+    if (previousUrl === undefined) delete process.env.MEMORY_DAEMON_URL;
+    else process.env.MEMORY_DAEMON_URL = previousUrl;
+    await daemon.close();
+    db.close();
+  }
 });
 
 // A6: a summariser failure returns 502 and leaves the thread intact — no delete, no
