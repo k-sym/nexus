@@ -313,20 +313,6 @@ struct MessageBubble: View {
     }
 }
 
-struct MarkdownText: View {
-    let text: String
-    var body: some View {
-        Text(attributed).textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    private var attributed: AttributedString {
-        (try? AttributedString(
-            markdown: text,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        )) ?? AttributedString(text)
-    }
-}
-
 struct ThinkingView: View {
     let text: String
     @State private var expanded = false

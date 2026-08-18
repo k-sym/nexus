@@ -82,3 +82,51 @@ Built behavior:
 - Consecutive text chunks without intervening tool activity remain byte-for-byte contiguous.
 
 Testing should verify a response containing `text → tool call → text`, both while streaming and after reloading the thread. It should also verify that a model-provided newline after a tool call is not doubled.
+
+## Native iOS structured Markdown follow-up (2026-08-18)
+
+The shared iOS `StreamingChatView` previously decoded assistant output with
+Foundation's `inlineOnlyPreservingWhitespace` mode. Inline emphasis rendered,
+but headings, lists, fenced code, block quotes, thematic breaks, and GFM tables
+had no block layout; tables therefore appeared as raw pipe-delimited source.
+
+Built behavior:
+
+- `NexusCore` now projects the official `swift-markdown` GFM parse tree into a
+  small, UI-free `MarkdownDocument` model. This keeps parsing testable without
+  importing SwiftUI into the core package.
+- Assistant output in the shared iOS chat renders paragraphs, headings, ordered
+  and unordered lists, task items, block quotes, code blocks, thematic breaks,
+  and tables as native SwiftUI views. User messages remain literal `Text`.
+- Compact-width layouts and accessibility Dynamic Type sizes render each table
+  row as a labeled record card. Regular-width layouts render a bordered grid
+  with horizontal scrolling only when its content requires it.
+- The renderer is shared by Assistant sessions, project Sessions Chat, Idea
+  discussions, and the existing chat/assistant deep-link destinations.
+- Raw HTML remains inert text. Rendered links are restricted to `https`, `http`,
+  and `mailto`, matching the desktop security boundary. Markdown images are not
+  fetched by the structured text renderer; existing message attachments retain
+  their dedicated native preview path.
+- Dynamic Type, selectable text, heading accessibility traits, task-state
+  labels, and table summaries are preserved in the native view hierarchy.
+
+Deviation from desktop: tables intentionally become labeled cards on iPhone and
+at accessibility text sizes rather than reproducing the desktop grid. This
+avoids narrow columns, severe wrapping, and nested horizontal scrolling.
+
+Testing agent should verify:
+
+- The `Repo / Commit / Contents` example renders as one readable card per row on
+  an iPhone-sized simulator, with inline commit code and bold cell content.
+- The same example renders as a grid on iPad, and remains usable in light/dark
+  modes, landscape, and an accessibility Dynamic Type size.
+- Headings, nested/numbered/task lists, block quotes, fenced code, safe links,
+  raw HTML, and plain user-authored Markdown retain their intended behavior.
+- Streaming and rehydrated assistant messages produce the same final structure
+  across Assistant, project Sessions Chat, and Idea discussions.
+
+Verification performed:
+
+- `swift test --filter MarkdownDocumentTests` passed (4 tests).
+- Full `swift test` passed (80 tests).
+- `xcodebuild` for the iPhone 17 / iOS 26.5 simulator succeeded.
