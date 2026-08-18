@@ -102,6 +102,8 @@ test('archive roll-up surfaces a decision from the final window (A1, A7)', async
   });
 
   assert.equal(result.elided, false);
+  // Vault display title is explicit, not derived from the summary's "## Summary" heading.
+  assert.equal(stored[0].title, 'Demo — T1');
   assert.match(stored[0].content, /DECISIONZZZ/); // the ending was not dropped
   // 5 windows → 5 chunk passes + 1 synthesis; last call is the synthesis.
   const modes = calls.map((c) => c.mode);
