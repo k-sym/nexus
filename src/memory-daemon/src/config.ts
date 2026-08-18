@@ -19,6 +19,12 @@ export interface OpenRouterConfig {
   defaultModel: string;
   /** Rerank model on OpenRouter's /rerank endpoint (Cohere-style wire shape). */
   rerankModel: string;
+  /** Restrict which upstream providers may serve CHAT calls (OpenRouter
+   *  `provider.only`) — e.g. ["Anthropic"] pins anthropic/* models to
+   *  first-party instead of Bedrock/Vertex load-balancing. Chat only: the
+   *  rerank model has its own provider, a chat pin would break it. Must match
+   *  the chosen task models; empty = let OpenRouter route. */
+  providerOnly: string[];
 }
 
 export interface DaemonConfig {
@@ -99,12 +105,14 @@ function loadOpenRouter(raw: unknown, str: (v: unknown, fallback: string) => str
   for (const task of GEN_TASKS) {
     tasks[task] = str(pick(raw, `memory.models.openrouter.tasks.${task}`), defaultModel);
   }
+  const providerOnlyRaw = pick(raw, "memory.models.openrouter.provider_only");
   return {
     apiKey,
     baseUrl: str(pick(raw, "memory.models.openrouter.base_url"), "https://openrouter.ai/api/v1"),
     tasks,
     defaultModel,
     rerankModel: str(pick(raw, "memory.models.openrouter.rerank_model"), DEFAULT_RERANK_MODEL),
+    providerOnly: Array.isArray(providerOnlyRaw) ? providerOnlyRaw.filter((p): p is string => typeof p === "string" && p.length > 0) : [],
   };
 }
 

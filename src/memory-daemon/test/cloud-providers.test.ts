@@ -24,6 +24,7 @@ function modelsCfg(overrides: Partial<DaemonConfig["models"]> = {}): DaemonConfi
       tasks: { next_message: "fast-model", kg_extraction: "quality-model" },
       defaultModel: "default-model",
       rerankModel: "scorer-model",
+      providerOnly: ["Anthropic"],
     },
     ...overrides,
   };
@@ -76,6 +77,7 @@ test("complete: cloud-first uses the per-task OpenRouter model and key", async (
   assert.ok(calls[0].url.startsWith(OR_URL));
   assert.equal(calls[0].body.model, "fast-model");
   assert.equal(calls[0].auth, "Bearer or-key");
+  assert.deepEqual(calls[0].body.provider, { only: ["Anthropic"] }); // provider pin on chat
 });
 
 test("complete: unmapped task falls back to defaultModel; prefer=local skips cloud", async () => {
@@ -98,6 +100,7 @@ test("complete: fast cloud failure falls back to local within the budget", async
   assert.equal(out, "local answer");
   assert.equal(calls.length, 2);
   assert.ok(calls[1].url.startsWith(LOCAL_GEN));
+  assert.equal(calls[1].body.provider, undefined); // pin is OpenRouter-only, never sent to llama
 });
 
 test("circuit breaker: opens after 3 failures and skips cloud entirely", async () => {
@@ -122,6 +125,7 @@ test("rerank: cloud /rerank endpoint serves scores; breaker records success", as
   assert.equal(calls[0].url, `${OR_URL}/rerank`);
   assert.equal(calls[0].body.model, "scorer-model");
   assert.equal(calls[0].auth, "Bearer or-key");
+  assert.equal(calls[0].body.provider, undefined); // chat pin must not leak into /rerank
   assert.equal(client.cloudBreaker.state, "closed");
 });
 

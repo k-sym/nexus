@@ -108,6 +108,9 @@ memory:
       # tasks: { kg_extraction: ..., archive_summary: ..., session_title: ...,
       #          next_message: ..., hyde: ... }   # per-task chat model overrides
       # rerank_model: "voyageai/rerank-2.5-lite"       # OpenRouter /rerank endpoint
+      # provider_only: ["Anthropic"]   # pin CHAT calls to first-party upstream(s)
+      #   instead of OpenRouter's Bedrock/Vertex load-balancing; must match the
+      #   chosen task models. Chat only — never applied to /rerank.
     gen_url:    "http://127.0.0.1:4001/v1"
     embed_url:  "http://127.0.0.1:4002/v1"
     rerank_url: "http://127.0.0.1:4003/v1"

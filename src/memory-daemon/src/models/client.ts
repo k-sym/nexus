@@ -180,7 +180,7 @@ export class ModelClient {
       const started = Date.now();
       try {
         const model = (opts.task && or.tasks[opts.task]) || or.defaultModel;
-        const out = await this.chatCompletion(`${or.baseUrl}/chat/completions`, model, prompt, opts, or.apiKey);
+        const out = await this.chatCompletion(`${or.baseUrl}/chat/completions`, model, prompt, opts, or.apiKey, or.providerOnly);
         this.cloudBreaker.recordSuccess();
         return out;
       } catch (err) {
@@ -206,6 +206,7 @@ export class ModelClient {
     prompt: string,
     opts: { system?: string; temperature?: number; maxTokens?: number; timeoutMs?: number },
     apiKey: string | undefined,
+    providerOnly: string[] = [],
   ): Promise<string> {
     const messages = [
       ...(opts.system ? [{ role: "system", content: opts.system }] : []),
@@ -213,8 +214,16 @@ export class ModelClient {
     ];
     const json = await postJson(
       url,
-      // The local llama-server serves one model and ignores the field; OpenRouter requires it.
-      { ...(model ? { model } : {}), messages, temperature: opts.temperature ?? 0.2, max_tokens: opts.maxTokens ?? 512 },
+      {
+        // The local llama-server serves one model and ignores the field; OpenRouter requires it.
+        ...(model ? { model } : {}),
+        // Pin upstream providers (e.g. anthropic/* to first-party Anthropic instead
+        // of OpenRouter's Bedrock/Vertex load-balancing) when configured.
+        ...(providerOnly.length ? { provider: { only: providerOnly } } : {}),
+        messages,
+        temperature: opts.temperature ?? 0.2,
+        max_tokens: opts.maxTokens ?? 512,
+      },
       apiKey,
       opts.timeoutMs ?? 60_000,
     );
