@@ -121,6 +121,45 @@ test('POST decision denies with the supplied reason', async () => {
   }
 });
 
+test('POST decision stamps decidedBy=partner into the resolution (#54 attribution)', async () => {
+  const broker = new ApprovalBroker();
+  const app = await buildApp(broker);
+  try {
+    const allowed = broker.register('thread-1', 'call-1', 'bash', INPUT, '/repo');
+    const ok = await app.inject({
+      method: 'POST', url: '/api/approvals/call-1/decision',
+      payload: { action: 'allow', decidedBy: 'partner' },
+    });
+    assert.equal(ok.statusCode, 200);
+    assert.deepEqual(await allowed, { block: false, answeredBy: 'partner' });
+
+    const denied = broker.register('thread-1', 'call-2', 'bash', INPUT, '/repo');
+    await app.inject({
+      method: 'POST', url: '/api/approvals/call-2/decision',
+      payload: { action: 'deny', reason: 'partner says no', decidedBy: 'partner' },
+    });
+    assert.deepEqual(await denied, { block: true, reason: 'partner says no', answeredBy: 'partner' });
+  } finally {
+    await app.close();
+  }
+});
+
+test('an unrecognized decidedBy can never launder a decision as anything but human', async () => {
+  const broker = new ApprovalBroker();
+  const app = await buildApp(broker);
+  try {
+    const gate = broker.register('thread-1', 'call-1', 'bash', INPUT, '/repo');
+    const res = await app.inject({
+      method: 'POST', url: '/api/approvals/call-1/decision',
+      payload: { action: 'allow', decidedBy: 'robot-overlord' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(await gate, { block: false, answeredBy: 'human' });
+  } finally {
+    await app.close();
+  }
+});
+
 test('an unknown action is treated as allow, never as an unhandled 500', async () => {
   const broker = new ApprovalBroker();
   const app = await buildApp(broker);

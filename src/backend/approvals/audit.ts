@@ -14,8 +14,9 @@
 import type Database from 'better-sqlite3';
 import type { ToolCategory, ToolDecision, ToolDecisionSource } from '../pi/tool-policy.js';
 
-/** How a gated call was ultimately settled. */
-export type ToolDecisionAnsweredBy = 'policy' | 'human' | 'timeout' | 'aborted';
+/** How a gated call was ultimately settled. `partner` = the partner assistant
+ *  decided it via the nexus-control MCP lens (baker-internal #54). */
+export type ToolDecisionAnsweredBy = 'policy' | 'human' | 'partner' | 'timeout' | 'aborted';
 
 export interface ToolDecisionRecord {
   threadId: string;

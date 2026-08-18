@@ -73,8 +73,12 @@ export async function registerApprovalRoutes(fastify: FastifyInstance): Promise<
 
   fastify.post('/api/approvals/:id/decision', async (request, reply) => {
     const { id: toolCallId } = request.params as { id: string };
-    const body = (request.body ?? {}) as { action?: string; reason?: string };
+    const body = (request.body ?? {}) as { action?: string; reason?: string; decidedBy?: string };
     const action = body.action === 'deny' ? 'deny' : 'allow';
+    // Audit attribution (#54): the partner's nexus-control lens self-identifies;
+    // anything else — the UI, the glasses, an absent field — stays `human`, so
+    // an unrecognized value can never launder an automated decision as a person.
+    const decidedBy = body.decidedBy === 'partner' ? 'partner' : 'human';
 
     // Look the gate up by tool call id alone: the UI does not need to know
     // which thread owns it, and ids are unique across threads in practice.
@@ -86,7 +90,7 @@ export async function registerApprovalRoutes(fastify: FastifyInstance): Promise<
       return { error: 'unknown approval' };
     }
 
-    const result = broker().decide(gate.threadId, toolCallId, action, body.reason);
+    const result = broker().decide(gate.threadId, toolCallId, action, body.reason, decidedBy);
     if (!result.ok) {
       reply.code(result.status);
       return { error: result.error };

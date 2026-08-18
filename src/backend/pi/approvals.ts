@@ -28,10 +28,15 @@ import { NULL_APPROVAL_AUDIT, summarizeToolInput, type ApprovalAudit, type ToolD
 export { UNGATED_TOOL_NAMES } from './tool-policy.js';
 
 /** How a parked gate was settled — for the audit trail. `human` = a person
- *  allowed/denied it (from the UI or the glasses); `timeout` = the default-deny
- *  fired; `aborted` = the run was cancelled, the thread dropped, or the signal
- *  aborted. */
-export type ApprovalAnsweredBy = 'human' | 'timeout' | 'aborted';
+ *  allowed/denied it (from the UI or the glasses); `partner` = the partner
+ *  assistant decided it through the nexus-control MCP lens (baker-internal
+ *  #54 — both arrive over the same route, so the caller must say which);
+ *  `timeout` = the default-deny fired; `aborted` = the run was cancelled, the
+ *  thread dropped, or the signal aborted. */
+export type ApprovalAnsweredBy = 'human' | 'partner' | 'timeout' | 'aborted';
+
+/** The actors that can actively answer a gate (as opposed to timeout/abort). */
+export type ApprovalDecider = 'human' | 'partner';
 
 /** The value returned to the SDK's `beforeToolCall`. `block:false` lets the
  *  tool run; `block:true` skips it and surfaces `reason` as the tool result.
@@ -224,13 +229,16 @@ export class ApprovalBroker {
     });
   }
 
-  /** Resolve a pending gate from a glasses decision. `allow` lets the tool run;
-   *  `deny` blocks it, surfacing `reason` as the tool result. 404 if unknown. */
+  /** Resolve a pending gate from a client decision. `allow` lets the tool run;
+   *  `deny` blocks it, surfacing `reason` as the tool result. 404 if unknown.
+   *  `decidedBy` stamps the audit trail: the glasses/UI leave the default
+   *  `human`; the partner's nexus-control lens passes `partner`. */
   decide(
     threadId: string,
     toolCallId: string,
     action: 'allow' | 'deny',
     reason?: string,
+    decidedBy: ApprovalDecider = 'human',
   ): ApprovalDecisionResponse {
     const key = this.key(threadId, toolCallId);
     const entry = this.pending.get(key);
@@ -238,9 +246,9 @@ export class ApprovalBroker {
 
     if (action === 'allow') {
       this.remove(key, entry);
-      entry.resolve({ block: false, answeredBy: 'human' });
+      entry.resolve({ block: false, answeredBy: decidedBy });
     } else {
-      this.denyEntry(key, reason?.trim() || 'Denied from glasses', 'human');
+      this.denyEntry(key, reason?.trim() || 'Denied from glasses', decidedBy);
     }
     return { ok: true };
   }
