@@ -1,10 +1,10 @@
 // Cloud-first provider chain: OpenRouter primary, local llama fallback, circuit
-// breaker latching, and the LLM listwise rerank score parsing. Exercises the real
+// breaker latching, and the shared /rerank wire shape. Exercises the real
 // ModelClient HTTP path by stubbing globalThis.fetch.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { DaemonConfig } from "../src/config.js";
-import { ModelClient, parseScores } from "../src/models/client.js";
+import { ModelClient } from "../src/models/client.js";
 
 const OR_URL = "https://openrouter.example/api/v1";
 const LOCAL_GEN = "http://127.0.0.1:1/v1";
@@ -112,25 +112,29 @@ test("circuit breaker: opens after 3 failures and skips cloud entirely", async (
   assert.ok(newCalls[0].url.startsWith(LOCAL_GEN));
 });
 
-test("rerank: cloud LLM scores parse and clamp; breaker records success", async () => {
-  const calls = stubFetch(() => ({ json: chat("Here you go:\n```json\n[0.9, 1.4, -0.2]\n```") }));
+test("rerank: cloud /rerank endpoint serves scores; breaker records success", async () => {
+  const calls = stubFetch(() => ({
+    json: { results: [{ index: 0, relevance_score: 0.72 }, { index: 2, relevance_score: 0.4 }, { index: 1, relevance_score: 0.1 }] },
+  }));
   const client = new ModelClient(modelsCfg());
   const scores = await client.rerank("query", ["a", "b", "c"], 2000);
-  assert.deepEqual(scores, [0.9, 1, 0]);
+  assert.deepEqual(scores, [0.72, 0.1, 0.4]); // results come back ranked; scores realign to input order
+  assert.equal(calls[0].url, `${OR_URL}/rerank`);
   assert.equal(calls[0].body.model, "scorer-model");
+  assert.equal(calls[0].auth, "Bearer or-key");
   assert.equal(client.cloudBreaker.state, "closed");
 });
 
-test("rerank: malformed cloud reply falls back to the local cross-encoder", async () => {
+test("rerank: cloud failure falls back to the local cross-encoder", async () => {
   const calls = stubFetch((url) =>
     url.startsWith(OR_URL)
-      ? { json: chat("sorry, I cannot help with that") }
+      ? { status: 502, json: { error: "upstream sad" } }
       : { json: { results: [{ index: 0, relevance_score: 0.7 }, { index: 1, relevance_score: 0.3 }] } },
   );
   const client = new ModelClient(modelsCfg());
   const scores = await client.rerank("query", ["a", "b"], 5000);
   assert.deepEqual(scores, [0.7, 0.3]);
-  assert.ok(calls[1].url.startsWith(LOCAL_RERANK));
+  assert.equal(calls[1].url, `${LOCAL_RERANK}/rerank`);
 });
 
 test("rerank: no openrouter config behaves exactly as before (local only)", async () => {
@@ -140,14 +144,6 @@ test("rerank: no openrouter config behaves exactly as before (local only)", asyn
   assert.deepEqual(scores, [0.5]);
   assert.equal(calls.length, 1);
   assert.ok(calls[0].url.startsWith(LOCAL_RERANK));
-});
-
-test("parseScores: strict about count and content", () => {
-  assert.deepEqual(parseScores("[0.1, 0.2]", 2, "u"), [0.1, 0.2]);
-  assert.throws(() => parseScores("[0.1]", 2, "u"), /shape mismatch/);
-  assert.throws(() => parseScores('["a", "b"]', 2, "u"), /shape mismatch/);
-  assert.throws(() => parseScores("no array here", 2, "u"), /no JSON array/);
-  assert.throws(() => parseScores("[0.1, oops]", 2, "u"), /not valid JSON/);
 });
 
 test("health: reports cloud provider state when configured", async () => {

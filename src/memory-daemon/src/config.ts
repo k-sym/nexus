@@ -17,7 +17,7 @@ export interface OpenRouterConfig {
   /** Per-task chat model; tasks absent here use `defaultModel`. */
   tasks: Partial<Record<GenTask, string>>;
   defaultModel: string;
-  /** Chat model used for LLM listwise rerank scoring. */
+  /** Rerank model on OpenRouter's /rerank endpoint (Cohere-style wire shape). */
   rerankModel: string;
 }
 
@@ -82,11 +82,11 @@ function pick(obj: unknown, path: string): unknown {
 const GEN_TASKS: GenTask[] = ["kg_extraction", "archive_summary", "session_title", "next_message", "hyde"];
 /** All gen tasks default to Haiku — Keith wants text-producing tasks consistent
  *  with the Anthropic models doing the rest of his work, and at these volumes the
- *  premium over a flash-class model is a few $/month. Rerank scoring (below) is
- *  the deliberate exception: highest-volume call, emits only JSON scores no one
- *  reads, sits under a ~2s deadline — flash-class is 10x cheaper and faster. */
+ *  premium over a flash-class model is a few $/month. */
 const DEFAULT_GEN_MODEL = "anthropic/claude-haiku-4.5";
-const DEFAULT_RERANK_SCORER_MODEL = "google/gemini-2.5-flash-lite";
+/** Purpose-built cross-encoder on OpenRouter's /rerank endpoint (~$0.02/M tokens,
+ *  ~400ms for a 25-doc recall batch — measured live 2026-08-18). */
+const DEFAULT_RERANK_MODEL = "voyageai/rerank-2.5-lite";
 
 /** OpenRouter config is present only when an api_key survives env interpolation —
  *  an unset ${OPENROUTER_API_KEY} interpolates to "" and disables the cloud tier
@@ -104,7 +104,7 @@ function loadOpenRouter(raw: unknown, str: (v: unknown, fallback: string) => str
     baseUrl: str(pick(raw, "memory.models.openrouter.base_url"), "https://openrouter.ai/api/v1"),
     tasks,
     defaultModel,
-    rerankModel: str(pick(raw, "memory.models.openrouter.rerank_model"), DEFAULT_RERANK_SCORER_MODEL),
+    rerankModel: str(pick(raw, "memory.models.openrouter.rerank_model"), DEFAULT_RERANK_MODEL),
   };
 }
 

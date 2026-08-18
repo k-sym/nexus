@@ -101,33 +101,6 @@ async function postJson(url: string, body: unknown, apiKey: string | undefined, 
   }
 }
 
-/** Extract the score array from an LLM rerank reply. Lenient about wrapping
- *  (markdown fences, stray prose) but strict about the payload: exactly `expected`
- *  finite numbers, clamped to [0,1]. Exported for tests. */
-export function parseScores(content: string, expected: number, url: string): number[] {
-  const start = content.indexOf("[");
-  const end = content.lastIndexOf("]");
-  if (start === -1 || end <= start) {
-    throw new ModelError(`${url} rerank reply had no JSON array`, "config", url, undefined, content.slice(0, 300));
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(content.slice(start, end + 1));
-  } catch {
-    throw new ModelError(`${url} rerank reply was not valid JSON`, "config", url, undefined, content.slice(0, 300));
-  }
-  if (!Array.isArray(parsed) || parsed.length !== expected || !parsed.every((n) => typeof n === "number" && Number.isFinite(n))) {
-    throw new ModelError(
-      `${url} rerank reply shape mismatch (wanted ${expected} numbers)`,
-      "config",
-      url,
-      undefined,
-      content.slice(0, 300),
-    );
-  }
-  return (parsed as number[]).map((n) => Math.min(1, Math.max(0, n)));
-}
-
 export class ModelClient {
   /** Count of actual embedding HTTP calls — lets tests assert the dedup cache works. */
   embedCalls = 0;
@@ -152,15 +125,15 @@ export class ModelClient {
   }
 
   /** Rerank documents against a query -> relevance scores aligned to input order.
-   *  Cloud-first: LLM listwise scoring via OpenRouter (there is no cloud /rerank
-   *  endpoint), local cross-encoder as fallback. Throws ModelError on failure. */
+   *  Cloud-first via OpenRouter's /rerank (same Cohere-style wire shape as the
+   *  local llama-server), local cross-encoder as fallback. Throws ModelError. */
   async rerank(query: string, documents: string[], timeoutMs = 30_000): Promise<number[]> {
     if (documents.length === 0) return [];
     const or = this.cfg.openrouter;
     if (or && this.cloudFirst && this.cloudBreaker.canAttempt()) {
       const started = Date.now();
       try {
-        const scores = await this.rerankViaLLM(query, documents, timeoutMs);
+        const scores = await this.rerankRequest(or.baseUrl, or.rerankModel, or.apiKey, query, documents, timeoutMs);
         this.cloudBreaker.recordSuccess();
         return scores;
       } catch (err) {
@@ -170,51 +143,29 @@ export class ModelClient {
         // consumed it — rethrow and let the caller degrade to fusion order.
         if (remaining < timeoutMs * 0.5) throw err;
         console.warn(`[models] cloud rerank failed, trying local: ${(err as Error).message}`);
-        return await this.localRerank(query, documents, remaining);
+        return await this.rerankRequest(this.cfg.rerankUrl, this.cfg.rerankModel, this.cfg.apiKey, query, documents, remaining);
       }
     }
-    return await this.localRerank(query, documents, timeoutMs);
+    return await this.rerankRequest(this.cfg.rerankUrl, this.cfg.rerankModel, this.cfg.apiKey, query, documents, timeoutMs);
   }
 
-  private async localRerank(query: string, documents: string[], timeoutMs: number): Promise<number[]> {
-    const url = `${this.cfg.rerankUrl}/rerank`;
-    const json = await postJson(url, { model: this.cfg.rerankModel, query, documents }, this.cfg.apiKey, timeoutMs);
+  /** One /rerank call — OpenRouter and llama-server share the wire shape:
+   *  {model, query, documents} -> results[{index, relevance_score}]. */
+  private async rerankRequest(
+    baseUrl: string,
+    model: string,
+    apiKey: string | undefined,
+    query: string,
+    documents: string[],
+    timeoutMs: number,
+  ): Promise<number[]> {
+    const url = `${baseUrl}/rerank`;
+    const json = await postJson(url, { model, query, documents }, apiKey, timeoutMs);
     const results = json?.results as Array<{ index: number; relevance_score: number }> | undefined;
     if (!results) throw new ModelError(`${url} returned no rerank results`, "http", url, undefined, JSON.stringify(json).slice(0, 300));
     const scores = new Array<number>(documents.length).fill(0);
     for (const r of results) scores[r.index] = r.relevance_score;
     return scores;
-  }
-
-  /** LLM listwise rerank: one chat call scores every candidate (RankGPT-style).
-   *  Documents are truncated — vault sentences are short and the ordering signal
-   *  lives in the first clause; the cap bounds cost under the cue-loop cadence. */
-  private async rerankViaLLM(query: string, documents: string[], timeoutMs: number): Promise<number[]> {
-    const or = this.cfg.openrouter!;
-    const url = `${or.baseUrl}/chat/completions`;
-    const docs = documents.map((d, i) => `${i + 1}. ${d.replace(/\s+/g, " ").slice(0, 300)}`).join("\n");
-    const json = await postJson(
-      url,
-      {
-        model: or.rerankModel,
-        temperature: 0,
-        max_tokens: 32 + 8 * documents.length,
-        messages: [
-          {
-            role: "system",
-            content:
-              "You score how relevant each document is to a query for memory retrieval. " +
-              `Reply with ONLY a JSON array of ${documents.length} numbers between 0 and 1, ` +
-              "one score per document in the given order. No prose, no keys, no markdown fence.",
-          },
-          { role: "user", content: `Query: ${query}\n\nDocuments:\n${docs}` },
-        ],
-      },
-      or.apiKey,
-      timeoutMs,
-    );
-    const content: string = json?.choices?.[0]?.message?.content ?? "";
-    return parseScores(content, documents.length, url);
   }
 
   /** One-shot chat completion (HyDE / KG extraction / operations routes).

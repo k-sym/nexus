@@ -107,7 +107,7 @@ memory:
       # default_model: "anthropic/claude-haiku-4.5"
       # tasks: { kg_extraction: ..., archive_summary: ..., session_title: ...,
       #          next_message: ..., hyde: ... }   # per-task chat model overrides
-      # rerank_model: "google/gemini-2.5-flash-lite"   # LLM listwise rerank scorer
+      # rerank_model: "voyageai/rerank-2.5-lite"       # OpenRouter /rerank endpoint
     gen_url:    "http://127.0.0.1:4001/v1"
     embed_url:  "http://127.0.0.1:4002/v1"
     rerank_url: "http://127.0.0.1:4003/v1"
@@ -124,12 +124,12 @@ keeps offline operation from paying a network-timeout tax on every call. `/healt
 reports the cloud provider and breaker state. **Embeddings are always local**: the
 sqlite-vec index is built in the local embedder's 768-dim space, and at 10–30ms/call
 local beats any network round-trip — this is the deliberate exception to cloud-first.
-Rerank is an LLM listwise scorer (one chat call returning a JSON score array) because
-OpenRouter has no /rerank endpoint; malformed replies fall back to the local
-cross-encoder, and past the recall deadline the caller degrades to fusion order as
-before. The launchd plist sources `~/.partner/env` so `${OPENROUTER_API_KEY}`
-interpolates; unset, the cloud tier disables cleanly and behavior is exactly the
-pre-cloud daemon.
+Cloud rerank uses OpenRouter's `/rerank` endpoint (same Cohere-style wire shape as
+the local llama-server; default `voyageai/rerank-2.5-lite`, ~400ms per 25-doc batch);
+failures fall back to the local cross-encoder, and past the recall deadline the
+caller degrades to fusion order as before. The launchd plist sources
+`~/.partner/env` so `${OPENROUTER_API_KEY}` interpolates; unset, the cloud tier
+disables cleanly and behavior is exactly the pre-cloud daemon.
 
 ## Run as a LaunchD agent (always-on)
 
