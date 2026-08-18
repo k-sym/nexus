@@ -100,12 +100,39 @@ memory:
   port: 4100
   vault_path: "~/Obsidian/Nexus"    # visible so it's selectable in Obsidian's vault picker
   models:
+    prefer: cloud                   # "local" = kill switch back to local-only
+    openrouter:                     # omit (or leave the key unset) for local-only
+      api_key: ${OPENROUTER_API_KEY}
+      # base_url: "https://openrouter.ai/api/v1"
+      # default_model: "anthropic/claude-haiku-4.5"
+      # tasks: { kg_extraction: ..., archive_summary: ..., session_title: ...,
+      #          next_message: ..., hyde: ... }   # per-task chat model overrides
+      # rerank_model: "voyageai/rerank-2.5-lite"       # OpenRouter /rerank endpoint
+      # provider_only: ["Anthropic"]   # pin CHAT calls to first-party upstream(s)
+      #   instead of OpenRouter's Bedrock/Vertex load-balancing; must match the
+      #   chosen task models. Chat only — never applied to /rerank.
     gen_url:    "http://127.0.0.1:4001/v1"
     embed_url:  "http://127.0.0.1:4002/v1"
     rerank_url: "http://127.0.0.1:4003/v1"
 ```
 
 Override the config home with `NEXUS_HOME`.
+
+### Cloud-first models, local fallback
+
+With `openrouter.api_key` set (and `prefer: cloud`, the default), gen tasks and the
+recall rerank go to OpenRouter first; the local llama servers are the fallback tier.
+A latching circuit breaker (3 consecutive failures → 120s local-only, then a probe)
+keeps offline operation from paying a network-timeout tax on every call. `/health`
+reports the cloud provider and breaker state. **Embeddings are always local**: the
+sqlite-vec index is built in the local embedder's 768-dim space, and at 10–30ms/call
+local beats any network round-trip — this is the deliberate exception to cloud-first.
+Cloud rerank uses OpenRouter's `/rerank` endpoint (same Cohere-style wire shape as
+the local llama-server; default `voyageai/rerank-2.5-lite`, ~400ms per 25-doc batch);
+failures fall back to the local cross-encoder, and past the recall deadline the
+caller degrades to fusion order as before. The launchd plist sources
+`~/.partner/env` so `${OPENROUTER_API_KEY}` interpolates; unset, the cloud tier
+disables cleanly and behavior is exactly the pre-cloud daemon.
 
 ## Run as a LaunchD agent (always-on)
 

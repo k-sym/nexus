@@ -168,7 +168,7 @@ export function registerOperationRoutes(
     try {
       const summary = (await ctx.models.complete(
         userPrompt,
-        { system, temperature: 0.1, maxTokens, timeoutMs: SESSION_ARCHIVE_TIMEOUT_MS },
+        { system, temperature: 0.1, maxTokens, timeoutMs: SESSION_ARCHIVE_TIMEOUT_MS, task: "archive_summary" },
       )).trim();
       if (!summary) return reply.code(502).send({ error: "Archive summary model returned empty content" });
       return { summary };
@@ -191,6 +191,7 @@ export function registerOperationRoutes(
         temperature: 0.2,
         maxTokens: 32,
         timeoutMs: SESSION_TITLE_TIMEOUT_MS,
+        task: "session_title",
       }));
       if (!title) return reply.code(502).send({ error: "Session title model returned empty content" });
       return { title };
@@ -214,6 +215,7 @@ export function registerOperationRoutes(
         temperature: 0.3,
         maxTokens: 48,
         timeoutMs: NEXT_MESSAGE_TIMEOUT_MS,
+        task: "next_message",
       }));
       return { suggestion };
     } catch (err) {
