@@ -208,6 +208,15 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     modelKey: claim.modelKey,
   });
 
+  // Claims snapshot the thread title at send time, which is the placeholder
+  // ("New Session") for a first turn that auto-titles mid-run. Re-read the DB
+  // whenever a claim is surfaced to the user so the banner names the session
+  // as the sidebar shows it now.
+  const currentThreadTitle = (threadId: string, fallback: string): string => {
+    const row = db.prepare('SELECT title FROM chat_threads WHERE id = ?').get(threadId) as { title: string } | undefined;
+    return row?.title ?? fallback;
+  };
+
   const projectBusyResponse = (run: ProjectRun | undefined) => {
     if (!run) {
       return {
@@ -219,7 +228,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       kind: 'chat_busy',
       error: 'Another session already has a run in progress for this project',
       activeThreadId: run.threadId,
-      activeTitle: run.title,
+      activeTitle: currentThreadTitle(run.threadId, run.title),
       modelKey: run.modelKey,
     };
   };
@@ -923,13 +932,19 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
 
     const active = concurrency.getProject(projectId);
     if (active) {
+      // A holder blocked on the `question` tool is not doing work — it waits
+      // indefinitely for the user, holding the project claim the whole time.
+      // Report that so the frontend can say "answer it" instead of "it's busy".
+      const questionCount = pi.questions?.pendingCount(active.threadId) ?? 0;
       return {
         busy: true,
         activeThreadId: active.threadId,
-        activeTitle: active.title,
+        activeTitle: currentThreadTitle(active.threadId, active.title),
         source: active.source,
         modelKey: active.modelKey,
         sameModel: !!modelKey && active.modelKey === modelKey,
+        waitingForResponse: questionCount > 0,
+        questionCount,
         // Kept for older frontends. Historically "an uncancellable mission
         // holds the slot"; always false since missions were removed (#353).
         projectBusy: false,
