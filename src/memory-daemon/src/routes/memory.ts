@@ -62,13 +62,25 @@ export function registerMemoryRoutes(app: FastifyInstance, ctx: AppContext): voi
     if (typeof q.q === "string" && q.q.trim().length > 0) {
       return recall(ctx, q.q, filter, { limit });
     }
-    const scope = (filter.namespace ? " AND namespace = @namespace" : "") + (filter.project ? " AND project = @project" : "");
+    // Every scope field the caller passes must narrow the list, exactly as it does on the
+    // recall path (retrieval/search.ts buildScope). A silently-ignored filter hands callers
+    // rows they never asked for — and callers that prune what they read back (partner
+    // reflect.sh) then delete durable pages. Keep this in step with buildScope.
+    const scope =
+      (filter.namespace ? " AND namespace = @namespace" : "") +
+      (filter.project ? " AND project = @project" : "") +
+      (filter.category ? " AND category = @category" : "");
     const rows = ctx.db
       .prepare(
         `SELECT id, title, namespace, project, category, source, body, created_at, updated_at
          FROM memories WHERE deleted_at IS NULL${scope} ORDER BY updated_at DESC LIMIT @limit`,
       )
-      .all({ namespace: filter.namespace ?? null, project: filter.project ?? null, limit: limit ?? 50 });
+      .all({
+        namespace: filter.namespace ?? null,
+        project: filter.project ?? null,
+        category: filter.category ?? null,
+        limit: limit ?? 50,
+      });
     return { items: rows };
   });
 
