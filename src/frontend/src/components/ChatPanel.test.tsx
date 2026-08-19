@@ -86,6 +86,44 @@ describe('ChatPanel', () => {
     expect(screen.getByTestId('send-button')).toBeEnabled();
   });
 
+  it('says the holder is waiting for input and offers to jump to it when it is question-blocked', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      }
+      if (url.startsWith('/api/projects/p1/model-status')) {
+        return {
+          ok: true,
+          json: async () => ({
+            busy: true,
+            activeThreadId: 't2',
+            activeTitle: 'Fix login flow',
+            source: 'chat',
+            modelKey: 'openai/gpt-5',
+            sameModel: false,
+            waitingForResponse: true,
+            questionCount: 1,
+            projectBusy: false,
+          }),
+        } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+    const onNavigateToThread = vi.fn();
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} onNavigateToThread={onNavigateToThread} />);
+
+    expect(await screen.findByText(/"Fix login flow" is paused on a question and waiting for your answer/)).toBeInTheDocument();
+    expect(screen.queryByText(/Another session is running/)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Answer it' }));
+    expect(onNavigateToThread).toHaveBeenCalledWith('t2');
+  });
+
   it('disables the composer and ignores Enter while a turn is running', async () => {
     let streamCalls = 0;
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {

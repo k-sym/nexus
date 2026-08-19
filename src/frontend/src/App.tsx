@@ -779,6 +779,7 @@ export default function App() {
                   projectId={activeProject.id}
                   threadId={activeThreadId}
                   onBusyConflict={() => {}}
+                  onNavigateToThread={(id) => selectThread(activeProject.id, id)}
                   onThreadsChanged={() => { void loadThreads(activeProject.id); void refreshLiveSessions(); }}
                   onSessionActivityChange={handleSessionActivityChange}
                   backendActiveThreadIds={runningThreadIds}

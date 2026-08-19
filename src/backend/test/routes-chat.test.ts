@@ -577,8 +577,53 @@ test('GET /api/projects/:id/model-status identifies a chat holder without treati
       source: 'chat',
       modelKey: 'openai/gpt-5',
       sameModel: false,
+      waitingForResponse: false,
+      questionCount: 0,
       projectBusy: false,
     });
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The claim snapshots the title at send time — for a first turn that is the
+// "New Session" placeholder, which auto-titling replaces mid-run. The status
+// endpoint must serve the CURRENT title so the busy banner names the session
+// the way the sidebar does.
+test('GET /api/projects/:id/model-status reports the holder thread\'s current DB title, not the stale claim title', async () => {
+  const { app, db, dir, concurrency } = await makeApp(undefined, { includeSecondThread: true });
+  try {
+    const owner = concurrency.claimProject('proj-1', 'thread-2', 'New Session', 'chat', 'openai/gpt-5');
+    assert.ok(owner);
+    db.prepare('UPDATE chat_threads SET title = ? WHERE id = ?').run('Fix login flow', 'thread-2');
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/proj-1/model-status' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json().activeTitle, 'Fix login flow');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('GET /api/projects/:id/model-status flags a holder that is blocked on a pending question', async () => {
+  const { app, db, dir, runtime, concurrency } = await makeApp(undefined, { includeSecondThread: true });
+  try {
+    const owner = concurrency.claimProject('proj-1', 'thread-2', 'T2', 'chat', 'openai/gpt-5');
+    assert.ok(owner);
+    const pending = runtime.questions.register('thread-2', 'call-1', questionRequest);
+
+    const blocked = await app.inject({ method: 'GET', url: '/api/projects/proj-1/model-status' });
+    assert.equal(blocked.json().waitingForResponse, true);
+    assert.equal(blocked.json().questionCount, 1);
+
+    runtime.questions.cancelThread('thread-2', 'test done');
+    await pending;
+    const after = await app.inject({ method: 'GET', url: '/api/projects/proj-1/model-status' });
+    assert.equal(after.json().waitingForResponse, false);
   } finally {
     await app.close();
     db.close();

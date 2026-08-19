@@ -44,6 +44,8 @@ interface ChatPanelProps {
   threadId: string | null;
   /** Called when the user confirms cancelling a busy thread in the same project. */
   onBusyConflict: (activeThreadId: string, activeTitle: string) => void;
+  /** Navigate to another session in this project (the busy banner's "open" action). */
+  onNavigateToThread?: (threadId: string) => void;
   /** Called after a turn completes so the sidebar (title etc.) can refresh. */
   onThreadsChanged?: () => void;
   /** Reports whether this session is actively streaming/thinking/tooling. */
@@ -151,7 +153,7 @@ function fileToAttachment(file: File): Promise<ChatAttachment> {
   });
 }
 
-export default function ChatPanel({ projectId, threadId, onBusyConflict, onThreadsChanged, onSessionActivityChange, backendActiveThreadIds, seed, onSeedConsumed }: ChatPanelProps) {
+export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavigateToThread, onThreadsChanged, onSessionActivityChange, backendActiveThreadIds, seed, onSeedConsumed }: ChatPanelProps) {
   const { models, activeModelId, capabilitiesLoading, setModel, setThread } = useModels();
   const { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread, lastOutcomeRef } = usePiStream();
   const [input, setInput] = useState('');
@@ -165,6 +167,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
   const [projectRunBusy, setProjectRunBusy] = useState<{
     threadId: string;
     title: string;
+    waitingForResponse: boolean;
   } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
@@ -287,6 +290,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
             setProjectRunBusy({
               threadId: data.activeThreadId,
               title: data.activeTitle,
+              waitingForResponse: data.waitingForResponse === true,
             });
           } else {
             setProjectRunBusy(null);
@@ -805,9 +809,19 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onThrea
               aria-hidden
               className="inline-block w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse motion-reduce:animate-none"
             />
-            <span>
-              {`Another session is running in "${projectRunBusy.title}". Nexus allows one run per project to prevent conflicting file changes; sending here will ask before cancelling it.`}
+            <span className="flex-1 min-w-0">
+              {projectRunBusy.waitingForResponse
+                ? `"${projectRunBusy.title}" is paused on a question and waiting for your answer. It holds this project until you answer or cancel it; sending here will ask before cancelling it.`
+                : `Another session is running in "${projectRunBusy.title}". Nexus allows one run per project to prevent conflicting file changes; sending here will ask before cancelling it.`}
             </span>
+            {onNavigateToThread && (
+              <button
+                onClick={() => onNavigateToThread(projectRunBusy.threadId)}
+                className="shrink-0 px-2 py-0.5 rounded-sm border border-amber-700 bg-amber-800/50 text-amber-100 hover:bg-amber-700/50"
+              >
+                {projectRunBusy.waitingForResponse ? 'Answer it' : 'Open session'}
+              </button>
+            )}
           </span>
         </div>
       )}
