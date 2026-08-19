@@ -2,15 +2,16 @@
 /**
  * Guard against the better-sqlite3 NODE_MODULE_VERSION (ABI) mismatch.
  *
- * The backend and the memory-daemon always run under *system Node*
- * (see electron/main.ts: prod spawns `node`, never Electron's fork()),
+ * The backend and the memory-daemon always run under a plain Node binary —
+ * the bundled one in prod, the developer's system Node in dev (see
+ * tauri/src-tauri/src/supervisor.rs: boot() picks it, spawn_node() runs it) —
  * so better-sqlite3 must be compiled for the running Node's ABI.
  *
- * If a stray `electron-rebuild` / Electron packaging step recompiled it for
- * Electron's bundled Node (a different ABI), the process dies at startup with
- * a cryptic ERR_DLOPEN_FAILED. This runs before the process boots: it verifies
- * the native module loads under the current Node and, if not, rebuilds the
- * install that owns it for the current Node — then re-verifies.
+ * If anything recompiled it against a different ABI — switching Node majors,
+ * or a node_modules copied from another machine — the process dies at startup
+ * with a cryptic ERR_DLOPEN_FAILED. This runs before the process boots: it
+ * verifies the native module loads under the current Node and, if not,
+ * rebuilds the install that owns it for the current Node — then re-verifies.
  *
  * Usage: node scripts/ensure-sqlite-abi.cjs <label>
  *   <label> is a human tag for log lines (e.g. "backend", "daemon").

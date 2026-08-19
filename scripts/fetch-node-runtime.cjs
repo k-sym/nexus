@@ -2,9 +2,9 @@
 /**
  * Download the official Node runtime — matching THIS Node's version, so the
  * native modules staged by stage-services.cjs share its ABI — for the host
- * platform into .stage/node/. electron-builder ships it via extraResources and
- * the packaged app spawns the backend/daemon under it (see electron/main.ts
- * bundledNode()).
+ * platform into .stage/node/. The Tauri bundler ships it as a resource
+ * (tauri.conf.json maps .stage/node -> node) and the packaged app spawns the
+ * backend/daemon under it (see tauri/src-tauri/src/supervisor.rs boot()).
  *
  * Host-platform only: cross-platform packaging is a per-OS CI concern (native
  * modules can't be cross-built here anyway).

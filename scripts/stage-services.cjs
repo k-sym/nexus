@@ -7,11 +7,12 @@
  *   .stage/services/daemon   ← dist + prod node_modules + package.json
  *   .stage/services/frontend ← dist (static assets only)
  *
- * Run AFTER `npm run build` (which produces every dist/) and BEFORE
- * electron-builder, which copies .stage/services via extraResources. Native
- * modules (better-sqlite3, node-pty, sqlite-vec) are installed/built here under
- * the SAME Node that runs this script — the version we also bundle — so their
- * ABI matches at runtime. See scripts/fetch-node-runtime.cjs.
+ * Run AFTER `npm run build` (which produces every dist/) and BEFORE the Tauri
+ * bundler, which copies .stage/services in as a resource (tauri.conf.json maps
+ * .stage/services -> services). Native modules (better-sqlite3, node-pty,
+ * sqlite-vec) are installed/built here under the SAME Node that runs this
+ * script — the version we also bundle — so their ABI matches at runtime.
+ * See scripts/fetch-node-runtime.cjs.
  */
 const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
