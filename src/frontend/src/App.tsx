@@ -819,7 +819,7 @@ export default function App() {
       />
 
       <div className="flex flex-1 min-h-0">
-        {globalView !== 'assistant' && (
+        {globalView !== 'assistant' && globalView !== 'ideas' && (
           <Sidebar
             projects={projects}
             activeProjectId={activeProjectId}
