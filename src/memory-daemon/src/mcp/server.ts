@@ -15,6 +15,7 @@ function asText(data: unknown) {
 const scopeShape = {
   namespace: z.string().optional(),
   project: z.string().optional(),
+  category: z.string().optional(),
   scope: z.enum(["isolated", "cross"]).optional(),
 };
 
@@ -70,7 +71,7 @@ export function buildMcpServer(client: MemoryClient, opts?: { defaults?: McpEnvD
 
   server.tool(
     "memory_list",
-    "List recent memories (optionally scoped by namespace/project).",
+    "List recent memories (optionally scoped by namespace/project/category).",
     { ...scopeShape, limit: z.number().int().positive().optional() },
     async (a) => asText(await client.list(mergeScope(a, defaults), a.limit)),
   );

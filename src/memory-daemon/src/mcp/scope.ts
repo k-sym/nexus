@@ -21,12 +21,15 @@ export function mcpEnvDefaults(env: NodeJS.ProcessEnv): McpEnvDefaults {
 
 /** Merge explicit tool args over env defaults — args always win. */
 export function mergeScope(
-  args: { namespace?: string; project?: string; scope?: "isolated" | "cross" },
+  args: { namespace?: string; project?: string; category?: string; scope?: "isolated" | "cross" },
   defaults: McpEnvDefaults,
 ): ScopeFilter {
   return {
     namespace: args.namespace ?? defaults.namespace,
     project: args.project ?? defaults.project,
+    // category has no env default — it is per-call only, but it must survive the merge or
+    // the daemon never sees it and every filtered call silently returns the full list.
+    category: args.category,
     scope: args.scope ?? defaults.scope,
   };
 }

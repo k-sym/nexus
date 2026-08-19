@@ -25,14 +25,20 @@ test("mcpEnvDefaults: trims the project slug", () => {
 
 test("mergeScope: explicit args override env defaults", () => {
   const d = { namespace: "nexus", project: "a", scope: "isolated" as const, readonly: false };
-  assert.deepEqual(mergeScope({ project: "b", scope: "cross" }, d), { namespace: "nexus", project: "b", scope: "cross" });
+  assert.deepEqual(mergeScope({ project: "b", scope: "cross" }, d), { namespace: "nexus", project: "b", category: undefined, scope: "cross" });
 });
 
 test("mergeScope: defaults fill gaps when args omit them", () => {
   const d = { namespace: "nexus", project: "a", scope: "isolated" as const, readonly: false };
-  assert.deepEqual(mergeScope({}, d), { namespace: "nexus", project: "a", scope: "isolated" });
+  assert.deepEqual(mergeScope({}, d), { namespace: "nexus", project: "a", category: undefined, scope: "isolated" });
 });
 
 test("mergeScope: no defaults → passes args through (undefined stays undefined)", () => {
-  assert.deepEqual(mergeScope({ project: "b" }, { readonly: false }), { namespace: undefined, project: "b", scope: undefined });
+  assert.deepEqual(mergeScope({ project: "b" }, { readonly: false }), { namespace: undefined, project: "b", category: undefined, scope: undefined });
+});
+
+test("mergeScope: category survives the merge (per-call only, no env default)", () => {
+  const d = { namespace: "nexus", project: "a", scope: "isolated" as const, readonly: false };
+  assert.equal(mergeScope({ category: "meeting" }, d).category, "meeting");
+  assert.equal(mergeScope({}, d).category, undefined);
 });
