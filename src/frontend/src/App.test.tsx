@@ -39,6 +39,9 @@ vi.mock('./components/ChatPanel', () => ({
 vi.mock('./components/AssistantView', () => ({
   default: () => <div data-testid="assistant-view">Assistant</div>,
 }));
+vi.mock('./components/IdeasView', () => ({
+  default: () => <div data-testid="ideas-view">Ideas</div>,
+}));
 vi.mock('./components/MemoryRail', () => ({ default: () => <div data-testid="memory-rail" /> }));
 vi.mock('./components/ProjectManagementView', () => ({
   ProjectManagementView: ({ projectId }: { projectId: string }) => (
@@ -208,6 +211,18 @@ describe('App project navigation', () => {
     await user.click(screen.getByRole('button', { name: /Assistant/i }));
 
     expect(await screen.findByTestId('assistant-view')).toBeInTheDocument();
+    expect(screen.queryByLabelText('Navigation sidebar')).not.toBeInTheDocument();
+  });
+
+  it('hides the Projects sidebar on the Ideas view', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    expect(await screen.findByLabelText('Navigation sidebar')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Ideas/i }));
+
+    expect(await screen.findByTestId('ideas-view')).toBeInTheDocument();
     expect(screen.queryByLabelText('Navigation sidebar')).not.toBeInTheDocument();
   });
 });
