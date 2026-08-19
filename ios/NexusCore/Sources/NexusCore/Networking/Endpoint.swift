@@ -183,6 +183,28 @@ public struct Endpoint: Sendable {
         return Endpoint(path: "/api/routines/\(encoded)")
     }
 
+    // MARK: Drafts (outbound approval queue, baker-internal#42)
+
+    /// Pending outbound drafts → `DraftsResponse`.
+    public static func drafts(status: String = "pending") -> Endpoint {
+        Endpoint(path: "/api/drafts?status=\(status)")
+    }
+
+    /// One draft with its full body → `OutboundDraftDetail`.
+    public static func draftDetail(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/drafts/\(id)")
+    }
+
+    /// Approve AND send. There is no separate send call by design: an approved
+    /// but unsent draft goes stale in 15 minutes and rots the queue.
+    public static func approveDraft(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/drafts/\(id)/approve", method: "POST", body: body)
+    }
+
+    public static func rejectDraft(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/drafts/\(id)/reject", method: "POST", body: body)
+    }
+
     // MARK: M6 assistant
 
     /// Merged local + adoptable-remote Hermes sessions → `AssistantSessionsResponse`.

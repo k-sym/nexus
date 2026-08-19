@@ -1,5 +1,6 @@
 import { Gauge } from '@phosphor-icons/react';
 import { MissionStatus } from '../api';
+import DraftsCard from './DraftsCard';
 import RoutinesCard from './RoutinesCard';
 
 interface MissionControlProps {
@@ -196,6 +197,10 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
               </div>
             </Card>
           </div>
+
+          {/* Drafts the partner wants sent — renders nothing when the queue is
+              empty, which is the normal state (baker-internal#42) */}
+          <DraftsCard />
 
           {/* Partner routine fleet (self-polling; independent of /api/mission-control) */}
           <RoutinesCard />

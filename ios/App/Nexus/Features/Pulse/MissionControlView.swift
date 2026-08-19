@@ -43,6 +43,10 @@ struct MissionControlView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     memoryCard(status.memory)
+                    // Above the fleet card: a draft waiting on a tap is more
+                    // urgent than routine health, and it hides itself when the
+                    // queue is empty (baker-internal#42).
+                    DraftsCard(api: api)
                     RoutinesCard(api: api)
                     if let counts = status.modelCounts {
                         modelsCard(counts)

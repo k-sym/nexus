@@ -345,6 +345,35 @@ public actor APIClient {
         try await request(.routineDetail(name))
     }
 
+    // MARK: Drafts (baker-internal#42)
+
+    /// The outbound draft queue. Fail-soft shapes (`configured: false`, `error`)
+    /// come through as data, not thrown errors — same contract as `routines()`.
+    public func drafts(status: String = "pending") async throws -> DraftsResponse {
+        try await request(.drafts(status: status))
+    }
+
+    /// One draft including its full body — fetched before Send is offered.
+    public func draftDetail(id: String) async throws -> OutboundDraftDetail {
+        try await request(.draftDetail(id))
+    }
+
+    /// Approve and send. Throws on refusal; the thrown message is the adapter's
+    /// reason (already decided, content changed, send failed) and is shown verbatim.
+    @discardableResult
+    public func approveDraft(id: String, by: String = "ios") async throws -> DraftDecision {
+        let body = try JSONSerialization.data(withJSONObject: ["by": by])
+        return try await request(.approveDraft(id, body: body))
+    }
+
+    @discardableResult
+    public func rejectDraft(id: String, by: String = "ios", note: String? = nil) async throws -> DraftDecision {
+        var payload: [String: String] = ["by": by]
+        if let note, !note.isEmpty { payload["note"] = note }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await request(.rejectDraft(id, body: body))
+    }
+
     // MARK: Assistant (M6)
 
     /// Merged local + adoptable-remote Hermes sessions. Mixed snake/camel keys →

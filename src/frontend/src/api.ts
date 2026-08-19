@@ -378,6 +378,46 @@ export interface RoutinesResponse {
   error?: string;
 }
 
+// Outbound draft queue — proxied from the assistant adapter's /v1/drafts
+// (baker-internal#42). Replies the partner proposed; approving one SENDS it.
+export type DraftStatus = 'pending' | 'approved' | 'sent' | 'rejected' | 'expired' | 'failed';
+
+export interface OutboundDraft {
+  id: string;
+  account: string;
+  status: DraftStatus;
+  subject: string;
+  to: string[];
+  cc: string[];
+  reply_to: string | null;
+  thread: string | null;
+  source: string;
+  rationale: string;
+  created_iso?: string;
+  preview: string;
+  body_chars: number;
+}
+
+/** Detail carries the FULL body: approving something you have only seen a
+ *  preview of is not consent. */
+export interface OutboundDraftDetail extends OutboundDraft {
+  body: string;
+  sendable: boolean;
+  sendable_reason: string;
+  status_detail?: Record<string, string>;
+}
+
+export interface DraftsResponse {
+  configured?: boolean;
+  drafts: OutboundDraft[];
+  pending: number;
+  error?: string;
+}
+
+export interface DraftDecision extends OutboundDraft {
+  sent?: boolean;
+}
+
 // Idea Watcher (#352) — one created GitHub issue of a graduation set.
 export interface CreatedIssue {
   number: number;
@@ -489,6 +529,22 @@ export const api = {
   },
   missionControl: {
     get: () => fetchJson<MissionStatus>(`/api/mission-control`),
+  },
+  drafts: {
+    list: (status = 'pending') => fetchJson<DraftsResponse>(`/api/drafts?status=${encodeURIComponent(status)}`),
+    get: (id: string) => fetchJson<OutboundDraftDetail>(`/api/drafts/${encodeURIComponent(id)}`),
+    approve: (id: string, by = 'web') =>
+      fetchJson<DraftDecision>(`/api/drafts/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ by }),
+      }),
+    reject: (id: string, note?: string, by = 'web') =>
+      fetchJson<DraftDecision>(`/api/drafts/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ by, ...(note ? { note } : {}) }),
+      }),
   },
   routines: {
     list: () => fetchJson<RoutinesResponse>(`/api/routines`),
