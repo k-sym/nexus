@@ -215,6 +215,13 @@ export interface HermesClient {
    * endpoint and the request throws; callers fail-soft. */
   listRoutines(): Promise<unknown>;
   getRoutine(name: string): Promise<unknown>;
+  /** Partner adapter's outbound draft queue (baker-internal#42). Also passed
+   * through untyped. `approveDraft` is the send: it approves and transmits in
+   * one call, and rejects with a status-bearing Error when the adapter refuses. */
+  listDrafts(status?: string): Promise<unknown>;
+  getDraft(id: string): Promise<unknown>;
+  approveDraft(id: string, by: string): Promise<unknown>;
+  rejectDraft(id: string, by: string, note?: string): Promise<unknown>;
   createSession(input: HermesSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
   listSessions(input?: HermesListSessionsInput): Promise<HermesListSessionsResult>;
@@ -262,7 +269,14 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
     });
     if (!response.ok) {
       const text = await response.text().catch(() => '');
-      throw new Error(text || `Hermes request failed with ${response.status}`);
+      // Carry the status: the draft-approval routes (baker-internal#42) must tell
+      // "someone already approved this" (409) apart from "the send itself failed"
+      // (502), and a flattened message cannot.
+      const error = new Error(text || `Hermes request failed with ${response.status}`) as Error & {
+        status?: number;
+      };
+      error.status = response.status;
+      throw error;
     }
     if (response.status === 204) return {};
     return response.json().catch(() => ({}));
@@ -296,6 +310,32 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
 
     async getRoutine(name: string): Promise<unknown> {
       return requestJson(`/v1/routines/${encodeURIComponent(name)}`);
+    },
+
+    // Outbound draft queue (baker-internal#42). The adapter owns every guard;
+    // these are pure passthroughs, including the deliberate approve-and-send
+    // semantics — approving is what transmits the email.
+    async listDrafts(status?: string): Promise<unknown> {
+      const q = status ? `?status=${encodeURIComponent(status)}` : '';
+      return requestJson(`/v1/drafts${q}`);
+    },
+
+    async getDraft(id: string): Promise<unknown> {
+      return requestJson(`/v1/drafts/${encodeURIComponent(id)}`);
+    },
+
+    async approveDraft(id: string, by: string): Promise<unknown> {
+      return requestJson(`/v1/drafts/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ by }),
+      });
+    },
+
+    async rejectDraft(id: string, by: string, note?: string): Promise<unknown> {
+      return requestJson(`/v1/drafts/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ by, ...(note ? { note } : {}) }),
+      });
     },
 
     async startRun(input: HermesRunInput): Promise<HermesRunStart> {
