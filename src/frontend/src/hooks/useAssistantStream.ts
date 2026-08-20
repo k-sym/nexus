@@ -328,12 +328,20 @@ export function useAssistantStream() {
       readerRef.current = reader;
       const decoder = new TextDecoder();
       let pending = '';
-      while (true) {
+      let streamDone = false;
+      while (!streamDone) {
         const { done, value } = await reader.read();
-        if (done) break;
-        pending += decoder.decode(value, { stream: true });
+        streamDone = done;
+        if (value) pending += decoder.decode(value, { stream: true });
+        // The last ndjson frame is not guaranteed to be newline-terminated, so
+        // on the final read the held-back remainder IS a complete line. Breaking
+        // on `done` before draining it dropped the closing frame of a turn: the
+        // final assistant message was persisted server-side but never rendered,
+        // and only appeared once navigating away and back refetched the history.
+        // decode() with no argument also flushes any partial multi-byte char.
+        if (streamDone) pending += decoder.decode();
         const lines = pending.split(/\r?\n/);
-        pending = lines.pop() ?? '';
+        pending = streamDone ? '' : (lines.pop() ?? '');
         for (const line of lines) {
           if (!line.trim()) continue;
           const event = JSON.parse(line);

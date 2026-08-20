@@ -24,6 +24,25 @@ function streamResponse(lines: unknown[]): Response {
   });
 }
 
+/** Like ndjsonStreamResponse, but the FINAL frame carries no trailing newline —
+ *  which is what a stream that simply ends looks like on the wire. The reader
+ *  used to hold that last line back as an incomplete remainder and then break on
+ *  `done` without draining it, silently dropping the closing frame of a turn. */
+function unterminatedStreamResponse(events: any[]): Response {
+  const payload = events.map((e) => JSON.stringify(e)).join('\n'); // note: no trailing \n
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      const enc = new TextEncoder();
+      // Deliberately split mid-payload so the last frame spans two chunks.
+      const cut = Math.floor(payload.length * 0.6);
+      c.enqueue(enc.encode(payload.slice(0, cut)));
+      c.enqueue(enc.encode(payload.slice(cut)));
+      c.close();
+    },
+  });
+  return { ok: true, body, json: async () => ({}) } as unknown as Response;
+}
+
 function ndjsonStreamResponse(events: any[]): Response {
   const body = new ReadableStream<Uint8Array>({
     start(c) {
@@ -210,6 +229,31 @@ describe('AssistantView', () => {
       });
     });
     expect(await screen.findByText('done')).toBeInTheDocument();
+  });
+
+  it('renders the closing frame when the stream ends without a trailing newline', async () => {
+    // The regression this pins: the final assistant message was persisted
+    // server-side but never painted, and only appeared after navigating away
+    // and back forced a refetch of the history.
+    installDefaultMock();
+    const withDefaults = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/sessions/s1/messages/stream') {
+        return unterminatedStreamResponse([
+          { type: 'run_start', runId: 'r1', remoteRunId: 'remote-r1' },
+          { type: 'text_delta', delta: 'first part, ' },
+          { type: 'text_delta', delta: 'and the closing sentence.' },
+        ]);
+      }
+      return withDefaults(url, init);
+    });
+
+    render(<AssistantView />);
+    const input = await screen.findByPlaceholderText('Message Assistant...');
+    fireEvent.change(input, { target: { value: 'Run now' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    expect(await screen.findByText('first part, and the closing sentence.')).toBeInTheDocument();
   });
 
   it('keeps the UI alive and un-wedges the composer when the stream request throws (WebKit "Load failed")', async () => {
