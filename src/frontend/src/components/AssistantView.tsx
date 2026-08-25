@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { CloudArrowUp, PaperPlaneRight, Paperclip, Stop, Trash } from '@phosphor-icons/react';
+import { PaperPlaneRight, Paperclip, Stop, Trash } from '@phosphor-icons/react';
 import {
   AssistantMessage,
   useAssistantStream,
@@ -28,7 +28,6 @@ export default function AssistantView() {
     error,
     loadCurrent,
     send,
-    startBackgroundRun,
     abort,
     clear,
   } = useAssistantStream();
@@ -89,22 +88,15 @@ export default function AssistantView() {
       return;
     }
     if (isRunning) return;
-    const sent = await send(text, pendingAttachments);
-    if (sent) {
-      setInput('');
-      clearPendingAttachments();
-    }
+    // Clear the composer the moment the message leaves — the user bubble is
+    // already on screen; holding the text until the turn completes made every
+    // long turn look like the send hadn't registered. Restore it on failure.
+    const sentAttachments = pendingAttachments;
+    setInput('');
+    clearPendingAttachments();
+    const sent = await send(text, sentAttachments);
+    if (!sent) setInput(text);
   }, [clear, clearPendingAttachments, input, isRunning, loadCurrent, pendingAttachments, selectedSessionId, send]);
-
-  const handleBackgroundRun = useCallback(async () => {
-    const text = input.trim();
-    if ((!text && pendingAttachments.length === 0) || !selectedSessionId) return;
-    const started = await startBackgroundRun(text, pendingAttachments);
-    if (started) {
-      setInput('');
-      clearPendingAttachments();
-    }
-  }, [clearPendingAttachments, input, pendingAttachments, selectedSessionId, startBackgroundRun]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Tab' && suggestion && !input) {
@@ -317,16 +309,6 @@ export default function AssistantView() {
               disabled={!selectedSessionId}
               className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong disabled:opacity-50"
             />
-            <button
-              type="button"
-              onClick={() => void handleBackgroundRun()}
-              disabled={!canSubmit}
-              className="h-10 px-3 surface-elevated border border-subtle rounded-lg flex items-center gap-2 text-sm text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              title="Hand this run off to keep it running in the background after Nexus restarts"
-            >
-              <CloudArrowUp size={17} />
-              Background Handoff
-            </button>
             {isRunning ? (
               <button
                 type="button"

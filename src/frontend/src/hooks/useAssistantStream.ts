@@ -111,6 +111,12 @@ export function useAssistantStream() {
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [latestRun, setLatestRun] = useState<AssistantRun | null>(null);
   const [isRunning, setIsRunning] = useState(false);
+  // True while a foreground NDJSON reader is consuming a turn. The 5s remote
+  // sync poll MUST NOT run then: sync() -> loadSession() replaces `messages`
+  // wholesale, deleting the local streaming draft — after which every later
+  // delta maps over a message that no longer exists and silently vanishes
+  // (the "tool ran, then nothing until I navigated away" bug).
+  const [liveStream, setLiveStream] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Synchronous guard so concurrent callers can't both read `false` while
@@ -313,6 +319,7 @@ export function useAssistantStream() {
     assistantDraft.isStreaming = true;
     setMessages((current) => [...current, localMessage('user', trimmed, attachments), assistantDraft]);
     setIsRunning(true);
+    setLiveStream(true);
     setLatestRun((run) => run ? { ...run, status: 'running' } : run);
     setSessions((current) => current.map((session) =>
       session.id === selectedSessionId ? { ...session, status: 'running' } : session,
@@ -465,34 +472,11 @@ export function useAssistantStream() {
     } finally {
       if (reader && readerRef.current === reader) readerRef.current = null;
       sendingRef.current = false;
+      setLiveStream(false);
       setIsRunning(remoteStillRunning);
     }
   }, [selectedSessionId]);
 
-  const startBackgroundRun = useCallback(async (content: string, attachments: AssistantAttachment[] = []): Promise<boolean> => {
-    const trimmed = content.trim();
-    if ((!trimmed && attachments.length === 0) || !selectedSessionId) return false;
-    setError(null);
-    const res = await apiFetch(`/api/assistant/sessions/${selectedSessionId}/runs`, {
-      method: 'POST',
-      body: JSON.stringify({ content: trimmed, ...(attachments.length > 0 ? { attachments } : {}) }),
-      headers: { 'Content-Type': 'application/json' },
-    });
-    if (!res.ok) {
-      setError(await responseError(res));
-      return false;
-    }
-    const data = (await res.json()) as { run?: AssistantRun };
-    if (data.run) {
-      setLatestRun(data.run);
-      setSessions((current) => current.map((session) =>
-        session.id === selectedSessionId ? { ...session, status: data.run?.status ?? 'running', latestRun: data.run } : session,
-      ));
-    }
-    recordAttachments(selectedSessionId, nextUserOrdinal(messagesRef.current), attachments);
-    setMessages((current) => [...current, localMessage('user', trimmed, attachments)]);
-    return true;
-  }, [selectedSessionId]);
 
   const sync = useCallback(async (): Promise<boolean> => {
     setError(null);
@@ -508,12 +492,15 @@ export function useAssistantStream() {
   }, [loadSession, selectedSessionId]);
 
   useEffect(() => {
-    if (!selectedSessionId || !isActiveRunStatus(latestRun?.status)) return undefined;
+    // Poll only for runs we are NOT already streaming (detached/remote-side):
+    // during a live foreground stream the poll's loadSession would wipe the
+    // streaming draft (see liveStream above).
+    if (!selectedSessionId || liveStream || !isActiveRunStatus(latestRun?.status)) return undefined;
     const timer = window.setInterval(() => {
       void sync();
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [latestRun?.status, selectedSessionId, sync]);
+  }, [latestRun?.status, liveStream, selectedSessionId, sync]);
 
   const abort = useCallback(async () => {
     cancelActiveReader();
@@ -558,7 +545,6 @@ export function useAssistantStream() {
     createSession,
     renameSession,
     send,
-    startBackgroundRun,
     sync,
     abort,
     clear,

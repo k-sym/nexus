@@ -234,6 +234,78 @@ describe('AssistantView', () => {
     expect(await screen.findByText('done')).toBeInTheDocument();
   });
 
+  it('clears the composer the moment a message is sent, not when the turn ends', async () => {
+    installDefaultMock();
+    const withDefaults = apiFetchMock.getMockImplementation()!;
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/sessions/s1/messages/stream') {
+        // A stream that never ends: the turn is still running when we assert.
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode(JSON.stringify({ kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: 'x', provider: 'assistant', model: 'partner' } }) + '\n'));
+          },
+        });
+        return { ok: true, body, json: async () => ({}) } as unknown as Response;
+      }
+      return withDefaults(url, init);
+    });
+    render(<AssistantView />);
+
+    const input = await screen.findByPlaceholderText('Message your partner...');
+    fireEvent.change(input, { target: { value: 'Run now' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+
+    await waitFor(() => expect((input as HTMLTextAreaElement).value).toBe(''));
+  });
+
+  it('never lets the 5s remote-sync poll run during a live foreground stream', async () => {
+    // The regression this pins: once run_start marked the run running, the 5s
+    // poll fired sync() -> loadSession(), which replaced `messages` and deleted
+    // the streaming draft — every later delta then mapped over a message that
+    // no longer existed and silently vanished. Post-tool answers only appeared
+    // after navigating away and back refetched the transcript.
+    installDefaultMock();
+    const withDefaults = apiFetchMock.getMockImplementation()!;
+    let releaseTail: (() => void) | null = null;
+    apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url === '/api/assistant/sessions/s1/messages/stream') {
+        const enc = new TextEncoder();
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(enc.encode(JSON.stringify({ kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: 'x', provider: 'assistant', model: 'partner' } }) + '\n'));
+            c.enqueue(enc.encode(JSON.stringify({ type: 'tool_execution_start', toolCallId: 'c1', toolName: 'Bash', args: {} }) + '\n'));
+            // Hold the stream open across the poll window; the tail arrives later.
+            releaseTail = () => {
+              c.enqueue(enc.encode(JSON.stringify({ type: 'tool_execution_end', toolCallId: 'c1', toolName: 'Bash', result: { content: [{ type: 'text', text: 'ok' }] }, isError: false }) + '\n'));
+              c.enqueue(enc.encode(JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'the late answer' } }) + '\n'));
+              c.enqueue(enc.encode(JSON.stringify({ kind: 'run_end', run: { runId: 'r1', threadId: 's1', completedAt: 'y', status: 'completed' } }) + '\n'));
+              c.close();
+            };
+          },
+        });
+        return { ok: true, body, json: async () => ({}) } as unknown as Response;
+      }
+      return withDefaults(url, init);
+    });
+    render(<AssistantView />);
+
+    const input = await screen.findByPlaceholderText('Message your partner...');
+    fireEvent.change(input, { target: { value: 'Run now' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByTestId('run-status');
+
+    vi.useFakeTimers();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    vi.useRealTimers();
+
+    expect(apiFetchMock).not.toHaveBeenCalledWith('/api/assistant/sync', { method: 'POST' });
+
+    await act(async () => { releaseTail?.(); });
+    expect(await screen.findByText(/the late answer/)).toBeInTheDocument();
+  });
+
   it('renders the closing frame when the stream ends without a trailing newline', async () => {
     // The regression this pins: the final assistant message was persisted
     // server-side but never painted, and only appeared after navigating away
@@ -293,22 +365,6 @@ describe('AssistantView', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     expect(await screen.findByText('recovered')).toBeInTheDocument();
     expect(streamCalls).toBe(2);
-  });
-
-  it('starts a detached background run for the selected session', async () => {
-    render(<AssistantView />);
-
-    const input = await screen.findByPlaceholderText('Message your partner...');
-    fireEvent.change(input, { target: { value: 'Run overnight' } });
-    fireEvent.click(screen.getByRole('button', { name: /Background Handoff/i }));
-
-    await waitFor(() => {
-      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1/runs', {
-        method: 'POST',
-        body: JSON.stringify({ content: 'Run overnight' }),
-        headers: { 'Content-Type': 'application/json' },
-      });
-    });
   });
 
   it('deletes the current conversation from a visible delete control without a confirm dialog', async () => {
