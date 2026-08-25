@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { PaperPlaneRight, Paperclip, Stop, Trash } from '@phosphor-icons/react';
+import { NotePencil, PaperPlaneRight, Paperclip, Stop } from '@phosphor-icons/react';
 import {
   AssistantMessage,
   useAssistantStream,
@@ -55,7 +55,7 @@ export default function AssistantView() {
     clearPendingAttachments,
   } = usePendingAttachments();
   const [draggingAttachments, setDraggingAttachments] = useState(false);
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [confirmingNew, setConfirmingNew] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastSelectedSessionIdRef = useRef<string | null>(null);
 
@@ -65,7 +65,7 @@ export default function AssistantView() {
 
   useEffect(() => {
     if (lastSelectedSessionIdRef.current && lastSelectedSessionIdRef.current !== selectedSessionId) {
-      setConfirmingDelete(false);
+      setConfirmingNew(false);
     }
     lastSelectedSessionIdRef.current = selectedSessionId;
   }, [selectedSessionId]);
@@ -165,27 +165,27 @@ export default function AssistantView() {
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setConfirmingDelete(true)}
+              onClick={() => setConfirmingNew(true)}
               disabled={!selectedSessionId}
-              className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-red-300 hover:border-strong transition-colors disabled:opacity-40"
-              title="Delete this conversation"
-              aria-label="Delete this conversation"
+              className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40"
+              title="New conversation"
+              aria-label="New conversation"
             >
-              <Trash size={16} />
+              <NotePencil size={16} />
             </button>
           </div>
         </header>
 
-        {confirmingDelete && selectedSessionId && (
+        {confirmingNew && selectedSessionId && (
           <div
             role="alertdialog"
-            aria-label="Confirm delete conversation"
+            aria-label="Start a new conversation"
             className="surface-panel border-b border-subtle px-6 py-2 flex items-center justify-end gap-2 text-xs text-muted"
           >
-            <span className="mr-auto text-primary">Delete this conversation?</span>
+            <span className="mr-auto text-primary">Start a new conversation — what happens to this one?</span>
             <button
               type="button"
-              onClick={() => setConfirmingDelete(false)}
+              onClick={() => setConfirmingNew(false)}
               className="h-8 px-3 surface-elevated border border-subtle rounded-lg hover:text-[var(--text-primary)] hover:border-strong transition-colors"
             >
               Cancel
@@ -195,14 +195,25 @@ export default function AssistantView() {
               onClick={async () => {
                 const cleared = await clear();
                 if (cleared) {
-                  setConfirmingDelete(false);
+                  setConfirmingNew(false);
                   await loadCurrent();
                 }
               }}
               className="h-8 px-3 rounded-lg border border-red-400/35 text-red-200 bg-red-950/35 hover:border-red-300 transition-colors"
-              aria-label="Confirm delete conversation"
+              aria-label="Delete this conversation"
             >
-              Delete
+              Delete it
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                const rotated = await loadCurrent(true);
+                if (rotated) setConfirmingNew(false);
+              }}
+              className="h-8 px-3 accent-button rounded-lg transition-colors"
+              aria-label="Archive to memory"
+            >
+              Archive to memory
             </button>
           </div>
         )}
