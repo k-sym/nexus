@@ -208,7 +208,7 @@ describe('App project navigation', () => {
 
     expect(await screen.findByLabelText('Navigation sidebar')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /Assistant/i }));
+    await user.click(screen.getByRole('button', { name: /Partner/i }));
 
     expect(await screen.findByTestId('assistant-view')).toBeInTheDocument();
     expect(screen.queryByLabelText('Navigation sidebar')).not.toBeInTheDocument();

@@ -204,6 +204,32 @@ export function useAssistantStream() {
     return true;
   }, [applySessionStatus, importRemoteSession]);
 
+  // The one-conversation model (baker-internal#114): the server holds THE
+  // current partner session; the view never chooses. rotate = the /new verb.
+  const loadCurrent = useCallback(async (rotate = false): Promise<boolean> => {
+    setError(null);
+    const res = await apiFetch(
+      rotate ? '/api/assistant/current/rotate' : '/api/assistant/current',
+      rotate ? { method: 'POST' } : undefined,
+    );
+    if (!res.ok) {
+      setError(await responseError(res));
+      return false;
+    }
+    const data = (await res.json()) as {
+      session: AssistantSession;
+      messages?: AssistantMessage[];
+      latestRun?: AssistantRun | null;
+    };
+    const run = data.latestRun ?? null;
+    setSelectedSessionId(data.session.id);
+    setMessages(reattachAttachments((data.messages ?? []).map(toAssistantMessage), data.session.id));
+    setLatestRun(run);
+    setIsRunning(run?.status === 'running' || run?.status === 'cancelling');
+    setSessions([{ ...data.session, remoteOnly: false, latestRun: run }]);
+    return true;
+  }, []);
+
   const loadSessions = useCallback(async (): Promise<boolean> => {
     setError(null);
     const res = await apiFetch('/api/assistant/sessions');
@@ -478,9 +504,8 @@ export function useAssistantStream() {
     if (selectedSessionId) {
       await loadSession(selectedSessionId);
     }
-    await loadSessions();
     return true;
-  }, [loadSession, loadSessions, selectedSessionId]);
+  }, [loadSession, selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSessionId || !isActiveRunStatus(latestRun?.status)) return undefined;
@@ -516,9 +541,8 @@ export function useAssistantStream() {
     setMessages([]);
     setLatestRun(null);
     setSessions((current) => current.filter((session) => session.id !== selectedSessionId));
-    await loadSessions();
     return true;
-  }, [cancelActiveReader, loadSessions, selectedSessionId]);
+  }, [cancelActiveReader, selectedSessionId]);
 
   return {
     sessions,
@@ -530,6 +554,7 @@ export function useAssistantStream() {
     error,
     loadSessions,
     loadSession,
+    loadCurrent,
     createSession,
     renameSession,
     send,

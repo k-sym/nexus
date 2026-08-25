@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { ArrowsClockwise, CloudArrowUp, PaperPlaneRight, Paperclip, PencilSimple, Plus, Stop, Trash } from '@phosphor-icons/react';
+import { CloudArrowUp, PaperPlaneRight, Paperclip, Stop, Trash } from '@phosphor-icons/react';
 import {
-  AssistantAttachment,
   AssistantMessage,
-  AssistantSession,
   useAssistantStream,
 } from '../hooks/useAssistantStream';
 import { confirmDialog } from '../lib/confirm';
@@ -13,22 +11,24 @@ import { AgentRunCard } from './AgentRunCard';
 import { RunStatusStrip } from './RunStatusStrip';
 import { ToolCallTimeline } from './ToolCallTimeline';
 
+// The one-conversation model (baker-internal#114 / #381): the partner has ONE
+// current session, held server-side and shared with every other surface
+// (Telegram, and whatever comes next). This view never chooses a session — it
+// renders whatever the pointer says. `/new` rotates; there is no session rail,
+// no picker, and none is wanted. Rotation is also the archive path: the
+// memory-flush hooks harvest transcripts, so old conversations become memory,
+// not tabs.
 export default function AssistantView() {
   const {
-    sessions,
     selectedSession,
     selectedSessionId,
     messages,
     latestRun,
     isRunning,
     error,
-    loadSessions,
-    loadSession,
-    createSession,
-    renameSession,
+    loadCurrent,
     send,
     startBackgroundRun,
-    sync,
     abort,
     clear,
   } = useAssistantStream();
@@ -56,19 +56,13 @@ export default function AssistantView() {
     clearPendingAttachments,
   } = usePendingAttachments();
   const [draggingAttachments, setDraggingAttachments] = useState(false);
-  const [renaming, setRenaming] = useState(false);
-  const [renameDraft, setRenameDraft] = useState('');
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const lastSelectedSessionIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    void loadSessions();
-  }, [loadSessions]);
-
-  useEffect(() => {
-    if (!renaming) setRenameDraft(selectedSession?.title ?? '');
-  }, [renaming, selectedSession?.title]);
+    void loadCurrent();
+  }, [loadCurrent]);
 
   useEffect(() => {
     if (lastSelectedSessionIdRef.current && lastSelectedSessionIdRef.current !== selectedSessionId) {
@@ -81,14 +75,17 @@ export default function AssistantView() {
     const text = input.trim();
     if ((!text && pendingAttachments.length === 0) || !selectedSessionId) return;
     if (text === '/new' && pendingAttachments.length === 0) {
-      const created = await createSession();
-      if (created) setInput('');
+      const rotated = await loadCurrent(true);
+      if (rotated) setInput('');
       return;
     }
     if (text === '/clear' && pendingAttachments.length === 0) {
-      if (!(await confirmDialog('Delete this Assistant session? This cannot be undone.'))) return;
+      if (!(await confirmDialog('Delete this conversation? This cannot be undone.'))) return;
       const cleared = await clear();
-      if (cleared) setInput('');
+      if (cleared) {
+        setInput('');
+        await loadCurrent();
+      }
       return;
     }
     if (isRunning) return;
@@ -97,7 +94,7 @@ export default function AssistantView() {
       setInput('');
       clearPendingAttachments();
     }
-  }, [clear, clearPendingAttachments, createSession, input, isRunning, pendingAttachments, selectedSessionId, send]);
+  }, [clear, clearPendingAttachments, input, isRunning, loadCurrent, pendingAttachments, selectedSessionId, send]);
 
   const handleBackgroundRun = useCallback(async () => {
     const text = input.trim();
@@ -126,12 +123,6 @@ export default function AssistantView() {
       void handleSend();
     }
   };
-
-  const commitRename = useCallback(async () => {
-    if (!selectedSessionId) return;
-    const renamed = await renameSession(selectedSessionId, renameDraft);
-    if (renamed) setRenaming(false);
-  }, [renameDraft, renameSession, selectedSessionId]);
 
   const trimmedInput = input.trim();
   const canSubmit = !!selectedSessionId && (!!trimmedInput || pendingAttachments.length > 0);
@@ -169,100 +160,26 @@ export default function AssistantView() {
           Release to attach files
         </div>
       )}
-      <aside className="w-72 shrink-0 surface-glass border-r border-subtle flex flex-col min-h-0">
-        <div className="px-4 py-3 border-b border-subtle flex items-center justify-between gap-3">
-          <div>
-            <h1 className="text-lg font-semibold">Assistant</h1>
-            <p className="text-xs text-faint">Sessions</p>
-          </div>
-          <button
-            type="button"
-            onClick={() => void createSession()}
-            className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors"
-            title="New Assistant session"
-            aria-label="New Session"
-          >
-            <Plus size={16} weight="bold" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {sessions.length === 0 ? (
-            <p className="px-2 py-3 text-sm text-faint">No Assistant sessions yet.</p>
-          ) : (
-            sessions.map((session) => (
-              <SessionRow
-                key={session.id}
-                session={session}
-                selected={session.id === selectedSessionId}
-                onSelect={() => void loadSession(session.id)}
-              />
-            ))
-          )}
-        </div>
-      </aside>
-
       <section className="flex-1 flex flex-col min-w-0 min-h-0">
         <header className="surface-glass flex items-center justify-between px-6 py-3 border-b border-subtle shrink-0">
           <div className="min-w-0">
-            {renaming ? (
-              <input
-                autoFocus
-                value={renameDraft}
-                onChange={(e) => setRenameDraft(e.target.value)}
-                onBlur={() => void commitRename()}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.preventDefault();
-                    void commitRename();
-                  } else if (e.key === 'Escape') {
-                    e.preventDefault();
-                    setRenaming(false);
-                  }
-                }}
-                className="surface-elevated text-primary text-lg font-semibold px-2 py-0.5 rounded-sm outline-hidden ring-1 ring-[var(--accent)]"
-              />
-            ) : (
-              <h2 className="text-lg font-semibold truncate">{selectedSession?.title ?? 'Assistant'}</h2>
-            )}
-            {latestRun?.remote_run_id && (
-              <div className="flex items-center gap-2 text-xs text-faint">
-                <span className="truncate">remote {latestRun.remote_run_id}</span>
-              </div>
-            )}
+            <h2 className="text-lg font-semibold truncate">{selectedSession?.title ?? 'Partner'}</h2>
+            <div className="flex items-center gap-2 text-xs text-faint">
+              <span className="truncate">One conversation, every surface — /new starts fresh</span>
+              {selectedSession?.updated_at && <span className="shrink-0">· {relativeUpdatedAt(selectedSession.updated_at)}</span>}
+              {latestRun?.remote_run_id && <span className="truncate shrink-0">· remote {latestRun.remote_run_id}</span>}
+            </div>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setRenameDraft(selectedSession?.title ?? '');
-                setRenaming(true);
-              }}
-              disabled={!selectedSessionId}
-              className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors disabled:opacity-40"
-              title="Rename Assistant session"
-              aria-label="Rename Assistant session"
-            >
-              <PencilSimple size={16} />
-            </button>
             <button
               type="button"
               onClick={() => setConfirmingDelete(true)}
               disabled={!selectedSessionId}
               className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-red-300 hover:border-strong transition-colors disabled:opacity-40"
-              title="Delete Assistant session"
-              aria-label="Delete Assistant session"
+              title="Delete this conversation"
+              aria-label="Delete this conversation"
             >
               <Trash size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={() => void sync()}
-              className="h-8 w-8 surface-elevated border border-subtle rounded-lg flex items-center justify-center text-muted hover:text-[var(--text-primary)] hover:border-strong transition-colors"
-              title="Sync Assistant sessions"
-              aria-label="Sync"
-            >
-              <ArrowsClockwise size={16} />
             </button>
           </div>
         </header>
@@ -270,10 +187,10 @@ export default function AssistantView() {
         {confirmingDelete && selectedSessionId && (
           <div
             role="alertdialog"
-            aria-label="Confirm delete Assistant session"
+            aria-label="Confirm delete conversation"
             className="surface-panel border-b border-subtle px-6 py-2 flex items-center justify-end gap-2 text-xs text-muted"
           >
-            <span className="mr-auto text-primary">Delete this Assistant session?</span>
+            <span className="mr-auto text-primary">Delete this conversation?</span>
             <button
               type="button"
               onClick={() => setConfirmingDelete(false)}
@@ -285,10 +202,13 @@ export default function AssistantView() {
               type="button"
               onClick={async () => {
                 const cleared = await clear();
-                if (cleared) setConfirmingDelete(false);
+                if (cleared) {
+                  setConfirmingDelete(false);
+                  await loadCurrent();
+                }
               }}
               className="h-8 px-3 rounded-lg border border-red-400/35 text-red-200 bg-red-950/35 hover:border-red-300 transition-colors"
-              aria-label="Confirm delete Assistant session"
+              aria-label="Confirm delete conversation"
             >
               Delete
             </button>
@@ -392,7 +312,7 @@ export default function AssistantView() {
                 e.preventDefault();
                 void addAttachmentFiles(files);
               }}
-              placeholder={suggestion || 'Message Assistant...'}
+              placeholder={suggestion || 'Message your partner...'}
               rows={2}
               disabled={!selectedSessionId}
               className="flex-1 surface-panel border border-subtle rounded-lg px-3 py-2 text-sm text-primary placeholder:text-faint resize-none focus:outline-hidden focus:border-strong disabled:opacity-50"
@@ -432,43 +352,6 @@ export default function AssistantView() {
         </div>
       </section>
     </div>
-  );
-}
-
-// Remote rows are adopted from Hermes. api_server sessions keep the plain
-// "Remote" tag; TUI/CLI sessions get a distinguishing label so it's clear they
-// originated outside Nexus.
-function remoteSourceLabel(source?: string | null): string {
-  if (source === 'tui') return 'TUI';
-  if (source === 'cli') return 'CLI';
-  return 'Remote';
-}
-
-function SessionRow({ session, selected, onSelect }: { session: AssistantSession; selected: boolean; onSelect: () => void }) {
-  const active = session.status === 'running' || session.latestRun?.status === 'running';
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`w-full text-left rounded-lg px-3 py-2 border transition-colors ${
-        selected
-          ? 'surface-elevated border-strong text-primary'
-          : 'border-transparent text-muted hover:text-[var(--text-primary)] hover:bg-[var(--surface-hover)]'
-      }`}
-    >
-      <div className="flex items-center gap-2 min-w-0">
-        <span className={`h-2 w-2 rounded-full shrink-0 ${active ? 'bg-emerald-400' : 'bg-[var(--border-strong)]'}`} aria-hidden="true" />
-        <span className="text-sm font-medium truncate">{session.title}</span>
-        {session.remoteOnly && (
-          <span className="ml-auto rounded-sm border border-subtle px-1.5 py-0.5 text-[10px] uppercase text-faint shrink-0">
-            {remoteSourceLabel(session.source)}
-          </span>
-        )}
-      </div>
-      {session.updated_at && (
-        <div className="text-[11px] text-faint mt-1 truncate">{relativeUpdatedAt(session.updated_at)}</div>
-      )}
-    </button>
   );
 }
 

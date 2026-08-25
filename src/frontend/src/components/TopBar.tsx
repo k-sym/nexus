@@ -47,13 +47,13 @@ export default function TopBar({ view, onSelectGlobal, onSelectManage, onOpenPal
       <button onClick={() => onSelectGlobal('tickets')} className={item(view === 'tickets')}><Ticket size={16} weight={view === 'tickets' ? 'fill' : 'regular'} /> Tickets</button>
       <button onClick={() => onSelectGlobal('ideas')} className={item(view === 'ideas')}><Brain size={16} weight={view === 'ideas' ? 'fill' : 'regular'} /> Ideas</button>
       <button onClick={() => onSelectGlobal('assistant')} className={item(view === 'assistant')}>
-        <ChatCircle size={16} weight={view === 'assistant' ? 'fill' : 'regular'} /> Assistant
+        <ChatCircle size={16} weight={view === 'assistant' ? 'fill' : 'regular'} /> Partner
         {assistantActive && (
           <span
             role="img"
             className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse"
-            title="Assistant run active"
-            aria-label="Assistant run active"
+            title="Partner run active"
+            aria-label="Partner run active"
           />
         )}
       </button>

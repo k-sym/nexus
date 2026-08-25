@@ -226,6 +226,10 @@ export interface HermesClient {
   deleteSession(sessionId: string): Promise<void>;
   listSessions(input?: HermesListSessionsInput): Promise<HermesListSessionsResult>;
   getSession(sessionId: string): Promise<HermesListedSession | null>;
+  /** The partner's server-held current-session pointer (baker-internal#114):
+   * one conversation, every surface. rotate = the /new verb. */
+  currentSession(): Promise<HermesListedSession | null>;
+  rotateCurrentSession(): Promise<HermesListedSession | null>;
   getSessionMessages(sessionId: string): Promise<HermesSessionMessage[]>;
   sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult>;
   sessionChatStream(input: HermesSessionChatStreamInput): AsyncIterable<HermesChatStreamEvent>;
@@ -405,6 +409,18 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
 
     async getSession(sessionId: string): Promise<HermesListedSession | null> {
       const body = (await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`)) as any;
+      const session = body?.session ?? body;
+      return session && typeof session === 'object' ? (session as HermesListedSession) : null;
+    },
+
+    async currentSession(): Promise<HermesListedSession | null> {
+      const body = (await requestJson('/v1/current-session')) as any;
+      const session = body?.session ?? body;
+      return session && typeof session === 'object' ? (session as HermesListedSession) : null;
+    },
+
+    async rotateCurrentSession(): Promise<HermesListedSession | null> {
+      const body = (await requestJson('/v1/current-session/rotate', { method: 'POST' })) as any;
       const session = body?.session ?? body;
       return session && typeof session === 'object' ? (session as HermesListedSession) : null;
     },

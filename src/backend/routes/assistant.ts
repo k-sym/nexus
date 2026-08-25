@@ -815,27 +815,22 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return createSession(db, body.title);
     });
 
-    fastify.post('/api/assistant/sessions/import', async (request, reply) => {
-      const body = (request.body ?? {}) as { remoteSessionId?: string };
-      const remoteSessionId = String(body.remoteSessionId ?? '').trim();
-      if (!remoteSessionId) {
-        reply.code(400);
-        return { error: 'remoteSessionId is required' };
+    // Bind (or re-find) a local row for a remote session — adoption is just a
+    // local pointer at the remote session; transcripts render live.
+    const adoptRemoteSession = async (
+      hermes: ReturnType<typeof createHermesClient>,
+      remoteSessionId: string,
+      knownTitle?: string,
+    ): Promise<AssistantSession> => {
+      let remoteTitle = knownTitle?.trim() || undefined;
+      if (!remoteTitle) {
+        try {
+          const detail = await hermes.getSession(remoteSessionId);
+          remoteTitle = detail?.title?.trim() || undefined;
+        } catch {
+          // Tolerate a missing detail endpoint; adoption still proceeds with a fallback title.
+        }
       }
-      const hermes = client();
-      if (!hermes) {
-        reply.code(400);
-        return { error: 'Assistant URL and key must be configured in Settings.' };
-      }
-
-      let remoteTitle: string | undefined;
-      try {
-        const detail = await hermes.getSession(remoteSessionId);
-        remoteTitle = detail?.title?.trim() || undefined;
-      } catch {
-        // Tolerate a missing detail endpoint; adoption still proceeds with a fallback title.
-      }
-
       const now = new Date().toISOString();
       let session = db
         .prepare('SELECT * FROM assistant_sessions WHERE remote_session_id = ? AND archived_at IS NULL')
@@ -852,6 +847,23 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         db.prepare('UPDATE assistant_sessions SET title = ?, updated_at = ? WHERE id = ?').run(remoteTitle, now, session.id);
         session = db.prepare('SELECT * FROM assistant_sessions WHERE id = ?').get(session.id) as AssistantSession;
       }
+      return session;
+    };
+
+    fastify.post('/api/assistant/sessions/import', async (request, reply) => {
+      const body = (request.body ?? {}) as { remoteSessionId?: string };
+      const remoteSessionId = String(body.remoteSessionId ?? '').trim();
+      if (!remoteSessionId) {
+        reply.code(400);
+        return { error: 'remoteSessionId is required' };
+      }
+      const hermes = client();
+      if (!hermes) {
+        reply.code(400);
+        return { error: 'Assistant URL and key must be configured in Settings.' };
+      }
+
+      const session = await adoptRemoteSession(hermes, remoteSessionId);
 
       // Adoption is now just a local pointer at the remote session — no message
       // copy. History renders live from `/api/sessions/{id}/messages`, so the
@@ -863,6 +875,44 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         ...(await remoteSessionSeeds(session, hermes)),
       };
     });
+
+    // The one-conversation model (baker-internal#114 / #381): the partner's
+    // current session is a server-held pointer in assistant-api; the view never
+    // chooses sessions. Without a configured assistant, fall back to a local
+    // session so the view stays usable.
+    const currentPayload = async (rotate: boolean, reply: any) => {
+      const hermes = client();
+      if (!hermes) {
+        const session = rotate ? createSession(db, 'Partner') : ensureDefaultSession(db);
+        return {
+          session,
+          messages: await renderSessionMessages(db, session, assistantSessionDir, undefined),
+          latestRun: publicRun(latestRun(db, session.id)),
+        };
+      }
+      let remote;
+      try {
+        remote = rotate ? await hermes.rotateCurrentSession() : await hermes.currentSession();
+      } catch (err) {
+        reply.code(502);
+        return { error: `Assistant current-session failed: ${errorMessage(err)}` };
+      }
+      if (!remote?.id) {
+        reply.code(502);
+        return { error: 'Assistant returned no current session.' };
+      }
+      const session = await adoptRemoteSession(hermes, String(remote.id), remote.title ?? 'Partner');
+      return {
+        session,
+        messages: await renderSessionMessages(db, session, assistantSessionDir, hermes),
+        latestRun: publicRun(latestRun(db, session.id)),
+        ...(await remoteSessionSeeds(session, hermes)),
+      };
+    };
+
+    fastify.get('/api/assistant/current', async (_request, reply) => currentPayload(false, reply));
+
+    fastify.post('/api/assistant/current/rotate', async (_request, reply) => currentPayload(true, reply));
 
     fastify.get('/api/assistant/sessions/:id', async (request, reply) => {
       const { id } = request.params as { id: string };

@@ -1382,3 +1382,87 @@ test('Assistant session detail seeds lastModelKey + contextUsage from the adapte
     await cleanup(app, db, dir);
   }
 });
+
+// -- the one-conversation model (baker-internal#114 / #381) ------------------
+
+test('GET /api/assistant/current adopts the remote pointer session and re-finds it on repeat', async () => {
+  const fetchImpl = hermesChatMock({
+    messages: [{ id: 'm1', role: 'assistant', content: 'hello from the partner' }],
+    onOther: (u, init) => {
+      if (u.endsWith('/v1/current-session') && (!init?.method || init.method === 'GET')) {
+        return jsonRes({ session: { id: 'partner-123-abc', title: 'Partner' } });
+      }
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const first = await app.inject({ method: 'GET', url: '/api/assistant/current' });
+    assert.equal(first.statusCode, 200);
+    const firstBody = first.json() as any;
+    assert.equal(firstBody.session.remote_session_id, 'partner-123-abc');
+    assert.equal(firstBody.session.title, 'Partner');
+    assert.equal(firstBody.messages.at(-1)?.content, 'hello from the partner');
+
+    // Same pointer again → the SAME local row, never a duplicate adoption.
+    const second = await app.inject({ method: 'GET', url: '/api/assistant/current' });
+    assert.equal(second.json().session.id, firstBody.session.id);
+    const rows = db.prepare('SELECT COUNT(*) AS n FROM assistant_sessions WHERE remote_session_id = ?')
+      .get('partner-123-abc') as { n: number };
+    assert.equal(rows.n, 1);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('POST /api/assistant/current/rotate adopts the fresh pointer session', async () => {
+  const fetchImpl = hermesChatMock({
+    messages: [],
+    onOther: (u, init) => {
+      if (u.endsWith('/v1/current-session/rotate') && init?.method === 'POST') {
+        return jsonRes({ session: { id: 'partner-456-def', title: 'Partner' } });
+      }
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const res = await app.inject({ method: 'POST', url: '/api/assistant/current/rotate' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.json().session.remote_session_id, 'partner-456-def');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('GET /api/assistant/current falls back to a local session when no assistant is configured', async () => {
+  const { app, db, dir } = makeApp({ config: { ...loadConfig(), assistant: { url: '', api_key: '' } } });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/assistant/current' });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as any;
+    assert.ok(body.session.id);
+    assert.equal(body.session.remote_session_id ?? null, null);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('GET /api/assistant/current surfaces adapter failure as 502, not a crash', async () => {
+  const fetchImpl = hermesChatMock({
+    onOther: (u) => {
+      if (u.endsWith('/v1/current-session')) {
+        return new Response('adapter down', { status: 503 });
+      }
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const res = await app.inject({ method: 'GET', url: '/api/assistant/current' });
+    assert.equal(res.statusCode, 502);
+    assert.match((res.json() as any).error, /current-session failed/);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
