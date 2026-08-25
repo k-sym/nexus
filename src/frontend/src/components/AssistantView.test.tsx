@@ -367,19 +367,32 @@ describe('AssistantView', () => {
     expect(streamCalls).toBe(2);
   });
 
-  it('deletes the current conversation from a visible delete control without a confirm dialog', async () => {
+  it('new-conversation control: Archive to memory rotates and never deletes', async () => {
     render(<AssistantView />);
 
-    fireEvent.click(await screen.findByRole('button', { name: /Delete this conversation/i }));
-    fireEvent.click(await screen.findByRole('button', { name: /Confirm delete conversation/i }));
+    fireEvent.click(await screen.findByRole('button', { name: 'New conversation' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive to memory' }));
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/current/rotate', { method: 'POST' });
+    });
+    // Archiving keeps the transcript for the memory pipeline — no DELETE.
+    expect(apiFetchMock).not.toHaveBeenCalledWith('/api/assistant/sessions/s1', { method: 'DELETE' });
+    // The inline two-step control is self-contained; it must not route through confirmDialog.
+    expect(confirmDialog).not.toHaveBeenCalled();
+  });
+
+  it('new-conversation control: Delete removes the session then re-asks the pointer', async () => {
+    render(<AssistantView />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'New conversation' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete this conversation' }));
 
     await waitFor(() => {
       expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sessions/s1', { method: 'DELETE' });
     });
-    // The inline two-step control is self-contained; it must not route through confirmDialog.
-    expect(confirmDialog).not.toHaveBeenCalled();
-    // Deleting the current conversation immediately re-asks the pointer, which
-    // rotates server-side — the view is never left without a conversation.
+    // Deleting immediately re-asks the pointer, which rotates server-side —
+    // the view is never left without a conversation.
     await waitFor(() => {
       expect(apiFetchMock.mock.calls.filter(([u]) => u === '/api/assistant/current').length).toBeGreaterThan(1);
     });
