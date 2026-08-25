@@ -675,7 +675,7 @@ export default function App() {
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
       { id: 'view-ideas', label: 'Ideas', hint: 'View', keywords: 'ideas capture ripen park', run: () => selectGlobal('ideas') },
       { id: 'view-decisions', label: 'Decisions', hint: 'View', keywords: 'tool policy approval audit gated', run: () => selectGlobal('decisions') },
-      { id: 'view-assistant', label: 'Assistant', hint: 'View', keywords: 'hermes openclaw remote chat', run: () => selectGlobal('assistant') },
+      { id: 'view-assistant', label: 'Partner', hint: 'View', keywords: 'assistant partner hermes openclaw remote chat', run: () => selectGlobal('assistant') },
     ];
     (['kanban', 'memory', 'chat', 'projectManagement'] as const).forEach((sub) => {
       const label = sub === 'chat' ? 'Sessions' : sub === 'projectManagement' ? 'Project Management' : sub.charAt(0).toUpperCase() + sub.slice(1);

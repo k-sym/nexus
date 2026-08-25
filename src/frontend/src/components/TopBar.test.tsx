@@ -14,7 +14,7 @@ describe('TopBar', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /Assistant/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Partner/i }));
 
     expect(onSelectGlobal).toHaveBeenCalledWith('assistant');
   });
@@ -30,7 +30,7 @@ describe('TopBar', () => {
       />,
     );
 
-    expect(screen.getByLabelText('Assistant run active')).toBeInTheDocument();
+    expect(screen.getByLabelText('Partner run active')).toBeInTheDocument();
   });
 
   it('hides the activity dot on the Assistant tab when assistantActive is false', () => {
@@ -44,7 +44,7 @@ describe('TopBar', () => {
       />,
     );
 
-    expect(screen.queryByLabelText('Assistant run active')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Partner run active')).not.toBeInTheDocument();
   });
 
   it('hides the activity dot on the Assistant tab when assistantActive is omitted', () => {
@@ -57,6 +57,6 @@ describe('TopBar', () => {
       />,
     );
 
-    expect(screen.queryByLabelText('Assistant run active')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Partner run active')).not.toBeInTheDocument();
   });
 });

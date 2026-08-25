@@ -72,6 +72,15 @@ const fixtures: Record<string, unknown> = {
   '/api/models': { models: [], allModels: [], enabledModelKeys: [], customized: false },
   '/api/notifications': [],
   '/api/assistant/sessions': { sessions },
+  // The one-conversation model (#381): the Partner view mounts on the pointer.
+  '/api/assistant/current': {
+    session: sessions[0],
+    messages: [
+      { id: 'message-1', role: 'user', content: 'Check the release candidate and summarise any blockers.', created_at: '2026-07-19T09:00:00.000Z' },
+      { id: 'message-2', role: 'assistant', content: 'All required checks pass. No release blockers remain.', created_at: '2026-07-19T09:01:00.000Z' },
+    ],
+    latestRun: null,
+  },
   '/api/assistant/sessions/session-1': {
     session: sessions[0],
     messages: [
@@ -112,7 +121,7 @@ test('mission control desktop', async ({ page }) => {
 });
 
 test('assistant desktop', async ({ page }) => {
-  await page.getByRole('button', { name: 'Assistant', exact: true }).click();
+  await page.getByRole('button', { name: 'Partner', exact: true }).click();
   await expect(page.getByText('All required checks pass. No release blockers remain.')).toBeVisible();
   await expect(page).toHaveScreenshot('assistant.png');
 });
