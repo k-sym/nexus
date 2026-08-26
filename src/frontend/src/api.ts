@@ -384,6 +384,8 @@ export type DraftStatus = 'pending' | 'approved' | 'sent' | 'rejected' | 'expire
 
 export interface OutboundDraft {
   id: string;
+  /** 'mail' (default) or 'meeting' (baker-internal#43). Approving a meeting BOOKS it. */
+  kind?: 'mail' | 'meeting';
   account: string;
   status: DraftStatus;
   subject: string;
@@ -397,6 +399,11 @@ export interface OutboundDraft {
   /** True once the body has been rewritten by hand (#97) — the approval that
    *  follows records as approved_with_edits in the autonomy ledger. */
   edited?: boolean;
+  /** Meeting-kind fields (#43): ISO local times, invitees, Teams flag. */
+  start?: string;
+  end?: string;
+  attendees?: string[];
+  online?: boolean;
   preview: string;
   body_chars: number;
 }
@@ -419,6 +426,7 @@ export interface DraftsResponse {
 
 export interface DraftDecision extends OutboundDraft {
   sent?: boolean;
+  booked?: boolean;
 }
 
 // Idea Watcher (#352) — one created GitHub issue of a graduation set.

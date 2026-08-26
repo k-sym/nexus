@@ -101,14 +101,20 @@ struct DraftRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: draft.isReply ? "arrowshape.turn.up.left" : "envelope")
+            Image(systemName: draft.isMeeting ? "calendar.badge.plus"
+                             : draft.isReply ? "arrowshape.turn.up.left" : "envelope")
                 .font(.caption)
-                .foregroundStyle(.blue)
+                .foregroundStyle(draft.isMeeting ? .purple : .blue)
             VStack(alignment: .leading, spacing: 2) {
                 Text(draft.subject)
                     .font(.subheadline)
                     .lineLimit(1)
-                if let rationale = draft.rationale, !rationale.isEmpty {
+                if draft.isMeeting, let start = draft.start {
+                    Text("\(start.replacingOccurrences(of: "T", with: " ").prefix(16)) · \(draft.attendees?.count ?? 0) attendee(s)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if let rationale = draft.rationale, !rationale.isEmpty {
                     Text(rationale)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -155,6 +161,14 @@ struct DraftReviewSheet: View {
             Form {
                 Section {
                     LabeledContent("From", value: draft.account)
+                    if draft.isMeeting {
+                        LabeledContent("When", value: "\(draft.start ?? "?") → \(draft.end?.split(separator: "T").last.map(String.init) ?? "?")")
+                        LabeledContent("Invites", value: (draft.attendees?.isEmpty ?? true)
+                            ? "(none — just you)" : draft.attendees!.joined(separator: ", "))
+                        if draft.online == true {
+                            LabeledContent("Teams", value: "meeting link attached on booking")
+                        }
+                    }
                     if let replyTo = draft.replyTo {
                         LabeledContent("Reply to", value: replyTo)
                     } else if !draft.to.isEmpty {
@@ -248,7 +262,9 @@ struct DraftReviewSheet: View {
                             }
                             .disabled(busy)
                         } footer: {
-                            Text("Sending is immediate and cannot be undone.")
+                            Text(draft.isMeeting
+                                 ? "Booking creates the event and sends the invites immediately."
+                                 : "Sending is immediate and cannot be undone.")
                         }
                     }
                 }
@@ -261,11 +277,12 @@ struct DraftReviewSheet: View {
                 }
             }
             .confirmationDialog(
-                "Send this reply from \(draft.account)?",
+                draft.isMeeting ? "Book this meeting and send the invites?"
+                                : "Send this reply from \(draft.account)?",
                 isPresented: $confirmingSend,
                 titleVisibility: .visible
             ) {
-                Button("Send now", role: .destructive) {
+                Button(draft.isMeeting ? "Book now" : "Send now", role: .destructive) {
                     Task { await decide(approve: true) }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -303,10 +320,11 @@ struct DraftReviewSheet: View {
         do {
             if approve {
                 let decision = try await api.approveDraft(id: draft.id)
-                result = (decision.sent == true) ? "Sent." : "Approved."
+                result = decision.booked == true ? "Booked — invites are out."
+                       : decision.sent == true ? "Sent." : "Approved."
             } else {
                 _ = try await api.rejectDraft(id: draft.id)
-                result = "Rejected — nothing sent."
+                result = draft.isMeeting ? "Rejected — nothing booked." : "Rejected — nothing sent."
             }
             onDecided()
         } catch {
