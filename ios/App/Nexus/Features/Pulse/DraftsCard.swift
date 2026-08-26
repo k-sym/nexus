@@ -42,7 +42,13 @@ struct DraftsCard: View {
     }
 
     var body: some View {
-        Group {
+        // ZStack, NOT Group: Group applies modifiers to each CHILD, and while
+        // the card is hidden it has zero children — so `.polling` (a .task
+        // underneath) was attached to nothing and never fired. The card starts
+        // hidden (state .idle) and only a poll can un-hide it, so it deadlocked
+        // closed and never rendered on any device. A ZStack is a real container
+        // that exists while empty, so the poll runs regardless of visibility.
+        ZStack {
             if shouldRender {
                 Card(title: "Drafts awaiting you", systemImage: "envelope.badge") {
                     content
