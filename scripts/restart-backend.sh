@@ -16,6 +16,13 @@
 #
 # Falls back to a plain foreground start when the launchd job isn't installed,
 # so this still works on a machine that runs the backend by hand.
+#
+# The health wait is generous (2 minutes) on purpose. The LaunchAgent sets
+# ProcessType=Background, which puts the job in a throttled I/O and CPU band, so
+# a cold start right after `npm install` rewrites node_modules can spend a minute
+# in V8's script compilation at ~0% CPU just reading the module tree — measured
+# at ~62s under launchd against 4s for the same build run by hand. That is a slow
+# start, not a failure, so the wait prints progress instead of sitting silent.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -28,7 +35,7 @@ SKIP_BUILD=0
 for arg in "$@"; do
   case "$arg" in
     --skip-build) SKIP_BUILD=1 ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
     *) echo "unknown option: $arg" >&2; exit 2 ;;
   esac
 done
@@ -84,16 +91,23 @@ else
   exec node src/backend/dist/index.js
 fi
 
-echo "==> Waiting for http://127.0.0.1:$PORT/api/health"
-for _ in $(seq 1 30); do
+HEALTH_TIMEOUT=120
+echo "==> Waiting for http://127.0.0.1:$PORT/api/health (up to ${HEALTH_TIMEOUT}s)"
+for elapsed in $(seq 1 "$HEALTH_TIMEOUT"); do
   if curl -fsS -o /dev/null "http://127.0.0.1:$PORT/api/health" 2>/dev/null; then
-    echo "==> Backend healthy on :$PORT (pid $(launchctl list | awk -v l="$LABEL" '$3 == l { print $1 }'))"
+    echo "==> Backend healthy on :$PORT after $((elapsed - 1))s (pid $(launchctl list | awk -v l="$LABEL" '$3 == l { print $1 }'))"
     exit 0
+  fi
+  # A heartbeat every 15s: a slow cold start keeps ticking up, a genuinely
+  # wedged job just sits there — the difference is visible without waiting out
+  # the whole budget.
+  if (( elapsed % 15 == 0 )); then
+    echo "    still waiting (${elapsed}s)"
   fi
   sleep 1
 done
 
-echo "!! Backend did not become healthy within 30s." >&2
+echo "!! Backend did not become healthy within ${HEALTH_TIMEOUT}s." >&2
 echo "   Last 20 log lines from $LOG:" >&2
 tail -20 "$LOG" >&2 2>/dev/null || echo "   (no log at $LOG)" >&2
 exit 1
