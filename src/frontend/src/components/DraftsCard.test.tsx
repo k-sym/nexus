@@ -175,3 +175,52 @@ describe('DraftsCard editing (#97)', () => {
     expect(screen.queryByRole('button', { name: /send/i })).not.toBeInTheDocument();
   });
 });
+
+
+describe('DraftsCard meetings (#43)', () => {
+  const MEETING = {
+    id: 'm1',
+    kind: 'meeting' as const,
+    account: 'ssuk',
+    status: 'pending' as const,
+    subject: 'Wise CI catch-up',
+    to: [], cc: [],
+    reply_to: null, thread: null,
+    source: 'manual',
+    rationale: 'prep for Thursday',
+    start: '2026-08-28T14:00:00',
+    end: '2026-08-28T14:30:00',
+    attendees: ['amh@safetyservices.co.uk'],
+    online: true,
+    preview: 'Agenda: CI pipeline',
+    body_chars: 19,
+  };
+  const MEETING_DETAIL = { ...MEETING, body: 'Agenda: CI pipeline', sendable: false, sendable_reason: 'not approved (status=pending)' };
+
+  it('renders a meeting with its time and offers Book, never Send', async () => {
+    vi.spyOn(api.drafts, 'list').mockResolvedValue({ configured: true, drafts: [MEETING], pending: 1 });
+    vi.spyOn(api.drafts, 'get').mockResolvedValue(MEETING_DETAIL);
+    const user = userEvent.setup();
+    render(<DraftsCard />);
+    await user.click(await screen.findByText(/Wise CI catch-up/));
+    await screen.findByText(/Agenda: CI pipeline/);
+    // The action must be honestly named: this puts an event and invites into
+    // the world, not an email.
+    expect(screen.getByRole('button', { name: 'Book…' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Send…' })).not.toBeInTheDocument();
+    // And the card says where the invites will go BEFORE the tap.
+    expect(screen.getByText(/invites go to amh@safetyservices.co.uk on booking/)).toBeVisible();
+  });
+
+  it('a booked meeting reports booking, not sending', async () => {
+    vi.spyOn(api.drafts, 'list').mockResolvedValue({ configured: true, drafts: [MEETING], pending: 1 });
+    vi.spyOn(api.drafts, 'get').mockResolvedValue(MEETING_DETAIL);
+    vi.spyOn(api.drafts, 'approve').mockResolvedValue({ ...MEETING, status: 'sent', booked: true });
+    const user = userEvent.setup();
+    render(<DraftsCard />);
+    await user.click(await screen.findByText(/Wise CI catch-up/));
+    await user.click(await screen.findByRole('button', { name: 'Book…' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm book' }));
+    expect(await screen.findByText('Booked — invites are out.')).toBeVisible();
+  });
+});

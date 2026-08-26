@@ -35,6 +35,9 @@ public enum DraftStatus: String, Decodable, Sendable {
 
 public struct OutboundDraft: Decodable, Sendable, Identifiable {
     public let id: String
+    /// "mail" (nil for old records) or "meeting" (baker-internal#43).
+    /// Approving a meeting BOOKS it — the invite goes out at that moment.
+    public let kind: String?
     /// Mailbox alias the reply would be sent from (`ssuk`, `baker`, …).
     public let account: String
     public let status: DraftStatus
@@ -52,17 +55,24 @@ public struct OutboundDraft: Decodable, Sendable, Identifiable {
     /// True once the body was rewritten by hand (baker-internal#97) — the
     /// approval that follows records as approved_with_edits in the ledger.
     public let edited: Bool?
+    /// Meeting-kind fields (#43): ISO local times, invitees, Teams flag.
+    public let start: String?
+    public let end: String?
+    public let attendees: [String]?
+    public let online: Bool?
     /// First ~200 characters. The full body only arrives on the detail call.
     public let preview: String?
     public let bodyChars: Int?
 
     public var isReply: Bool { replyTo != nil }
+    public var isMeeting: Bool { kind == "meeting" }
 }
 
 /// Detail carries the FULL body: approving something you have only seen a
 /// preview of is not consent, so the sheet fetches this before offering Send.
 public struct OutboundDraftDetail: Decodable, Sendable, Identifiable {
     public let id: String
+    public let kind: String?
     public let account: String
     public let status: DraftStatus
     public let subject: String
@@ -72,6 +82,10 @@ public struct OutboundDraftDetail: Decodable, Sendable, Identifiable {
     public let source: String?
     public let rationale: String?
     public let edited: Bool?
+    public let start: String?
+    public let end: String?
+    public let attendees: [String]?
+    public let online: Bool?
     public let body: String
     /// The adapter's own read of whether this could be sent right now, and why
     /// not. Advisory for display — the send path re-checks regardless.
@@ -85,4 +99,5 @@ public struct DraftDecision: Decodable, Sendable {
     public let id: String?
     public let status: DraftStatus?
     public let sent: Bool?
+    public let booked: Bool?
 }

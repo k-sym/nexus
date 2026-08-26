@@ -61,7 +61,9 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
     setError(null);
     try {
       const decision = action === 'approve' ? await api.drafts.approve(draft.id) : await api.drafts.reject(draft.id);
-      setResult(action === 'approve' ? (decision.sent ? 'Sent.' : 'Approved.') : 'Rejected — nothing sent.');
+      setResult(action === 'approve'
+        ? (decision.booked ? 'Booked — invites are out.' : decision.sent ? 'Sent.' : 'Approved.')
+        : isMeeting ? 'Rejected — nothing booked.' : 'Rejected — nothing sent.');
       onDecided();
     } catch (err: any) {
       // Includes the 409 "already decided" case: say what happened rather than
@@ -73,7 +75,11 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
     }
   };
 
-  const target = draft.reply_to ? `reply · ${draft.rationale || draft.account}` : `to ${draft.to.join(', ')}`;
+  const isMeeting = draft.kind === 'meeting';
+  const target = isMeeting
+    ? `${draft.start?.replace('T', ' ').slice(0, 16)} · ${draft.attendees?.length || 0} attendee(s)${draft.online ? ' · Teams' : ''}`
+    : draft.reply_to ? `reply · ${draft.rationale || draft.account}` : `to ${draft.to.join(', ')}`;
+  const actionWord = isMeeting ? 'Book' : 'Send';
 
   return (
     <div className="border-b border-subtle last:border-b-0">
@@ -82,13 +88,21 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
         className="w-full flex items-center gap-2.5 py-1.5 text-left hover:bg-[var(--surface-hover)] transition-colors rounded-sm px-1"
         aria-label={`Draft for ${draft.account}: ${draft.subject}`}
       >
-        <span className="inline-block h-2.5 w-2.5 rounded-full shrink-0 bg-sky-400" />
+        <span className={`inline-block h-2.5 w-2.5 rounded-full shrink-0 ${isMeeting ? 'bg-violet-400' : 'bg-sky-400'}`} />
         <span className="text-xs font-medium text-zinc-200 truncate">{draft.subject}</span>
         <span className="text-[11px] text-muted ml-auto shrink-0">{draft.account}</span>
       </button>
       {expanded && (
         <div className="px-1 pb-2 text-[11px] text-muted space-y-2">
           <div className="text-faint">{target}</div>
+          {isMeeting && detail && (
+            <div className="text-[11px] text-zinc-300">
+              {detail.start?.replace('T', ' ')} → {detail.end?.split('T')[1] ?? detail.end}
+              {detail.attendees && detail.attendees.length > 0 && (
+                <span className="text-muted"> · invites go to {detail.attendees.join(', ')} on booking</span>
+              )}
+            </div>
+          )}
           {error && <div className="text-red-400">{error}</div>}
           {result && <div className="text-emerald-400">{result}</div>}
           {!detail && !error && <div className="text-faint">Loading the full draft…</div>}
@@ -136,7 +150,7 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
                         disabled={busy !== null}
                         className="px-2 py-1 rounded-md bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] disabled:opacity-50"
                       >
-                        {busy === 'approve' ? 'Sending…' : 'Confirm send'}
+                        {busy === 'approve' ? (isMeeting ? 'Booking…' : 'Sending…') : `Confirm ${actionWord.toLowerCase()}`}
                       </button>
                       <button
                         onClick={() => setConfirming(false)}
@@ -152,7 +166,7 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
                         onClick={() => setConfirming(true)}
                         className="px-2 py-1 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-[11px]"
                       >
-                        Send…
+                        {actionWord}…
                       </button>
                       <button
                         onClick={() => { setConfirming(false); setEditText(detail.body); }}
