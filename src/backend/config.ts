@@ -307,7 +307,24 @@ export function resolveEnvVars(value: string): string {
 export function resolveOpenRouterKey(config: NexusConfig): string {
   const fromConfig = resolveEnvVars(config.models.openrouter.api_key || '');
   if (fromConfig) return fromConfig;
-  return process.env.OPENROUTER_API_KEY || process.env.OPENROUTING_API_KEY || '';
+  const fromEnv = process.env.OPENROUTER_API_KEY || process.env.OPENROUTING_API_KEY || '';
+  if (fromEnv) return fromEnv;
+  return readPiAuthApiKey('openrouter');
+}
+
+/**
+ * Fallback to pi's credential store (~/.nexus/auth.json): a key saved through
+ * the UI's auth flow lives there and nowhere else, so config/env being empty
+ * must not read as "no key configured".
+ */
+function readPiAuthApiKey(providerId: string): string {
+  try {
+    const raw = fs.readFileSync(path.join(nexusDir(), 'auth.json'), 'utf-8');
+    const entry = (JSON.parse(raw) as Record<string, { type?: string; key?: string }>)?.[providerId];
+    return entry?.type === 'api_key' && typeof entry.key === 'string' ? entry.key : '';
+  } catch {
+    return '';
+  }
 }
 
 export function resolveAssistantKey(config: NexusConfig): string {

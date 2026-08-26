@@ -71,6 +71,51 @@ test('parseCodexBarUsage maps the current nested OpenRouter balance', () => {
   assert.equal(stats.sampledAt, '2026-07-16T10:04:37Z');
 });
 
+test('parseCodexBarUsage maps the CodexBar 0.55 OpenRouter details rows', () => {
+  const stats = parseCodexBarUsage('openrouter', JSON.stringify([{
+    provider: 'openrouter',
+    source: 'api',
+    usage: {
+      loginMethod: 'Balance: $373.78',
+      updatedAt: '2026-08-26T17:09:24Z',
+      details: [
+        {
+          title: 'Credits',
+          rows: [
+            { label: 'Remaining', value: '$373.78' },
+            { label: 'Used', value: '$437.22' },
+            { label: 'Total added', value: '$811.00' },
+          ],
+        },
+        {
+          title: 'API key',
+          rows: [{ label: 'Today', value: '$3.52' }],
+          chart: { unit: 'USD', kind: 'bars', title: 'Key spend', points: [{ value: 3.52291003, label: 'Today' }] },
+        },
+      ],
+      primary: null,
+      secondary: null,
+    },
+  }]));
+
+  assert.equal(stats.ok, true);
+  assert.equal(stats.value, '$373.78');
+  assert.equal(stats.caption, 'credit balance');
+  assert.equal(stats.source, 'codexbar-api');
+  assert.equal(stats.sampledAt, '2026-08-26T17:09:24Z');
+});
+
+test('parseCodexBarUsage falls back to the 0.55 loginMethod balance summary', () => {
+  const stats = parseCodexBarUsage('openrouter', JSON.stringify([{
+    provider: 'openrouter',
+    source: 'api',
+    usage: { loginMethod: 'Balance: $1,024.50', details: [] },
+  }]));
+
+  assert.equal(stats.ok, true);
+  assert.equal(stats.value, '$1024.50');
+});
+
 test('getUsageStats prefers current CodexBar CLI data for every dashboard provider', async () => {
   const payloads: Record<string, string> = {
     claude: JSON.stringify([{ provider: 'claude', source: 'web', usage: { primary: { usedPercent: 11, windowMinutes: 300 } } }]),
