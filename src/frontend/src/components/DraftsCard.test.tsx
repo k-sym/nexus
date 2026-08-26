@@ -23,6 +23,7 @@ const DRAFT = {
 };
 
 const DETAIL = { ...DRAFT, body: 'Hi Jane,\n\nThursday works.\n\nKeith', sendable: false, sendable_reason: 'not approved (status=pending)' };
+const EDITED_DETAIL = { ...DETAIL, body: 'Hi Jane,\n\nFriday actually.\n\nKeith', edited: true };
 
 function stubQueue(drafts = [DRAFT]) {
   vi.spyOn(api.drafts, 'list').mockResolvedValue({ configured: true, drafts, pending: drafts.length });
@@ -109,5 +110,68 @@ describe('DraftsCard', () => {
     await waitFor(() => expect(reject).toHaveBeenCalledWith('d1'));
     expect(approve).not.toHaveBeenCalled();
     expect(await screen.findByText(/Rejected/)).toBeVisible();
+  });
+});
+
+
+describe('DraftsCard editing (#97)', () => {
+  it('hides Send entirely while the textarea holds unsaved text', async () => {
+    stubQueue();
+    const user = userEvent.setup();
+    render(<DraftsCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    await screen.findByText(/Thursday works/);
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+    // The stale-text guard: nothing on screen can send while editing.
+    expect(screen.getByRole('textbox', { name: 'Edit draft body' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /send/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
+  });
+
+  it('Save round-trips through the API and Send only then returns', async () => {
+    stubQueue();
+    const edit = vi.spyOn(api.drafts, 'edit').mockResolvedValue(EDITED_DETAIL);
+    const user = userEvent.setup();
+    render(<DraftsCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    const box = screen.getByRole('textbox', { name: 'Edit draft body' });
+    await user.clear(box);
+    await user.type(box, 'Hi Jane, Friday actually. Keith');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(edit).toHaveBeenCalledWith('d1', 'Hi Jane, Friday actually. Keith'));
+    // Back in read mode: the SAVED body renders, Send is reachable again, and
+    // the weaker ledger outcome is signposted.
+    expect(await screen.findByText(/Friday actually/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send…' })).toBeVisible();
+    expect(screen.getByText(/approved-with-edits/)).toBeVisible();
+  });
+
+  it('Discard changes reverts without calling the API', async () => {
+    stubQueue();
+    const edit = vi.spyOn(api.drafts, 'edit');
+    const user = userEvent.setup();
+    render(<DraftsCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: 'Discard changes' }));
+    expect(edit).not.toHaveBeenCalled();
+    expect(await screen.findByText(/Thursday works/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Send…' })).toBeVisible();
+  });
+
+  it('a failed save stays in edit mode and says so', async () => {
+    stubQueue();
+    vi.spyOn(api.drafts, 'edit').mockRejectedValue(
+      new Error("cannot edit a draft in state 'sent' — a sent draft is history, not a document"));
+    const user = userEvent.setup();
+    render(<DraftsCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    await user.click(await screen.findByRole('button', { name: 'Edit' }));
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    expect(await screen.findByText(/history, not a document/)).toBeVisible();
+    expect(screen.getByRole('textbox', { name: 'Edit draft body' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: /send/i })).not.toBeInTheDocument();
   });
 });

@@ -394,6 +394,9 @@ export interface OutboundDraft {
   source: string;
   rationale: string;
   created_iso?: string;
+  /** True once the body has been rewritten by hand (#97) — the approval that
+   *  follows records as approved_with_edits in the autonomy ledger. */
+  edited?: boolean;
   preview: string;
   body_chars: number;
 }
@@ -533,6 +536,12 @@ export const api = {
   drafts: {
     list: (status = 'pending') => fetchJson<DraftsResponse>(`/api/drafts?status=${encodeURIComponent(status)}`),
     get: (id: string) => fetchJson<OutboundDraftDetail>(`/api/drafts/${encodeURIComponent(id)}`),
+    edit: (id: string, body: string, by = 'web') =>
+      fetchJson<OutboundDraftDetail>(`/api/drafts/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ body, by }),
+      }),
     approve: (id: string, by = 'web') =>
       fetchJson<DraftDecision>(`/api/drafts/${encodeURIComponent(id)}/approve`, {
         method: 'POST',

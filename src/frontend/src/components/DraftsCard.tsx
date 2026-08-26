@@ -12,6 +12,11 @@ import { api, DraftsResponse, OutboundDraft, OutboundDraftDetail } from '../api'
 //      sized card is not a decision.
 //   3. Failures stay on screen until dismissed. A send that failed must never
 //      look like one that worked.
+//   4. Editing (baker-internal#97) and sending are mutually exclusive states:
+//      while the textarea differs from what the server holds, Send does not
+//      exist — the card can never send stale text it is no longer displaying.
+//      Save round-trips through the adapter (which returns the draft to
+//      pending and voids any approval) before Send reappears.
 const POLL_MS = 60_000;
 
 function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () => void }) {
@@ -19,8 +24,9 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
   const [detail, setDetail] = useState<OutboundDraftDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [busy, setBusy] = useState<'approve' | 'reject' | null>(null);
+  const [busy, setBusy] = useState<'approve' | 'reject' | 'save' | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const [editText, setEditText] = useState<string | null>(null); // null = not editing
 
   const toggle = async () => {
     const next = !expanded;
@@ -32,6 +38,21 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
       } catch (err: any) {
         setError(err?.message || 'Failed to load the draft.');
       }
+    }
+  };
+
+  const saveEdit = async () => {
+    if (editText === null || !detail) return;
+    setBusy('save');
+    setError(null);
+    try {
+      const updated = await api.drafts.edit(draft.id, editText);
+      setDetail(updated);
+      setEditText(null); // back to read mode — Send is reachable again
+    } catch (err: any) {
+      setError(err?.message || 'Could not save the edit.');
+    } finally {
+      setBusy(null);
     }
   };
 
@@ -73,10 +94,40 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
           {!detail && !error && <div className="text-faint">Loading the full draft…</div>}
           {detail && (
             <>
-              <pre className="text-[11px] leading-5 text-zinc-300 bg-[var(--surface-hover)] rounded-md p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
-                {detail.body}
-              </pre>
-              {!result && (
+              {editText !== null ? (
+                <textarea
+                  value={editText}
+                  onChange={(e) => setEditText(e.target.value)}
+                  aria-label="Edit draft body"
+                  className="w-full text-[11px] leading-5 text-zinc-200 bg-[var(--surface-hover)] rounded-md p-2 max-h-64 min-h-32 font-mono"
+                />
+              ) : (
+                <pre className="text-[11px] leading-5 text-zinc-300 bg-[var(--surface-hover)] rounded-md p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
+                  {detail.body}
+                </pre>
+              )}
+              {detail.edited && editText === null && !result && (
+                <div className="text-[10px] text-amber-400">edited — will record as approved-with-edits</div>
+              )}
+              {editText !== null && !result && (
+                <div className="flex items-center gap-2 pt-0.5">
+                  <button
+                    onClick={() => void saveEdit()}
+                    disabled={busy !== null || !editText.trim()}
+                    className="px-2 py-1 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-[11px] disabled:opacity-50"
+                  >
+                    {busy === 'save' ? 'Saving…' : 'Save'}
+                  </button>
+                  <button
+                    onClick={() => setEditText(null)}
+                    disabled={busy !== null}
+                    className="px-2 py-1 rounded-md border border-subtle text-[11px] disabled:opacity-50"
+                  >
+                    Discard changes
+                  </button>
+                </div>
+              )}
+              {editText === null && !result && (
                 <div className="flex items-center gap-2 pt-0.5">
                   {confirming ? (
                     <>
@@ -102,6 +153,12 @@ function DraftRow({ draft, onDecided }: { draft: OutboundDraft; onDecided: () =>
                         className="px-2 py-1 rounded-md bg-sky-600 hover:bg-sky-500 text-white text-[11px]"
                       >
                         Send…
+                      </button>
+                      <button
+                        onClick={() => { setConfirming(false); setEditText(detail.body); }}
+                        className="px-2 py-1 rounded-md border border-subtle text-[11px]"
+                      >
+                        Edit
                       </button>
                       <button
                         onClick={() => void decide('reject')}

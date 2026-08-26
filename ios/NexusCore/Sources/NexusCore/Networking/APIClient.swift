@@ -366,6 +366,14 @@ public actor APIClient {
         return try await request(.approveDraft(id, body: body))
     }
 
+    /// Replace a draft's body (#97). The response is the full updated detail —
+    /// pending again, `edited` set — which the sheet swaps in wholesale so what
+    /// is displayed is exactly what the server now holds.
+    public func editDraft(id: String, body newBody: String, by: String = "ios") async throws -> OutboundDraftDetail {
+        let payload = try JSONSerialization.data(withJSONObject: ["body": newBody, "by": by])
+        return try await request(.editDraft(id, body: payload))
+    }
+
     @discardableResult
     public func rejectDraft(id: String, by: String = "ios", note: String? = nil) async throws -> DraftDecision {
         var payload: [String: String] = ["by": by]

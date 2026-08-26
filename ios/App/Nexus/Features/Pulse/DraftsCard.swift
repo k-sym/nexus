@@ -133,6 +133,10 @@ struct DraftReviewSheet: View {
     @State private var result: String?
     @State private var confirmingSend = false
     @State private var busy = false
+    /// nil = read mode. Non-nil = editing: Send and Reject do not exist while
+    /// the text on screen differs from what the server holds (#97) — the sheet
+    /// can never send stale text it is no longer displaying.
+    @State private var editText: String?
 
     init(api: APIClient, draft: OutboundDraft, onDecided: @escaping () -> Void) {
         self.api = api
@@ -157,10 +161,23 @@ struct DraftReviewSheet: View {
                 }
 
                 Section("Message") {
-                    if let detail {
+                    if detail != nil, editText != nil {
+                        TextEditor(text: Binding(
+                            get: { editText ?? "" },
+                            set: { editText = $0 }
+                        ))
+                        .font(.callout)
+                        .frame(minHeight: 160)
+                        .accessibilityLabel("Edit draft body")
+                    } else if let detail {
                         Text(detail.body)
                             .font(.callout)
                             .textSelection(.enabled)
+                        if detail.edited == true {
+                            Text("Edited — approving records as approved-with-edits.")
+                                .font(.caption2)
+                                .foregroundStyle(.orange)
+                        }
                     } else if let loadError {
                         Text(loadError).font(.caption).foregroundStyle(.red)
                     } else {
@@ -184,22 +201,49 @@ struct DraftReviewSheet: View {
                 }
 
                 if detail != nil && result == nil {
-                    Section {
-                        Button {
-                            confirmingSend = true
-                        } label: {
-                            Label("Send", systemImage: "paperplane.fill")
-                        }
-                        .disabled(busy)
+                    if editText != nil {
+                        Section {
+                            Button {
+                                Task { await saveEdit() }
+                            } label: {
+                                Label(busy ? "Saving…" : "Save", systemImage: "checkmark")
+                            }
+                            .disabled(busy || (editText ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-                        Button(role: .destructive) {
-                            Task { await decide(approve: false) }
-                        } label: {
-                            Label("Reject", systemImage: "trash")
+                            Button(role: .cancel) {
+                                editText = nil
+                            } label: {
+                                Label("Discard changes", systemImage: "arrow.uturn.backward")
+                            }
+                            .disabled(busy)
+                        } footer: {
+                            Text("Saving returns the draft to pending — it will need a fresh approval.")
                         }
-                        .disabled(busy)
-                    } footer: {
-                        Text("Sending is immediate and cannot be undone.")
+                    } else {
+                        Section {
+                            Button {
+                                confirmingSend = true
+                            } label: {
+                                Label("Send", systemImage: "paperplane.fill")
+                            }
+                            .disabled(busy)
+
+                            Button {
+                                editText = detail?.body
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            .disabled(busy)
+
+                            Button(role: .destructive) {
+                                Task { await decide(approve: false) }
+                            } label: {
+                                Label("Reject", systemImage: "trash")
+                            }
+                            .disabled(busy)
+                        } footer: {
+                            Text("Sending is immediate and cannot be undone.")
+                        }
                     }
                 }
             }
@@ -229,6 +273,20 @@ struct DraftReviewSheet: View {
             detail = try await api.draftDetail(id: draft.id)
         } catch {
             loadError = LoadState<OutboundDraftDetail>.message(for: error)
+        }
+    }
+
+    private func saveEdit() async {
+        guard let newBody = editText else { return }
+        busy = true
+        actionError = nil
+        defer { busy = false }
+        do {
+            detail = try await api.editDraft(id: draft.id, body: newBody)
+            editText = nil  // read mode — Send is reachable again
+            onDecided()     // the list's preview is stale now; let it refresh
+        } catch {
+            actionError = LoadState<OutboundDraftDetail>.message(for: error)
         }
     }
 
