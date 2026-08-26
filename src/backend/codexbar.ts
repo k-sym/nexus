@@ -141,6 +141,35 @@ function captionForWindow(kind: 'session' | 'weekly', window?: UsageWindowStats)
   return window?.resetLabel ? `${label} remaining · resets ${window.resetLabel}` : `${label} remaining`;
 }
 
+function parseDollarAmount(value: unknown): number | undefined {
+  if (typeof value !== 'string') return undefined;
+  const match = value.match(/\$\s*(-?[\d,]+(?:\.\d+)?)/);
+  if (!match) return undefined;
+  const amount = Number(match[1].replace(/,/g, ''));
+  return Number.isFinite(amount) ? amount : undefined;
+}
+
+/**
+ * CodexBar ≥0.55 stopped emitting numeric balance fields for OpenRouter and
+ * instead ships display sections: usage.details[].rows[] of {label, value}
+ * strings (e.g. {label: "Remaining", value: "$373.78"}), plus a
+ * usage.loginMethod summary like "Balance: $373.78".
+ */
+function balanceFromDetails(usage: Record<string, any>): number | undefined {
+  const details = Array.isArray(usage.details) ? usage.details : [];
+  for (const section of details) {
+    if (!section || typeof section !== 'object') continue;
+    const rows = Array.isArray((section as Record<string, any>).rows) ? (section as Record<string, any>).rows : [];
+    for (const row of rows) {
+      const label = typeof row?.label === 'string' ? row.label.toLowerCase() : '';
+      if (label !== 'remaining' && label !== 'balance') continue;
+      const amount = parseDollarAmount(row?.value);
+      if (amount !== undefined) return amount;
+    }
+  }
+  return parseDollarAmount(usage.loginMethod);
+}
+
 function parseJsonPayload(text: string): unknown {
   const trimmed = text.trim();
   if (!trimmed) throw new Error('empty codexbar response');
@@ -174,7 +203,9 @@ export function parseCodexBarUsage(provider: CodexBarProvider, stdout: string): 
   }
 
   if (provider === 'openrouter') {
-    const balance = findNumber(row, ['balance', 'credits', 'creditBalance', 'creditsRemaining', 'remainingCredits']);
+    const balance =
+      findNumber(row, ['balance', 'credits', 'creditBalance', 'creditsRemaining', 'remainingCredits']) ??
+      balanceFromDetails(usage);
     if (balance !== undefined) {
       const currency = findString(row, ['currency']) || 'USD';
       const prefix = currency.toUpperCase() === 'USD' ? '$' : `${currency.toUpperCase()} `;
