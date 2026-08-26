@@ -144,3 +144,33 @@ test('reject forwards the note and does not send', async () => {
   assert.deepEqual(body, { by: 'web', note: 'too formal' });
   await app.close();
 });
+
+test('PATCH edit forwards the new body and passes 409s through', async () => {
+  const calls: Array<{ url: string; method?: string; body?: any }> = [];
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (url, init) => {
+    calls.push({ url: String(url), method: init?.method, body: init?.body && JSON.parse(String(init.body)) });
+    return jsonRes({ id: 'd1', status: 'pending', edited: true, body: 'Rewritten.' });
+  });
+  const res = await app.inject({
+    method: 'PATCH',
+    url: '/api/drafts/d1',
+    payload: { body: 'Rewritten.', by: 'web' },
+  });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().edited, true);
+  assert.equal(calls[0].method, 'PATCH');
+  assert.deepEqual(calls[0].body, { body: 'Rewritten.', by: 'web' });
+  await app.close();
+});
+
+test('PATCH edit of a sent draft is a 409, and a bodiless edit a 400', async () => {
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async () =>
+    jsonRes({ detail: "cannot edit a draft in state 'sent' — a sent draft is history, not a document" }, 409),
+  );
+  const res = await app.inject({ method: 'PATCH', url: '/api/drafts/d1', payload: { body: 'x' } });
+  assert.equal(res.statusCode, 409);
+  assert.match(res.json().error, /history, not a document/);
+  const bad = await app.inject({ method: 'PATCH', url: '/api/drafts/d1', payload: {} });
+  assert.equal(bad.statusCode, 400);
+  await app.close();
+});

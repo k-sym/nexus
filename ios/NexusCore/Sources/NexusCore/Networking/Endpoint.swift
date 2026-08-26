@@ -201,6 +201,12 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/drafts/\(id)/approve", method: "POST", body: body)
     }
 
+    /// Edit-before-send (baker-internal#97): PATCH the body; the draft returns
+    /// to pending, so a prior approval can never be inherited.
+    public static func editDraft(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/drafts/\(id)", method: "PATCH", body: body)
+    }
+
     public static func rejectDraft(_ id: String, body: Data) -> Endpoint {
         Endpoint(path: "/api/drafts/\(id)/reject", method: "POST", body: body)
     }

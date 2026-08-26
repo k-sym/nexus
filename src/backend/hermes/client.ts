@@ -222,6 +222,9 @@ export interface HermesClient {
   getDraft(id: string): Promise<unknown>;
   approveDraft(id: string, by: string): Promise<unknown>;
   rejectDraft(id: string, by: string, note?: string): Promise<unknown>;
+  /** Edit-before-send (baker-internal#97): replaces the body and returns the
+   * draft to pending, so a prior approval can never be inherited. */
+  editDraft(id: string, body: string, by: string): Promise<unknown>;
   createSession(input: HermesSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
   listSessions(input?: HermesListSessionsInput): Promise<HermesListSessionsResult>;
@@ -332,6 +335,13 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       return requestJson(`/v1/drafts/${encodeURIComponent(id)}/approve`, {
         method: 'POST',
         body: JSON.stringify({ by }),
+      });
+    },
+
+    async editDraft(id: string, body: string, by: string): Promise<unknown> {
+      return requestJson(`/v1/drafts/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ body, by }),
       });
     },
 

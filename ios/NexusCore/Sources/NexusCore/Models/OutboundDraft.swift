@@ -49,6 +49,9 @@ public struct OutboundDraft: Decodable, Sendable, Identifiable {
     /// Why it was proposed — shown on the row so the decision has context.
     public let rationale: String?
     public let createdIso: String?
+    /// True once the body was rewritten by hand (baker-internal#97) — the
+    /// approval that follows records as approved_with_edits in the ledger.
+    public let edited: Bool?
     /// First ~200 characters. The full body only arrives on the detail call.
     public let preview: String?
     public let bodyChars: Int?
@@ -68,6 +71,7 @@ public struct OutboundDraftDetail: Decodable, Sendable, Identifiable {
     public let replyTo: String?
     public let source: String?
     public let rationale: String?
+    public let edited: Bool?
     public let body: String
     /// The adapter's own read of whether this could be sent right now, and why
     /// not. Advisory for display — the send path re-checks regardless.

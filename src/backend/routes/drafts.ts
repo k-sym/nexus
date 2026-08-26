@@ -79,6 +79,32 @@ export function createDraftsRoutes(load: () => NexusConfig = loadConfig, options
         }
       };
 
+    // Edit-before-send (baker-internal#97). A write like approve/reject: the
+    // user is owed the truth about whether their new text was saved, so no
+    // fail-soft here, and the adapter's status passes through — an edit of a
+    // sent draft is a 409, not a 502.
+    fastify.patch('/api/drafts/:id', async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const body = (request.body ?? {}) as { body?: string; by?: string };
+      if (typeof body.body !== 'string') {
+        reply.code(400);
+        return { error: 'body (string) is required' };
+      }
+      const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim().slice(0, 40) : 'nexus';
+      const hermes = client();
+      if (!hermes) {
+        reply.code(400);
+        return { error: 'Assistant URL and key must be configured in Settings.' };
+      }
+      try {
+        return await hermes.editDraft(id, body.body, by);
+      } catch (err: any) {
+        const status = typeof err?.status === 'number' ? err.status : 502;
+        reply.code(status === 404 || status === 409 || status === 400 ? status : 502);
+        return { error: extractDetail(err?.message) || 'Draft edit failed.' };
+      }
+    });
+
     fastify.post('/api/drafts/:id/approve', decide('approve'));
     fastify.post('/api/drafts/:id/reject', decide('reject'));
   };
