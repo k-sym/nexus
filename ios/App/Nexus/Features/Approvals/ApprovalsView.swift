@@ -64,13 +64,22 @@ struct ApprovalRow: View {
             }
 
             HStack(spacing: 12) {
+                // Explicit foregrounds on both labels (#375): the button style
+                // recolours only the title, so each Label's glyph kept the
+                // accent — a blue ✕ beside Deny's red text, and a blue tick
+                // invisible on Allow's blue fill. This is the trust surface
+                // for supervised sessions; the glyphs must read at a glance.
                 Button(role: .destructive, action: onDeny) {
-                    Label("Deny", systemImage: "xmark").frame(maxWidth: .infinity)
+                    Label("Deny", systemImage: "xmark")
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
 
                 Button(action: onAllow) {
-                    Label("Allow", systemImage: "checkmark").frame(maxWidth: .infinity)
+                    Label("Allow", systemImage: "checkmark")
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
             }
