@@ -16,10 +16,12 @@ import { v4 as uuid } from 'uuid';
 import { corsHeaders } from '../cors-headers.js';
 import {
   AGENT_RUN_CUSTOM_TYPE,
+  APPROVAL_DECISION_CUSTOM_TYPE,
   type AgentRunAbortSource,
   type AgentRunEnd,
   type AgentRunStart,
   type AgentRunTerminalStatus,
+  type ApprovalDecisionEvent,
   type ChatThread,
 } from '@nexus/shared';
 import type { AgentSession } from '@earendil-works/pi-coding-agent';
@@ -670,6 +672,29 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       if (session) {
         activeStreams.set(threadId, { session, runId });
         const runStartMs = Date.parse(startEvent.startedAt);
+        // Inline approval decisions (#374): when a gate parked during THIS run
+        // settles, persist the decision into the session event log (so replays
+        // show it where it happened) and tell the live viewer. Abort-path
+        // resolutions are skipped — the run's own end already tells that story.
+        // Optional-chained like `pi.questions` below: test stubs (and any
+        // reduced runtime) may carry no broker, and a missing decoration must
+        // cost the feature, not the turn.
+        const unsubscribeApprovals = pi.approvals?.subscribe((ev) => {
+          if (ev.type !== 'resolved' || ev.threadId !== threadId) return;
+          if (ev.resolution.answeredBy === 'aborted') return;
+          const decision: ApprovalDecisionEvent = {
+            threadId,
+            toolCallId: ev.toolCallId,
+            toolName: ev.resolution.toolName,
+            inputSummary: ev.resolution.inputSummary,
+            outcome: ev.resolution.outcome,
+            answeredBy: ev.resolution.answeredBy,
+            ...(ev.resolution.reason ? { reason: ev.resolution.reason } : {}),
+            decidedAt: new Date().toISOString(),
+          };
+          session?.sessionManager?.appendCustomEntry(APPROVAL_DECISION_CUSTOM_TYPE, decision);
+          write({ kind: 'approval_decision', decision });
+        });
         const subscription = session.subscribe((ev) => {
           lastEventType = String((ev as any)?.type ?? (ev as any)?.kind ?? '(unknown)');
           write(ev);
@@ -707,6 +732,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
           promptInFlight = false;
           clearInterval(heartbeat);
           subscription();
+          unsubscribeApprovals?.();
         }
         const completedAbortSource = activeStreams.get(threadId)?.abortSource;
         if (completedAbortSource) {
@@ -989,11 +1015,18 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
   const runEndsByAssistant = new Map<string, AgentRunEnd>();
   const runEndIndexes = new Map<string, { index: number; event: AgentRunEnd }>();
   const runStartIndexes: number[] = [];
+  // Gate decisions recorded into the session log (#374), attached to their
+  // tool call below so the transcript shows who allowed or denied it.
+  const approvalsByToolCall = new Map<string, ApprovalDecisionEvent>();
   const sourceEntries = entries as any[];
   for (const [index, entry] of sourceEntries.entries()) {
     const message = entry?.type === 'message' ? entry.message : undefined;
     if (message?.role === 'toolResult' && message.toolCallId) {
       toolResults.set(String(message.toolCallId), message);
+    }
+    if (entry?.type === 'custom' && entry.customType === APPROVAL_DECISION_CUSTOM_TYPE) {
+      const data = entry.data as ApprovalDecisionEvent | undefined;
+      if (data?.toolCallId) approvalsByToolCall.set(String(data.toolCallId), data);
     }
     if (entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE) {
       const data = entry.data as AgentRunStart | AgentRunEnd | undefined;
@@ -1098,6 +1131,15 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
             queuedAt: m.timestamp ?? e.timestamp,
             partialOutput: '',
           };
+          const approval = approvalsByToolCall.get(String(block.id));
+          if (approval) {
+            call.approval = {
+              outcome: approval.outcome,
+              answeredBy: approval.answeredBy,
+              ...(approval.reason ? { reason: approval.reason } : {}),
+              decidedAt: approval.decidedAt,
+            };
+          }
           if (result) {
             call.result = resultText;
             call.completedAt = result.timestamp;

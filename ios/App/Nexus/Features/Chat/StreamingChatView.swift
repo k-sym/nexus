@@ -340,6 +340,17 @@ struct ToolCallCard: View {
                     if let summary = argSummary {
                         Text(summary).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
                     }
+                    if let approval = tool.approval {
+                        // The gate decision is part of the story (#374): show it
+                        // where it happened. Explicit foreground on the whole
+                        // label — glyph and text share one colour (#375 lesson).
+                        Label(approval.label, systemImage:
+                                approval.outcome == .allowed ? "checkmark.shield" : "xmark.shield")
+                            .font(.caption2)
+                            .foregroundStyle(approval.outcome == .allowed ? Color.green : Color.red)
+                            .lineLimit(1)
+                            .layoutPriority(1)
+                    }
                     Spacer(minLength: 0)
                     if !tool.result.isEmpty {
                         Image(systemName: expanded ? "chevron.down" : "chevron.right")

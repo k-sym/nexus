@@ -59,7 +59,14 @@ test('approval broker pushes pending then resolved to subscribers', async () => 
 
   broker.decide('thread-1', 'call-1', 'allow');
   assert.equal(events.length, 2);
-  assert.deepEqual(events[1], { type: 'resolved', threadId: 'thread-1', toolCallId: 'call-1' });
+  // The resolved event says HOW the gate settled (#374): transcript consumers
+  // record the decision from this event alone, no second lookup.
+  assert.deepEqual(events[1], {
+    type: 'resolved',
+    threadId: 'thread-1',
+    toolCallId: 'call-1',
+    resolution: { toolName: 'edit', inputSummary: '/x.ts', outcome: 'allowed', answeredBy: 'human' },
+  });
   await pending;
 
   unsub();
@@ -88,6 +95,39 @@ test('approval broker emits resolved (default-deny) on cancel, cancelThread and 
   assert.deepEqual(await p3, { block: true, reason: 'client gone', answeredBy: 'aborted' });
 
   assert.deepEqual([...resolved].sort(), ['a', 'b', 'c']);
+});
+
+test('resolved events carry the decision and the decider on every path (#374)', async () => {
+  const broker = new ApprovalBroker();
+  const resolutions: Array<{ id: string; resolution: unknown }> = [];
+  broker.subscribe((e) => {
+    if (e.type === 'resolved') resolutions.push({ id: e.toolCallId, resolution: e.resolution });
+  });
+
+  const denied = broker.register('t', 'deny-me', 'bash', { command: 'rm -rf /' }, '/repo');
+  broker.decide('t', 'deny-me', 'deny', 'not on my watch', 'partner');
+  await denied;
+  assert.deepEqual(resolutions[0], {
+    id: 'deny-me',
+    resolution: {
+      toolName: 'bash',
+      inputSummary: 'rm -rf /',
+      outcome: 'denied',
+      answeredBy: 'partner',
+      reason: 'not on my watch',
+    },
+  });
+
+  const timedOut = broker.register('t', 'late', 'bash', INPUT, '/repo', undefined, 10);
+  const hold = setInterval(() => {}, 50);
+  try {
+    await timedOut;
+  } finally {
+    clearInterval(hold);
+  }
+  const late = resolutions.find((r) => r.id === 'late')?.resolution as { outcome: string; answeredBy: string };
+  assert.equal(late.outcome, 'denied');
+  assert.equal(late.answeredBy, 'timeout');
 });
 
 test('approval broker times out to a default-deny', async () => {

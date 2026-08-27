@@ -677,3 +677,4 @@ export const OPERATION_STATUSES = ['running', 'succeeded', 'failed', 'cancelled'
 export type OperationStatus = (typeof OPERATION_STATUSES)[number];
 
 export * from './agent-run.js';
+export * from './approval-decision.js';

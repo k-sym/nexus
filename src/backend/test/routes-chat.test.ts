@@ -3143,3 +3143,89 @@ test('archiveThreadToMemory rejects empty sessions without deleting', async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('approval decisions from the session log attach to their tool call (#374)', () => {
+  const messages = flattenEntries([
+    {
+      type: 'message',
+      id: 'assistant-1',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'toolCall', id: 'gated-1', name: 'bash', arguments: { command: 'npm --version' } },
+          { type: 'toolCall', id: 'ungated-1', name: 'read', arguments: { path: '/x' } },
+        ],
+      },
+    },
+    {
+      type: 'custom',
+      id: 'decision-1',
+      customType: 'nexus.approval_decision',
+      data: {
+        threadId: 'thread-1',
+        toolCallId: 'gated-1',
+        toolName: 'bash',
+        inputSummary: 'npm --version',
+        outcome: 'allowed',
+        answeredBy: 'human',
+        decidedAt: '2026-08-27T07:12:00.000Z',
+      },
+    },
+    {
+      type: 'message',
+      id: 'result-1',
+      message: {
+        role: 'toolResult',
+        toolCallId: 'gated-1',
+        toolName: 'bash',
+        isError: false,
+        content: [{ type: 'text', text: '11.6.2' }],
+      },
+    },
+  ]) as any[];
+
+  const [gated, ungated] = messages[0].tool_calls;
+  assert.deepEqual(gated.approval, {
+    outcome: 'allowed',
+    answeredBy: 'human',
+    decidedAt: '2026-08-27T07:12:00.000Z',
+  });
+  // A call that never parked carries no stamp — absence means "no gate", so a
+  // policy-allowed read must not look like an approved one.
+  assert.equal('approval' in ungated, false);
+});
+
+test('a denied decision carries its reason into the transcript (#374)', () => {
+  const messages = flattenEntries([
+    {
+      type: 'message',
+      id: 'assistant-1',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'toolCall', id: 'gated-2', name: 'bash', arguments: { command: 'rm -rf /' } }],
+      },
+    },
+    {
+      type: 'custom',
+      id: 'decision-2',
+      customType: 'nexus.approval_decision',
+      data: {
+        threadId: 'thread-1',
+        toolCallId: 'gated-2',
+        toolName: 'bash',
+        inputSummary: 'rm -rf /',
+        outcome: 'denied',
+        answeredBy: 'partner',
+        reason: 'destructive',
+        decidedAt: '2026-08-27T07:13:00.000Z',
+      },
+    },
+  ]) as any[];
+
+  assert.deepEqual(messages[0].tool_calls[0].approval, {
+    outcome: 'denied',
+    answeredBy: 'partner',
+    reason: 'destructive',
+    decidedAt: '2026-08-27T07:13:00.000Z',
+  });
+});
