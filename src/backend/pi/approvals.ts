@@ -60,14 +60,27 @@ export interface PendingApprovalView {
   requestedAt: number;
 }
 
+/** How a specific gate was settled, carried on the `resolved` event so
+ *  transcript consumers (#374) can record the decision without a second
+ *  lookup. Every resolution path supplies it — the single removal choke-point
+ *  guarantees that. */
+export interface ApprovalResolution {
+  toolName: string;
+  /** Bounded human-readable input summary (never the raw payload). */
+  inputSummary: string;
+  outcome: 'allowed' | 'denied';
+  answeredBy: ApprovalAnsweredBy;
+  reason?: string;
+}
+
 /** Broker lifecycle events for push-based consumers (the gateway SSE stream).
  *  `pending` fires the instant a gate registers; `resolved` fires when it leaves
  *  the pending set for any reason (allow, deny, cancel, thread dropped, abort,
  *  or timeout). Every registered gate emits exactly one `pending` then one
- *  `resolved`. */
+ *  `resolved`, carrying how it settled. */
 export type ApprovalBrokerEvent =
   | { type: 'pending'; view: PendingApprovalView }
-  | { type: 'resolved'; threadId: string; toolCallId: string };
+  | { type: 'resolved'; threadId: string; toolCallId: string; resolution: ApprovalResolution };
 
 export type ApprovalBrokerListener = (event: ApprovalBrokerEvent) => void;
 
@@ -245,7 +258,7 @@ export class ApprovalBroker {
     if (!entry) return { ok: false, status: 404, error: 'Approval not found' };
 
     if (action === 'allow') {
-      this.remove(key, entry);
+      this.remove(key, entry, { outcome: 'allowed', answeredBy: decidedBy });
       entry.resolve({ block: false, answeredBy: decidedBy });
     } else {
       this.denyEntry(key, reason?.trim() || 'Denied from glasses', decidedBy);
@@ -310,17 +323,27 @@ export class ApprovalBroker {
   private denyEntry(key: string, reason: string, answeredBy: ApprovalAnsweredBy = 'aborted'): void {
     const entry = this.pending.get(key);
     if (!entry) return;
-    this.remove(key, entry);
+    this.remove(key, entry, { outcome: 'denied', answeredBy, reason });
     entry.resolve({ block: true, reason, answeredBy });
   }
 
-  private remove(key: string, entry: PendingApproval): void {
+  private remove(key: string, entry: PendingApproval, how: Omit<ApprovalResolution, 'toolName' | 'inputSummary'>): void {
     this.pending.delete(key);
     if (entry.timer) clearTimeout(entry.timer);
     if (entry.onAbort) entry.signal?.removeEventListener('abort', entry.onAbort);
     // Single choke point for every removal (allow / deny / cancel / abort /
-    // timeout), so one resolved event fires per pending gate regardless of path.
-    this.emit({ type: 'resolved', threadId: entry.threadId, toolCallId: entry.toolCallId });
+    // timeout), so one resolved event fires per pending gate regardless of
+    // path — and every resolved event says how the gate settled (#374).
+    this.emit({
+      type: 'resolved',
+      threadId: entry.threadId,
+      toolCallId: entry.toolCallId,
+      resolution: {
+        toolName: entry.toolName,
+        inputSummary: summarizeToolInput(entry.input),
+        ...how,
+      },
+    });
   }
 
   private abortReason(signal?: AbortSignal): string {

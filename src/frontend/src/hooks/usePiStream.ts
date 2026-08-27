@@ -70,6 +70,13 @@ export interface StreamMessage {
     result?: string;
     details?: unknown;
     is_error?: boolean;
+    /** How this call's tool-gate settled, when it went through one (#374). */
+    approval?: {
+      outcome: 'allowed' | 'denied';
+      answeredBy: 'human' | 'partner' | 'timeout' | 'aborted';
+      reason?: string;
+      decidedAt?: string;
+    };
   }>;
   toolName?: string;
   toolCallId?: string;
@@ -468,6 +475,26 @@ export function usePiStream() {
     }
     if (ev?.kind === 'run_end') {
       dispatch({ type: 'STREAM_COMPLETE' });
+      return null;
+    }
+    // A tool-gate settled (#374): stamp the decision onto its tool call so the
+    // transcript shows who allowed or denied it, live.
+    if (ev?.kind === 'approval_decision') {
+      const d = ev.decision;
+      if (d?.toolCallId) {
+        dispatch({
+          type: 'TOOL_CALL_UPDATE',
+          id: d.toolCallId,
+          patch: {
+            approval: {
+              outcome: d.outcome,
+              answeredBy: d.answeredBy,
+              ...(d.reason ? { reason: d.reason } : {}),
+              decidedAt: d.decidedAt,
+            },
+          },
+        });
+      }
       return null;
     }
     if (type === 'context_usage') {

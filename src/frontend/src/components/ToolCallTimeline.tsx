@@ -1,4 +1,4 @@
-import { WarningCircle, Check, Circle, Prohibit, Spinner, CaretDown, CaretUp, Wrench } from '@phosphor-icons/react';
+import { WarningCircle, Check, Circle, Prohibit, Spinner, CaretDown, CaretUp, Wrench, ShieldCheck, ShieldSlash } from '@phosphor-icons/react';
 import { useState } from 'react';
 import { QuestionCard } from './QuestionCard';
 import { normalizeQuestionRequest, parseQuestionResult, type QuestionAnswer, type QuestionToolResult } from '../lib/questions';
@@ -7,6 +7,15 @@ import { normalizeQuestionRequest, parseQuestionResult, type QuestionAnswer, typ
  *  stream. The shared types module used to export this; since it was
  *  legacy and got dropped, we declare it locally with a slightly wider
  *  shape (pi can emit status, args, result with more nuanced types). */
+/** How a gated call's approval settled (#374) — attached by the backend
+ *  projection (history) or the `approval_decision` stream event (live). */
+export interface ToolCallApprovalInfo {
+  outcome: 'allowed' | 'denied';
+  answeredBy: 'human' | 'partner' | 'timeout' | 'aborted';
+  reason?: string;
+  decidedAt?: string;
+}
+
 export interface ToolCallInfo {
   id: string;
   name: string;
@@ -21,6 +30,16 @@ export interface ToolCallInfo {
   startedAt?: number;
   completedAt?: number;
   payloadBytes?: number;
+  approval?: ToolCallApprovalInfo;
+}
+
+/** "approved — you" / "denied — partner" / "auto-denied — timed out". The
+ *  decider matters as much as the verdict: a partner-decided gate must never
+ *  read identically to one the user tapped (nexus#359's whole point). */
+export function approvalLabel(approval: ToolCallApprovalInfo): string {
+  const by = { human: 'you', partner: 'partner', timeout: 'timed out', aborted: 'aborted' }[approval.answeredBy];
+  if (approval.answeredBy === 'timeout') return 'auto-denied — timed out';
+  return `${approval.outcome === 'allowed' ? 'approved' : 'denied'} — ${by}`;
 }
 
 interface ToolCallTimelineProps {
@@ -139,6 +158,21 @@ function ToolCallBlock({
           <Check className={`w-3 h-3 shrink-0 ${accentColor}`} />
         )}
         <span className="text-zinc-300 flex-1 truncate" title={header}>{header}</span>
+        {toolCall.approval && (
+          // The gate is the reason a supervised session is trustworthy, so its
+          // decision renders where it happened instead of only in the audit list.
+          <span
+            className={`flex items-center gap-0.5 text-[10px] shrink-0 ${
+              toolCall.approval.outcome === 'allowed' ? 'text-emerald-400' : 'text-red-400'
+            }`}
+            title={toolCall.approval.reason || approvalLabel(toolCall.approval)}
+          >
+            {toolCall.approval.outcome === 'allowed'
+              ? <ShieldCheck className="w-3 h-3" />
+              : <ShieldSlash className="w-3 h-3" />}
+            {approvalLabel(toolCall.approval)}
+          </span>
+        )}
         <span className={`text-[10px] ${accentColor}`}>{toolStatusLabel(toolCall.status)}</span>
         {formatToolDuration(toolCall) && (
           <span className="text-[10px] text-zinc-600">{formatToolDuration(toolCall)}</span>

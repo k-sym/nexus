@@ -98,6 +98,15 @@ public struct PersistedToolCall: Decodable, Identifiable, Hashable, Sendable {
     public let args: JSONValue?
     public let status: String
     public let result: String?
+    /// How this call's tool-gate settled, when it went through one (#374).
+    public let approval: PersistedToolApproval?
+}
+
+/// The projection's approval stamp on a gated tool call (#374).
+public struct PersistedToolApproval: Decodable, Hashable, Sendable {
+    public let outcome: String
+    public let answeredBy: String
+    public let reason: String?
 }
 
 /// Body for `POST /api/projects/:id/threads`.

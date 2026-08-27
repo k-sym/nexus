@@ -146,3 +146,56 @@ describe('ToolActivity', () => {
     expect(container).toBeEmptyDOMElement();
   });
 });
+
+describe('approval stamps (#374)', () => {
+  it('shows who approved a gated call, distinct from a partner decision', () => {
+    render(<ToolCallTimeline
+      toolCalls={[
+        {
+          id: 'gated-1', name: 'Bash', args: { command: 'npm --version' },
+          status: 'succeeded', result: '11.6.2',
+          approval: { outcome: 'allowed', answeredBy: 'human' },
+        },
+        {
+          id: 'gated-2', name: 'Bash', args: { command: 'ls' },
+          status: 'succeeded', result: '',
+          approval: { outcome: 'allowed', answeredBy: 'partner' },
+        },
+      ]}
+      detailsExpanded={false}
+    />);
+
+    expect(screen.getByText('approved — you')).toBeVisible();
+    expect(screen.getByText('approved — partner')).toBeVisible();
+  });
+
+  it('renders a denial with its decider and keeps ungated calls unstamped', () => {
+    render(<ToolCallTimeline
+      toolCalls={[
+        {
+          id: 'gated-3', name: 'Bash', args: { command: 'rm -rf /' },
+          status: 'failed', result: 'Denied',
+          approval: { outcome: 'denied', answeredBy: 'human', reason: 'no thanks' },
+        },
+        { id: 'plain-1', name: 'read', args: { path: '/x' }, status: 'succeeded', result: 'ok' },
+      ]}
+      detailsExpanded={false}
+    />);
+
+    expect(screen.getByText('denied — you')).toBeVisible();
+    expect(screen.queryByText(/approved —/)).not.toBeInTheDocument();
+  });
+
+  it('labels a timeout as auto-denied', () => {
+    render(<ToolCallTimeline
+      toolCalls={[{
+        id: 'gated-4', name: 'Bash', args: { command: 'true' },
+        status: 'failed', result: '',
+        approval: { outcome: 'denied', answeredBy: 'timeout' },
+      }]}
+      detailsExpanded={false}
+    />);
+
+    expect(screen.getByText('auto-denied — timed out')).toBeVisible();
+  });
+});

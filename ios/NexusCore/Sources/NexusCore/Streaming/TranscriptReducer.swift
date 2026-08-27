@@ -8,12 +8,38 @@ public enum ToolStatus: String, Sendable, Hashable {
     case running, completed, error, interrupted
 }
 
+/// How a gated call's approval settled (#374). The decider matters as much as
+/// the verdict: a partner-decided gate must never read identically to one the
+/// user tapped.
+public struct ToolApprovalStamp: Hashable, Sendable {
+    public enum Outcome: String, Sendable { case allowed, denied }
+    public let outcome: Outcome
+    /// "human" | "partner" | "timeout" | "aborted" — kept as the wire string so
+    /// an unknown future decider degrades to its raw name, not a dropped stamp.
+    public let answeredBy: String
+    public let reason: String?
+
+    public init(outcome: Outcome, answeredBy: String, reason: String? = nil) {
+        self.outcome = outcome
+        self.answeredBy = answeredBy
+        self.reason = reason
+    }
+
+    /// "approved — you" / "denied — partner" / "auto-denied — timed out".
+    public var label: String {
+        if answeredBy == "timeout" { return "auto-denied — timed out" }
+        let by = ["human": "you", "partner": "partner", "aborted": "aborted"][answeredBy] ?? answeredBy
+        return "\(outcome == .allowed ? "approved" : "denied") — \(by)"
+    }
+}
+
 public struct ToolCallView: Identifiable, Hashable, Sendable {
     public let id: String
     public var name: String
     public var args: JSONValue
     public var status: ToolStatus
     public var result: String
+    public var approval: ToolApprovalStamp? = nil
 }
 
 /// An attachment shown on the user's own turn (image thumbnail). Platform-neutral
@@ -116,10 +142,16 @@ public struct TranscriptReducer: Sendable {
                     thinking: "", toolCalls: [], isError: false, isStreaming: false,
                     attachments: attachments)
             case "assistant":
-                let tools = (message.toolCalls ?? []).map { call in
-                    ToolCallView(
+                let tools = (message.toolCalls ?? []).map { call -> ToolCallView in
+                    var view = ToolCallView(
                         id: call.id, name: call.name, args: call.args ?? .object([:]),
                         status: Self.persistedStatus(call.status), result: call.result ?? "")
+                    if let approval = call.approval,
+                       let outcome = ToolApprovalStamp.Outcome(rawValue: approval.outcome) {
+                        view.approval = ToolApprovalStamp(
+                            outcome: outcome, answeredBy: approval.answeredBy, reason: approval.reason)
+                    }
+                    return view
                 }
                 return RenderedMessage(
                     id: message.id, role: .assistant, content: message.content ?? "",
@@ -202,6 +234,9 @@ public struct TranscriptReducer: Sendable {
                 return
             case "error":
                 fail(line["error"]?.string ?? "stream error")
+                return
+            case "approval_decision":
+                applyApprovalDecision(line["decision"])
                 return
             default:
                 break
@@ -352,6 +387,21 @@ public struct TranscriptReducer: Sendable {
         updateTool(id) { tool in
             tool.status = isError ? .error : .completed
             tool.result = result
+        }
+    }
+
+    /// A tool-gate settled (#374): stamp the decision onto its call so the
+    /// transcript shows who allowed or denied it, live.
+    private mutating func applyApprovalDecision(_ decision: JSONValue?) {
+        guard let decision,
+              let id = decision["toolCallId"]?.string,
+              let outcome = ToolApprovalStamp.Outcome(rawValue: decision["outcome"]?.string ?? "")
+        else { return }
+        updateTool(id) { tool in
+            tool.approval = ToolApprovalStamp(
+                outcome: outcome,
+                answeredBy: decision["answeredBy"]?.string ?? "human",
+                reason: decision["reason"]?.string)
         }
     }
 
