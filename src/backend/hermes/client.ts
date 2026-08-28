@@ -215,6 +215,11 @@ export interface HermesClient {
    * endpoint and the request throws; callers fail-soft. */
   listRoutines(): Promise<unknown>;
   getRoutine(name: string): Promise<unknown>;
+  /** Partner adapter's night-queue board (baker-internal#111) — the overnight
+   * runner's ledger plus the labelled queue and the PRs still awaiting review.
+   * Untyped passthrough like the routine fleet. */
+  listNightQueue(nights?: number): Promise<unknown>;
+  getNight(nightId: string): Promise<unknown>;
   /** Partner adapter's outbound draft queue (baker-internal#42). Also passed
    * through untyped. `approveDraft` is the send: it approves and transmits in
    * one call, and rejects with a status-bearing Error when the adapter refuses. */
@@ -317,6 +322,18 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
 
     async getRoutine(name: string): Promise<unknown> {
       return requestJson(`/v1/routines/${encodeURIComponent(name)}`);
+    },
+
+    // Night-queue board (baker-internal#111). Read-only; the adapter owns the
+    // fail-soft shapes (`available: false`, per-section `*_error`) and they
+    // come back as data, not as thrown errors.
+    async listNightQueue(nights?: number): Promise<unknown> {
+      const q = nights ? `?nights=${encodeURIComponent(String(nights))}` : '';
+      return requestJson(`/v1/night-queue${q}`);
+    },
+
+    async getNight(nightId: string): Promise<unknown> {
+      return requestJson(`/v1/night-queue/nights/${encodeURIComponent(nightId)}`);
     },
 
     // Outbound draft queue (baker-internal#42). The adapter owns every guard;

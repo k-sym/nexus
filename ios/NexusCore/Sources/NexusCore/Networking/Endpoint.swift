@@ -183,6 +183,19 @@ public struct Endpoint: Sendable {
         return Endpoint(path: "/api/routines/\(encoded)")
     }
 
+    // MARK: Night queue (read-only board, baker-internal#111)
+
+    /// The overnight runner's board → `NightQueueResponse`.
+    public static func nightQueue(nights: Int? = nil) -> Endpoint {
+        Endpoint(path: "/api/night-queue" + (nights.map { "?nights=\($0)" } ?? ""))
+    }
+
+    /// One night with the planner's decisions → `Night` (with `plan`).
+    public static func night(_ nightId: String) -> Endpoint {
+        let encoded = nightId.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? nightId
+        return Endpoint(path: "/api/night-queue/nights/\(encoded)")
+    }
+
     // MARK: Drafts (outbound approval queue, baker-internal#42)
 
     /// Pending outbound drafts → `DraftsResponse`.
