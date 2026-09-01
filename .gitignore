@@ -43,7 +43,10 @@ test-results/
 .claude/
 
 # KS Workflows
-# project_docs is a symlink into Dropbox (@Work/@project_docs/nexus); never tracked.
+# Design/architecture notes (AGENTS.md sends docs here). Ignored so new notes
+# stay local — but not "never tracked": some get force-added anyway, see
+# `git ls-files project_docs`. It is a plain directory, not a symlink; a
+# separate, long-diverged copy lives in ~/Dropbox/@Work/@project_docs/nexus.
 project_docs
 .worktrees/
 
