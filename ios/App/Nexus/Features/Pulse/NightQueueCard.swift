@@ -2,9 +2,12 @@ import SwiftUI
 import NexusCore
 
 /// Night-queue board on the Pulse dashboard (baker-internal#111) — the read
-/// side of the overnight runner (#55). Read-only by design: the queue is
-/// filled by minting a `night-queue` label in daytime discussion, never from
-/// a phone.
+/// side of the overnight runner (#55), plus the way in to the readiness
+/// workshop, which is the one place the queue can be filled from here.
+///
+/// The board itself stays read-only. Arming lives behind a push, an
+/// assessment, and a destructive confirmation, because minting the label hands
+/// an issue to an unattended agent for a whole night.
 ///
 /// The card is opinionated about two things, because auditability is the
 /// queue's whole value:
@@ -35,7 +38,22 @@ final class NightQueueCardViewModel {
 struct NightQueueCard: View {
     private let api: APIClient
     @State private var vm: NightQueueCardViewModel
-    @State private var selected: Night?
+    @State private var sheet: Destination?
+
+    /// One sheet modifier, two destinations. Stacking a second `.sheet` on the
+    /// same view is unreliable in SwiftUI, and this card presents both a night
+    /// and the workshop.
+    private enum Destination: Identifiable {
+        case night(Night)
+        case workshop
+
+        var id: String {
+            switch self {
+            case .night(let night): return "night-\(night.id)"
+            case .workshop: return "workshop"
+            }
+        }
+    }
 
     init(api: APIClient) {
         self.api = api
@@ -56,8 +74,13 @@ struct NightQueueCard: View {
             }
         }
         .polling(PollingCadence.missionControl) { await vm.refresh() }
-        .sheet(item: $selected) { night in
-            NightDetailSheet(api: api, night: night)
+        .sheet(item: $sheet) { destination in
+            switch destination {
+            case .night(let night):
+                NightDetailSheet(api: api, night: night)
+            case .workshop:
+                NightQueueWorkshopSheet(api: api) { Task { await vm.refresh() } }
+            }
         }
     }
 
@@ -87,6 +110,7 @@ struct NightQueueCard: View {
                     nights(report)
                     queue(report)
                     awaiting(report)
+                    workshopEntry
                 }
             }
         }
@@ -104,7 +128,7 @@ struct NightQueueCard: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
             ForEach(report.nights.prefix(3)) { night in
-                Button { selected = night } label: { NightRow(night: night) }
+                Button { sheet = .night(night) } label: { NightRow(night: night) }
                     .buttonStyle(.plain)
             }
         }
@@ -129,6 +153,27 @@ struct NightQueueCard: View {
                 QueuedIssueRow(issue: issue)
             }
         }
+    }
+
+    /// The queue used to be fillable only from a desk. This is the way in from
+    /// here — a browse-and-judge surface, not a button that queues something.
+    @ViewBuilder
+    private var workshopEntry: some View {
+        Button { sheet = .workshop } label: {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "checklist").font(.caption)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Readiness workshop").font(.callout.weight(.medium))
+                    Text("Judge an issue against the bar, then arm it for tonight.")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.tertiary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens the night-queue readiness workshop")
     }
 
     @ViewBuilder

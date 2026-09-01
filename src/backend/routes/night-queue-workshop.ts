@@ -22,7 +22,7 @@ interface WorkshopRoutesOptions {
 
 /**
  * Readiness workshop (baker-internal#111) — the daylight half of the night
- * queue. Three reads and one write.
+ * queue. Three reads, one conversation, and one write.
  *
  * The write, `POST /api/night-queue/arm`, is the moment an issue joins
  * tonight's queue for an unattended agent. It is a pure passthrough on
@@ -91,13 +91,46 @@ export function createWorkshopRoutes(
       }
     });
 
+    // Opening a conversation about an issue. It creates an assistant session
+    // and writes nothing to GitHub, so it is not gated like the arm below —
+    // but it is a POST because it has an effect, and the adapter's 403 for an
+    // excluded repo reaches the client unchanged.
+    //
+    // The seed (the readiness bar plus the issue text inside its fence) is
+    // composed by the adapter, never here and never by the client: a second
+    // spelling of that fence would be an injection path into the very decision
+    // the conversation exists to inform.
+    fastify.post('/api/night-queue/discuss', async (request, reply) => {
+      const { repo, number, draft } = (request.body ?? {}) as {
+        repo?: string; number?: number; draft?: string;
+      };
+      if (!repo || typeof number !== 'number') {
+        reply.code(400);
+        return { error: 'repo (string) and number (number) are required.' };
+      }
+      const hermes = client();
+      if (!hermes) {
+        reply.code(400);
+        return { error: 'Assistant URL and key must be configured in Settings.' };
+      }
+      try {
+        return await hermes.discussIssue({
+          repo, number,
+          draft: typeof draft === 'string' ? draft : undefined,
+        });
+      } catch (err: any) {
+        reply.code(err?.status ?? 502);
+        return { error: detailOf(err, 'Could not open the conversation.') };
+      }
+    });
+
     // The write. The adapter's status reaches the card unchanged, because the
     // card branches on it: 403 is standing policy, 409 is already queued or
     // closed, 400 is a spec the adapter refused. Flattening them all to 502
     // would turn four different conversations into one shrug.
     fastify.post('/api/night-queue/arm', async (request, reply) => {
-      const { repo, number, comment } = (request.body ?? {}) as {
-        repo?: string; number?: number; comment?: string;
+      const { repo, number, comment, decided_by } = (request.body ?? {}) as {
+        repo?: string; number?: number; comment?: string; decided_by?: string;
       };
       if (!repo || typeof number !== 'number' || typeof comment !== 'string') {
         reply.code(400);
@@ -109,7 +142,15 @@ export function createWorkshopRoutes(
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.armIssue({ repo, number, comment, decided_by: 'nexus-workshop' });
+        // Forwarded so the autonomy ledger records WHERE the decision was
+        // made — a phone tap and a desk session are the same write but not the
+        // same act. Defaults to the desktop's value when a client omits it.
+        return await hermes.armIssue({
+          repo, number, comment,
+          decided_by: typeof decided_by === 'string' && decided_by.trim()
+            ? decided_by.trim().slice(0, 64)
+            : 'nexus-workshop',
+        });
       } catch (err: any) {
         reply.code(err?.status ?? 502);
         return { error: detailOf(err, 'Arming failed.') };

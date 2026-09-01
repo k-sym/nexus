@@ -144,6 +144,82 @@ test('POST /api/night-queue/arm returns the armed result and names the decision'
   await app.close();
 });
 
+test('POST /api/night-queue/discuss passes the working draft through and surfaces 403', async () => {
+  const seen: any[] = [];
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (url, init) => {
+    seen.push({ url: String(url), body: JSON.parse(String(init?.body ?? '{}')) });
+    return jsonRes({ session_id: 's-1', repo: 'quasar-scoreboard', number: 3,
+                     title: 'Layout bug', url: 'u3',
+                     session_title: 'night-queue: quasar-scoreboard#3' });
+  });
+
+  const body = (await app.inject({ method: 'POST', url: '/api/night-queue/discuss',
+    payload: { repo: 'quasar-scoreboard', number: 3, draft: 'my working text' } })).json();
+  assert.equal(body.session_id, 's-1');
+  assert.equal(seen[0].url, 'http://adapter:8788/v1/night-queue/discuss');
+  // The conversation starts from what is on Keith's screen, not from the
+  // original assessment.
+  assert.equal(seen[0].body.draft, 'my working text');
+
+  // An absent draft is omitted rather than sent as null.
+  await app.inject({ method: 'POST', url: '/api/night-queue/discuss',
+                     payload: { repo: 'r', number: 1 } });
+  assert.equal('draft' in seen[1].body, false);
+  await app.close();
+});
+
+test('discuss keeps the adapter status and validates before calling out', async () => {
+  let called = false;
+  const refusing = await appWith(loadWith('http://adapter:8788', 'k1'), async () => {
+    called = true;
+    return new Response(JSON.stringify({ detail: 'nexus never runs unattended by standing policy' }),
+                        { status: 403 });
+  });
+  const res = await refusing.inject({ method: 'POST', url: '/api/night-queue/discuss',
+                                      payload: { repo: 'nexus', number: 401 } });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.json().error, 'nexus never runs unattended by standing policy');
+
+  called = false;
+  for (const bad of [{}, { repo: 'r' }, { repo: 'r', number: '1' }]) {
+    const r = await refusing.inject({ method: 'POST', url: '/api/night-queue/discuss', payload: bad });
+    assert.equal(r.statusCode, 400);
+  }
+  assert.equal(called, false, 'a malformed discuss must not reach the adapter');
+  await refusing.close();
+});
+
+test('arm forwards the caller\'s decided_by so the ledger says where it came from', async () => {
+  // A phone tap and a desk session are the same write but not the same act,
+  // and the autonomy ledger is the only place that distinction survives.
+  const seen: any[] = [];
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (_url, init) => {
+    seen.push(JSON.parse(String(init?.body ?? '{}')));
+    return jsonRes({ repo: 'r', number: 1, queued: true, label: 'night-queue',
+                     comment_posted: true, url: 'u' });
+  });
+  const arm = (decided_by?: unknown) => app.inject({
+    method: 'POST', url: '/api/night-queue/arm',
+    payload: { repo: 'r', number: 1, comment: 'z'.repeat(60), decided_by },
+  });
+
+  await arm('ios-workshop');
+  assert.equal(seen[0].decided_by, 'ios-workshop');
+
+  // Blank, whitespace and non-string values fall back to the desktop's value
+  // rather than writing an empty attribution onto the ledger.
+  await arm('   ');
+  assert.equal(seen[1].decided_by, 'nexus-workshop');
+  await arm(42);
+  assert.equal(seen[2].decided_by, 'nexus-workshop');
+
+  // Clamped like the adapter clamps it, so a long client string cannot become
+  // the ledger's problem.
+  await arm('x'.repeat(200));
+  assert.equal(seen[3].decided_by.length, 64);
+  await app.close();
+});
+
 test('arm validates its input before reaching the adapter', async () => {
   let called = false;
   const app = await appWith(loadWith('http://adapter:8788', 'k1'), async () => {

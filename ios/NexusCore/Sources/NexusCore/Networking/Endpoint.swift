@@ -10,6 +10,14 @@ public struct Endpoint: Sendable {
     public var headers: [String: String]
     public var body: Data?
     public var requiresAuth: Bool
+    /// Whether a 409 from this endpoint means "a turn is already running"
+    /// (`APIError.busy`). True everywhere by default because that is what 409
+    /// means on the chat and assistant streams, where the mapping was written.
+    /// The night-queue arm endpoint sets it false: there a 409 is the adapter
+    /// saying the issue is closed or already queued, and flattening that into
+    /// "Busy — another turn is already running" would answer a question nobody
+    /// asked.
+    public var conflictIsBusy: Bool
 
     public init(
         path: String,
@@ -17,7 +25,8 @@ public struct Endpoint: Sendable {
         queryItems: [URLQueryItem] = [],
         headers: [String: String] = [:],
         body: Data? = nil,
-        requiresAuth: Bool = true
+        requiresAuth: Bool = true,
+        conflictIsBusy: Bool = true
     ) {
         self.path = path
         self.method = method
@@ -25,6 +34,7 @@ public struct Endpoint: Sendable {
         self.headers = headers
         self.body = body
         self.requiresAuth = requiresAuth
+        self.conflictIsBusy = conflictIsBusy
     }
 
     // MARK: M0 endpoints
@@ -194,6 +204,42 @@ public struct Endpoint: Sendable {
     public static func night(_ nightId: String) -> Endpoint {
         let encoded = nightId.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? nightId
         return Endpoint(path: "/api/night-queue/nights/\(encoded)")
+    }
+
+    // MARK: Readiness workshop (baker-internal#111)
+
+    /// The readiness bar the 01:00 planner enforces → `ReadinessResponse`.
+    /// Served, never hand-copied into Swift: `night-queue/readiness.py` is the
+    /// single definition, and a second copy here would drift from the thing
+    /// that actually decides the night.
+    public static let nightQueueReadiness = Endpoint(path: "/api/night-queue/readiness")
+
+    /// Every open issue with the reason it could not be armed →
+    /// `NightQueueCandidatesResponse`. Two gh reads and no model call.
+    public static let nightQueueCandidates = Endpoint(path: "/api/night-queue/candidates")
+
+    /// Judge ONE issue against the bar → `AssessmentResponse`. A POST because
+    /// it costs a model call and takes tens of seconds. Body `{ repo, number }`.
+    public static func assessIssue(body: Data) -> Endpoint {
+        Endpoint(path: "/api/night-queue/assess", method: "POST", body: body)
+    }
+
+    /// Open a Partner conversation about one issue → `DiscussResponse`. Body
+    /// `{ repo, number, draft? }`, where `draft` is the working text on screen
+    /// so the conversation starts from it. Writes nothing to GitHub.
+    public static func discussIssue(body: Data) -> Endpoint {
+        Endpoint(path: "/api/night-queue/discuss", method: "POST", body: body)
+    }
+
+    /// THE write: post the readiness comment, then mint the `night-queue`
+    /// label. Body `{ repo, number, comment }`.
+    ///
+    /// `conflictIsBusy: false` — the adapter's 409 here is "the issue is
+    /// closed" or "this issue is already queued", both of which the reader
+    /// needs verbatim.
+    public static func armIssue(body: Data) -> Endpoint {
+        Endpoint(path: "/api/night-queue/arm", method: "POST", body: body,
+                 conflictIsBusy: false)
     }
 
     // MARK: Drafts (outbound approval queue, baker-internal#42)
