@@ -2,11 +2,16 @@ import SwiftUI
 import NexusCore
 
 /// A lightweight, mutable projection of a task for the board (ProjectTask is
-/// immutable). Optimistic moves flip `status` before the server confirms.
+/// immutable). Optimistic writes flip these before the server confirms.
+///
+/// `description` is carried even though the card never draws it: the board
+/// already fetched the whole task, so the edit sheet can open populated
+/// instead of re-fetching one it has.
 struct BoardCard: Identifiable, Hashable {
     let id: String
-    let title: String
-    let priority: TaskPriority
+    var title: String
+    var description: String
+    var priority: TaskPriority
     var status: TaskStatus
 }
 
@@ -17,7 +22,8 @@ final class KanbanViewModel {
     let projectId: String
     var cards: [BoardCard] = []
     var loadState: LoadState<Void> = .idle
-    var moveError: String?
+    /// Shared by both optimistic writes (move and edit) — one card, one alert.
+    var actionError: String?
 
     init(api: APIClient, projectId: String) {
         self.api = api
@@ -28,7 +34,11 @@ final class KanbanViewModel {
         if case .loaded = loadState {} else { loadState = .loading }
         do {
             let tasks = try await api.tasks(projectId: projectId)
-            cards = tasks.map { BoardCard(id: $0.id, title: $0.title, priority: $0.priority, status: $0.status) }
+            cards = tasks.map {
+                BoardCard(
+                    id: $0.id, title: $0.title, description: $0.description,
+                    priority: $0.priority, status: $0.status)
+            }
             loadState = .loaded(())
             maybeAutoMove()
         } catch {
@@ -51,7 +61,34 @@ final class KanbanViewModel {
                 _ = try await api.updateTask(id: id, status: newStatus.rawValue)
             } catch {
                 if let i = cards.firstIndex(where: { $0.id == id }) { cards[i].status = previous }
-                moveError = "Couldn't move card: \((error as? APIError)?.errorDescription ?? error.localizedDescription)"
+                actionError = "Couldn't move card: \(LoadState<Void>.message(for: error))"
+            }
+        }
+    }
+
+    /// Optimistically apply an edit, then PUT the changed fields; roll back on
+    /// failure. Only the fields that actually changed go on the wire, so a
+    /// title-only edit can't clobber a description edited elsewhere.
+    func edit(_ id: String, to edit: TaskEdit) {
+        guard let index = cards.firstIndex(where: { $0.id == id }) else { return }
+        let previous = cards[index]
+        var patch = UpdateTaskRequest()
+        if edit.title != previous.title { patch.title = edit.title }
+        // An emptied description is a real change: "" clears the column,
+        // whereas omitting the field would leave the old text in place.
+        if edit.description != previous.description { patch.description = edit.description }
+        if edit.priority != previous.priority { patch.priority = edit.priority.rawValue }
+        guard patch.title != nil || patch.description != nil || patch.priority != nil else { return }
+
+        cards[index].title = edit.title
+        cards[index].description = edit.description
+        cards[index].priority = edit.priority
+        Task {
+            do {
+                _ = try await api.updateTask(id: id, patch: patch)
+            } catch {
+                if let i = cards.firstIndex(where: { $0.id == id }) { cards[i] = previous }
+                actionError = "Couldn't save changes: \(LoadState<Void>.message(for: error))"
             }
         }
     }
@@ -68,24 +105,35 @@ final class KanbanViewModel {
 }
 
 /// 5-column Kanban board. Cards drag between columns (or use the context menu);
-/// a move writes `PUT /tasks/:id` optimistically.
+/// tapping one opens the edit sheet. Both writes go to `PUT /tasks/:id`
+/// optimistically.
 struct KanbanBoardView: View {
+    private let api: APIClient
+    private let projectId: String
     @State private var vm: KanbanViewModel
+    @State private var editing: BoardCard?
 
     init(api: APIClient, projectId: String) {
+        self.api = api
+        self.projectId = projectId
         _vm = State(initialValue: KanbanViewModel(api: api, projectId: projectId))
     }
 
     var body: some View {
         content
             .task { if case .idle = vm.loadState { await vm.load() } }
-            .alert("Move failed", isPresented: moveErrorBinding, presenting: vm.moveError) { _ in
+            .sheet(item: $editing) { card in
+                TaskEditSheet(api: api, projectId: projectId, card: card) { edit in
+                    vm.edit(card.id, to: edit)
+                }
+            }
+            .alert("Couldn't save", isPresented: actionErrorBinding, presenting: vm.actionError) { _ in
                 Button("OK", role: .cancel) {}
             } message: { Text($0) }
     }
 
-    private var moveErrorBinding: Binding<Bool> {
-        Binding(get: { vm.moveError != nil }, set: { if !$0 { vm.moveError = nil } })
+    private var actionErrorBinding: Binding<Bool> {
+        Binding(get: { vm.actionError != nil }, set: { if !$0 { vm.actionError = nil } })
     }
 
     @ViewBuilder
@@ -120,7 +168,7 @@ struct KanbanBoardView: View {
             ForEach(cards) { card in
                 cardView(card)
                     .draggable(card.id)
-                    .contextMenu { moveMenu(for: card) }
+                    .contextMenu { cardMenu(for: card) }
             }
 
             if cards.isEmpty {
@@ -148,10 +196,19 @@ struct KanbanBoardView: View {
         .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.background, in: RoundedRectangle(cornerRadius: 8))
+        // `.draggable` runs off a long press, so a plain tap is still free to
+        // mean "edit". The context menu offers Edit too, for anyone who
+        // reaches for the card the way they already reach for a move.
+        .contentShape(Rectangle())
+        .onTapGesture { editing = card }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(card.title), \(card.priority.label) priority")
+        .accessibilityHint("Opens the edit sheet")
     }
 
     @ViewBuilder
-    private func moveMenu(for card: BoardCard) -> some View {
+    private func cardMenu(for card: BoardCard) -> some View {
+        Button("Edit…", systemImage: "pencil") { editing = card }
         Menu("Move to") {
             ForEach(TaskStatus.allCases.filter { $0 != card.status }, id: \.rawValue) { status in
                 Button(status.label) { vm.move(card.id, to: status) }

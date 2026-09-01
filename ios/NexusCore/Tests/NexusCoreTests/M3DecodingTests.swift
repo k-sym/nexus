@@ -18,5 +18,33 @@ final class M3DecodingTests: XCTestCase {
         let json = try XCTUnwrap(JSONValue.parse(data))
         XCTAssertEqual(json["status"]?.string, "in_progress")
         XCTAssertNil(json["title"])   // nil fields omitted
+        XCTAssertNil(json["description"])
+        XCTAssertNil(json["priority"])
+    }
+
+    /// The edit sheet's payload: the three fields the desktop modal submits,
+    /// and no `status` — the board owns that.
+    func testUpdateTaskRequestEncodesEditFields() throws {
+        let data = try JSONEncoder().encode(
+            UpdateTaskRequest(title: "Ship it", description: "Details.", priority: "high"))
+        let json = try XCTUnwrap(JSONValue.parse(data))
+        XCTAssertEqual(json["title"]?.string, "Ship it")
+        XCTAssertEqual(json["description"]?.string, "Details.")
+        XCTAssertEqual(json["priority"]?.string, "high")
+        XCTAssertNil(json["status"])
+    }
+
+    /// An emptied description must reach the server as `""`, not as an absent
+    /// key: the route updates with `COALESCE(?, description)`, so omitting it
+    /// would silently keep the old text and the clear would look like a bug.
+    func testUpdateTaskRequestEncodesClearedDescription() throws {
+        let data = try JSONEncoder().encode(UpdateTaskRequest(description: ""))
+        let json = try XCTUnwrap(JSONValue.parse(data))
+        XCTAssertEqual(json["description"]?.string, "")
+    }
+
+    func testTaskPriorityAllCasesOmitsUnknown() {
+        XCTAssertEqual(TaskPriority.allCases.map(\.rawValue), ["low", "medium", "high", "urgent"])
+        XCTAssertFalse(TaskPriority.allCases.contains(TaskPriority(rawValue: "blocker")))
     }
 }

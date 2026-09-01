@@ -238,10 +238,19 @@ public actor APIClient {
 
     // MARK: Writes (M3)
 
+    /// Patch a task. Fields left nil on `patch` are omitted from the body and
+    /// the backend leaves those columns untouched, so this is safe to call
+    /// with only the fields the user actually changed.
+    @discardableResult
+    public func updateTask(id: String, patch: UpdateTaskRequest) async throws -> ProjectTask {
+        let body = try JSONEncoder().encode(patch)
+        return try await request(.updateTask(id, body: body))
+    }
+
+    /// Status-only convenience — the Kanban drag/move path.
     @discardableResult
     public func updateTask(id: String, status: String) async throws -> ProjectTask {
-        let body = try JSONEncoder().encode(UpdateTaskRequest(status: status))
-        return try await request(.updateTask(id, body: body))
+        try await updateTask(id: id, patch: UpdateTaskRequest(status: status))
     }
 
     public func memories(projectId: String, query: String? = nil) async throws -> [MemoryRecord] {
