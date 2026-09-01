@@ -224,6 +224,13 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/night-queue/assess", method: "POST", body: body)
     }
 
+    /// Open a Partner conversation about one issue → `DiscussResponse`. Body
+    /// `{ repo, number, draft? }`, where `draft` is the working text on screen
+    /// so the conversation starts from it. Writes nothing to GitHub.
+    public static func discussIssue(body: Data) -> Endpoint {
+        Endpoint(path: "/api/night-queue/discuss", method: "POST", body: body)
+    }
+
     /// THE write: post the readiness comment, then mint the `night-queue`
     /// label. Body `{ repo, number, comment }`.
     ///

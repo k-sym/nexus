@@ -18,6 +18,10 @@ import NexusCore
 ///     a destructive confirmation — approving a preview is not consent, and a
 ///     stray tap on a phone must not hand an issue to an unattended agent for a
 ///     whole night.
+///   * the Partner can be talked to about an issue, but cannot arm it. That
+///     conversation is seeded by the adapter — the bar plus the issue text
+///     inside its fence — and the seed says outright that minting the label is
+///     Keith's action, taken against the final text in front of him.
 ///
 /// Every refusal the Arm control mirrors is computed by `ArmGate` in NexusCore,
 /// where it is tested. The adapter enforces all of them again regardless.
@@ -195,7 +199,7 @@ struct BlockedChip: View {
 @MainActor
 @Observable
 final class WorkshopIssueModel {
-    enum Busy: Equatable { case assessing, arming }
+    enum Busy: Equatable { case assessing, arming, opening }
 
     private let api: APIClient
     private(set) var candidate: NightQueueCandidate
@@ -207,6 +211,15 @@ final class WorkshopIssueModel {
     var busy: Busy?
     var error: String?
     var armed: ArmResponse?
+    /// The adapter-side session to adopt once a conversation has been opened.
+    var conversation: Conversation?
+
+    /// A pushed Partner conversation. Identifiable so it can drive a
+    /// `navigationDestination(item:)`.
+    struct Conversation: Identifiable, Hashable {
+        let id: String
+        let title: String
+    }
 
     init(api: APIClient, candidate: NightQueueCandidate) {
         self.api = api
@@ -223,6 +236,7 @@ final class WorkshopIssueModel {
         draft = ""
         error = nil
         armed = nil
+        conversation = nil
         busy = nil
     }
 
@@ -253,6 +267,31 @@ final class WorkshopIssueModel {
         } catch {
             guard candidate.id == requestedFor else { return }
             self.error = LoadState<AssessmentResponse>.message(for: error)
+        }
+        if candidate.id == requestedFor { busy = nil }
+    }
+
+    /// Open a Partner conversation about this issue (baker-internal#131).
+    ///
+    /// The working draft goes with it, so the Partner argues about the text on
+    /// screen rather than the assessor's original. Nothing is written to
+    /// GitHub; the adapter refuses only a repo that never runs unattended.
+    ///
+    /// Guarded by the same key check as `assess()`: opening the conversation
+    /// costs a round trip, and a session for an issue the reader has left must
+    /// not be pushed on top of a different one.
+    func discuss() async {
+        let requestedFor = candidate.id
+        busy = .opening
+        error = nil
+        do {
+            let got = try await api.discussIssue(repo: candidate.repo,
+                                                 number: candidate.number, draft: draft)
+            guard candidate.id == requestedFor else { return }
+            conversation = Conversation(id: got.sessionId, title: got.sessionTitle)
+        } catch {
+            guard candidate.id == requestedFor else { return }
+            self.error = LoadState<DiscussResponse>.message(for: error)
         }
         if candidate.id == requestedFor { busy = nil }
     }
@@ -307,8 +346,10 @@ struct WorkshopIssueView: View {
             }
             if model.assessment == nil {
                 barSection
+                discussSection
             } else {
                 verdictSection
+                discussSection
                 draftSection
             }
             if let error = model.error {
@@ -325,6 +366,17 @@ struct WorkshopIssueView: View {
         }
         .navigationTitle("\(candidate.repo)#\(candidate.number)")
         .navigationBarTitleDisplayMode(.inline)
+        // The session belongs to the adapter, so it is adopted before the chat
+        // opens — `AssistantAdoptingView` already owns that dance, including
+        // the retry when the import is slow or fails.
+        //
+        // Pushed onto this stack rather than sent to the Assistant tab: coming
+        // back must land on THIS issue with its draft as Keith left it, which
+        // is the whole point of talking it over before arming.
+        .navigationDestination(item: $model.conversation) { conversation in
+            AssistantAdoptingView(api: api, remoteSessionId: conversation.id,
+                                  fallbackTitle: conversation.title)
+        }
         // Defence in depth: a pushed destination normally gets fresh state, but
         // if SwiftUI ever recycles this view the model must be re-bound rather
         // than keep the previous issue's verdict.
@@ -465,6 +517,39 @@ struct WorkshopIssueView: View {
                 }
             }
         }
+    }
+
+    /// Talking it over before arming (baker-internal#131).
+    ///
+    /// The Partner is given the bar and the fenced issue text by the adapter,
+    /// plus whatever is currently in the draft — so it argues about the text on
+    /// screen, not the assessor's first attempt. It cannot arm, and its own
+    /// seed tells it to send Keith back here for that.
+    @ViewBuilder
+    private var discussSection: some View {
+        Section {
+            Button {
+                Task { await model.discuss() }
+            } label: {
+                Label(model.busy == .opening ? "Opening…" : "Talk it over with the Partner",
+                      systemImage: "bubble.left.and.text.bubble.right")
+            }
+            .disabled(discussRefusal != nil || model.busy != nil)
+        } footer: {
+            Text(discussRefusal
+                 ?? "Opens a conversation seeded with the bar and this issue. The Partner "
+                  + "argues and drafts; it cannot arm. Bring the wording you agree on back "
+                  + "into the readiness comment, then arm it here.")
+        }
+    }
+
+    /// The one refusal the adapter makes: a repo that never runs unattended has
+    /// nothing to work up. Mirrored so the reason is on screen rather than
+    /// discovered after a round trip.
+    private var discussRefusal: String? {
+        candidate.blocked == .excluded
+            ? "This repo never runs unattended by standing policy — there is nothing to work up."
+            : nil
     }
 
     @ViewBuilder

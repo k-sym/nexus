@@ -394,6 +394,21 @@ public actor APIClient {
         return try await request(.assessIssue(body: body))
     }
 
+    /// Open a Partner conversation about this issue, seeded by the adapter with
+    /// the bar and the fenced issue text. `draft` is the text currently on
+    /// screen, so the conversation argues about what Keith is actually holding.
+    ///
+    /// The returned session belongs to the adapter — adopt it before chatting.
+    /// Throws the adapter's 403 for a repo that never runs unattended.
+    public func discussIssue(repo: String, number: Int,
+                             draft: String = "") async throws -> DiscussResponse {
+        var payload: [String: Any] = ["repo": repo, "number": number]
+        if !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            payload["draft"] = draft
+        }
+        return try await request(.discussIssue(body: try JSONSerialization.data(withJSONObject: payload)))
+    }
+
     /// Post the readiness comment and mint the label — the moment an issue
     /// joins tonight's queue for an unattended agent.
     ///

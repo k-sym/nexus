@@ -152,6 +152,28 @@ final class NightQueueWorkshopTests: XCTestCase {
         XCTAssertEqual(partial.decision?.error, "ledger unavailable")
     }
 
+    func testDecodesTheDiscussSession() throws {
+        let json = """
+        {"session_id": "8f1c-…", "repo": "quasar-scoreboard", "number": 3,
+         "title": "Rank column drops on narrow screens",
+         "url": "https://github.com/k-sym/quasar-scoreboard/issues/3",
+         "session_title": "night-queue: quasar-scoreboard#3"}
+        """
+        let opened = try JSONDecoder.nexusREST.decode(DiscussResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(opened.sessionId, "8f1c-…")
+        XCTAssertEqual(opened.sessionTitle, "night-queue: quasar-scoreboard#3")
+        XCTAssertEqual(opened.number, 3)
+    }
+
+    /// Opening a conversation is a POST with an effect but no GitHub write, so
+    /// unlike arming it keeps the ordinary 409 meaning.
+    func testDiscussKeepsTheDefaultConflictMeaning() {
+        let discuss = Endpoint.discussIssue(body: Data("{}".utf8))
+        XCTAssertEqual(discuss.path, "/api/night-queue/discuss")
+        XCTAssertEqual(discuss.method, "POST")
+        XCTAssertTrue(discuss.conflictIsBusy)
+    }
+
     // MARK: The arm gate
 
     private func candidates() throws -> [String: NightQueueCandidate] {

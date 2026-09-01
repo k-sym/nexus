@@ -227,6 +227,10 @@ export interface HermesClient {
   nightQueueCandidates(): Promise<unknown>;
   assessIssue(repo: string, number: number): Promise<unknown>;
   armIssue(input: { repo: string; number: number; comment: string; decided_by?: string }): Promise<unknown>;
+  /** Opens a Partner conversation about one issue, seeded server-side with the
+   * readiness bar and the FENCED issue text. Creates a session; it does not
+   * arm. */
+  discussIssue(input: { repo: string; number: number; draft?: string }): Promise<unknown>;
   /** Partner adapter's outbound draft queue (baker-internal#42). Also passed
    * through untyped. `approveDraft` is the send: it approves and transmits in
    * one call, and rejects with a status-bearing Error when the adapter refuses. */
@@ -363,6 +367,19 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
     /** Writes. Posts the readiness comment, then mints the label. */
     async armIssue(input: { repo: string; number: number; comment: string; decided_by?: string }): Promise<unknown> {
       return requestJson('/v1/night-queue/arm', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
+    },
+
+    /** Talk the issue over before arming it. The adapter composes the seed —
+     * the bar, plus the issue text inside its fence — because a client that
+     * built that fence itself would be an injection path into the arming
+     * decision it exists to protect. `draft` is Keith's working text, so the
+     * conversation starts from what is on his screen rather than from the
+     * original assessment. */
+    async discussIssue(input: { repo: string; number: number; draft?: string }): Promise<unknown> {
+      return requestJson('/v1/night-queue/discuss', {
         method: 'POST',
         body: JSON.stringify(input),
       });

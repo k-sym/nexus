@@ -5,11 +5,11 @@ import Foundation
 /// workshop types in `src/frontend/src/api.ts`; wire keys are snake_case, so
 /// the shared `.nexusREST` decoder applies.
 ///
-/// Three reads and one write. The write — arming — posts a readiness comment
-/// and mints the `night-queue` label, which is the moment an issue is handed
-/// to an unattended agent for a whole night. Every guard on it lives in the
-/// adapter; the types here exist so the phone can MIRROR those refusals rather
-/// than discover them after a round trip.
+/// Three reads, one conversation, and one write. The write — arming — posts a
+/// readiness comment and mints the `night-queue` label, which is the moment an
+/// issue is handed to an unattended agent for a whole night. Every guard on it
+/// lives in the adapter; the types here exist so the phone can MIRROR those
+/// refusals rather than discover them after a round trip.
 ///
 /// Nothing in this file re-states the readiness bar. The criteria are served
 /// by `/api/night-queue/readiness` precisely so a Swift copy cannot drift from
@@ -179,6 +179,28 @@ public struct AssessmentResponse: Decodable, Sendable {
     public func describes(_ candidate: NightQueueCandidate) -> Bool {
         repo == candidate.repo && number == candidate.number
     }
+}
+
+// MARK: - The conversation before arming
+
+/// A Partner conversation opened about one issue (baker-internal#131).
+///
+/// The adapter composes the seed — the readiness bar plus the issue text inside
+/// its fence — and holds it against the session, so it rides on every turn
+/// rather than only the first. Nothing here builds that fence: a second
+/// spelling in Swift would be an injection path into the arming decision the
+/// conversation exists to inform.
+///
+/// The session is the adapter's, so the app adopts it before chatting. The
+/// Partner drafts and argues; it cannot arm, and its seed says so.
+public struct DiscussResponse: Decodable, Sendable {
+    /// The adapter-side session to adopt.
+    public let sessionId: String
+    public let repo: String
+    public let number: Int
+    public let title: String
+    public let url: String
+    public let sessionTitle: String
 }
 
 // MARK: - Arming (the one write)
