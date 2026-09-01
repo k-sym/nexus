@@ -96,6 +96,9 @@ struct NightQueueCard: View {
     private func nights(_ report: NightQueueResponse) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             SectionHeader("Recent nights")
+            if let attempt = report.lastAttempt, attempt.isUnaccountedFor {
+                AttemptBanner(attempt: attempt)
+            }
             if report.available == false {
                 Text("No nights recorded yet — the runner writes its ledger after its first night.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -157,6 +160,49 @@ struct NightQueueCard: View {
                 .buttonStyle(.plain)
             }
         }
+    }
+}
+
+/// The line the board was missing on 2026-09-01: the runner had crashed at
+/// 01:00 four nights running, and because it died before opening a night the
+/// ledger held nothing and the card showed a four-day-old night as if all were
+/// well. An attempt nothing accounts for is the loudest thing on this card.
+///
+/// Only shown when `recorded == false`. `nil` means we could not check, and
+/// the card does not accuse the runner of losing a night it cannot look for.
+struct AttemptBanner: View {
+    let attempt: NightAttempt
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(headline).font(.caption.weight(.semibold))
+            Text(detail).font(.caption2).opacity(0.85)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .foregroundStyle(attempt.ok ? Color.orange : Color.red)
+        .background((attempt.ok ? Color.orange : Color.red).opacity(0.12),
+                    in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(headline). \(detail)")
+    }
+
+    private var headline: String {
+        var text = attempt.ok
+            ? "Last scheduled run recorded no night"
+            : "Last scheduled run failed" + (attempt.rc.map { " (exit \($0))" } ?? "")
+        if attempt.timedOut == true { text += " — timed out" }
+        if let when = attempt.started ?? attempt.ended {
+            text += " · \(NightFormat.relative(when))"
+        }
+        return text
+    }
+
+    private var detail: String {
+        attempt.ok
+            ? "It exited cleanly but wrote nothing — nothing below accounts for it."
+            : "It never reached the ledger, so no night below covers it."
     }
 }
 

@@ -14,6 +14,8 @@ public struct NightQueueResponse: Decodable, Sendable {
     /// from `error`: "nothing has happened yet" is not "I cannot tell".
     public let available: Bool?
     public let nights: [Night]
+    /// What the scheduled launchd job last did. Absent on older adapters.
+    public let lastAttempt: NightAttempt?
     public let queue: [QueuedIssue]
     public let openPrs: [NightQueuePR]
     /// Per-section reasons. `*Stale` means the list below is the last good
@@ -25,6 +27,32 @@ public struct NightQueueResponse: Decodable, Sendable {
     public let generatedAt: Int?
     /// Set when the backend could not reach the adapter at all.
     public let error: String?
+}
+
+/// What the scheduled launchd job last did, from the wrapper's status file.
+///
+/// The ledger cannot answer "did the job even run?": a night that dies before
+/// the runner opens it writes no row, so between 2026-08-29 and 09-01 the
+/// runner crashed on an import four nights running and the board showed a
+/// four-day-old night as if all were well. This is the only evidence such an
+/// attempt happened.
+public struct NightAttempt: Decodable, Sendable {
+    public let started: Int?
+    public let ended: Int?
+    public let rc: Int?
+    public let timedOut: Bool?
+    /// "status" (the wrapper's JSON) or "stamp" (a legacy `.last` file).
+    public let source: String?
+    /// `rc == 0`. A legacy stamp carries no exit code and reports false —
+    /// unknown is not success.
+    public let ok: Bool
+    /// Whether a ledger night covers this attempt. Independent of `ok`: a run
+    /// that exited 0 and wrote no night is still unaccounted for. `nil` when
+    /// there is no ledger to check, which is not the same as "went missing".
+    public let recorded: Bool?
+
+    /// The one state worth interrupting the reader for.
+    public var isUnaccountedFor: Bool { recorded == false }
 }
 
 /// `quiet` — nothing was labelled. The normal night, and not a failure.
