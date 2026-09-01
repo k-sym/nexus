@@ -163,12 +163,18 @@ describe('NightQueueWorkshop', () => {
     await waitFor(() => expect(adopt).toHaveBeenCalledWith('s1'));
   });
 
-  it('lifts a proposed comment into the draft rather than making you retype it', async () => {
+  it('brings the agreed comment back by the ADAPTER session id, into the draft', async () => {
+    // baker-internal#132. The extraction is the adapter's — the last fenced
+    // block, verbatim — so what is pinned here is that the right id is asked
+    // and the answer reaches the editable draft rather than the chat pane.
     vi.spyOn(api.nightQueue, 'candidates').mockResolvedValue(CANDIDATES as any);
     vi.spyOn(api.nightQueue, 'readiness').mockResolvedValue(READINESS as any);
     vi.spyOn(api.nightQueue, 'assess').mockResolvedValue(assessment('quasar-scoreboard', 3));
     vi.spyOn(api.nightQueue, 'discuss').mockResolvedValue({ session_id: 's1' } as any);
     vi.spyOn(api.assistant, 'importRemote').mockResolvedValue({ session: { id: 'nexus-1' } } as any);
+    const pull = vi.spyOn(api.nightQueue, 'discussComment').mockResolvedValue(
+      { session_id: 's1', found: true,
+        comment: '**Goal:** the wording we agreed on, long enough to arm with.' } as any);
     render(<NightQueueWorkshop />);
 
     fireEvent.click(await screen.findByText(/Layout bug/));
@@ -176,9 +182,36 @@ describe('NightQueueWorkshop', () => {
     await screen.findByText(/verdict for quasar-scoreboard#3/);
     fireEvent.click(screen.getByText(/Discuss with the Partner/));
 
-    fireEvent.click(await screen.findByText(/Use this as the readiness comment/));
+    fireEvent.click(await screen.findByText(/Bring the comment back/));
+    // The ADAPTER id, not the adopted nexus one: the chat endpoints are keyed
+    // by 'nexus-1' and this read is not.
+    await waitFor(() => expect(pull).toHaveBeenCalledWith('s1'));
     await waitFor(() => expect((screen.getByRole('textbox', { name: 'Readiness comment' }) as HTMLTextAreaElement).value)
-      .toMatch(/a spec the Partner proposed/));
+      .toMatch(/the wording we agreed on/));
+  });
+
+  it('says so when there is no fenced comment, rather than pasting something else', async () => {
+    // The failure this whole path exists to avoid is a half-copied spec
+    // reaching the 01:00 runner. "Nothing to bring back" must read as itself.
+    vi.spyOn(api.nightQueue, 'candidates').mockResolvedValue(CANDIDATES as any);
+    vi.spyOn(api.nightQueue, 'readiness').mockResolvedValue(READINESS as any);
+    vi.spyOn(api.nightQueue, 'assess').mockResolvedValue(assessment('quasar-scoreboard', 3));
+    vi.spyOn(api.nightQueue, 'discuss').mockResolvedValue({ session_id: 's1' } as any);
+    vi.spyOn(api.assistant, 'importRemote').mockResolvedValue({ session: { id: 'nexus-1' } } as any);
+    vi.spyOn(api.nightQueue, 'discussComment').mockResolvedValue(
+      { session_id: 's1', found: false, comment: '' } as any);
+    render(<NightQueueWorkshop />);
+
+    fireEvent.click(await screen.findByText(/Layout bug/));
+    fireEvent.click(await screen.findByText(/Assess against the bar/));
+    await screen.findByText(/verdict for quasar-scoreboard#3/);
+    const before = (screen.getByRole('textbox', { name: 'Readiness comment' }) as HTMLTextAreaElement).value;
+    fireEvent.click(screen.getByText(/Discuss with the Partner/));
+
+    fireEvent.click(await screen.findByText(/Bring the comment back/));
+    await screen.findByText(/No fenced comment in this conversation yet/);
+    expect((screen.getByRole('textbox', { name: 'Readiness comment' }) as HTMLTextAreaElement).value)
+      .toBe(before);
   });
 
   it('drops the conversation when you switch issues', async () => {

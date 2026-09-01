@@ -105,7 +105,12 @@ function Dialogue({
   onApplyDraft: (next: string) => void;
 }) {
   const [sessionId, setSessionId] = useState<string | null>(null);
+  // The ADAPTER's id, kept alongside the adopted nexus one: the chat endpoints
+  // are keyed by the nexus id, and the comment read is keyed by this.
+  const [remoteId, setRemoteId] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
+  const [pulling, setPulling] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const thread = useIdeaThread(sessionId);
@@ -114,7 +119,9 @@ function Dialogue({
   // here is what stops the pane showing issue A's discussion under issue B.
   useEffect(() => {
     setSessionId(null);
+    setRemoteId(null);
     setError(null);
+    setNotice(null);
     setInput('');
   }, [candidate.repo, candidate.number]);
 
@@ -130,11 +137,42 @@ function Dialogue({
       // one iOS uses via AssistantAdoptingView. Driving the raw adapter id
       // through them 404s, which is exactly what it did before this line.
       const adopted = await api.assistant.importRemote(got.session_id);
+      setRemoteId(got.session_id);
       setSessionId(adopted.session.id);
     } catch (err: any) {
       setError(err?.message || 'Could not open the conversation.');
     } finally {
       setOpening(false);
+    }
+  };
+
+  /** Bring the agreed wording back (baker-internal#132).
+   *
+   * The adapter does the extraction — the last fenced block of the newest
+   * assistant reply, verbatim — because a model asked to pick "the comment we
+   * agreed on" out of a transcript can invent one, and this is the exact text
+   * an unattended agent is handed at 01:00. Nothing here inspects the
+   * conversation, and `found: false` is reported as itself rather than
+   * papered over with the last message.
+   */
+  const bringBack = async () => {
+    if (!remoteId) return;
+    setPulling(true);
+    setNotice(null);
+    setError(null);
+    try {
+      const got = await api.nightQueue.discussComment(remoteId);
+      if (got.found && got.comment) {
+        onApplyDraft(got.comment);
+        setNotice('Pulled into the draft below — read it before arming.');
+      } else {
+        setNotice('No fenced comment in this conversation yet. Ask the Partner '
+                  + 'for the final comment and it will fence it.');
+      }
+    } catch (err: any) {
+      setError(err?.message || 'Could not read the comment.');
+    } finally {
+      setPulling(false);
     }
   };
 
@@ -180,17 +218,6 @@ function Dialogue({
               {m.role === 'user' ? 'you' : 'partner'}
             </span>
             <div className="text-zinc-200 whitespace-pre-wrap">{m.content}</div>
-            {m.role === 'assistant' && typeof m.content === 'string' && m.content.includes('**Goal:**') && (
-              // The conversation's product is the readiness comment, so lift a
-              // proposed one straight into the draft rather than making Keith
-              // copy it across and risk transcribing it wrong.
-              <button
-                onClick={() => onApplyDraft(m.content)}
-                className="mt-1 text-[11px] text-sky-400 hover:underline"
-              >
-                Use this as the readiness comment
-              </button>
-            )}
           </div>
         ))}
         {thread.isRunning && <div className="text-[11px] text-faint">thinking…</div>}
@@ -218,6 +245,20 @@ function Dialogue({
           Send
         </button>
       </div>
+      <div className="flex items-center gap-2 mt-2">
+        <button
+          onClick={() => void bringBack()}
+          disabled={pulling || thread.isRunning}
+          className="px-3 py-1.5 text-xs rounded-md border border-subtle hover:bg-[var(--surface-hover)] disabled:opacity-40"
+        >
+          {pulling ? 'Bringing it back…' : 'Bring the comment back'}
+        </button>
+        <span className="text-[11px] text-faint">
+          Lands in the draft below, editable — every arm guard still applies.
+        </span>
+      </div>
+      {notice && <div className="text-[11px] text-faint mt-1">{notice}</div>}
+      {error && <div className="text-[11px] text-red-400 mt-1">{error}</div>}
     </div>
   );
 }

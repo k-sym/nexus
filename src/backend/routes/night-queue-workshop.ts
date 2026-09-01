@@ -124,6 +124,32 @@ export function createWorkshopRoutes(
       }
     });
 
+    // Getting the agreed wording back out of that conversation
+    // (baker-internal#132). A read, and the whole point of it is that nothing
+    // between the transcript and the draft field is allowed to be creative:
+    // the adapter returns the last fenced block verbatim or says it found
+    // none. The card puts the result in the EDITABLE draft, where every arm
+    // guard still applies to it.
+    //
+    // `:sessionId` is the ADAPTER session id from `discuss`, not the nexus id
+    // the chat endpoints are keyed by — the card holds both.
+    fastify.get('/api/night-queue/discuss/:sessionId/comment', async (request, reply) => {
+      const { sessionId } = request.params as { sessionId: string };
+      const hermes = client();
+      if (!hermes) {
+        reply.code(400);
+        return { error: 'Assistant URL and key must be configured in Settings.' };
+      }
+      try {
+        return await hermes.discussComment(sessionId);
+      } catch (err: any) {
+        // 404 is "no workshop conversation with that id" and reads quite
+        // differently from "the adapter is down". Keep them apart.
+        reply.code(err?.status ?? 502);
+        return { error: detailOf(err, 'Could not read the comment.') };
+      }
+    });
+
     // The write. The adapter's status reaches the card unchanged, because the
     // card branches on it: 403 is standing policy, 409 is already queued or
     // closed, 400 is a spec the adapter refused. Flattening them all to 502

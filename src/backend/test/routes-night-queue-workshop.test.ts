@@ -189,6 +189,45 @@ test('discuss keeps the adapter status and validates before calling out', async 
   await refusing.close();
 });
 
+test('GET discuss/:id/comment reads by the ADAPTER session id', async () => {
+  const seen: string[] = [];
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (url) => {
+    seen.push(String(url));
+    return jsonRes({ session_id: 's-1', found: true, comment: '**Goal:** agreed text' });
+  });
+
+  const body = (await app.inject({
+    method: 'GET', url: '/api/night-queue/discuss/s-1/comment' })).json();
+  assert.equal(body.found, true);
+  assert.equal(body.comment, '**Goal:** agreed text');
+  // The chat endpoints are keyed by NEXUS ids; this one is not. Sending the
+  // adopted id here would read a conversation that does not exist.
+  assert.equal(seen[0], 'http://adapter:8788/v1/night-queue/discuss/s-1/comment');
+  await app.close();
+});
+
+test('comment: found:false travels, and 404 stays 404', async () => {
+  // "There is no comment in this conversation yet" is an answer the card
+  // renders; flattening it to an error would send Keith back to copy-paste.
+  const empty = await appWith(loadWith('http://adapter:8788', 'k1'), async () =>
+    jsonRes({ session_id: 's-1', found: false, comment: '' }));
+  const body = (await empty.inject({
+    method: 'GET', url: '/api/night-queue/discuss/s-1/comment' })).json();
+  assert.equal(body.found, false);
+  assert.equal(body.comment, '');
+  assert.equal(body.error, undefined);
+  await empty.close();
+
+  const missing = await appWith(loadWith('http://adapter:8788', 'k1'), async () =>
+    new Response(JSON.stringify({ detail: 'no workshop conversation with that id' }),
+                 { status: 404 }));
+  const res = await missing.inject({
+    method: 'GET', url: '/api/night-queue/discuss/nope/comment' });
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.json().error, 'no workshop conversation with that id');
+  await missing.close();
+});
+
 test('arm forwards the caller\'s decided_by so the ledger says where it came from', async () => {
   // A phone tap and a desk session are the same write but not the same act,
   // and the autonomy ledger is the only place that distinction survives.

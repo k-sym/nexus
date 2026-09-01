@@ -199,7 +199,7 @@ struct BlockedChip: View {
 @MainActor
 @Observable
 final class WorkshopIssueModel {
-    enum Busy: Equatable { case assessing, arming, opening }
+    enum Busy: Equatable { case assessing, arming, opening, bringingBack }
 
     private let api: APIClient
     private(set) var candidate: NightQueueCandidate
@@ -212,7 +212,15 @@ final class WorkshopIssueModel {
     var error: String?
     var armed: ArmResponse?
     /// The adapter-side session to adopt once a conversation has been opened.
+    /// Bound to `navigationDestination(item:)`, so it goes nil on the way back.
     var conversation: Conversation?
+    /// The same id, kept after the pop. Coming back from the chat is exactly
+    /// when the comment is worth pulling, so the control cannot hang off a
+    /// binding that SwiftUI clears in order to get here.
+    private(set) var openedConversationId: String?
+    /// What the last pull did. "There is no fenced comment yet" is an answer,
+    /// not an error, so it does not go in `error` beside the arm failures.
+    var commentNotice: String?
 
     /// A pushed Partner conversation. Identifiable so it can drive a
     /// `navigationDestination(item:)`.
@@ -237,6 +245,8 @@ final class WorkshopIssueModel {
         error = nil
         armed = nil
         conversation = nil
+        openedConversationId = nil
+        commentNotice = nil
         busy = nil
     }
 
@@ -289,9 +299,46 @@ final class WorkshopIssueModel {
                                                  number: candidate.number, draft: draft)
             guard candidate.id == requestedFor else { return }
             conversation = Conversation(id: got.sessionId, title: got.sessionTitle)
+            openedConversationId = got.sessionId
         } catch {
             guard candidate.id == requestedFor else { return }
             self.error = LoadState<DiscussResponse>.message(for: error)
+        }
+        if candidate.id == requestedFor { busy = nil }
+    }
+
+    /// Bring the agreed wording back into the draft (baker-internal#132).
+    ///
+    /// The adapter extracts it — the last fenced block of the newest assistant
+    /// reply, verbatim — so nothing between the transcript and this field is
+    /// allowed to be creative. It lands in the EDITABLE draft and every arm
+    /// guard still applies, which is why a bad pull is caught by Keith reading
+    /// it rather than by the 01:00 runner.
+    ///
+    /// Overwrites the draft, deliberately: the agreed comment supersedes the
+    /// assessor's first attempt, and that is the whole point of the
+    /// conversation.
+    func bringBackComment() async {
+        guard let sessionId = openedConversationId else { return }
+        let requestedFor = candidate.id
+        busy = .bringingBack
+        error = nil
+        commentNotice = nil
+        do {
+            let got = try await api.discussComment(sessionId: sessionId)
+            guard candidate.id == requestedFor else { return }
+            if got.found, !got.comment.isEmpty {
+                draft = got.comment
+                commentNotice = "Pulled into the readiness comment below — read it before arming."
+            } else {
+                // Never a guess at the last message: a half-copied spec
+                // reaching an unattended agent is the failure this replaces.
+                commentNotice = "No fenced comment in this conversation yet. Ask the "
+                    + "Partner for the final comment and it will fence it."
+            }
+        } catch {
+            guard candidate.id == requestedFor else { return }
+            self.error = LoadState<DiscussCommentResponse>.message(for: error)
         }
         if candidate.id == requestedFor { busy = nil }
     }
@@ -347,6 +394,10 @@ struct WorkshopIssueView: View {
             if model.assessment == nil {
                 barSection
                 discussSection
+                // Talking it over does not require an assessment, so a comment
+                // can arrive before one. Text that landed somewhere invisible
+                // would be worse than no control at all.
+                if !model.draft.isEmpty { draftSection }
             } else {
                 verdictSection
                 discussSection
@@ -535,11 +586,29 @@ struct WorkshopIssueView: View {
                       systemImage: "bubble.left.and.text.bubble.right")
             }
             .disabled(discussRefusal != nil || model.busy != nil)
+
+            // Only once there is a conversation to pull from (#132). Before
+            // that the control would be a promise with nothing behind it, and
+            // the reader would not know why it did nothing.
+            if model.openedConversationId != nil {
+                Button {
+                    Task { await model.bringBackComment() }
+                } label: {
+                    Label(model.busy == .bringingBack ? "Bringing it back…"
+                                                      : "Bring the comment back",
+                          systemImage: "arrow.down.doc")
+                }
+                .disabled(model.busy != nil)
+                if let notice = model.commentNotice {
+                    Text(notice).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
         } footer: {
             Text(discussRefusal
                  ?? "Opens a conversation seeded with the bar and this issue. The Partner "
-                  + "argues and drafts; it cannot arm. Bring the wording you agree on back "
-                  + "into the readiness comment, then arm it here.")
+                  + "argues and drafts; it cannot arm. When you have agreed the wording, "
+                  + "bring it back into the readiness comment below — it arrives editable, "
+                  + "and every arm guard still applies to it.")
         }
     }
 
