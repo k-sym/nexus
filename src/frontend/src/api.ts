@@ -501,6 +501,103 @@ export interface NightQueueResponse {
   error?: string;
 }
 
+// Readiness workshop — the night queue's front door (baker-internal#111).
+// Reads are cheap; `assess` costs a model call and `arm` is the only write.
+
+export type BlockedReason = 'excluded' | 'queued' | 'open_pr' | null;
+
+export interface NightQueueBlocker {
+  number: number;
+  url: string;
+  branch: string;
+  /** How the PR was linked: an explicit "Fixes #N", our own nq/ branch, or a
+   * branch named after the issue. */
+  reason: 'linked' | 'nq_branch' | 'branch_name';
+}
+
+export interface NightQueueCandidate {
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  updated_at: string | null;
+  updated_ts: number | null;
+  labels: string[];
+  queued: boolean;
+  excluded: boolean;
+  open_pr: NightQueueBlocker | null;
+  /** null = nothing structurally blocks arming. NOT "ready" — nothing here has
+   * been judged against the bar yet. */
+  blocked: BlockedReason;
+}
+
+export interface NightQueueCandidatesResponse {
+  configured?: boolean;
+  candidates: NightQueueCandidate[];
+  /** Count with no structural blocker. Deliberately not called "armable". */
+  unblocked?: number;
+  generated_at?: number;
+  cached?: boolean;
+  stale?: boolean;
+  error?: string;
+}
+
+export interface ReadinessCriterion {
+  id: string;
+  label: string;
+  requirement: string;
+  /** Set when the criterion only applies to some issues (reachability). */
+  conditional: string | null;
+}
+
+export interface ReadinessResponse {
+  configured?: boolean;
+  criteria: ReadinessCriterion[];
+  /** The verbatim bar the 01:00 planner enforces. */
+  bar_text?: string;
+  comment_template?: string;
+  excluded_repos?: string[];
+  error?: string;
+}
+
+export interface AssessedCriterion {
+  id: string;
+  label: string;
+  status: 'met' | 'missing' | 'na';
+  note: string;
+}
+
+export interface AssessmentResponse {
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  state: string;
+  labels: string[];
+  queued: boolean;
+  excluded: boolean;
+  open_pr: NightQueueBlocker | null;
+  /** Recomputed from the criteria, never taken from the model. */
+  ready: boolean;
+  /** False when the verdict was decided without a model call (excluded repo). */
+  assessed: boolean;
+  summary: string;
+  criteria: AssessedCriterion[];
+  /** Gaps arrive as `<TODO: …>` and must be resolved before arming. */
+  draft_comment: string;
+}
+
+export interface ArmResponse {
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  queued: boolean;
+  label: string;
+  comment_posted: boolean;
+  decision: { class: string; recorded: boolean; promotable: boolean; streak?: number; error?: string };
+}
+
 // Outbound draft queue — proxied from the assistant adapter's /v1/drafts
 // (baker-internal#42). Replies the partner proposed; approving one SENDS it.
 export type DraftStatus = 'pending' | 'approved' | 'sent' | 'rejected' | 'expired' | 'failed';
@@ -694,6 +791,21 @@ export const api = {
     list: (nights?: number) =>
       fetchJson<NightQueueResponse>(`/api/night-queue${nights ? `?nights=${nights}` : ''}`),
     night: (id: string) => fetchJson<NightDetail>(`/api/night-queue/nights/${encodeURIComponent(id)}`),
+    readiness: () => fetchJson<ReadinessResponse>(`/api/night-queue/readiness`),
+    candidates: () => fetchJson<NightQueueCandidatesResponse>(`/api/night-queue/candidates`),
+    assess: (repo: string, number: number) =>
+      fetchJson<AssessmentResponse>(`/api/night-queue/assess`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo, number }),
+      }),
+    /** The only write: posts the readiness comment, then mints the label. */
+    arm: (repo: string, number: number, comment: string) =>
+      fetchJson<ArmResponse>(`/api/night-queue/arm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo, number, comment }),
+      }),
   },
   tickets: {
     list: () => fetchJson<Ticket[]>(`/api/tickets`),

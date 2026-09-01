@@ -24,6 +24,7 @@ import { registerSettingsRoutes } from './routes/settings.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { registerDraftsRoutes } from './routes/drafts.js';
 import { registerNightQueueRoutes } from './routes/night-queue.js';
+import { registerWorkshopRoutes } from './routes/night-queue-workshop.js';
 import { registerRoutinesRoutes } from './routes/routines.js';
 import { registerTicketRoutes } from './routes/tickets.js';
 import { registerIdeaRoutes } from './routes/ideas.js';
@@ -247,6 +248,7 @@ async function main() {
   app.register(registerStatusRoutes);
   app.register(registerRoutinesRoutes);
   app.register(registerNightQueueRoutes);
+  app.register(registerWorkshopRoutes);
   app.register(registerDraftsRoutes);
   app.register(registerTicketRoutes);
   app.register(registerIdeaRoutes);

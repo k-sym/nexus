@@ -13,6 +13,7 @@ import NotificationToasts from './components/NotificationToasts';
 import ConfirmHost from './components/ConfirmHost';
 import ApprovalQueue from './components/ApprovalQueue';
 import ToolDecisionsView from './components/ToolDecisionsView';
+import NightQueueWorkshop from './components/NightQueueWorkshop';
 import KanbanBoard from './components/KanbanBoard';
 import ChatPanel from './components/ChatPanel';
 import AssistantView from './components/AssistantView';
@@ -28,7 +29,7 @@ import DiffReviewPanel from './components/DiffReviewPanel';
 import type { ActivityResponse, ChatSessionSummary, OperationKind, OperationStatus, ReviewActionResult } from './api';
 import { loadViewState, saveViewState } from './viewState';
 
-type GlobalView = 'dashboard' | 'activity' | 'tickets' | 'ideas' | 'assistant' | 'decisions' | 'settings';
+type GlobalView = 'dashboard' | 'activity' | 'tickets' | 'ideas' | 'assistant' | 'decisions' | 'nightQueue' | 'settings';
 
 /** The slice of an in-flight run the sidebar needs: which project owns it and
  *  whether it is blocked on the user. */
@@ -675,6 +676,7 @@ export default function App() {
       { id: 'view-tickets', label: 'Tickets', hint: 'View', run: () => selectGlobal('tickets') },
       { id: 'view-ideas', label: 'Ideas', hint: 'View', keywords: 'ideas capture ripen park', run: () => selectGlobal('ideas') },
       { id: 'view-decisions', label: 'Decisions', hint: 'View', keywords: 'tool policy approval audit gated', run: () => selectGlobal('decisions') },
+      { id: 'view-night-queue', label: 'Night Queue', hint: 'View', keywords: 'nightqueue readiness arm overnight issue candidate workshop bar', run: () => selectGlobal('nightQueue') },
       { id: 'view-assistant', label: 'Partner', hint: 'View', keywords: 'assistant partner hermes openclaw remote chat', run: () => selectGlobal('assistant') },
     ];
     (['kanban', 'memory', 'chat', 'projectManagement'] as const).forEach((sub) => {
@@ -723,6 +725,8 @@ export default function App() {
       return <AssistantView />;
     if (globalView === 'decisions')
       return <ToolDecisionsView />;
+    if (globalView === 'nightQueue')
+      return <NightQueueWorkshop />;
 
     if (!activeProject) {
       return (
