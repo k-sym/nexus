@@ -1,6 +1,7 @@
 import { Gauge } from '@phosphor-icons/react';
 import { MissionStatus } from '../api';
 import DraftsCard from './DraftsCard';
+import NightQueueCard from './NightQueueCard';
 import RoutinesCard from './RoutinesCard';
 
 interface MissionControlProps {
@@ -204,6 +205,10 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
 
           {/* Partner routine fleet (self-polling; independent of /api/mission-control) */}
           <RoutinesCard />
+
+          {/* What the overnight runner did, what is queued, and which of its
+              PRs still want Keith (baker-internal#111) */}
+          <NightQueueCard />
 
           <div>
             <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Stats</div>

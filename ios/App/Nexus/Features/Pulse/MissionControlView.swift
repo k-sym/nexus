@@ -48,6 +48,9 @@ struct MissionControlView: View {
                     // queue is empty (baker-internal#42).
                     DraftsCard(api: api)
                     RoutinesCard(api: api)
+                    // What the overnight runner did, what is queued, and which
+                    // of its PRs still want Keith (baker-internal#111).
+                    NightQueueCard(api: api)
                     if let counts = status.modelCounts {
                         modelsCard(counts)
                     }

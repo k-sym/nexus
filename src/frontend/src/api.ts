@@ -378,6 +378,110 @@ export interface RoutinesResponse {
   error?: string;
 }
 
+// Night-queue board — proxied from the assistant adapter's /v1/night-queue
+// (baker-internal#111). What the overnight runner (#55) did, what is queued
+// for tonight, and which of its PRs are still open. Snake_case mirrors the
+// adapter wire shape, as with the routine fleet above.
+
+/** What the RUNNER observed, never the coder model's claim about its own
+ * homework. `null` means the ledger row predates the column — unknown, which
+ * is not the same as `not_run`. Anything but `passed` makes a PR a draft. */
+export type NightTests = 'passed' | 'failed' | 'not_run' | null;
+
+export type NightRunStatus = 'pr_opened' | 'parked' | 'no_changes' | 'timeout' | 'failed' | null;
+
+export type NightVerdict = 'approve' | 'arbitrated_ship' | 'arbitrated_park' | 'unreviewed' | null;
+
+/** `quiet` = nothing was labelled, the normal night. Not a failure. */
+export type NightOutcome = 'worked' | 'quiet' | 'running';
+
+export interface NightRun {
+  id: string;
+  repo: string;
+  issue_number: number;
+  branch: string | null;
+  started_at: string | null;
+  started_ts: number | null;
+  ended_at: string | null;
+  ended_ts: number | null;
+  status: NightRunStatus;
+  rounds: number;
+  verdict: NightVerdict;
+  pr_url: string | null;
+  tokens_used: number;
+  error: string | null;
+  summary: string;
+  tests: NightTests;
+  issue_url: string | null;
+}
+
+export interface Night {
+  id: string;
+  started_at: string | null;
+  started_ts: number | null;
+  ended_at: string | null;
+  ended_ts: number | null;
+  stop_reason: string | null;
+  issues_planned: number;
+  issues_attempted: number;
+  tokens_used: number;
+  outcome: NightOutcome;
+  /** Rollups the adapter computes so web and iOS cannot disagree. */
+  prs_opened: number;
+  unvalidated: number;
+  failures: number;
+  runs: NightRun[];
+}
+
+export interface NightPlan {
+  selected: Array<{ repo?: string; number?: number; title?: string; model?: string; budget_tokens?: number; rationale?: string }>;
+  parked: Array<{ repo?: string; number?: number; reason?: string }>;
+  excluded: Array<{ repo?: string; number?: number; title?: string }>;
+}
+
+export interface NightDetail extends Night {
+  plan: NightPlan;
+}
+
+export interface QueuedIssue {
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  updated_at: string | null;
+  updated_ts: number | null;
+  /** baker-internal and nexus: labelled, but the runner never touches them. */
+  excluded: boolean;
+  readiness: string | null;
+  readiness_source: 'comment' | 'body' | null;
+}
+
+export interface NightQueuePR {
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  created_at: string | null;
+  created_ts: number | null;
+  is_draft: boolean;
+}
+
+export interface NightQueueResponse {
+  configured?: boolean;
+  /** False until the runner has written its first night. */
+  available: boolean;
+  nights: Night[];
+  queue: QueuedIssue[];
+  queue_error?: string | null;
+  queue_stale?: boolean;
+  open_prs: NightQueuePR[];
+  open_prs_error?: string | null;
+  open_prs_stale?: boolean;
+  generated_at?: number;
+  /** Set when the backend could not reach the adapter at all. */
+  error?: string;
+}
+
 // Outbound draft queue — proxied from the assistant adapter's /v1/drafts
 // (baker-internal#42). Replies the partner proposed; approving one SENDS it.
 export type DraftStatus = 'pending' | 'approved' | 'sent' | 'rejected' | 'expired' | 'failed';
@@ -566,6 +670,11 @@ export const api = {
   routines: {
     list: () => fetchJson<RoutinesResponse>(`/api/routines`),
     get: (name: string) => fetchJson<RoutineDetail>(`/api/routines/${encodeURIComponent(name)}`),
+  },
+  nightQueue: {
+    list: (nights?: number) =>
+      fetchJson<NightQueueResponse>(`/api/night-queue${nights ? `?nights=${nights}` : ''}`),
+    night: (id: string) => fetchJson<NightDetail>(`/api/night-queue/nights/${encodeURIComponent(id)}`),
   },
   tickets: {
     list: () => fetchJson<Ticket[]>(`/api/tickets`),

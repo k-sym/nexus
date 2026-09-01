@@ -345,6 +345,21 @@ public actor APIClient {
         try await request(.routineDetail(name))
     }
 
+    // MARK: Night queue (baker-internal#111)
+
+    /// The overnight runner's board — what it did, what is queued, and which
+    /// of its PRs are still open. Fail-soft shapes (`configured: false`,
+    /// `available: false`, per-section errors) come through as data, not as
+    /// thrown errors — same contract as `routines()`.
+    public func nightQueue(nights: Int? = nil) async throws -> NightQueueResponse {
+        try await request(.nightQueue(nights: nights))
+    }
+
+    /// One night plus the planner's decisions for it.
+    public func night(id: String) async throws -> Night {
+        try await request(.night(id))
+    }
+
     // MARK: Drafts (baker-internal#42)
 
     /// The outbound draft queue. Fail-soft shapes (`configured: false`, `error`)
