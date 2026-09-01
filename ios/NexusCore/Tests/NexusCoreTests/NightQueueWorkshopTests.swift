@@ -174,6 +174,42 @@ final class NightQueueWorkshopTests: XCTestCase {
         XCTAssertTrue(discuss.conflictIsBusy)
     }
 
+    /// Bringing the agreed comment back (baker-internal#132). `found: false`
+    /// must decode as a value, because it is an answer the sheet renders —
+    /// "ask the Partner for the final comment" — not a failure.
+    func testDecodesTheAgreedCommentIncludingItsAbsence() throws {
+        let json = """
+        {"session_id": "8f1c-…", "found": true,
+         "comment": "**Goal:** keep the rank column rendered."}
+        """
+        let got = try JSONDecoder.nexusREST.decode(
+            DiscussCommentResponse.self, from: Data(json.utf8))
+        XCTAssertTrue(got.found)
+        XCTAssertEqual(got.comment, "**Goal:** keep the rank column rendered.")
+        XCTAssertEqual(got.sessionId, "8f1c-…")
+
+        let none = try JSONDecoder.nexusREST.decode(
+            DiscussCommentResponse.self,
+            from: Data(#"{"session_id": "8f1c-…", "found": false, "comment": ""}"#.utf8))
+        XCTAssertFalse(none.found)
+        XCTAssertEqual(none.comment, "")
+    }
+
+    /// Keyed by the ADAPTER session id, and a GET: nothing is written, and the
+    /// nexus id the chat endpoints use would read a conversation that does not
+    /// exist.
+    func testTheCommentReadIsAGetOnTheAdapterSessionId() {
+        let read = Endpoint.discussComment(sessionId: "8f1c")
+        XCTAssertEqual(read.path, "/api/night-queue/discuss/8f1c/comment")
+        XCTAssertEqual(read.method, "GET")
+        XCTAssertTrue(read.conflictIsBusy)
+
+        // Session ids come from the adapter, so a stray path character must
+        // not be able to walk out of the route.
+        let awkward = Endpoint.discussComment(sessionId: "a/../b")
+        XCTAssertEqual(awkward.path, "/api/night-queue/discuss/a%2F%2E%2E%2Fb/comment")
+    }
+
     // MARK: The arm gate
 
     private func candidates() throws -> [String: NightQueueCandidate] {

@@ -231,6 +231,10 @@ export interface HermesClient {
    * readiness bar and the FENCED issue text. Creates a session; it does not
    * arm. */
   discussIssue(input: { repo: string; number: number; draft?: string }): Promise<unknown>;
+  /** The comment agreed in that conversation, extracted deterministically by
+   * the adapter (baker-internal#132). A read; `found: false` when there is no
+   * fenced block to lift. */
+  discussComment(sessionId: string): Promise<unknown>;
   /** Partner adapter's outbound draft queue (baker-internal#42). Also passed
    * through untyped. `approveDraft` is the send: it approves and transmits in
    * one call, and rejects with a status-bearing Error when the adapter refuses. */
@@ -383,6 +387,17 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
         method: 'POST',
         body: JSON.stringify(input),
       });
+    },
+
+    /** Pulls the agreed comment back out of that conversation. The adapter
+     * scans the transcript for the last fenced block — no second model call,
+     * because a model asked to extract "the comment we agreed on" can invent
+     * one, and this is the exact text an unattended agent is handed at 01:00.
+     * Keyed by the ADAPTER session id, the one `discussIssue` returned, not by
+     * the nexus id the chat endpoints use. */
+    async discussComment(sessionId: string): Promise<unknown> {
+      return requestJson(
+        `/v1/night-queue/discuss/${encodeURIComponent(sessionId)}/comment`);
     },
 
     // Outbound draft queue (baker-internal#42). The adapter owns every guard;

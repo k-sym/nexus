@@ -409,6 +409,18 @@ public actor APIClient {
         return try await request(.discussIssue(body: try JSONSerialization.data(withJSONObject: payload)))
     }
 
+    /// Bring the agreed wording back from that conversation
+    /// (baker-internal#132), so it never has to be long-pressed, selected and
+    /// copied on a phone — the failure mode being that you paste half a spec
+    /// and arm anyway.
+    ///
+    /// Takes the ADAPTER session id from `discussIssue`, not the adopted nexus
+    /// one. Throws the adapter's 404 when there is no such conversation;
+    /// `found: false` is a value, not a throw.
+    public func discussComment(sessionId: String) async throws -> DiscussCommentResponse {
+        try await request(.discussComment(sessionId: sessionId))
+    }
+
     /// Post the readiness comment and mint the label — the moment an issue
     /// joins tonight's queue for an unattended agent.
     ///

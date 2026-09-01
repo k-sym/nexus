@@ -597,6 +597,16 @@ export interface DiscussResponse {
   error?: string;
 }
 
+/** The comment agreed in a workshop conversation (baker-internal#132).
+ * `found: false` means the Partner has not put one in a fenced block yet — an
+ * answer to render, never an error and never a guess at the last message. */
+export interface DiscussCommentResponse {
+  session_id: string;
+  found: boolean;
+  comment: string;
+  error?: string;
+}
+
 export interface ArmResponse {
   repo: string;
   number: number;
@@ -820,6 +830,13 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repo, number, draft }),
       }),
+    /** Pulls the agreed comment back out of that conversation, so it never has
+     * to be selected and copied by hand. Deterministic on the adapter — the
+     * last fenced block, verbatim — and keyed by the ADAPTER session id, not
+     * the adopted nexus one the chat endpoints use. */
+    discussComment: (sessionId: string) =>
+      fetchJson<DiscussCommentResponse>(
+        `/api/night-queue/discuss/${encodeURIComponent(sessionId)}/comment`),
     /** The only write: posts the readiness comment, then mints the label. */
     arm: (repo: string, number: number, comment: string) =>
       fetchJson<ArmResponse>(`/api/night-queue/arm`, {

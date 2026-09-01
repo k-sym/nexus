@@ -231,6 +231,15 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/night-queue/discuss", method: "POST", body: body)
     }
 
+    /// The comment agreed in that conversation → `DiscussCommentResponse`.
+    /// Keyed by the ADAPTER session id (the one `discussIssue` returned), not
+    /// by the nexus id the chat endpoints use. A read; nothing is written.
+    public static func discussComment(sessionId: String) -> Endpoint {
+        let encoded = sessionId.addingPercentEncoding(withAllowedCharacters: .alphanumerics)
+            ?? sessionId
+        return Endpoint(path: "/api/night-queue/discuss/\(encoded)/comment")
+    }
+
     /// THE write: post the readiness comment, then mint the `night-queue`
     /// label. Body `{ repo, number, comment }`.
     ///

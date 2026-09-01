@@ -203,6 +203,31 @@ public struct DiscussResponse: Decodable, Sendable {
     public let sessionTitle: String
 }
 
+/// The comment agreed in a workshop conversation (baker-internal#132).
+///
+/// Extracted by the adapter, deterministically: the last fenced block of the
+/// newest assistant reply, verbatim. There is no second model call, because a
+/// model asked to pick "the comment we agreed on" out of a transcript can
+/// invent one — and this is the exact text an unattended agent is handed at
+/// 01:00 with nobody watching.
+///
+/// `found == false` is an honest answer, not an error: it means the Partner
+/// has not put a comment in a fenced block yet. It never falls back to the
+/// last message, so the caller shows that and asks for one.
+public struct DiscussCommentResponse: Decodable, Sendable {
+    public let sessionId: String?
+    public let found: Bool
+    /// Empty whenever `found` is false. Lands in the EDITABLE draft, where
+    /// every arm guard still applies to it.
+    public let comment: String
+
+    public init(sessionId: String? = nil, found: Bool, comment: String) {
+        self.sessionId = sessionId
+        self.found = found
+        self.comment = comment
+    }
+}
+
 // MARK: - Arming (the one write)
 
 public struct ArmDecision: Decodable, Sendable {
