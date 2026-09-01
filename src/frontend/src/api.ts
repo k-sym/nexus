@@ -466,11 +466,30 @@ export interface NightQueuePR {
   is_draft: boolean;
 }
 
+/** What the scheduled launchd job last did, from the wrapper's status file.
+ * The ledger cannot answer this: a night that dies before the runner opens it
+ * writes no row, so this is the only evidence such an attempt happened. */
+export interface NightAttempt {
+  started: number | null;
+  ended: number | null;
+  rc: number | null;
+  timed_out: boolean | null;
+  source: 'status' | 'stamp' | null;
+  /** rc === 0. A legacy stamp has no exit code and reports false: unknown is
+   * not success. */
+  ok: boolean;
+  /** Whether a ledger night covers this attempt. Independent of `ok` — a run
+   * that exited 0 and wrote no night is still unaccounted for. `null` when
+   * there is no ledger to check. */
+  recorded: boolean | null;
+}
+
 export interface NightQueueResponse {
   configured?: boolean;
   /** False until the runner has written its first night. */
   available: boolean;
   nights: Night[];
+  last_attempt?: NightAttempt | null;
   queue: QueuedIssue[];
   queue_error?: string | null;
   queue_stale?: boolean;

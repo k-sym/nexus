@@ -52,6 +52,9 @@ final class NightQueueTests: XCTestCase {
              "updated_at": null, "updated_ts": null,
              "excluded": true, "readiness": null, "readiness_source": null}
           ],
+          "last_attempt": {"started": 1787000000, "ended": 1787007200, "rc": 0,
+                           "timed_out": false, "source": "status", "ok": true,
+                           "recorded": true},
           "queue_error": null, "queue_stale": false,
           "open_prs": [
             {"repo": "selfie-wall", "number": 287, "title": "night-queue: Add X",
@@ -94,6 +97,11 @@ final class NightQueueTests: XCTestCase {
         XCTAssertTrue(board.queue[1].excluded)
         XCTAssertEqual(board.openPrs[0].number, 287)
         XCTAssertFalse(board.openPrs[0].isDraft)
+
+        let attempt = try XCTUnwrap(board.lastAttempt)
+        XCTAssertTrue(attempt.ok)
+        XCTAssertEqual(attempt.recorded, true)
+        XCTAssertFalse(attempt.isUnaccountedFor)
     }
 
     func testAQuietNightDecodesAsQuiet() throws {
@@ -144,6 +152,68 @@ final class NightQueueTests: XCTestCase {
         XCTAssertNotEqual(run.tests, .notRun)
         XCTAssertTrue(run.isUnvalidatedPR)
         XCTAssertEqual(NightTestsBadgeLabels.unknown, "tests unknown")
+    }
+
+    func testAnAttemptThatReachedNoLedgerNightIsUnaccountedFor() throws {
+        // The four silent nights (2026-08-29 to 09-01): the runner crashed
+        // before opening a night, so the ledger below looks calm and only this
+        // field carries the truth.
+        let json = """
+        {
+          "available": true, "nights": [], "queue": [], "open_prs": [],
+          "last_attempt": {"started": 1788220805, "ended": 1788220805, "rc": 1,
+                           "timed_out": false, "source": "status", "ok": false,
+                           "recorded": false}
+        }
+        """.data(using: .utf8)!
+        let board = try JSONDecoder.nexusREST.decode(NightQueueResponse.self, from: json)
+        let attempt = try XCTUnwrap(board.lastAttempt)
+        XCTAssertEqual(attempt.rc, 1)
+        XCTAssertFalse(attempt.ok)
+        XCTAssertTrue(attempt.isUnaccountedFor)
+    }
+
+    func testACleanRunThatWroteNothingIsStillUnaccountedFor() throws {
+        // Exit 0 is not the same as work recorded, and the banner must fire.
+        let json = """
+        {
+          "available": true, "nights": [], "queue": [], "open_prs": [],
+          "last_attempt": {"started": 1788220805, "ended": 1788220810, "rc": 0,
+                           "timed_out": false, "source": "status", "ok": true,
+                           "recorded": false}
+        }
+        """.data(using: .utf8)!
+        let attempt = try XCTUnwrap(
+            JSONDecoder.nexusREST.decode(NightQueueResponse.self, from: json).lastAttempt)
+        XCTAssertTrue(attempt.ok)
+        XCTAssertTrue(attempt.isUnaccountedFor)
+    }
+
+    func testUnknownRecordedIsNotAnAccusation() throws {
+        // `recorded: null` means we could not check — the card must stay quiet
+        // rather than claim a night went missing.
+        let json = """
+        {
+          "available": false, "nights": [], "queue": [], "open_prs": [],
+          "last_attempt": {"started": 1788220805, "ended": null, "rc": null,
+                           "timed_out": null, "source": "stamp", "ok": false,
+                           "recorded": null}
+        }
+        """.data(using: .utf8)!
+        let attempt = try XCTUnwrap(
+            JSONDecoder.nexusREST.decode(NightQueueResponse.self, from: json).lastAttempt)
+        XCTAssertNil(attempt.recorded)
+        XCTAssertFalse(attempt.isUnaccountedFor)
+        // A legacy stamp has no exit code; unknown must not read as success.
+        XCTAssertFalse(attempt.ok)
+    }
+
+    func testAnAdapterWithoutLastAttemptStillDecodes() throws {
+        let json = """
+        {"available": true, "nights": [], "queue": [], "open_prs": []}
+        """.data(using: .utf8)!
+        let board = try JSONDecoder.nexusREST.decode(NightQueueResponse.self, from: json)
+        XCTAssertNil(board.lastAttempt)
     }
 
     func testDetailCarriesThePlan() throws {

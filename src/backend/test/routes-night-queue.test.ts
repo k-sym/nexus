@@ -38,6 +38,10 @@ const REPORT = {
       ],
     },
   ],
+  last_attempt: {
+    started: 1787000000, ended: 1787007200, rc: 0, timed_out: false,
+    source: 'status', ok: true, recorded: true,
+  },
   queue: [{ repo: 'selfie-wall', number: 300, title: 'Add X', excluded: false }],
   queue_error: null,
   queue_stale: false,
@@ -77,6 +81,8 @@ test('GET /api/night-queue proxies the board and marks configured', async () => 
   // The rollups the cards render rather than recompute must survive the hop.
   assert.equal(body.nights[0].unvalidated, 1);
   assert.equal(body.nights[0].runs[0].tests, 'passed');
+  assert.equal(body.last_attempt.ok, true);
+  assert.equal(body.last_attempt.recorded, true);
   assert.equal(body.queue[0].number, 300);
   assert.equal(body.open_prs[0].number, 287);
   assert.deepEqual(seen, ['http://adapter:8788/v1/night-queue']);
@@ -152,5 +158,34 @@ test('GET /api/night-queue/nights/:id proxies the plan and maps 404', async () =
 
   const missing = await app.inject({ method: 'GET', url: '/api/night-queue/nights/nope' });
   assert.equal(missing.statusCode, 404);
+  await app.close();
+});
+
+test('GET /api/night-queue passes through a run that reached no ledger night', async () => {
+  // The four silent nights: the runner crashed before opening a night, so the
+  // ledger looks calm and only last_attempt carries the truth. The proxy must
+  // not flatten or drop it.
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async () =>
+    jsonRes({
+      ...REPORT,
+      last_attempt: { started: 1788220805, ended: 1788220805, rc: 1, timed_out: false,
+                      source: 'status', ok: false, recorded: false },
+    }),
+  );
+  const body = (await app.inject({ method: 'GET', url: '/api/night-queue' })).json();
+  assert.equal(body.last_attempt.rc, 1);
+  assert.equal(body.last_attempt.ok, false);
+  assert.equal(body.last_attempt.recorded, false);
+  // There ARE nights — just none covering that attempt. Both must survive.
+  assert.equal(body.nights.length, 1);
+  await app.close();
+});
+
+test('GET /api/night-queue tolerates an adapter with no last_attempt yet', async () => {
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async () =>
+    jsonRes({ available: true, nights: [], queue: [], open_prs: [] }),
+  );
+  const body = (await app.inject({ method: 'GET', url: '/api/night-queue' })).json();
+  assert.equal(body.last_attempt, undefined);
   await app.close();
 });

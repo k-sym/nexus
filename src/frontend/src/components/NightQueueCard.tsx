@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   api,
   Night,
+  NightAttempt,
   NightDetail,
   NightOutcome,
   NightQueuePR,
@@ -98,6 +99,39 @@ function nightDate(night: Night): string {
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return <div className="text-[10px] uppercase tracking-wider text-faint font-medium mt-3 mb-1">{children}</div>;
+}
+
+/** The line the board was missing on 2026-09-01: the runner had crashed at
+ * 01:00 four nights running, and because it died before opening a night the
+ * ledger held nothing and the card showed a four-day-old night as if all were
+ * well. An attempt nothing accounts for is the loudest thing on this card. */
+function AttemptBanner({ attempt }: { attempt: NightAttempt }) {
+  // recorded === null means we could not check (no ledger). Say nothing rather
+  // than accuse the runner of losing a night we cannot look for.
+  if (attempt.recorded !== false) return null;
+  const when = attempt.started ?? attempt.ended;
+  const failed = !attempt.ok;
+  return (
+    <div
+      className={`mt-1 mb-2 px-2 py-1.5 rounded-md text-[11px] leading-snug ${
+        failed ? 'bg-red-500/10 text-red-300' : 'bg-amber-500/10 text-amber-300'
+      }`}
+      role="status"
+    >
+      <span className="font-semibold">
+        {failed
+          ? `Last scheduled run failed${attempt.rc != null ? ` (exit ${attempt.rc})` : ''}`
+          : 'Last scheduled run recorded no night'}
+      </span>
+      {attempt.timed_out ? ' — timed out' : ''}
+      {when ? ` · ${relativeAgo(when)}` : ''}
+      <div className="opacity-80">
+        {failed
+          ? 'It never reached the ledger, so no night below covers it.'
+          : 'It exited cleanly but wrote nothing — nothing below accounts for it.'}
+      </div>
+    </div>
+  );
 }
 
 function RunRow({ run }: { run: NightRun }) {
@@ -323,6 +357,7 @@ export default function NightQueueCard() {
       {report && report.configured !== false && !report.error && (
         <>
           <SectionLabel>Recent nights</SectionLabel>
+          {report.last_attempt && <AttemptBanner attempt={report.last_attempt} />}
           {!report.available && (
             <div className="text-xs text-faint px-1">
               No nights recorded yet — the runner writes its ledger after its first night.
