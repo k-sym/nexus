@@ -30,12 +30,10 @@ export interface UsageWindowStats {
 
 const PROVIDERS: CodexBarProvider[] = ['claude', 'codex', 'openrouter'];
 const DEFAULT_HISTORY_PATH = join(homedir(), 'Library', 'Application Support', 'CodexBar', 'usage-history.jsonl');
-const DEFAULT_CLAUDE_STATUSLINE_CACHE_PATH = join(homedir(), '.claude', '.statusline-usage-cache');
 const DEFAULT_CODEX_AUTH_PATH = join(homedir(), '.codex', 'auth.json');
 const USAGE_POLL_MS = 300_000;
 const OPENROUTER_TIMEOUT_MS = 4_000;
 const CODEX_TIMEOUT_MS = 4_000;
-const CLAUDE_TIMEOUT_MS = 4_000;
 const CODEXBAR_TIMEOUT_MS = 20_000;
 const execFileAsync = promisify(execFile);
 
@@ -50,7 +48,9 @@ function unavailable(provider: CodexBarProvider, error?: string): CodexBarProvid
     ok: false,
     provider,
     value: '—',
-    caption: provider === 'openrouter' ? 'credit balance unavailable' : 'session unavailable',
+    caption: provider === 'openrouter'
+      ? 'credit balance unavailable'
+      : provider === 'claude' ? 'local cost unavailable' : 'session unavailable',
     error,
   };
 }
@@ -255,55 +255,62 @@ export function parseCodexBarUsage(provider: CodexBarProvider, stdout: string): 
   return unavailable(provider, 'CodexBar returned an unsupported stats shape');
 }
 
-function parseKeyValueCache(text: string): Record<string, string> {
-  const parsed: Record<string, string> = {};
-  for (const line of text.split(/\n/)) {
-    const separator = line.indexOf('=');
-    if (separator === -1) continue;
-    const key = line.slice(0, separator).trim();
-    const value = line.slice(separator + 1).trim();
-    if (key) parsed[key] = value;
+function formatUsd(amount: number, decimals: boolean): string {
+  if (!decimals && Math.abs(amount) >= 100) return `$${Math.round(amount).toLocaleString('en-US')}`;
+  return `$${amount.toFixed(2)}`;
+}
+
+function costAmount(row: Record<string, any>, names: string[]): number | undefined {
+  for (const name of names) {
+    const candidate = row[name];
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return candidate;
   }
-  return parsed;
+  return undefined;
 }
 
-export function parseClaudeStatuslineCache(text: string): CodexBarProviderStats {
-  const cache = parseKeyValueCache(text);
-  const session = usageWindow(cache.UTILIZATION, cache.RESETS_AT, 18_000);
-  if (!session) return unavailable('claude', 'Claude statusline cache missing UTILIZATION');
-  const weekly = usageWindow(cache.WEEKLY_UTILIZATION, cache.WEEKLY_RESETS_AT, 604_800) ?? undefined;
-  const sampledAt = cache.TIMESTAMP && Number.isFinite(Number(cache.TIMESTAMP))
-    ? new Date(Number(cache.TIMESTAMP) * 1000).toISOString()
-    : undefined;
+/**
+ * CodexBar ≥0.56 can no longer sample Anthropic quota windows: the Claude CLI
+ * probe stopped returning session quota data and the OAuth usage endpoint is
+ * aggressively rate limited. `codexbar cost` instead reads Claude Code's local
+ * transcript logs — no network, no auth — and reports dollar cost totals.
+ */
+export function parseCodexBarCost(stdout: string, now: () => Date = () => new Date()): CodexBarProviderStats {
+  const payload = parseJsonPayload(stdout);
+  const row = firstObject('claude', payload);
+  if (!row) return unavailable('claude', 'No Claude cost data returned');
+  if (row.error) {
+    const message = typeof row.error === 'string' ? row.error : row.error.message;
+    return unavailable('claude', message || 'CodexBar cost provider error');
+  }
 
-  return {
-    ok: true,
-    provider: 'claude',
-    value: `${session.remainingPercent}%`,
-    caption: captionForWindow('session', session),
-    windows: { session, weekly },
-    source: 'claude-statusline-cache',
-    sampledAt,
-  };
-}
+  const sessionCost = costAmount(row, ['sessionCostUSD']);
+  const last30Cost = costAmount(row, ['last30DaysCostUSD']);
+  const daily = Array.isArray(row.daily) ? row.daily : [];
+  const todayKey = now().toLocaleDateString('en-CA');
+  const todayRow = daily.find((day: any) => day && typeof day === 'object' && day.date === todayKey);
+  const todayCost = todayRow ? costAmount(todayRow, ['totalCost']) : undefined;
+  const sampledAt = typeof row.updatedAt === 'string' ? row.updatedAt : undefined;
+  const source = 'codexbar-cost';
 
-export function parseClaudeOAuthUsage(payload: unknown): CodexBarProviderStats {
-  const row = payload && typeof payload === 'object' ? payload as Record<string, any> : {};
-  const fiveHour = row.five_hour && typeof row.five_hour === 'object' ? row.five_hour as Record<string, any> : null;
-  const sevenDay = row.seven_day && typeof row.seven_day === 'object' ? row.seven_day as Record<string, any> : null;
-  const session = fiveHour ? usageWindow(fiveHour.utilization, fiveHour.resets_at ?? fiveHour.resetsAt, 18_000) : null;
-  const weekly = sevenDay ? usageWindow(sevenDay.utilization, sevenDay.resets_at ?? sevenDay.resetsAt, 604_800) : null;
-
-  if (!session && !weekly) return unavailable('claude', 'Claude OAuth usage response missing usage windows');
-  const primaryWindow = session ?? weekly!;
-  return {
-    ok: true,
-    provider: 'claude',
-    value: `${primaryWindow.remainingPercent}%`,
-    caption: captionForWindow(session ? 'session' : 'weekly', primaryWindow),
-    windows: { session: session ?? undefined, weekly: weekly ?? undefined },
-    source: 'anthropic-oauth-usage',
-  };
+  const last30Part = last30Cost !== undefined ? ` · ${formatUsd(last30Cost, false)} last 30 days` : '';
+  if (sessionCost !== undefined) {
+    const todayPart = todayCost !== undefined ? ` · ${formatUsd(todayCost, false)} today` : '';
+    return {
+      ok: true,
+      provider: 'claude',
+      value: formatUsd(sessionCost, true),
+      caption: `session cost${todayPart}${last30Part}`,
+      source,
+      sampledAt,
+    };
+  }
+  if (todayCost !== undefined) {
+    return { ok: true, provider: 'claude', value: formatUsd(todayCost, true), caption: `cost today${last30Part}`, source, sampledAt };
+  }
+  if (last30Cost !== undefined) {
+    return { ok: true, provider: 'claude', value: formatUsd(last30Cost, true), caption: 'cost · last 30 days', source, sampledAt };
+  }
+  return unavailable('claude', 'CodexBar cost returned an unsupported shape');
 }
 
 export function parseCodexUsageWindows(payload: unknown): CodexBarProviderStats {
@@ -368,41 +375,30 @@ export interface UsageStatsOptions {
   useCache?: boolean;
   now?: () => number;
   readHistory?: () => Promise<string>;
-  readClaudeStatuslineCache?: () => Promise<string>;
-  readClaudeCredentials?: () => Promise<string>;
   readCodexAuth?: () => Promise<string>;
-  claudeUsage?: () => Promise<unknown>;
   codexUsage?: () => Promise<unknown>;
   openRouterKey?: string;
   openRouterBalance?: () => Promise<OpenRouterBalance | null>;
   codexBarUsage?: (provider: CodexBarProvider) => Promise<string>;
+  codexBarCost?: () => Promise<string>;
 }
 
 function defaultReadHistory(): Promise<string> {
   return readFile(DEFAULT_HISTORY_PATH, 'utf8');
 }
 
-function defaultReadClaudeStatuslineCache(): Promise<string> {
-  return readFile(DEFAULT_CLAUDE_STATUSLINE_CACHE_PATH, 'utf8');
-}
-
-async function defaultReadClaudeCredentials(): Promise<string> {
-  const { stdout } = await execFileAsync('/usr/bin/security', ['find-generic-password', '-s', 'Claude Code-credentials', '-w'], { timeout: 3_000 });
-  return stdout.trim();
-}
-
 function defaultReadCodexAuth(): Promise<string> {
   return readFile(DEFAULT_CODEX_AUTH_PATH, 'utf8');
 }
 
-async function defaultCodexBarUsage(provider: CodexBarProvider): Promise<string> {
+async function runCodexBar(args: string[]): Promise<string> {
   const candidates = ['/opt/homebrew/bin/codexbar', '/usr/local/bin/codexbar', 'codexbar'];
   let missing: unknown;
   for (const executable of candidates) {
     try {
       const { stdout } = await execFileAsync(
         executable,
-        ['--provider', provider, '--format', 'json', '--json-only'],
+        args,
         { timeout: CODEXBAR_TIMEOUT_MS, maxBuffer: 2 * 1024 * 1024 },
       );
       return stdout;
@@ -412,6 +408,14 @@ async function defaultCodexBarUsage(provider: CodexBarProvider): Promise<string>
     }
   }
   throw missing ?? new Error('CodexBar CLI not found');
+}
+
+function defaultCodexBarUsage(provider: CodexBarProvider): Promise<string> {
+  return runCodexBar(['--provider', provider, '--format', 'json', '--json-only']);
+}
+
+function defaultCodexBarCost(): Promise<string> {
+  return runCodexBar(['cost', '--provider', 'claude', '--format', 'json', '--json-only']);
 }
 
 function formatOpenRouterBalance(balance: OpenRouterBalance): CodexBarProviderStats {
@@ -476,25 +480,6 @@ async function fetchCodexUsage(readCodexAuth: () => Promise<string>): Promise<un
   }
 }
 
-async function fetchClaudeUsage(readClaudeCredentials: () => Promise<string>): Promise<unknown> {
-  const credentials = JSON.parse(await readClaudeCredentials()) as { claudeAiOauth?: { accessToken?: string } };
-  const token = credentials.claudeAiOauth?.accessToken;
-  if (!token) throw new Error('Claude OAuth access token missing');
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), CLAUDE_TIMEOUT_MS);
-  try {
-    const response = await fetch('https://api.anthropic.com/api/oauth/usage', {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`Claude OAuth usage returned ${response.status}`);
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 export async function getUsageStats(options: UsageStatsOptions = {}): Promise<CodexBarStats> {
   const now = options.now?.() ?? Date.now();
   const sampledAt = new Date(now).toISOString();
@@ -502,16 +487,25 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
   if (useCache && cached && cached.expiresAt > now) return cached.stats;
 
   const readHistory = options.readHistory ?? defaultReadHistory;
-  const readClaudeStatuslineCache = options.readClaudeStatuslineCache ?? defaultReadClaudeStatuslineCache;
-  const readClaudeCredentials = options.readClaudeCredentials ?? defaultReadClaudeCredentials;
   const readCodexAuth = options.readCodexAuth ?? defaultReadCodexAuth;
-  const claudeUsage = options.claudeUsage ?? (() => fetchClaudeUsage(readClaudeCredentials));
   const codexUsage = options.codexUsage ?? (() => fetchCodexUsage(readCodexAuth));
   const openRouterKey = options.openRouterKey ?? resolveOpenRouterKey(loadConfig());
   const openRouterBalance = options.openRouterBalance ?? (() => fetchOpenRouterBalance(openRouterKey));
   const codexBarUsage = options.codexBarUsage ?? (Object.keys(options).length === 0 ? defaultCodexBarUsage : undefined);
+  const codexBarCost = options.codexBarCost ?? (Object.keys(options).length === 0 ? defaultCodexBarCost : undefined);
 
   const entries = await Promise.all(PROVIDERS.map(async (provider) => {
+    if (provider === 'claude') {
+      if (!codexBarCost) return [provider, unavailable(provider, 'No Claude cost data found')] as const;
+      try {
+        const cost = parseCodexBarCost(await codexBarCost(), () => new Date(now));
+        return [provider, cost.ok && !cost.sampledAt ? { ...cost, sampledAt } : cost] as const;
+      } catch (err: any) {
+        const message = err?.code === 'ENOENT' ? 'CodexBar CLI not found' : err?.message || 'No Claude cost data found';
+        return [provider, unavailable(provider, message)] as const;
+      }
+    }
+
     if (codexBarUsage) {
       try {
         const codexBar = sampled(parseCodexBarUsage(provider, await codexBarUsage(provider)), sampledAt);
@@ -530,15 +524,6 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
       }
     }
 
-    if (provider === 'claude') {
-      try {
-        const live = sampled(parseClaudeOAuthUsage(await claudeUsage()), sampledAt);
-        if (live.ok) return [provider, live] as const;
-      } catch {
-        // Fall back to cached history/statusline sources below.
-      }
-    }
-
     if (provider === 'codex') {
       try {
         const live = sampled(parseCodexUsageWindows(await codexUsage()), sampledAt);
@@ -550,16 +535,6 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
 
     const history = await readHistoryFallback(provider, readHistory);
     if (history) return [provider, sampled(history, sampledAt)] as const;
-    if (provider === 'claude') {
-      try {
-        return [provider, sampled(parseClaudeStatuslineCache(await readClaudeStatuslineCache()), sampledAt)] as const;
-      } catch (err: any) {
-        const message = err?.code === 'ENOENT'
-          ? 'No Claude usage data found'
-          : err?.message || 'No Claude statusline cache';
-        return [provider, unavailable(provider, message)] as const;
-      }
-    }
     return [provider, unavailable(provider, 'No cached usage history')] as const;
   }));
   const freshStats = Object.fromEntries(entries) as CodexBarStats;
