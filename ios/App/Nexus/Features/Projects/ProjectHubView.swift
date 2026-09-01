@@ -171,6 +171,16 @@ extension TaskStatus {
 }
 
 extension TaskPriority {
+    var label: String {
+        switch self {
+        case .low: return "Low"
+        case .medium: return "Medium"
+        case .high: return "High"
+        case .urgent: return "Urgent"
+        case .unknown(let raw): return raw.capitalized
+        }
+    }
+
     var tint: Color {
         switch self {
         case .urgent: return .red

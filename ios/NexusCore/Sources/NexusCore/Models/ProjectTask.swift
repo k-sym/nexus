@@ -42,9 +42,14 @@ public enum TaskStatus: Codable, Hashable, Sendable, CaseIterable {
     }
 }
 
-public enum TaskPriority: Codable, Hashable, Sendable {
+public enum TaskPriority: Codable, Hashable, Sendable, CaseIterable {
     case low, medium, high, urgent
     case unknown(String)
+
+    /// The four levels a client may set, ordered as the desktop modal orders
+    /// them. `.unknown` is decode-only (a newer backend's value) and is
+    /// deliberately absent, exactly as `TaskStatus.allCases` omits it.
+    public static var allCases: [TaskPriority] { [.low, .medium, .high, .urgent] }
 
     public init(rawValue: String) {
         switch rawValue {
