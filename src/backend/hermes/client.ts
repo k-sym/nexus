@@ -220,6 +220,13 @@ export interface HermesClient {
    * Untyped passthrough like the routine fleet. */
   listNightQueue(nights?: number): Promise<unknown>;
   getNight(nightId: string): Promise<unknown>;
+  /** Readiness workshop (baker-internal#111). `armIssue` is the ONLY call here
+   * that writes: it posts the readiness comment and mints the night-queue
+   * label. The rest read. */
+  nightQueueReadiness(): Promise<unknown>;
+  nightQueueCandidates(): Promise<unknown>;
+  assessIssue(repo: string, number: number): Promise<unknown>;
+  armIssue(input: { repo: string; number: number; comment: string; decided_by?: string }): Promise<unknown>;
   /** Partner adapter's outbound draft queue (baker-internal#42). Also passed
    * through untyped. `approveDraft` is the send: it approves and transmits in
    * one call, and rejects with a status-bearing Error when the adapter refuses. */
@@ -334,6 +341,31 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
 
     async getNight(nightId: string): Promise<unknown> {
       return requestJson(`/v1/night-queue/nights/${encodeURIComponent(nightId)}`);
+    },
+
+    // -- readiness workshop --------------------------------------------------
+
+    async nightQueueReadiness(): Promise<unknown> {
+      return requestJson('/v1/night-queue/readiness');
+    },
+
+    async nightQueueCandidates(): Promise<unknown> {
+      return requestJson('/v1/night-queue/candidates');
+    },
+
+    async assessIssue(repo: string, number: number): Promise<unknown> {
+      return requestJson('/v1/night-queue/assess', {
+        method: 'POST',
+        body: JSON.stringify({ repo, number }),
+      });
+    },
+
+    /** Writes. Posts the readiness comment, then mints the label. */
+    async armIssue(input: { repo: string; number: number; comment: string; decided_by?: string }): Promise<unknown> {
+      return requestJson('/v1/night-queue/arm', {
+        method: 'POST',
+        body: JSON.stringify(input),
+      });
     },
 
     // Outbound draft queue (baker-internal#42). The adapter owns every guard;
