@@ -99,10 +99,16 @@ struct TaskEditSheet: View {
     /// The four settable levels, plus the card's own value when the backend
     /// sent one this build doesn't know: an unrecognized priority must still
     /// be selectable, or opening the sheet would silently rewrite it.
+    ///
+    /// Keyed off `card.priority`, not the current selection, so the extra
+    /// segment stays for the life of the sheet. Deriving it from `priority`
+    /// made the control re-lay-out under the user's finger the moment they
+    /// picked a known level, and stranded them — the original value was gone
+    /// from the picker, so the only way back was Cancel.
     private var priorityOptions: [TaskPriority] {
-        TaskPriority.allCases.contains(priority)
+        TaskPriority.allCases.contains(card.priority)
             ? TaskPriority.allCases
-            : TaskPriority.allCases + [priority]
+            : TaskPriority.allCases + [card.priority]
     }
 
     @ViewBuilder
