@@ -77,7 +77,8 @@ public actor APIClient {
         guard let http = response as? HTTPURLResponse else {
             throw APIError.transport(URLError(.badServerResponse))
         }
-        try Self.validate(status: http.statusCode, data: data)
+        try Self.validate(status: http.statusCode, data: data,
+                          conflictIsBusy: endpoint.conflictIsBusy)
         return data
     }
 
@@ -129,13 +130,14 @@ public actor APIClient {
         }
     }
 
-    private static func validate(status: Int, data: Data) throws {
+    private static func validate(status: Int, data: Data,
+                                 conflictIsBusy: Bool = true) throws {
         switch status {
         case 200..<300:
             return
         case 401:
             throw APIError.unauthorized
-        case 409:
+        case 409 where conflictIsBusy:
             throw APIError.busy(BusyInfo.decode(from: data))
         default:
             let message = (try? JSONDecoder.nexusCamel.decode(ServerError.self, from: data))?.error
@@ -367,6 +369,46 @@ public actor APIClient {
     /// One night plus the planner's decisions for it.
     public func night(id: String) async throws -> Night {
         try await request(.night(id))
+    }
+
+    // MARK: Readiness workshop (baker-internal#111)
+
+    /// The readiness bar, as the adapter defines it. Fail-soft like the board:
+    /// `configured: false` and `error` arrive as data, not thrown errors.
+    public func nightQueueReadiness() async throws -> ReadinessResponse {
+        try await request(.nightQueueReadiness)
+    }
+
+    /// Every open issue with its blocker. Blocked ones come back WITH their
+    /// reason rather than filtered out, and the UI shows them.
+    public func nightQueueCandidates() async throws -> NightQueueCandidatesResponse {
+        try await request(.nightQueueCandidates)
+    }
+
+    /// Judge one issue against the bar. Costs a model call and takes tens of
+    /// seconds, so callers must assume the reader can move on mid-flight —
+    /// check `AssessmentResponse.describes(_:)` before showing or arming it.
+    /// Throws on failure: an unjudgeable issue must never render as a clean one.
+    public func assessIssue(repo: String, number: Int) async throws -> AssessmentResponse {
+        let body = try JSONSerialization.data(withJSONObject: ["repo": repo, "number": number])
+        return try await request(.assessIssue(body: body))
+    }
+
+    /// Post the readiness comment and mint the label — the moment an issue
+    /// joins tonight's queue for an unattended agent.
+    ///
+    /// Throws on refusal, and the thrown message is the ADAPTER's own wording,
+    /// shown verbatim: 403 standing policy, 409 closed or already queued, 400
+    /// a spec it refused, and a 502 that says the comment was posted but the
+    /// label was not. That last one is a half-done state, and flattening it
+    /// would be the one lie this surface cannot afford.
+    @discardableResult
+    public func armIssue(repo: String, number: Int, comment: String,
+                         decidedBy: String = "ios-workshop") async throws -> ArmResponse {
+        let body = try JSONSerialization.data(withJSONObject: [
+            "repo": repo, "number": number, "comment": comment, "decided_by": decidedBy,
+        ])
+        return try await request(.armIssue(body: body))
     }
 
     // MARK: Drafts (baker-internal#42)

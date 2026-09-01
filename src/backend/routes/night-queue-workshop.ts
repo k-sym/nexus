@@ -96,8 +96,8 @@ export function createWorkshopRoutes(
     // closed, 400 is a spec the adapter refused. Flattening them all to 502
     // would turn four different conversations into one shrug.
     fastify.post('/api/night-queue/arm', async (request, reply) => {
-      const { repo, number, comment } = (request.body ?? {}) as {
-        repo?: string; number?: number; comment?: string;
+      const { repo, number, comment, decided_by } = (request.body ?? {}) as {
+        repo?: string; number?: number; comment?: string; decided_by?: string;
       };
       if (!repo || typeof number !== 'number' || typeof comment !== 'string') {
         reply.code(400);
@@ -109,7 +109,15 @@ export function createWorkshopRoutes(
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.armIssue({ repo, number, comment, decided_by: 'nexus-workshop' });
+        // Forwarded so the autonomy ledger records WHERE the decision was
+        // made — a phone tap and a desk session are the same write but not the
+        // same act. Defaults to the desktop's value when a client omits it.
+        return await hermes.armIssue({
+          repo, number, comment,
+          decided_by: typeof decided_by === 'string' && decided_by.trim()
+            ? decided_by.trim().slice(0, 64)
+            : 'nexus-workshop',
+        });
       } catch (err: any) {
         reply.code(err?.status ?? 502);
         return { error: detailOf(err, 'Arming failed.') };
