@@ -587,6 +587,16 @@ export interface AssessmentResponse {
   draft_comment: string;
 }
 
+export interface DiscussResponse {
+  session_id: string;
+  repo: string;
+  number: number;
+  title: string;
+  url: string;
+  session_title: string;
+  error?: string;
+}
+
 export interface ArmResponse {
   repo: string;
   number: number;
@@ -799,6 +809,17 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ repo, number }),
       }),
+    /** Opens a Partner conversation about one issue, seeded server-side with
+     * the readiness bar and the fenced issue text. The working draft goes with
+     * it so the Partner argues about the text on screen, not the assessor's
+     * first attempt. Returns a session id the ordinary assistant endpoints
+     * then drive. */
+    discuss: (repo: string, number: number, draft: string) =>
+      fetchJson<DiscussResponse>(`/api/night-queue/discuss`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo, number, draft }),
+      }),
     /** The only write: posts the readiness comment, then mints the label. */
     arm: (repo: string, number: number, comment: string) =>
       fetchJson<ArmResponse>(`/api/night-queue/arm`, {
@@ -857,6 +878,16 @@ export const api = {
   },
   assistant: {
     thread: () => fetchJson<{ id: 'global'; messages: any[] }>(`/api/assistant/thread`),
+    /** Adopt a session the ADAPTER created (e.g. a night-queue workshop
+     * conversation) into a nexus session, so the ordinary per-session chat
+     * endpoints can drive it. Adoption is a local pointer at the remote
+     * session — history still renders live from the adapter. */
+    importRemote: (remoteSessionId: string) =>
+      fetchJson<{ session: { id: string } }>(`/api/assistant/sessions/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ remoteSessionId }),
+      }),
     sessions: () =>
       fetchJson<{ sessions: Array<{ id: string; status?: string; latestRun?: { status?: string } | null }> }>(
         `/api/assistant/sessions`,

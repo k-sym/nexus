@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { armGate } from './nightQueueArmGate';
+// useIdeaThread is generic over the session id despite its name — it was
+// written for #352's idea dialogue but speaks only the per-session assistant
+// endpoints, so a workshop conversation is the same shape. Renaming it would
+// churn IdeasView for no functional gain; flagged as a follow-up instead.
+import { useIdeaThread } from '../hooks/useIdeaThread';
 import {
   api,
   AssessmentResponse,
@@ -81,6 +87,141 @@ function CandidateRow({
   );
 }
 
+/**
+ * The conversation before arming. An ordinary Partner session, seeded
+ * server-side (baker-internal#131) with the readiness bar and the issue's own
+ * prose inside its fence — the client never builds that fence, because a
+ * second spelling of it would be an injection path into the arming decision.
+ *
+ * The Partner drafts and argues; it cannot arm. Its seed says so, there is no
+ * act-tool for it, and the Arm button below is unaffected by anything said
+ * here except through the draft the two of you agree on.
+ */
+function Dialogue({
+  candidate, draft, onApplyDraft,
+}: {
+  candidate: NightQueueCandidate;
+  draft: string;
+  onApplyDraft: (next: string) => void;
+}) {
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [input, setInput] = useState('');
+  const thread = useIdeaThread(sessionId);
+
+  // A different issue is a different conversation. Dropping the session id
+  // here is what stops the pane showing issue A's discussion under issue B.
+  useEffect(() => {
+    setSessionId(null);
+    setError(null);
+    setInput('');
+  }, [candidate.repo, candidate.number]);
+
+  const open = async () => {
+    setOpening(true);
+    setError(null);
+    try {
+      // The working draft travels, so the Partner argues about the text on
+      // screen rather than the assessor's first attempt.
+      const got = await api.nightQueue.discuss(candidate.repo, candidate.number, draft);
+      // `discuss` returns an ADAPTER session id, and the per-session chat
+      // endpoints are keyed by NEXUS ids — adoption is the bridge, the same
+      // one iOS uses via AssistantAdoptingView. Driving the raw adapter id
+      // through them 404s, which is exactly what it did before this line.
+      const adopted = await api.assistant.importRemote(got.session_id);
+      setSessionId(adopted.session.id);
+    } catch (err: any) {
+      setError(err?.message || 'Could not open the conversation.');
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || thread.isRunning) return;
+    setInput('');
+    await thread.send(text);
+  };
+
+  if (!sessionId) {
+    return (
+      <div>
+        <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-1">
+          Talk it over
+        </div>
+        <button
+          onClick={open}
+          disabled={opening}
+          className="px-3 py-1.5 text-sm rounded-md border border-subtle hover:border-[var(--border-strong)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+        >
+          {opening ? 'Opening…' : 'Discuss with the Partner'}
+        </button>
+        {error && <div className="text-xs text-red-400 mt-1">{error}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-1">
+        Talk it over — the Partner can draft, but only you can arm
+      </div>
+      <div className="rounded-md border border-subtle max-h-72 overflow-y-auto p-2 space-y-2">
+        {thread.messages.length === 0 && !thread.loading && (
+          <div className="text-[11px] text-faint">
+            It has the issue, the readiness bar and your current draft. Ask what is missing.
+          </div>
+        )}
+        {thread.messages.map((m: any, i: number) => (
+          <div key={m.id ?? i} className="text-xs">
+            <span className={m.role === 'user' ? 'text-zinc-400' : 'text-emerald-400'}>
+              {m.role === 'user' ? 'you' : 'partner'}
+            </span>
+            <div className="text-zinc-200 whitespace-pre-wrap">{m.content}</div>
+            {m.role === 'assistant' && typeof m.content === 'string' && m.content.includes('**Goal:**') && (
+              // The conversation's product is the readiness comment, so lift a
+              // proposed one straight into the draft rather than making Keith
+              // copy it across and risk transcribing it wrong.
+              <button
+                onClick={() => onApplyDraft(m.content)}
+                className="mt-1 text-[11px] text-sky-400 hover:underline"
+              >
+                Use this as the readiness comment
+              </button>
+            )}
+          </div>
+        ))}
+        {thread.isRunning && <div className="text-[11px] text-faint">thinking…</div>}
+        {thread.error && <div className="text-[11px] text-red-400">{thread.error}</div>}
+      </div>
+      <div className="flex gap-2 mt-2">
+        <input
+          aria-label="Message the Partner"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          placeholder="What is missing from this spec?"
+          className="flex-1 text-xs px-2 py-1.5 rounded-md bg-[var(--surface-sunken,rgba(0,0,0,0.25))] border border-subtle text-zinc-200"
+        />
+        <button
+          onClick={() => void send()}
+          disabled={!input.trim() || thread.isRunning}
+          className="px-3 py-1.5 text-xs rounded-md border border-subtle hover:bg-[var(--surface-hover)] disabled:opacity-40"
+        >
+          Send
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Workshop({
   candidate, readiness, onArmed,
 }: {
@@ -135,16 +276,10 @@ function Workshop({
   };
 
   const unresolved = draft.includes(UNRESOLVED);
-  // Belt and braces against the race above: never arm unless the verdict on
-  // screen is demonstrably about the issue on screen.
-  const matches =
-    !!assessment && assessment.repo === candidate.repo && assessment.number === candidate.number;
-  // `blocked` covers all three structural refusals in one: excluded repo,
-  // already queued, and an open PR. The last was warned about in a banner but
-  // still armable — and the adapter does not refuse duplicates either, so the
-  // planner would only have caught it at 01:00, by parking the night's work.
-  const canArm =
-    matches && candidate.blocked === null && draft.trim().length >= 40 && !unresolved;
+  // Every refusal rule lives in armGate, tested without a DOM — all three bugs
+  // found while driving this view lived in this decision when it was an inline
+  // boolean. iOS has the same logic as NexusCore's ArmGate (nexus#403).
+  const gate = armGate(candidate, assessment, draft);
 
   const arm = async () => {
     setBusy('arm');
@@ -247,11 +382,14 @@ function Workshop({
             ))}
           </div>
 
+          <Dialogue candidate={candidate} draft={draft} onApplyDraft={setDraft} />
+
           <div>
             <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-1">
               Readiness comment — posted to the issue when you arm
             </div>
             <textarea
+              aria-label="Readiness comment"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               spellCheck={false}
@@ -279,16 +417,8 @@ function Workshop({
           {!armed && (
             <button
               onClick={arm}
-              disabled={!canArm || busy !== null}
-              title={
-                candidate.blocked === 'open_pr'
-                  ? 'A PR already implements this'
-                  : candidate.blocked
-                    ? 'Blocked — see above'
-                    : unresolved
-                      ? 'Resolve the <TODO:> first'
-                      : undefined
-              }
+              disabled={!gate.canArm || busy !== null}
+              title={gate.reason ?? undefined}
               className="px-3 py-1.5 text-sm rounded-md bg-emerald-600/80 hover:bg-emerald-600 text-white disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {busy === 'arm' ? 'Arming…' : 'Post comment and arm for tonight'}

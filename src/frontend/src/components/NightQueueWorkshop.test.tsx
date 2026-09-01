@@ -3,6 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import NightQueueWorkshop from './NightQueueWorkshop';
 import { api } from '../api';
 
+vi.mock('../hooks/useIdeaThread', () => ({
+  useIdeaThread: (sessionId: string | null) => ({
+    messages: sessionId
+      ? [{ id: 'm1', role: 'assistant', content: '**Goal:** a spec the Partner proposed, long enough to arm with.' }]
+      : [],
+    latestRun: null, isRunning: false, loading: false, error: null,
+    send: vi.fn(), abort: vi.fn(), reload: vi.fn(),
+  }),
+}));
+
 const CANDIDATES = {
   configured: true,
   unblocked: 1,
@@ -87,7 +97,7 @@ describe('NightQueueWorkshop', () => {
     expect(arm.disabled).toBe(true);
 
     // Resolving the TODO in the textarea enables it.
-    const box = screen.getByRole('textbox') as HTMLTextAreaElement;
+    const box = screen.getByRole('textbox', { name: 'Readiness comment' }) as HTMLTextAreaElement;
     fireEvent.change(box, {
       target: { value: '**Goal:** x\n**Acceptance checks:** `npm test` passes and the rank column stays.' },
     });
@@ -123,5 +133,73 @@ describe('NightQueueWorkshop', () => {
     );
     // And the panel is showing the new issue, un-assessed, not the stale one.
     expect(screen.getByText(/Assess against the bar/)).toBeTruthy();
+  });
+
+  it('opens a conversation carrying the working draft, not the assessor\'s first attempt', async () => {
+    vi.spyOn(api.nightQueue, 'candidates').mockResolvedValue(CANDIDATES as any);
+    vi.spyOn(api.nightQueue, 'readiness').mockResolvedValue(READINESS as any);
+    vi.spyOn(api.nightQueue, 'assess').mockResolvedValue(assessment('quasar-scoreboard', 3));
+    const adopt = vi.spyOn(api.assistant, 'importRemote')
+      .mockResolvedValue({ session: { id: 'nexus-1' } } as any);
+    const discuss = vi.spyOn(api.nightQueue, 'discuss')
+      .mockResolvedValue({ session_id: 's1', repo: 'quasar-scoreboard', number: 3,
+                           title: 't', url: 'u', session_title: 'night-queue: quasar-scoreboard#3' } as any);
+    render(<NightQueueWorkshop />);
+
+    fireEvent.click(await screen.findByText(/Layout bug/));
+    fireEvent.click(await screen.findByText(/Assess against the bar/));
+    await screen.findByText(/verdict for quasar-scoreboard#3/);
+
+    // Edit the draft first — what travels must be what is on screen.
+    const box = screen.getByRole('textbox', { name: 'Readiness comment' }) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'my own edited spec, long enough to matter here.' } });
+
+    fireEvent.click(screen.getByText(/Discuss with the Partner/));
+    await waitFor(() => expect(discuss).toHaveBeenCalledWith(
+      'quasar-scoreboard', 3, 'my own edited spec, long enough to matter here.'));
+    // The adapter's session id must be ADOPTED into a nexus one before the
+    // per-session chat endpoints can drive it — they are keyed by nexus ids,
+    // and passing the raw adapter id 404s.
+    await waitFor(() => expect(adopt).toHaveBeenCalledWith('s1'));
+  });
+
+  it('lifts a proposed comment into the draft rather than making you retype it', async () => {
+    vi.spyOn(api.nightQueue, 'candidates').mockResolvedValue(CANDIDATES as any);
+    vi.spyOn(api.nightQueue, 'readiness').mockResolvedValue(READINESS as any);
+    vi.spyOn(api.nightQueue, 'assess').mockResolvedValue(assessment('quasar-scoreboard', 3));
+    vi.spyOn(api.nightQueue, 'discuss').mockResolvedValue({ session_id: 's1' } as any);
+    vi.spyOn(api.assistant, 'importRemote').mockResolvedValue({ session: { id: 'nexus-1' } } as any);
+    render(<NightQueueWorkshop />);
+
+    fireEvent.click(await screen.findByText(/Layout bug/));
+    fireEvent.click(await screen.findByText(/Assess against the bar/));
+    await screen.findByText(/verdict for quasar-scoreboard#3/);
+    fireEvent.click(screen.getByText(/Discuss with the Partner/));
+
+    fireEvent.click(await screen.findByText(/Use this as the readiness comment/));
+    await waitFor(() => expect((screen.getByRole('textbox', { name: 'Readiness comment' }) as HTMLTextAreaElement).value)
+      .toMatch(/a spec the Partner proposed/));
+  });
+
+  it('drops the conversation when you switch issues', async () => {
+    // Issue A's discussion must not appear under issue B's heading — the same
+    // class of bug as the stale assessment.
+    vi.spyOn(api.nightQueue, 'candidates').mockResolvedValue(CANDIDATES as any);
+    vi.spyOn(api.nightQueue, 'readiness').mockResolvedValue(READINESS as any);
+    vi.spyOn(api.nightQueue, 'assess').mockImplementation((repo: string, number: number) =>
+      Promise.resolve(assessment(repo, number)));
+    vi.spyOn(api.nightQueue, 'discuss').mockResolvedValue({ session_id: 's1' } as any);
+    vi.spyOn(api.assistant, 'importRemote').mockResolvedValue({ session: { id: 'nexus-1' } } as any);
+    render(<NightQueueWorkshop />);
+
+    fireEvent.click(await screen.findByText(/Layout bug/));
+    fireEvent.click(await screen.findByText(/Assess against the bar/));
+    await screen.findByText(/verdict for quasar-scoreboard#3/);
+    fireEvent.click(screen.getByText(/Discuss with the Partner/));
+    await screen.findByText(/a spec the Partner proposed/);
+
+    fireEvent.click(screen.getByText(/Training content/));
+    await waitFor(() =>
+      expect(screen.queryByText(/a spec the Partner proposed/)).toBeNull());
   });
 });
