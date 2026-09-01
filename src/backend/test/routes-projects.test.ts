@@ -540,3 +540,51 @@ test('DELETE /api/tasks/:id emits a monday_write activity operation for its roll
     db.close();
   }
 });
+
+// PUT /api/tasks/:id updates every field with COALESCE(?, col), which makes
+// absence and emptiness mean different things: an omitted field leaves the
+// column alone, an empty string clears it. The iOS edit sheet depends on that
+// distinction — it sends only the fields the user changed, so an emptied
+// description has to travel as "" or the clear would silently do nothing and
+// the old text would spring back on the next load. Uses getDb() (the real
+// schema) rather than this file's hand-rolled makeApp(), whose tasks table
+// predates the model_key/thread_id columns this route writes.
+test('PUT /api/tasks/:id clears a description sent as "" and leaves an omitted one alone', async () => {
+  const db = getDb(':memory:');
+  const now = new Date().toISOString();
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','','', '{}', 0, '', ?, ?)`).run(now, now);
+  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
+              VALUES ('t1','p1','Task','Some details.','todo','medium', ?, ?)`).run(now, now);
+
+  const app = Fastify({ logger: false });
+  app.decorate('db', db);
+  await app.register(registerProjectRoutes);
+
+  const description = () =>
+    (db.prepare('SELECT description FROM tasks WHERE id = ?').get('t1') as { description: string }).description;
+
+  try {
+    // A patch that says nothing about the description must not touch it.
+    const untouched = await app.inject({
+      method: 'PUT', url: '/api/tasks/t1', payload: { priority: 'high' },
+    });
+    assert.equal(untouched.statusCode, 200);
+    assert.equal(description(), 'Some details.');
+    assert.equal(untouched.json().priority, 'high');
+
+    // "" is a value, not an absence: it clears the column and stays cleared.
+    const cleared = await app.inject({
+      method: 'PUT', url: '/api/tasks/t1', payload: { description: '' },
+    });
+    assert.equal(cleared.statusCode, 200);
+    assert.equal(cleared.json().description, '');
+    assert.equal(description(), '');
+
+    const reread = await app.inject({ method: 'GET', url: '/api/projects/p1/tasks' });
+    assert.equal(reread.json().find((t: { id: string }) => t.id === 't1').description, '');
+  } finally {
+    await app.close();
+    db.close();
+  }
+});
