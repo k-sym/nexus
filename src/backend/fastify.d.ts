@@ -7,6 +7,7 @@ import type { OAuthFlowManager } from './pi/oauth-flows.js';
 import type { ActivityManager } from './activity/manager.js';
 import type { DbApprovalAudit } from './approvals/audit.js';
 import type { ApnsSender } from './apns/sender.js';
+import type { AgentBridgeService } from './agent-bridge/service.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -18,6 +19,7 @@ declare module 'fastify' {
     activity: ActivityManager;
     approvalAudit?: DbApprovalAudit;
     apns: ApnsSender;
+    agentBridge: AgentBridgeService;
     activeChatStreams?: Map<string, { session: { abort: () => Promise<void> } }>;
   }
 }

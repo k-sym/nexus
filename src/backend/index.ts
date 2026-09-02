@@ -45,6 +45,8 @@ import { registerTrustRoutes } from './routes/trust.js';
 import { registerMondayRoutes } from './routes/monday.js';
 import { registerDevRoutes } from './routes/dev.js';
 import { registerNextMessageRoutes } from './routes/next-message.js';
+import { registerAgentBridgeRoutes, createManagedTurnRunner } from './routes/agent-bridge.js';
+import { AgentBridgeService } from './agent-bridge/service.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMondayPoll } from './monday/poll.js';
@@ -76,6 +78,7 @@ async function main() {
   writeLocalModelsFile(config);
 
   const db = getDb(getDbPath());
+  const agentBridge = new AgentBridgeService(db, config.agent_bridge);
   // One probe at startup so the first sessions know whether Docker is there;
   // it refreshes itself on a TTL after that (see docker/session-deps.ts).
   const dockerAvailability = new DockerAvailability();
@@ -102,7 +105,12 @@ async function main() {
   // always produces a prompt, logged exit — an unbounded close was why a wedged
   // backend could ignore `launchctl kickstart -k` indefinitely.
   const shutdown = installShutdownHandlers({
-    cleanup: async () => { await browserSupport?.pool.closeAll(); },
+    cleanup: async () => {
+      await Promise.all([
+        browserSupport?.pool.closeAll(),
+        agentBridge.stop(),
+      ]);
+    },
   });
   const pi = await PiRuntime.create(defaultPiRuntimePaths(), {
     recallMemories: (cwd, query, limit) => recallForRepoPath(db, cwd, query, limit),
@@ -237,6 +245,7 @@ async function main() {
   app.decorate('activity', activityManager);
   app.decorate('approvalAudit', approvalAudit);
   app.decorate('apns', apns);
+  app.decorate('agentBridge', agentBridge);
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
@@ -269,6 +278,13 @@ async function main() {
   });
   app.register(registerTrustRoutes);
   app.register(registerMondayRoutes);
+  app.register(registerAgentBridgeRoutes, {
+    service: agentBridge,
+    runManagedTurn: createManagedTurnRunner({
+      port: config.server.port,
+      token: config.server.token || '',
+    }),
+  });
 
   // Dev-only helpers (e.g. POST /api/dev/test-push). Never registered in
   // production; still behind the bearer-token gate.
@@ -290,6 +306,7 @@ async function main() {
   try {
     await app.listen({ port: config.server.port, host: '127.0.0.1' });
     logInfo('backend', `NEXUS backend running on http://127.0.0.1:${config.server.port}`);
+    agentBridge.start();
   } catch (err) {
     // app.log.error wrote nowhere (logger:false), so a failed bind used to exit
     // 1 with an empty log and launchd restarted into the same failure forever.

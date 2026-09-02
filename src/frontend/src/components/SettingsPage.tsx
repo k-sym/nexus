@@ -3,6 +3,7 @@ import { api } from '../api';
 import { PiAuthSection } from './PiAuthSection';
 import { ModelCurationSection } from './ModelCurationSection';
 import { TrustPrivacySection } from './TrustPrivacySection';
+import { AgentBridgeInbox } from './AgentBridgeInbox';
 import { getBackgroundMotion, setBackgroundMotion, type BackgroundMotion } from '../appearance';
 
 const MOTION_OPTIONS: { mode: BackgroundMotion; label: string }[] = [
@@ -603,6 +604,92 @@ export default function SettingsPage() {
               Keys support <span className="font-mono">{'${ENV_VAR}'}</span> interpolation and are masked on
               load. A provider can only be enabled after its key passes a Test.
             </p>
+          </Section>
+
+          <Section title="Agent Bridge">
+            <p className="text-xs text-faint">
+              Receive thread-addressed messages from other agent harnesses over one durable backend connection.
+              Disabled by default. Changes apply after a backend restart.
+            </p>
+            <Field label="Bridge connection">
+              <button
+                type="button"
+                aria-label={`Agent Bridge ${config.agent_bridge?.enabled ? 'Enabled' : 'Disabled'}`}
+                onClick={() => update(['agent_bridge', 'enabled'], !config.agent_bridge?.enabled)}
+                className={`min-h-11 px-3 text-xs rounded-sm transition-colors ${config.agent_bridge?.enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+              >
+                {config.agent_bridge?.enabled ? 'Enabled' : 'Disabled'}
+              </button>
+            </Field>
+            <Field label="Inbound behavior">
+              <select
+                aria-label="Inbound behavior"
+                value={config.agent_bridge?.mode ?? 'notify_only'}
+                onChange={(event) => update(['agent_bridge', 'mode'], event.target.value)}
+                className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm text-primary focus:outline-hidden focus:border-strong"
+              >
+                <option value="notify_only">Notify only — never start a turn</option>
+                <option value="queue_for_approval">Queue for approval — ask before running</option>
+              </select>
+            </Field>
+            <Field label="NATS URL">
+              <input
+                aria-label="Agent Bridge NATS URL"
+                type="text"
+                value={config.agent_bridge?.url ?? ''}
+                onChange={(event) => update(['agent_bridge', 'url'], event.target.value)}
+                placeholder="nats://127.0.0.1:4222"
+                className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">Remote brokers require a <span className="font-mono">tls://</span> URL and token.</p>
+            </Field>
+            <Field label="Instance ID">
+              <input
+                aria-label="Agent Bridge instance ID"
+                type="text"
+                value={config.agent_bridge?.instance_id ?? ''}
+                onChange={(event) => update(['agent_bridge', 'instance_id'], event.target.value)}
+                className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm font-mono text-primary focus:outline-hidden focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">Stable address for this Nexus server. Thread and project IDs remain separate envelope fields.</p>
+            </Field>
+            <Field label="Allowed sender IDs">
+              <textarea
+                aria-label="Allowed Agent Bridge senders"
+                rows={3}
+                value={(config.agent_bridge?.allowed_senders ?? []).join('\n')}
+                onChange={(event) => update(['agent_bridge', 'allowed_senders'], event.target.value.split('\n').map((value) => value.trim()).filter(Boolean))}
+                placeholder={'claude-reviewer\nclaude-builder'}
+                className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">One exact sender ID per line. Use <span className="font-mono">*</span> only to explicitly allow any sender.</p>
+            </Field>
+            <Field label="Broker token">
+              <input
+                aria-label="Agent Bridge broker token"
+                type="text"
+                value={config.agent_bridge?.token ?? ''}
+                onChange={(event) => update(['agent_bridge', 'token'], event.target.value)}
+                placeholder="${NEXUS_AGENT_BRIDGE_TOKEN} or paste a token"
+                className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
+              />
+              <p className="text-[10px] text-faint mt-1">Resolved only by the backend and masked after saving.</p>
+            </Field>
+            <details className="text-xs">
+              <summary className="min-h-11 flex items-center cursor-pointer text-muted">Safety limits</summary>
+              <div className="space-y-3 pt-2">
+                <Field label="Maximum message bytes">
+                  <input aria-label="Maximum Agent Bridge message bytes" type="number" min={1} max={1048576} value={config.agent_bridge?.max_message_bytes ?? 65536} onChange={(event) => update(['agent_bridge', 'max_message_bytes'], Number(event.target.value))} className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm text-primary" />
+                </Field>
+                <Field label="Messages per sender per minute">
+                  <input aria-label="Agent Bridge messages per minute" type="number" min={1} max={10000} value={config.agent_bridge?.max_messages_per_minute ?? 30} onChange={(event) => update(['agent_bridge', 'max_messages_per_minute'], Number(event.target.value))} className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm text-primary" />
+                </Field>
+                <Field label="Maximum hops">
+                  <input aria-label="Maximum Agent Bridge hops" type="number" min={0} max={32} value={config.agent_bridge?.max_hops ?? 4} onChange={(event) => update(['agent_bridge', 'max_hops'], Number(event.target.value))} className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm text-primary" />
+                </Field>
+              </div>
+            </details>
+            <AgentBridgeInbox />
           </Section>
 
           <TrustPrivacySection />
