@@ -1,0 +1,76 @@
+name: Tauri quality
+
+# The Rust desktop shell has its own tests and quality checks. It is not part of
+# the npm workspaces exercised by the other workflows, so changes under tauri/
+# need a dedicated job.
+
+on:
+  pull_request:
+    paths:
+      - tauri/**
+      - .github/workflows/tauri-quality.yml
+  push:
+    branches:
+      - main
+    paths:
+      - tauri/**
+      - .github/workflows/tauri-quality.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tauri-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Tauri test, lint, and format
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            curl \
+            file \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            wget
+
+      # The process-group integration test resolves and launches Node >= 20.
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tauri/src-tauri -> target
+
+      - name: Check Rust formatting
+        working-directory: tauri/src-tauri
+        run: cargo fmt --all -- --check
+
+      - name: Lint all Rust targets
+        working-directory: tauri/src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        working-directory: tauri/src-tauri
+        run: cargo test --locked

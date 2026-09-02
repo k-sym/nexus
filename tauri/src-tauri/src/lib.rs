@@ -1,9 +1,9 @@
-pub mod node;
-pub mod health;
-pub mod supervisor;
 mod app_mode;
+pub mod health;
+pub mod node;
 mod server_control;
 mod server_tray;
+pub mod supervisor;
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -106,7 +106,9 @@ pub fn run() {
                 let lexical = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
                 lexical.canonicalize().unwrap_or(lexical)
             } else {
-                app.path().resource_dir().expect("Tauri resource_dir unavailable")
+                app.path()
+                    .resource_dir()
+                    .expect("Tauri resource_dir unavailable")
             };
 
             std::thread::spawn(move || {
@@ -211,14 +213,12 @@ pub fn run() {
                         let scheme = url.scheme();
                         if scheme == "http" || scheme == "https" {
                             let host = url.host_str().unwrap_or("");
-                            let is_local = host == "localhost"
-                                || host == "127.0.0.1"
-                                || host.is_empty();
+                            let is_local =
+                                host == "localhost" || host == "127.0.0.1" || host.is_empty();
                             if !is_local {
                                 #[cfg(target_os = "macos")]
-                                let _ = std::process::Command::new("open")
-                                    .arg(url.as_str())
-                                    .spawn();
+                                let _ =
+                                    std::process::Command::new("open").arg(url.as_str()).spawn();
                                 #[cfg(target_os = "linux")]
                                 let _ = std::process::Command::new("xdg-open")
                                     .arg(url.as_str())

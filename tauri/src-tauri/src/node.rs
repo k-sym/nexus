@@ -2,7 +2,13 @@ use std::process::Command;
 
 /// Parse the major version from `node --version` output (e.g. "v22.22.3" -> 22).
 pub fn parse_major(version: &str) -> Option<u32> {
-    version.trim().trim_start_matches('v').split('.').next()?.parse().ok()
+    version
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()?
+        .parse()
+        .ok()
 }
 
 /// Ordered candidate paths to a usable Node, mirroring the Electron resolver.
@@ -10,7 +16,9 @@ pub fn node_candidates() -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut fixed: Vec<String> = Vec::new();
     if let Ok(forced) = std::env::var("NEXUS_NODE") {
-        if !forced.is_empty() { fixed.push(forced); }
+        if !forced.is_empty() {
+            fixed.push(forced);
+        }
     }
     fixed.push("node".into()); // PATH (dev / inherited env)
     fixed.push("/opt/homebrew/bin/node".into());
@@ -22,13 +30,21 @@ pub fn node_candidates() -> Vec<String> {
     // resolve_node is the real check; ordering only affects which we try first.
     for (base, leaf) in [
         (format!("{home}/.nvm/versions/node"), "bin/node"),
-        (format!("{home}/.fnm/node-versions"), "installation/bin/node"),
+        (
+            format!("{home}/.fnm/node-versions"),
+            "installation/bin/node",
+        ),
     ] {
         if let Ok(rd) = std::fs::read_dir(&base) {
-            let mut versions: Vec<_> = rd.filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+            let mut versions: Vec<_> = rd
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
             versions.sort();
             versions.reverse();
-            for v in versions { fixed.push(format!("{base}/{v}/{leaf}")); }
+            for v in versions {
+                fixed.push(format!("{base}/{v}/{leaf}"));
+            }
         }
     }
     fixed
@@ -41,7 +57,9 @@ pub fn resolve_node() -> Option<String> {
             if out.status.success() {
                 let v = String::from_utf8_lossy(&out.stdout);
                 if let Some(major) = parse_major(v.trim()) {
-                    if major >= 20 { return Some(cmd); }
+                    if major >= 20 {
+                        return Some(cmd);
+                    }
                 }
             }
         }
