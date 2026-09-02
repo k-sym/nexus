@@ -113,9 +113,10 @@ fn open_nexus(handle: &tauri::AppHandle, is_dev: bool) {
         .inner_size(1400.0, 900.0)
         .min_inner_size(900.0, 600.0);
     #[cfg(target_os = "macos")]
-    let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
     if let Err(error) = builder
-        .hidden_title(true)
         .disable_drag_drop_handler()
         .initialization_script(&init)
         .build()
