@@ -211,6 +211,28 @@ function mostRecentlyModifiedSessionForThread<T extends SessionInfoLike>(
     .sort((a, b) => b.modified.getTime() - a.modified.getTime())[0];
 }
 
+/**
+ * Open the thread's most recent on-disk session, or create a new one named
+ * after the thread. `SessionManager.create(cwd, dir, { id })` always starts a
+ * BLANK file — it never reopens — so a naive create after a restart would
+ * spawn a second `<timestamp>_<threadId>.jsonl` and lose the conversation.
+ * Shared by the Pi session builder and the other engines so every engine's
+ * transcript lands in the same file family.
+ */
+export async function openSessionManagerFor(threadId: string, cwd: string, sessionDir: string) {
+  const { SessionManager } = await import('@earendil-works/pi-coding-agent');
+  try {
+    const infos = await SessionManager.list(cwd, sessionDir);
+    const existing = mostRecentlyModifiedSessionForThread(infos, threadId);
+    return existing
+      ? SessionManager.open(existing.path, sessionDir, cwd)
+      : SessionManager.create(cwd, sessionDir, { id: threadId });
+  } catch {
+    // Listing failed (corrupt/locked dir) — a fresh session beats a blocked turn.
+    return SessionManager.create(cwd, sessionDir, { id: threadId });
+  }
+}
+
 export class PiRuntime {
   readonly auth: ModelRuntime;
   readonly models: ModelRegistry;
@@ -381,6 +403,67 @@ export class PiRuntime {
     });
   }
 
+  private readonly dropListeners = new Set<(threadId: string, cwd: string) => void>();
+
+  /** Decision sink the approval path records into. Other engines gate through the same sink. */
+  get auditSink(): ApprovalAudit {
+    return this.approvalAudit ?? NULL_APPROVAL_AUDIT;
+  }
+
+  /**
+   * The extension factories a Pi session for this thread is built with.
+   * Exposed so other engines can offer the identical Nexus tool set (the
+   * Claude engine turns the registered tools into an MCP server).
+   */
+  extensionFactoriesFor(threadId: string, cwd: string): ExtensionFactory[] {
+    return buildSessionExtensionFactories(
+      threadId, cwd, this.questions, this.approvals, this.policyFor(threadId, cwd),
+      createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
+      this.browserTools, this.helpersTools, this.auditSink,
+    );
+  }
+
+  /**
+   * The Nexus-specific system prompt additions for this thread: the orientation
+   * block (always) and the Monday context block (when the task has a linked
+   * item). Each is guarded independently, exactly as the Pi session builder
+   * treats them; an empty string means nothing to append.
+   */
+  systemPromptAppendixFor(threadId: string, cwd: string): string {
+    const parts: string[] = [];
+    try {
+      parts.push(buildOrientationBlock({
+        hasMemory: !!this.recallMemories,
+        hasDocker: this.hasDockerFor(threadId, cwd),
+        hasBrowser: this.hasBrowserFor(threadId, cwd),
+        hasHelpers: this.hasHelpersFor(threadId, cwd),
+        hasVision: this.hasVisionFor(threadId, cwd),
+      }));
+    } catch { /* orientation is a nicety; never fail a session over it */ }
+    let mondayContext: MondayContextInput | null = null;
+    try {
+      mondayContext = this.mondayContext?.(threadId, cwd) ?? null;
+    } catch {
+      mondayContext = null;
+    }
+    if (mondayContext) {
+      try {
+        parts.push(buildMondayContextBlock(mondayContext));
+      } catch { /* skip the Monday block, keep the rest */ }
+    }
+    return parts.join('\n\n');
+  }
+
+  /**
+   * Observe session drops. Listeners run inside `dropSession` BEFORE the
+   * on-disk files go, so an engine can still read its own session id from the
+   * JSONL and clean up its side (e.g. the Claude Agent SDK transcript).
+   */
+  onSessionDropped(listener: (threadId: string, cwd: string) => void): () => void {
+    this.dropListeners.add(listener);
+    return () => { this.dropListeners.delete(listener); };
+  }
+
   /**
    * Get the model key currently set for a session.
    */
@@ -423,7 +506,7 @@ export class PiRuntime {
     // Dynamic import so the ESM-only pi package is loaded at call time
     // (avoids top-level CJS resolution failures in tsx when the workspace
     // doesn't set type:module).
-    const { SessionManager, SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
+    const { SettingsManager, DefaultResourceLoader } = await import('@earendil-works/pi-coding-agent');
     const sessionDir = this.sessionDirFor(cwd);
     // Resume an existing on-disk session for this thread if one exists.
     // SessionManager.create(cwd, dir, { id }) always starts a BLANK session —
@@ -431,49 +514,17 @@ export class PiRuntime {
     // existing one. So after a backend restart (or any in-memory cache
     // eviction), naively calling create() here would spawn a second, empty
     // `<timestamp>_<threadId>.jsonl` and the model would lose all prior
-    // conversation context. We look up the thread's existing file (the same
-    // lookup readMessages() uses) and open() the most recently modified match
-    // to continue the conversation. Only when no prior session exists do we
-    // create a new one.
-    let sessionManager;
-    try {
-      const infos = await SessionManager.list(cwd, sessionDir);
-      const existing = mostRecentlyModifiedSessionForThread(infos, threadId);
-      sessionManager = existing
-        ? SessionManager.open(existing.path, sessionDir, cwd)
-        : SessionManager.create(cwd, sessionDir, { id: threadId });
-    } catch {
-      // Listing failed (e.g. corrupt/locked session dir) — fall back to a
-      // fresh session rather than blocking the turn entirely.
-      sessionManager = SessionManager.create(cwd, sessionDir, { id: threadId });
-    }
+    // conversation context. openSessionManagerFor looks up the thread's
+    // existing file (the same lookup readMessages() uses) and open()s the
+    // most recently modified match to continue the conversation. Only when
+    // no prior session exists does it create a new one.
+    const sessionManager = await openSessionManagerFor(threadId, cwd, sessionDir);
     const settingsManager = SettingsManager.inMemory();
-    // Resolving Monday context must never be able to fail session creation.
-    // resourceLoader.reload() below is awaited with no guard, so a throw from
-    // this.mondayContext (e.g. a real DB-backed resolver hitting a bad row)
-    // would reject createSession entirely, bricking the thread until the
-    // underlying data is fixed by hand. Degrade to "no Monday context"
-    // instead — a session without its Monday block is a small loss; a
-    // session that cannot open at all is a serious one.
-    let resolvedMondayContext: MondayContextInput | null = null;
-    try {
-      resolvedMondayContext = this.mondayContext?.(threadId, cwd) ?? null;
-    } catch {
-      resolvedMondayContext = null;
-    }
-    // Bind to a const so the ternary/closure below narrows to non-null
-    // permanently, rather than re-checking a mutable `let` at closure-call
-    // time.
-    const mondayContext = resolvedMondayContext;
     const resourceLoader = new DefaultResourceLoader(buildResourceLoaderOptions({
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
-      extensionFactories: buildSessionExtensionFactories(
-        threadId, cwd, this.questions, this.approvals, this.policyFor(threadId, cwd),
-        createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
-        this.browserTools, this.helpersTools, this.approvalAudit ?? NULL_APPROVAL_AUDIT,
-      ),
+      extensionFactories: this.extensionFactoriesFor(threadId, cwd),
       // Re-evaluated on every session create AND resume, so a thread reopened
       // later reflects the capabilities and item state it has THEN, not a line
       // frozen at first creation. Two blocks are appended: the Nexus orientation
@@ -482,23 +533,8 @@ export class PiRuntime {
       // prompt always comes through, rather than a bad block failing the whole
       // session.
       systemPromptOverride: (base: string | undefined) => {
-        const parts: string[] = [];
-        if (base) parts.push(base);
-        try {
-          parts.push(buildOrientationBlock({
-            hasMemory: !!this.recallMemories,
-            hasDocker: this.hasDockerFor(threadId, cwd),
-            hasBrowser: this.hasBrowserFor(threadId, cwd),
-            hasHelpers: this.hasHelpersFor(threadId, cwd),
-            hasVision: this.hasVisionFor(threadId, cwd),
-          }));
-        } catch { /* orientation is a nicety; never fail a session over it */ }
-        if (mondayContext) {
-          try {
-            parts.push(buildMondayContextBlock(mondayContext));
-          } catch { /* skip the Monday block, keep the rest */ }
-        }
-        return parts.join('\n\n');
+        const appendix = this.systemPromptAppendixFor(threadId, cwd);
+        return [base, appendix].filter((part) => !!part).join('\n\n');
       },
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
     await resourceLoader.reload();
@@ -526,6 +562,10 @@ export class PiRuntime {
    */
   dropSession(threadId: string, cwd: string, opts?: { tombstoneRetentionDays?: number }): void {
     const key = `${threadId}::${cwd}`;
+    for (const listener of this.dropListeners) {
+      // A listener that throws must not stop the drop.
+      try { listener(threadId, cwd); } catch { /* best effort */ }
+    }
     this.sessions.delete(key);
     this.sessionPromises.delete(key);
     this.sessionModels.delete(key);

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, existsSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime, buildResourceLoaderOptions, buildSessionExtensionFactories, cwdSlug, type PiRuntimePaths } from '../pi/runtime';
@@ -619,4 +619,70 @@ test('buildModelCatalog exposes thinkingLevels for reasoning models only', () =>
   assert.ok(catalog[0].thinkingLevels!.includes('off'));
   assert.ok(catalog[0].thinkingLevels!.some((level) => level !== 'off'));
   assert.deepEqual(catalog[1].thinkingLevels, []);
+});
+
+test('extensionFactoriesFor returns the same factory list a session is built with', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  try {
+    const rt = await PiRuntime.create({ authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') }, {
+      recallMemories: async () => ['remembered'],
+    });
+    const factories = rt.extensionFactoriesFor('thread-1', '/tmp/example');
+    // question + approval + signal filter + memory_recall (no Monday/Docker/browser/helpers deps supplied)
+    assert.equal(factories.length, 4);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('systemPromptAppendixFor includes the orientation block and the Monday block when present', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  try {
+    const rt = await PiRuntime.create({ authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') }, {
+      mondayContext: () => ({
+        item: {
+          item_id: '1', board_id: 'b1', board_name: 'Board', group_id: null, group_title: null,
+          name: 'Card', state: 'active', status_label: 'Working on it', status_color: null,
+          owners_json: '[]', url: null,
+        } as any,
+        rollupText: '1 of 5 done',
+        siblingCount: 1,
+        updates: [],
+      }),
+    });
+    const text = rt.systemPromptAppendixFor('thread-1', '/tmp/example');
+    // buildOrientationBlock's heading is "# Working in Nexus" (see pi/orientation.ts).
+    assert.match(text, /Working in Nexus/);
+    assert.match(text, /Card/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('onSessionDropped listeners fire before the session files are removed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
+  try {
+    const paths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };
+    const rt = await PiRuntime.create(paths);
+    const cwd = '/tmp/example';
+    const session = await rt.sessionFor('thread-1', cwd);
+    // SessionManager only flushes its file to disk once an assistant message
+    // entry exists (see session-manager.js's _persist: entries queue in memory
+    // until then) — matching the pattern the "resumes after restart" test
+    // above uses to force a flush. A lone appendCustomEntry never hits disk,
+    // so the drop-listener's file check below would see zero files regardless
+    // of ordering.
+    (session as any).sessionManager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'probe' }] });
+    const seen: boolean[] = [];
+    const off = rt.onSessionDropped((threadId) => {
+      const files = readdirSync(rt.sessionDirFor(cwd)).filter((name) => name.endsWith(`_${threadId}.jsonl`));
+      seen.push(files.length === 1);
+    });
+    rt.dropSession('thread-1', cwd);
+    off();
+    assert.deepEqual(seen, [true]);
+    assert.equal(readdirSync(rt.sessionDirFor(cwd)).filter((name) => name.endsWith('_thread-1.jsonl')).length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
