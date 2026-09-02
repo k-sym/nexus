@@ -164,12 +164,14 @@ pub fn run() {
                         WebviewUrl::App("index.html".into())
                     };
 
-                    let mut builder = WebviewWindowBuilder::new(&handle, "main", url)
+                    let builder = WebviewWindowBuilder::new(&handle, "main", url)
                         .title("Nexus")
                         .inner_size(1400.0, 900.0)
-                        .min_inner_size(900.0, 600.0)
-                        // macOS hiddenInset / traffic-light overlay title bar.
-                        .title_bar_style(tauri::TitleBarStyle::Overlay)
+                        .min_inner_size(900.0, 600.0);
+                    // macOS hiddenInset / traffic-light overlay title bar.
+                    #[cfg(target_os = "macos")]
+                    let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+                    let mut builder = builder
                         // Hide the window title text so it doesn't show through
                         // the overlay title bar over the in-app TopBar.
                         .hidden_title(true)

@@ -108,11 +108,13 @@ fn open_nexus(handle: &tauri::AppHandle, is_dev: bool) {
             serde_json::to_string(&token).unwrap()
         ));
     }
-    if let Err(error) = WebviewWindowBuilder::new(handle, "main", url)
+    let builder = WebviewWindowBuilder::new(handle, "main", url)
         .title("Nexus")
         .inner_size(1400.0, 900.0)
-        .min_inner_size(900.0, 600.0)
-        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .min_inner_size(900.0, 600.0);
+    #[cfg(target_os = "macos")]
+    let builder = builder.title_bar_style(tauri::TitleBarStyle::Overlay);
+    if let Err(error) = builder
         .hidden_title(true)
         .disable_drag_drop_handler()
         .initialization_script(&init)
