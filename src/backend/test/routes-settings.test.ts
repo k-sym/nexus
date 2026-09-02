@@ -182,6 +182,58 @@ test('settings masks and preserves the backend token, round-trips server.url', a
   }
 });
 
+test('settings masks and preserves the Agent Bridge token and rejects unsafe remote brokers', async () => {
+  const original = loadConfig();
+  const app = makeApp();
+  try {
+    const configured = {
+      ...original,
+      agent_bridge: {
+        ...original.agent_bridge,
+        enabled: true,
+        allowed_senders: ['claude-reviewer'],
+        token: 'bridge-secret',
+      },
+    };
+    saveConfig(configured);
+
+    const get = await app.inject({ method: 'GET', url: '/api/settings' });
+    assert.equal(get.statusCode, 200);
+    assert.equal(get.json().agent_bridge.token, '••••••••');
+    assert.equal(get.body.includes('bridge-secret'), false);
+
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: {
+        ...get.json(),
+        agent_bridge: { ...get.json().agent_bridge, mode: 'queue_for_approval' },
+      },
+    });
+    assert.equal(put.statusCode, 200);
+    assert.equal(loadConfig().agent_bridge.token, 'bridge-secret');
+    assert.equal(loadConfig().agent_bridge.mode, 'queue_for_approval');
+
+    const unsafe = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: {
+        ...put.json(),
+        agent_bridge: {
+          ...put.json().agent_bridge,
+          url: 'nats://broker.example.com:4222',
+          token: 'bridge-secret',
+        },
+      },
+    });
+    assert.equal(unsafe.statusCode, 400);
+    assert.match(unsafe.json().error, /tls/);
+  } finally {
+    saveConfig(original);
+    await app.close();
+  }
+});
+
 test('POST /api/settings/local-model/test verifies the configured chat model responds', async () => {
   const server = createServer((req, res) => {
     if (req.method === 'GET' && req.url === '/v1/models') {

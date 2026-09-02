@@ -23,6 +23,8 @@
     "@fastify/sensible": "^6.0.5",
     "@fastify/static": "^10.1.3",
     "@fastify/websocket": "^11.2.0",
+    "@nats-io/jetstream": "^3.4.0",
+    "@nats-io/transport-node": "^3.4.0",
     "@nexus/shared": "0.1.0",
     "better-sqlite3": "^13.0.3",
     "chokidar": "^5.0.0",

@@ -20,6 +20,17 @@ vi.mock('../api', () => ({
           context7: { enabled: false, api_key: '' },
           search_default: 'exa',
         },
+        agent_bridge: {
+          enabled: false,
+          mode: 'notify_only',
+          url: 'nats://127.0.0.1:4222',
+          instance_id: 'nexus-test',
+          allowed_senders: [],
+          token: '${NEXUS_AGENT_BRIDGE_TOKEN}',
+          max_message_bytes: 65536,
+          max_messages_per_minute: 30,
+          max_hops: 4,
+        },
       })),
       update: vi.fn(async (config) => config),
       testLocalModel: vi.fn(async () => ({
@@ -42,6 +53,20 @@ vi.mock('../api', () => ({
       })),
       rebuildMemory: vi.fn(),
       clearNexusMemory: vi.fn(),
+    },
+    agentBridge: {
+      status: vi.fn(async () => ({
+        enabled: false,
+        state: 'disabled',
+        mode: 'notify_only',
+        instanceId: 'nexus-test',
+        subject: 'nexus.bridge.v1.inbox.nexus-test',
+        url: 'nats://127.0.0.1:4222',
+        durable: true,
+      })),
+      messages: vi.fn(async () => ({ messages: [] })),
+      approve: vi.fn(),
+      reject: vi.fn(),
     },
   },
 }));
@@ -112,6 +137,31 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
 
     expect(await screen.findByRole('heading', { name: 'Trust & Privacy' })).toBeInTheDocument();
+  });
+
+  it('keeps Agent Bridge off and notify-only by default, then saves explicit controls', async () => {
+    const user = userEvent.setup();
+    render(<SettingsPage />);
+
+    const heading = await screen.findByRole('heading', { name: 'Agent Bridge' });
+    const section = within(heading.parentElement as HTMLElement);
+    expect(section.getByRole('button', { name: 'Agent Bridge Disabled' })).toBeInTheDocument();
+    expect(section.getByLabelText('Inbound behavior')).toHaveValue('notify_only');
+
+    await user.click(section.getByRole('button', { name: 'Agent Bridge Disabled' }));
+    await user.selectOptions(section.getByLabelText('Inbound behavior'), 'queue_for_approval');
+    await user.type(section.getByLabelText('Allowed Agent Bridge senders'), 'claude-reviewer');
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => {
+      expect(api.settings.update).toHaveBeenCalledWith(expect.objectContaining({
+        agent_bridge: expect.objectContaining({
+          enabled: true,
+          mode: 'queue_for_approval',
+          allowed_senders: ['claude-reviewer'],
+        }),
+      }));
+    });
   });
 
   it('shows a Monday.com section that never offers a field for the token', async () => {

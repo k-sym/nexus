@@ -144,6 +144,33 @@ export interface TrustSnapshot {
   telemetry: { applicationTelemetry: false; statement: string };
 }
 
+export type AgentBridgeMessageStatus = 'received' | 'pending_approval' | 'running' | 'completed' | 'rejected' | 'failed';
+
+export interface AgentBridgeMessage {
+  id: string;
+  sender_id: string;
+  sender_display_name: string | null;
+  sender_harness: string | null;
+  project_id: string;
+  thread_id: string;
+  content: string;
+  status: AgentBridgeMessageStatus;
+  rejection_reason: string | null;
+  received_at: string;
+  completed_at: string | null;
+}
+
+export interface AgentBridgeStatus {
+  enabled: boolean;
+  state: 'disabled' | 'connecting' | 'connected' | 'error';
+  mode: 'notify_only' | 'queue_for_approval';
+  instanceId: string;
+  subject: string;
+  url: string;
+  durable: true;
+  error?: string;
+}
+
 export interface ReindexResult {
   scanned: number;
   inserted: number;
@@ -777,6 +804,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ confirmation }),
     }),
+  },
+  agentBridge: {
+    status: () => fetchJson<AgentBridgeStatus>('/api/agent-bridge/status'),
+    messages: (limit = 20) => fetchJson<{ messages: AgentBridgeMessage[] }>(`/api/agent-bridge/messages?limit=${limit}`),
+    approve: (id: string) => fetchJson<AgentBridgeMessage>(`/api/agent-bridge/messages/${encodeURIComponent(id)}/approve`, { method: 'POST' }),
+    reject: (id: string) => fetchJson<AgentBridgeMessage>(`/api/agent-bridge/messages/${encodeURIComponent(id)}/reject`, { method: 'POST' }),
   },
   missionControl: {
     get: () => fetchJson<MissionStatus>(`/api/mission-control`),

@@ -11,6 +11,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createHash } from 'node:crypto';
 // Namespace import, not default: js-yaml 5 (#226) is ESM-only with named exports
 // and no default, so `import yaml from 'js-yaml'` throws at load time.
 import * as yaml from 'js-yaml';
@@ -114,6 +115,18 @@ function defaultConfig(): NexusConfig {
       // Default true so the existing sync behaviour is preserved for configs
       // written before this block existed (deepMerge backfills it on load).
       enabled: true,
+    },
+    agent_bridge: {
+      enabled: false,
+      mode: 'notify_only',
+      url: 'nats://127.0.0.1:4222',
+      // Stable across restarts and distinct for separate Nexus state roots.
+      instance_id: `nexus-${createHash('sha256').update(`${os.hostname()}:${nexusDir()}`).digest('hex').slice(0, 10)}`,
+      allowed_senders: [],
+      token: '${NEXUS_AGENT_BRIDGE_TOKEN}',
+      max_message_bytes: 65_536,
+      max_messages_per_minute: 30,
+      max_hops: 4,
     },
     browser: {
       // Off by default for the same reason as docker: an agent-driven browser

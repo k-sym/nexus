@@ -12,6 +12,7 @@ import { resolveGitHubToken } from '../github/token.js';
 import { testLocalModel, writeLocalModelsFile } from '../pi/local-models.js';
 import { HELPER_PROVIDERS } from '../helpers/providers.js';
 import { buildModelCatalog } from './pi.js';
+import { validateAgentBridgeConfig } from '../agent-bridge/protocol.js';
 
 const MASK = '••••••••';
 
@@ -69,6 +70,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         api_key: maskSecret(config.assistant.api_key),
       },
       helpers: maskHelpers(config.helpers),
+      agent_bridge: { ...config.agent_bridge, token: maskSecret(config.agent_bridge.token || '') },
       // Mask the APNs .p8 key like any other secret; env refs pass through.
       apns: { ...config.apns, key: maskSecret(config.apns.key || '') },
       // Derived, read-only signal so the UI can show "token detected" without
@@ -78,7 +80,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     };
   });
 
-  fastify.put('/api/settings', async (request) => {
+  fastify.put('/api/settings', async (request, reply) => {
     // The GET response includes a derived `github_token_detected` flag; strip
     // it so it never gets persisted into config.yaml when the UI echoes it back.
     const { github_token_detected: _ignored, ...incoming } =
@@ -104,6 +106,10 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const apnsKey = !incomingApnsKey || incomingApnsKey === MASK
       ? current.apns.key
       : incomingApnsKey;
+    const incomingBridgeToken = incoming.agent_bridge?.token;
+    const bridgeToken = !incomingBridgeToken || incomingBridgeToken === MASK
+      ? current.agent_bridge.token
+      : incomingBridgeToken;
 
     const merged: NexusConfig = {
       ...current,
@@ -118,6 +124,11 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       },
       jira: incoming.jira ?? current.jira,
       github: incoming.github ?? current.github,
+      agent_bridge: {
+        ...current.agent_bridge,
+        ...incoming.agent_bridge,
+        token: bridgeToken,
+      },
       // Merge explicitly so a masked key echoed back never overwrites the real one.
       helpers: mergeHelpers(current.helpers, incoming.helpers),
       apns: {
@@ -143,6 +154,12 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       },
     };
 
+    const bridgeConfigError = validateAgentBridgeConfig(merged.agent_bridge);
+    if (bridgeConfigError) {
+      reply.code(400);
+      return { error: bridgeConfigError };
+    }
+
     const pi = (fastify as any).pi;
     saveConfig(merged);
     writeLocalModelsFile(merged, pi?.paths?.modelsFile);
@@ -163,6 +180,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
         api_key: maskSecret(merged.assistant.api_key),
       },
       helpers: maskHelpers(merged.helpers),
+      agent_bridge: { ...merged.agent_bridge, token: maskSecret(merged.agent_bridge.token || '') },
       apns: { ...merged.apns, key: maskSecret(merged.apns.key || '') },
       github_token_detected: !!(await resolveGitHubToken()),
     };

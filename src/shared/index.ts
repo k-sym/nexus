@@ -342,6 +342,29 @@ export interface HelperConfig {
   api_key: string;
 }
 
+export type AgentBridgeMode = 'notify_only' | 'queue_for_approval';
+
+/** Backend-owned real-time bridge for messages from other agent harnesses.
+ * The transport is deliberately global to the Nexus process; individual Pi
+ * sessions never connect to NATS or wake themselves. */
+export interface AgentBridgeConfig {
+  /** Off by default because enabling this opens a new inbound trust boundary. */
+  enabled: boolean;
+  /** Notify-only never starts work. Queue mode requires a human decision. */
+  mode: AgentBridgeMode;
+  /** NATS endpoint. Remote endpoints must use TLS and authentication. */
+  url: string;
+  /** Stable address included in every thread-directed envelope. */
+  instance_id: string;
+  /** Exact sender ids. `*` is an explicit allow-all choice. */
+  allowed_senders: string[];
+  /** Supports ${NEXUS_AGENT_BRIDGE_TOKEN}; masked by the Settings API. */
+  token: string;
+  max_message_bytes: number;
+  max_messages_per_minute: number;
+  max_hops: number;
+}
+
 export interface NexusConfig {
   server: {
     /** Local port the backend binds (loopback). */
@@ -449,6 +472,7 @@ export interface NexusConfig {
      *  behaviour is preserved. The token is read from GITHUB_TOKEN only. */
     enabled: boolean;
   };
+  agent_bridge: AgentBridgeConfig;
   browser: {
     /** When false the browser tools are not registered at all. Off by default:
      *  a browser is a general-purpose fetch-and-execute engine, and the tools

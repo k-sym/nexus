@@ -77,6 +77,13 @@ export async function buildTrustSnapshot(
     db_path?: string;
     models?: { gen_url?: string; embed_url?: string; rerank_url?: string };
   } };
+  // Runtime fallback keeps snapshots readable for hand-built test/legacy
+  // configs; loadConfig() supplies the full block in production.
+  const bridge = config.agent_bridge ?? {
+    enabled: false,
+    url: 'nats://127.0.0.1:4222',
+    token: '',
+  };
   const vault = effectivePath(raw.memory.vault_path ?? config.obsidian.vault_path);
   const indexPath = effectivePath(raw.memory.db_path ?? join(vault, '.index', 'nexus-memory.db'));
   const nexusDir = dependencies.nexusDir ?? getNexusDir();
@@ -98,6 +105,7 @@ export async function buildTrustSnapshot(
     monday: process.env.MONDAY_TOKEN
       ? { configured: true, source: 'environment' }
       : { configured: false, source: 'absent' },
+    agentBridge: configSecret(bridge.token ?? '', ['NEXUS_AGENT_BRIDGE_TOKEN']),
   };
   const piProviderIds: string[] = [];
   try {
@@ -127,6 +135,7 @@ export async function buildTrustSnapshot(
       { name: boundaryName('memory generation', generationUrl), url: safeUrl(generationUrl), loopback: isLoopback(generationUrl) },
       { name: boundaryName('memory embedding', embeddingUrl), url: safeUrl(embeddingUrl), loopback: isLoopback(embeddingUrl) },
       { name: boundaryName('memory reranking', rerankUrl), url: safeUrl(rerankUrl), loopback: isLoopback(rerankUrl) },
+      { name: 'Agent Bridge broker', url: safeUrl(bridge.url), loopback: isLoopback(bridge.url) },
     ],
     storage: [
       { name: 'Nexus database', path: join(nexusDir, 'nexus.db'), role: 'application' },
@@ -138,6 +147,7 @@ export async function buildTrustSnapshot(
       // Nexus database) — Monday stays canonical, so this is safe to clear
       // and rebuild from a resync, unlike the durable task↔item links.
       { name: 'Monday item mirror', path: join(nexusDir, 'nexus.db'), role: 'rebuildable' },
+      { name: 'Agent Bridge inbox', path: join(nexusDir, 'nexus.db'), role: 'application' },
     ],
     secrets,
     memory: {
@@ -192,6 +202,12 @@ export async function buildTrustSnapshot(
       // absent at runtime. No optional chaining: a config that genuinely
       // lacks this field is a type-level bug and should surface as one.
       { name: 'Monday.com', destination: 'https://api.monday.com/v2', sends: ['account identity', 'item queries'], enabled: Boolean(config.monday.enabled) },
+      {
+        name: 'Agent Bridge',
+        destination: safeUrl(bridge.url),
+        sends: ['bridge instance identity', 'subscription metadata'],
+        enabled: Boolean(bridge.enabled),
+      },
     ],
     telemetry: {
       applicationTelemetry: false,

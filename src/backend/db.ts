@@ -179,6 +179,30 @@ function runMigrations(db: Database.Database) {
       seen_at TEXT
     );
 
+    -- Nexus-native Agent Bridge inbox (#249). The envelope id is the primary
+    -- key so broker redelivery and sender retries are harmless. Messages land
+    -- here before their JetStream delivery is acknowledged.
+    CREATE TABLE IF NOT EXISTS agent_bridge_messages (
+      id TEXT PRIMARY KEY,
+      protocol_version INTEGER NOT NULL,
+      sender_id TEXT NOT NULL,
+      sender_display_name TEXT,
+      sender_harness TEXT,
+      target_instance_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      correlation_id TEXT,
+      reply_to TEXT,
+      hop_count INTEGER NOT NULL DEFAULT 0,
+      status TEXT NOT NULL,
+      rejection_reason TEXT,
+      received_at TEXT NOT NULL,
+      sent_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT
+    );
+
     -- APNs device tokens registered by the iOS thin client. Keyed by the token
     -- so re-registration upserts. \`env\` = sandbox|production (which APNs host).
     CREATE TABLE IF NOT EXISTS devices (
@@ -266,6 +290,8 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_task_monday_links_item ON task_monday_links(item_id);
     CREATE INDEX IF NOT EXISTS idx_task_monday_links_project ON task_monday_links(project_id);
     CREATE INDEX IF NOT EXISTS idx_notifications_unseen ON notifications(seen_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_bridge_status ON agent_bridge_messages(status, received_at);
+    CREATE INDEX IF NOT EXISTS idx_agent_bridge_thread ON agent_bridge_messages(thread_id, received_at);
     CREATE INDEX IF NOT EXISTS idx_ideas_state ON ideas(state);
     CREATE INDEX IF NOT EXISTS idx_assistant_messages_created ON assistant_messages(created_at);
     CREATE INDEX IF NOT EXISTS idx_assistant_sessions_updated ON assistant_sessions(updated_at);
