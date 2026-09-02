@@ -130,18 +130,33 @@ test('parseCodexBarUsage falls back to the 0.55 loginMethod balance summary', ()
 
 test('getUsageStats prefers current CodexBar CLI data for every dashboard provider', async () => {
   const payloads: Record<string, string> = {
+    claude: JSON.stringify([{
+      provider: 'claude',
+      source: 'web',
+      usage: {
+        primary: { usedPercent: 21, windowMinutes: 300, resetsAt: '2026-09-02T12:00:00Z' },
+        secondary: { usedPercent: 34, windowMinutes: 10080, resetsAt: '2026-09-07T12:00:00Z' },
+      },
+    }]),
     codex: JSON.stringify([{ provider: 'codex', source: 'oauth', usage: { secondary: { usedPercent: 9, windowMinutes: 10080 } } }]),
     openrouter: JSON.stringify([{ provider: 'openrouter', source: 'api', usage: { openRouterUsage: { balance: 259.006 } } }]),
   };
+  let costCalls = 0;
   const stats = await getUsageStats({
     codexBarUsage: async (provider) => payloads[provider],
-    codexBarCost: async () => claudeCostPayload,
+    codexBarCost: async () => {
+      costCalls += 1;
+      return claudeCostPayload;
+    },
     codexUsage: async () => { throw new Error('should not use Codex fallback'); },
     openRouterBalance: async () => { throw new Error('should not use OpenRouter fallback'); },
   });
 
-  assert.equal(stats.claude.value, '$180.17');
-  assert.equal(stats.claude.source, 'codexbar-cost');
+  assert.equal(stats.claude.value, '79%');
+  assert.equal(stats.claude.source, 'codexbar-web');
+  assert.equal(stats.claude.windows?.session?.remainingPercent, 79);
+  assert.equal(stats.claude.windows?.weekly?.remainingPercent, 66);
+  assert.equal(costCalls, 0);
   assert.equal(stats.codex.value, '91%');
   assert.equal(stats.openrouter.value, '$259.01');
 });
@@ -218,7 +233,7 @@ test('parseCodexBarCost preserves provider errors without throwing', () => {
   );
 
   assert.equal(stats.ok, false);
-  assert.equal(stats.caption, 'local cost unavailable');
+  assert.equal(stats.caption, 'usage unavailable');
   assert.equal(stats.error, 'No local Claude logs found');
 });
 
@@ -256,9 +271,14 @@ test('getUsageStats prefers live Codex windows over weekly history', async () =>
   assert.equal(stats.codex.windows?.weekly?.usedPercent, 3);
 });
 
-test('getUsageStats reads Claude cost data from the CodexBar cost CLI', async () => {
+test('getUsageStats falls back to Claude cost data when quota windows are unavailable', async () => {
   const stats = await getUsageStats({
     readHistory: async () => '',
+    codexBarUsage: async () => JSON.stringify([{
+      provider: 'claude',
+      source: 'web',
+      error: { message: 'Claude usage temporarily unavailable' },
+    }]),
     codexBarCost: async () => claudeCostPayload,
     codexUsage: async () => ({
       rate_limit: {
@@ -287,7 +307,7 @@ test('getUsageStats hides local paths when the CodexBar cost CLI is missing', as
   });
 
   assert.equal(stats.claude.ok, false);
-  assert.equal(stats.claude.caption, 'local cost unavailable');
+  assert.equal(stats.claude.caption, 'usage unavailable');
   assert.equal(stats.claude.error, 'CodexBar CLI not found');
   assert.doesNotMatch(stats.claude.error || '', /Users|ENOENT/);
 });

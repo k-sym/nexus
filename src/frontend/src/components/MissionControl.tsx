@@ -213,7 +213,7 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
           <div>
             <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Stats</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <UsageCard title="Claude Stats" stat={stats?.claude} fallback="codexbar local cost" />
+              <UsageCard title="Claude Stats" stat={stats?.claude} fallback="codexbar session · weekly" />
               <UsageCard title="Codex Stats" stat={stats?.codex} fallback="codexbar session · weekly" />
               <UsageCard title="OpenRouter Stats" stat={stats?.openrouter} fallback="codexbar credit balance" />
             </div>

@@ -57,6 +57,10 @@ describe('MissionControl', () => {
     expect(screen.getByText('OpenRouter Stats')).toBeInTheDocument();
     expect(screen.getAllByText('Session')).toHaveLength(2);
     expect(screen.getAllByText('Weekly')).toHaveLength(2);
+    expect(screen.getByText('0% used')).toBeInTheDocument();
+    expect(screen.getByText('100% in reserve')).toBeInTheDocument();
+    expect(screen.getByText('12% used')).toBeInTheDocument();
+    expect(screen.getByText('88% in reserve')).toBeInTheDocument();
     expect(screen.getByText('55% used')).toBeInTheDocument();
     expect(screen.getByText('87% used')).toBeInTheDocument();
     expect(screen.getByText('$12.35')).toBeInTheDocument();
