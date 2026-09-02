@@ -50,7 +50,7 @@ function unavailable(provider: CodexBarProvider, error?: string): CodexBarProvid
     value: '—',
     caption: provider === 'openrouter'
       ? 'credit balance unavailable'
-      : provider === 'claude' ? 'local cost unavailable' : 'session unavailable',
+      : provider === 'claude' ? 'usage unavailable' : 'session unavailable',
     error,
   };
 }
@@ -269,10 +269,9 @@ function costAmount(row: Record<string, any>, names: string[]): number | undefin
 }
 
 /**
- * CodexBar ≥0.56 can no longer sample Anthropic quota windows: the Claude CLI
- * probe stopped returning session quota data and the OAuth usage endpoint is
- * aggressively rate limited. `codexbar cost` instead reads Claude Code's local
- * transcript logs — no network, no auth — and reports dollar cost totals.
+ * `codexbar cost` reads Claude Code's local transcript logs without network or
+ * auth. It is the reliable fallback when live or cached quota windows are not
+ * available.
  */
 export function parseCodexBarCost(stdout: string, now: () => Date = () => new Date()): CodexBarProviderStats {
   const payload = parseJsonPayload(stdout);
@@ -496,12 +495,26 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
 
   const entries = await Promise.all(PROVIDERS.map(async (provider) => {
     if (provider === 'claude') {
-      if (!codexBarCost) return [provider, unavailable(provider, 'No Claude cost data found')] as const;
+      if (codexBarUsage) {
+        try {
+          const live = sampled(parseCodexBarUsage(provider, await codexBarUsage(provider)), sampledAt);
+          if (live.ok && (live.windows?.session || live.windows?.weekly)) return [provider, live] as const;
+        } catch {
+          // Prefer a cached quota window, then fall back to local cost data.
+        }
+      }
+
+      const history = await readHistoryFallback(provider, readHistory);
+      if (history?.windows?.session || history?.windows?.weekly) {
+        return [provider, sampled(history, sampledAt)] as const;
+      }
+
+      if (!codexBarCost) return [provider, unavailable(provider, 'No Claude usage data found')] as const;
       try {
         const cost = parseCodexBarCost(await codexBarCost(), () => new Date(now));
         return [provider, cost.ok && !cost.sampledAt ? { ...cost, sampledAt } : cost] as const;
       } catch (err: any) {
-        const message = err?.code === 'ENOENT' ? 'CodexBar CLI not found' : err?.message || 'No Claude cost data found';
+        const message = err?.code === 'ENOENT' ? 'CodexBar CLI not found' : err?.message || 'No Claude usage data found';
         return [provider, unavailable(provider, message)] as const;
       }
     }
