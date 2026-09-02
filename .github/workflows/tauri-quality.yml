@@ -33,6 +33,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v7
 
+      # tauri-build validates configured bundle resource paths during ordinary
+      # checks and tests, but their packaged contents are not needed here.
+      - name: Prepare empty bundle resource directories
+        run: mkdir -p .stage/services .stage/node
+
       - name: Install Tauri system dependencies
         run: |
           sudo apt-get update
