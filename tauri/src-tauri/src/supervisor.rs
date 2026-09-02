@@ -1,26 +1,39 @@
+use crate::health::{degraded_models, probe, wait_for_health};
+use crate::node::resolve_node;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
-use crate::node::resolve_node;
-use crate::health::{probe, wait_for_health, degraded_models};
 
 /// Env for spawned services: inherit, enrich PATH, force OS-cert trust.
 pub fn spawn_env(node: &str) -> Vec<(String, String)> {
-    let node_dir = Path::new(node).parent().map(|p| p.to_string_lossy().into_owned());
+    let node_dir = Path::new(node)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned());
     let mut extra = Vec::new();
-    if let Some(d) = node_dir { extra.push(d); }
-    extra.extend(["/opt/homebrew/bin","/usr/local/bin","/usr/bin","/bin"].map(String::from));
+    if let Some(d) = node_dir {
+        extra.push(d);
+    }
+    extra.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(String::from));
     let current = std::env::var("PATH").unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
     let mut parts: Vec<String> = Vec::new();
     for p in current.split(':').map(String::from).chain(extra) {
-        if !p.is_empty() && seen.insert(p.clone()) { parts.push(p); }
+        if !p.is_empty() && seen.insert(p.clone()) {
+            parts.push(p);
+        }
     }
     let existing_opts = std::env::var("NODE_OPTIONS").unwrap_or_default();
-    let node_options = if existing_opts.contains("--use-system-ca") { existing_opts }
-        else if existing_opts.is_empty() { "--use-system-ca".into() }
-        else { format!("{existing_opts} --use-system-ca") };
-    vec![("PATH".into(), parts.join(":")), ("NODE_OPTIONS".into(), node_options)]
+    let node_options = if existing_opts.contains("--use-system-ca") {
+        existing_opts
+    } else if existing_opts.is_empty() {
+        "--use-system-ca".into()
+    } else {
+        format!("{existing_opts} --use-system-ca")
+    };
+    vec![
+        ("PATH".into(), parts.join(":")),
+        ("NODE_OPTIONS".into(), node_options),
+    ]
 }
 
 /// A spawned service leading its own process group.
@@ -30,7 +43,9 @@ pub struct Child {
 }
 
 impl Child {
-    pub fn id(&self) -> u32 { self.inner.id() }
+    pub fn id(&self) -> u32 {
+        self.inner.id()
+    }
 
     /// True if the process has already exited (used for fail-fast).
     pub fn has_exited(&mut self) -> bool {
@@ -39,20 +54,26 @@ impl Child {
 
     /// SIGTERM the whole process group, so grandchildren (node-pty) die too.
     pub fn kill_group(&self) {
-        unsafe { libc::kill(-self.pgid, libc::SIGTERM); }
+        unsafe {
+            libc::kill(-self.pgid, libc::SIGTERM);
+        }
     }
 }
 
 impl Drop for Child {
     fn drop(&mut self) {
-        self.kill_group();           // SIGTERM the whole group (grandchildren too)
-        let _ = self.inner.wait();   // reap the direct child so it doesn't zombie
+        self.kill_group(); // SIGTERM the whole group (grandchildren too)
+        let _ = self.inner.wait(); // reap the direct child so it doesn't zombie
     }
 }
 
 fn configure(cmd: &mut Command, node: &str) {
-    for (k, v) in spawn_env(node) { cmd.env(k, v); }
-    cmd.stdin(Stdio::null()).stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    for (k, v) in spawn_env(node) {
+        cmd.env(k, v);
+    }
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
     // New process group so we can group-kill (Unix).
     use std::os::unix::process::CommandExt;
     unsafe {
@@ -126,10 +147,14 @@ fn parse_daemon_url(config_text: &str) -> Option<String> {
 /// env override → config → loopback default.
 fn resolve_daemon_url(env_override: Option<&str>, config_text: Option<&str>) -> String {
     if let Some(e) = env_override {
-        if !e.trim().is_empty() { return e.trim().to_string(); }
+        if !e.trim().is_empty() {
+            return e.trim().to_string();
+        }
     }
     if let Some(c) = config_text {
-        if let Some(u) = parse_daemon_url(c) { return u; }
+        if let Some(u) = parse_daemon_url(c) {
+            return u;
+        }
     }
     DEFAULT_DAEMON_URL.to_string()
 }
@@ -142,7 +167,10 @@ pub(crate) fn is_remote_url(url: &str) -> bool {
 /// Read `MEMORY_DAEMON_URL` / `~/.nexus/config.yaml` to find where the daemon
 /// lives. Untested glue over the tested `resolve_daemon_url`.
 fn daemon_url() -> String {
-    resolve_daemon_url(std::env::var("MEMORY_DAEMON_URL").ok().as_deref(), read_config_text().as_deref())
+    resolve_daemon_url(
+        std::env::var("MEMORY_DAEMON_URL").ok().as_deref(),
+        read_config_text().as_deref(),
+    )
 }
 
 /// Load `~/.nexus/config.yaml` text, if present.
@@ -180,7 +208,10 @@ fn parse_nested_value(config_text: &str, section: &str, key: &str) -> Option<Str
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix(&key_prefix) {
-            return rest.split_whitespace().next().map(|t| unquote(t).to_string());
+            return rest
+                .split_whitespace()
+                .next()
+                .map(|t| unquote(t).to_string());
         }
     }
     None
@@ -224,18 +255,30 @@ fn resolve_backend_token(env_override: Option<&str>, config_text: Option<&str>) 
 }
 
 pub(crate) fn configured_backend_url() -> String {
-    resolve_backend_url(std::env::var("NEXUS_BACKEND_URL").ok().as_deref(), read_config_text().as_deref())
+    resolve_backend_url(
+        std::env::var("NEXUS_BACKEND_URL").ok().as_deref(),
+        read_config_text().as_deref(),
+    )
 }
 
 pub(crate) fn configured_backend_token() -> String {
-    resolve_backend_token(std::env::var("NEXUS_BACKEND_TOKEN").ok().as_deref(), read_config_text().as_deref())
+    resolve_backend_token(
+        std::env::var("NEXUS_BACKEND_TOKEN").ok().as_deref(),
+        read_config_text().as_deref(),
+    )
 }
 
-pub enum ServiceState { Reused, Up, Failed(String) }
+pub enum ServiceState {
+    Reused,
+    Up,
+    Failed(String),
+}
 
 /// Probe first (reuse anything already running, untracked), else spawn + wait.
 pub fn ensure_service(
-    _key: &str, health_url: &str, spawn_fn: &dyn Fn() -> std::io::Result<Child>,
+    _key: &str,
+    health_url: &str,
+    spawn_fn: &dyn Fn() -> std::io::Result<Child>,
 ) -> (ServiceState, Option<Child>) {
     if probe(health_url, Duration::from_millis(1500)) {
         return (ServiceState::Reused, None); // never killed
@@ -246,15 +289,19 @@ pub fn ensure_service(
     };
     let ok = wait_for_health(
         || probe(health_url, Duration::from_millis(1500)),
-        75, Duration::from_millis(400),
+        75,
+        Duration::from_millis(400),
         &|| false, // fail-fast via has_exited checked below between polls is omitted for brevity;
     );
     // Fail-fast: if it died, surface that.
     if !ok && child.has_exited() {
         return (ServiceState::Failed("exited early".into()), Some(child));
     }
-    if ok { (ServiceState::Up, Some(child)) }
-    else { (ServiceState::Failed("timeout".into()), Some(child)) }
+    if ok {
+        (ServiceState::Up, Some(child))
+    } else {
+        (ServiceState::Failed("timeout".into()), Some(child))
+    }
 }
 
 pub struct BootResult {
@@ -277,7 +324,11 @@ pub struct BootResult {
 /// `root` is the path from which service directories are resolved:
 /// - dev:  repo root (`CARGO_MANIFEST_DIR/../..`)
 /// - prod: Tauri resource dir (contains `services/` and `node/`)
-pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: bool, emit: E) -> BootResult {
+pub fn boot<E: Fn(&str, &str, Option<&str>)>(
+    root: std::path::PathBuf,
+    is_dev: bool,
+    emit: E,
+) -> BootResult {
     let mut children = Vec::new();
 
     // In prod, use the bundled node. In dev, fall back to resolve_node().
@@ -332,14 +383,20 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
         emit(
             "backend",
             if backend_ok { "up" } else { "warn" },
-            Some(if backend_ok { "remote" } else { "remote unreachable" }),
+            Some(if backend_ok {
+                "remote"
+            } else {
+                "remote unreachable"
+            }),
         );
         // The UI is the client and stays local: prod loads the bundled bundle,
         // dev still needs Vite to serve it.
         let frontend_ok = if is_dev {
             emit("frontend", "starting", Some("checking…"));
             let fe = root.join("src/frontend");
-            let (fstate, fchild) = ensure_service("frontend", FRONTEND_URL, &|| spawn_npm(&fe, &["run", "dev"]));
+            let (fstate, fchild) = ensure_service("frontend", FRONTEND_URL, &|| {
+                spawn_npm(&fe, &["run", "dev"])
+            });
             let ok = !matches!(fstate, ServiceState::Failed(_));
             emit("frontend", state_label(&fstate), state_detail(&fstate));
             if let Some(c) = fchild {
@@ -367,7 +424,15 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
     let daemon = daemon_url();
     let daemon_health = format!("{}/health", daemon.trim_end_matches('/'));
     let remote = is_remote_url(&daemon);
-    emit("memory", "starting", Some(if remote { "probing remote…" } else { "checking…" }));
+    emit(
+        "memory",
+        "starting",
+        Some(if remote {
+            "probing remote…"
+        } else {
+            "checking…"
+        }),
+    );
     let mem_ok = if remote {
         if probe(&daemon_health, std::time::Duration::from_millis(2500)) {
             emit("memory", "up", Some("remote"));
@@ -378,11 +443,16 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
         }
     } else {
         let (mstate, mchild) = ensure_service("memory", &daemon_health, &|| {
-            if is_dev { spawn_npm(&daemon_dir, &["start"]) }
-            else { spawn_node(&node, &daemon_dir.join("dist/src/index.js"), &daemon_dir) }
+            if is_dev {
+                spawn_npm(&daemon_dir, &["start"])
+            } else {
+                spawn_node(&node, &daemon_dir.join("dist/src/index.js"), &daemon_dir)
+            }
         });
         emit("memory", state_label(&mstate), state_detail(&mstate));
-        if let Some(c) = mchild { children.push(c); }
+        if let Some(c) = mchild {
+            children.push(c);
+        }
         !matches!(mstate, ServiceState::Failed(_))
     };
 
@@ -390,32 +460,53 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
     let degraded = if mem_ok {
         emit("models", "starting", Some("probing…"));
         match reqwest::blocking::get(&daemon_health).and_then(|r| r.text()) {
-            Ok(body) => { let d = degraded_models(&body);
-                emit("models", if d.is_empty() {"up"} else {"warn"}, None); d }
-            Err(_) => { emit("models", "warn", Some("unknown")); vec!["gen".into(),"embed".into(),"rerank".into()] }
+            Ok(body) => {
+                let d = degraded_models(&body);
+                emit("models", if d.is_empty() { "up" } else { "warn" }, None);
+                d
+            }
+            Err(_) => {
+                emit("models", "warn", Some("unknown"));
+                vec!["gen".into(), "embed".into(), "rerank".into()]
+            }
         }
-    } else { emit("models", "warn", Some("daemon down")); vec!["gen".into(),"embed".into(),"rerank".into()] };
+    } else {
+        emit("models", "warn", Some("daemon down"));
+        vec!["gen".into(), "embed".into(), "rerank".into()]
+    };
 
     // Backend (gating).
     emit("backend", "starting", Some("checking…"));
     let (bstate, bchild) = ensure_service("backend", BACKEND_HEALTH, &|| {
-        if is_dev { spawn_npm(&backend_dir, &["run","dev"]) }
-        else { spawn_node(&node, &backend_dir.join("dist/index.js"), &backend_dir) }
+        if is_dev {
+            spawn_npm(&backend_dir, &["run", "dev"])
+        } else {
+            spawn_node(&node, &backend_dir.join("dist/index.js"), &backend_dir)
+        }
     });
     let backend_ok = !matches!(bstate, ServiceState::Failed(_));
     emit("backend", state_label(&bstate), state_detail(&bstate));
-    if let Some(c) = bchild { children.push(c); }
+    if let Some(c) = bchild {
+        children.push(c);
+    }
 
     // Vite (dev only; gating in dev).
     let frontend_ok = if is_dev {
         emit("frontend", "starting", Some("checking…"));
         let fe = root.join("src/frontend");
-        let (fstate, fchild) = ensure_service("frontend", FRONTEND_URL, &|| spawn_npm(&fe, &["run","dev"]));
+        let (fstate, fchild) = ensure_service("frontend", FRONTEND_URL, &|| {
+            spawn_npm(&fe, &["run", "dev"])
+        });
         let ok = !matches!(fstate, ServiceState::Failed(_));
         emit("frontend", state_label(&fstate), state_detail(&fstate));
-        if let Some(c) = fchild { children.push(c); }
+        if let Some(c) = fchild {
+            children.push(c);
+        }
         ok
-    } else { emit("frontend", "skipped", Some("bundled")); true };
+    } else {
+        emit("frontend", "skipped", Some("bundled"));
+        true
+    };
 
     BootResult {
         ready: backend_ok && frontend_ok,
@@ -431,12 +522,19 @@ pub fn boot<E: Fn(&str, &str, Option<&str>)>(root: std::path::PathBuf, is_dev: b
 }
 
 fn state_label(s: &ServiceState) -> &'static str {
-    match s { ServiceState::Reused => "reused", ServiceState::Up => "up", ServiceState::Failed(_) => "failed" }
+    match s {
+        ServiceState::Reused => "reused",
+        ServiceState::Up => "up",
+        ServiceState::Failed(_) => "failed",
+    }
 }
 fn state_detail(s: &ServiceState) -> Option<&str> {
-    if let ServiceState::Failed(m) = s { Some(m.as_str()) } else { None }
+    if let ServiceState::Failed(m) = s {
+        Some(m.as_str())
+    } else {
+        None
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -451,11 +549,10 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
-            for s in listener.incoming() {
-                if let Ok(mut s) = s {
-                    let mut b = [0u8; 512]; let _ = s.read(&mut b);
-                    let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
-                }
+            for mut s in listener.incoming().flatten() {
+                let mut b = [0u8; 512];
+                let _ = s.read(&mut b);
+                let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
             }
         });
         std::thread::sleep(Duration::from_millis(50));
@@ -468,7 +565,10 @@ mod tests {
     #[test]
     fn parse_daemon_url_reads_the_key() {
         let cfg = "memory:\n  daemon_url: https://baker-pro.taileea629.ts.net:8443\n  auto_inject:\n    enabled: true\n";
-        assert_eq!(parse_daemon_url(cfg).as_deref(), Some("https://baker-pro.taileea629.ts.net:8443"));
+        assert_eq!(
+            parse_daemon_url(cfg).as_deref(),
+            Some("https://baker-pro.taileea629.ts.net:8443")
+        );
     }
 
     #[test]
@@ -478,13 +578,19 @@ mod tests {
 
     #[test]
     fn resolve_prefers_env_over_config() {
-        let r = resolve_daemon_url(Some("http://env:9999"), Some("memory:\n  daemon_url: http://cfg:4100\n"));
+        let r = resolve_daemon_url(
+            Some("http://env:9999"),
+            Some("memory:\n  daemon_url: http://cfg:4100\n"),
+        );
         assert_eq!(r, "http://env:9999");
     }
 
     #[test]
     fn resolve_uses_config_when_no_env() {
-        let r = resolve_daemon_url(None, Some("memory:\n  daemon_url: https://baker-pro.taileea629.ts.net:8443\n"));
+        let r = resolve_daemon_url(
+            None,
+            Some("memory:\n  daemon_url: https://baker-pro.taileea629.ts.net:8443\n"),
+        );
         assert_eq!(r, "https://baker-pro.taileea629.ts.net:8443");
     }
 
@@ -515,26 +621,42 @@ mod tests {
             parse_nested_value(CFG, "server", "url").as_deref(),
             Some("https://baker-pro.taileea629.ts.net:8444")
         );
-        assert_eq!(parse_nested_value(CFG, "server", "token").as_deref(), Some("server-secret"));
+        assert_eq!(
+            parse_nested_value(CFG, "server", "token").as_deref(),
+            Some("server-secret")
+        );
         // Not confused by gateway.token appearing later.
-        assert_eq!(parse_nested_value(CFG, "gateway", "token").as_deref(), Some("gateway-secret"));
+        assert_eq!(
+            parse_nested_value(CFG, "gateway", "token").as_deref(),
+            Some("gateway-secret")
+        );
     }
 
     #[test]
     fn parse_strips_surrounding_quotes() {
         // Users often quote these in YAML (and the README once showed them quoted);
         // the launcher must not keep the quotes, else the injected value breaks.
-        let dq = "server:\n  url: \"https://baker-pro.example.ts.net:8444\"\n  token: \"deadbeef00\"\n";
+        let dq =
+            "server:\n  url: \"https://baker-pro.example.ts.net:8444\"\n  token: \"deadbeef00\"\n";
         assert_eq!(
             parse_nested_value(dq, "server", "url").as_deref(),
             Some("https://baker-pro.example.ts.net:8444"),
         );
-        assert_eq!(parse_nested_value(dq, "server", "token").as_deref(), Some("deadbeef00"));
+        assert_eq!(
+            parse_nested_value(dq, "server", "token").as_deref(),
+            Some("deadbeef00")
+        );
         // Single quotes and daemon_url too.
         let sq = "memory:\n  daemon_url: 'https://baker-pro.example.ts.net:8443'\n";
-        assert_eq!(parse_daemon_url(sq).as_deref(), Some("https://baker-pro.example.ts.net:8443"));
+        assert_eq!(
+            parse_daemon_url(sq).as_deref(),
+            Some("https://baker-pro.example.ts.net:8443")
+        );
         // Unquoted still works (no accidental stripping).
-        assert_eq!(parse_daemon_url("memory:\n  daemon_url: http://127.0.0.1:4100\n").as_deref(), Some("http://127.0.0.1:4100"));
+        assert_eq!(
+            parse_daemon_url("memory:\n  daemon_url: http://127.0.0.1:4100\n").as_deref(),
+            Some("http://127.0.0.1:4100")
+        );
     }
 
     #[test]
@@ -546,8 +668,14 @@ mod tests {
 
     #[test]
     fn resolve_backend_url_precedence() {
-        assert_eq!(resolve_backend_url(Some("https://env:8444"), Some(CFG)), "https://env:8444");
-        assert_eq!(resolve_backend_url(None, Some(CFG)), "https://baker-pro.taileea629.ts.net:8444");
+        assert_eq!(
+            resolve_backend_url(Some("https://env:8444"), Some(CFG)),
+            "https://env:8444"
+        );
+        assert_eq!(
+            resolve_backend_url(None, Some(CFG)),
+            "https://baker-pro.taileea629.ts.net:8444"
+        );
         assert_eq!(resolve_backend_url(None, None), "http://127.0.0.1:4173");
     }
 
