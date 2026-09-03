@@ -183,6 +183,20 @@ test('a failed result then fail() does not double-report', () => {
   assert.deepEqual(h.mapper.finish(), { ok: false, error: 'x' });
 });
 
+test('fail() still closes a live partial after an earlier errored assistant message', () => {
+  const h = harness();
+  h.mapper.handle(assistant([{ type: 'text', text: 'oops' }], 'end_turn', { error: 'rate_limit' }) as any);
+  h.mapper.handle(stream({ type: 'message_start', message: { model: 'claude-opus-5', content: [], usage: {} } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'again' } }) as any);
+  h.mapper.fail('boom');
+  const last = h.events.filter((e) => e.type === 'message_end').at(-1);
+  assert.equal(last.message.stopReason, 'error');
+  assert.equal(last.message.errorMessage, 'boom');
+  assert.equal(last.message.content[0].text, 'again');
+  assert.equal(h.persisted.length, 2);
+});
+
 test('context usage from the assistant message is forwarded in Pi shape', () => {
   const h = harness();
   h.mapper.handle(assistant([{ type: 'text', text: 'x' }], 'end_turn', {

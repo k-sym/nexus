@@ -185,3 +185,38 @@ test('a query that throws becomes an error reply instead of a rejected prompt', 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('abort cancels the turn signal so an in-flight Nexus tool call actually stops', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const { queryFn, onInterrupt, calls } = fakeQuery(() => (async function* () {
+      yield init;
+      await gate;
+    })());
+    onInterrupt(() => release());
+    const { session } = makeSession(dir, queryFn);
+    const turn = session.prompt('long');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await session.abort();
+    await turn;
+    assert.equal(calls[0].options.abortController.signal.aborted, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a synchronously throwing queryFn resolves prompt() with an error reply', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    const queryFn = (() => { throw new Error('bad options'); }) as unknown as QueryFn;
+    const { session, sessionManager } = makeSession(dir, queryFn);
+    await session.prompt('x');
+    const assistant = sessionManager.getEntries().find((e: any) => e.type === 'message' && e.message.role === 'assistant') as any;
+    assert.equal(assistant.message.stopReason, 'error');
+    assert.equal(assistant.message.errorMessage, 'bad options');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

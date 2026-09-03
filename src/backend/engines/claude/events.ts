@@ -151,7 +151,7 @@ export class SdkEventMapper {
   fail(message: string): void {
     this.resultOk = false;
     this.resultError = message;
-    if (this.lastAssistantErrored) return;
+    if (!this.partial && this.lastAssistantErrored) return;
     if (this.partial) {
       const partial = this.partial;
       const errored: AssistantMessage = { ...partial, content: partial.content.filter(Boolean), stopReason: 'error', errorMessage: message };

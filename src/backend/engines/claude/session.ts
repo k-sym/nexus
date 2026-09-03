@@ -94,7 +94,7 @@ export class ClaudeEngineSession implements EngineSession {
   private model: EngineModel;
   private thinkingLevel: ThinkingLevel | undefined;
   private sdkSessionId: string | undefined;
-  private active: { controller: AbortController; query: Query; aborting: boolean } | null = null;
+  private active: { controller: AbortController; query: Query | undefined; aborting: boolean } | null = null;
   private lastContextUsage: ContextUsage | undefined;
   private readonly detailsByToolCall = new Map<string, unknown>();
   private loggedAuthSource = false;
@@ -135,15 +135,19 @@ export class ClaudeEngineSession implements EngineSession {
     const active = this.active;
     if (!active) return;
     active.aborting = true;
+    // Arm the hard-abort fallback *before* awaiting `interrupt()`: SDK control
+    // requests have no timeout of their own, so if the CLI never answers, this
+    // timer is the only thing that still cancels the turn.
+    const kill = setTimeout(() => {
+      if (this.active === active) active.controller.abort();
+    }, INTERRUPT_GRACE_MS);
+    kill.unref?.();
+    if (!active.query) return;
     try {
       await active.query.interrupt();
     } catch {
       /* the process may already be gone */
     }
-    const kill = setTimeout(() => {
-      if (this.active === active) active.controller.abort();
-    }, INTERRUPT_GRACE_MS);
-    kill.unref?.();
   }
 
   async prompt(text: string, options?: { images?: ImageContent[] }): Promise<void> {
@@ -195,10 +199,16 @@ export class ClaudeEngineSession implements EngineSession {
       stderr: (data) => this.deps.log?.(`[claude-engine ${this.deps.threadId}] ${data.trimEnd()}`),
     };
 
-    const q = this.queryFn({ prompt: buildPrompt(text, images), options: queryOptions });
-    const active = { controller, query: q, aborting: false };
+    const active: { controller: AbortController; query: Query | undefined; aborting: boolean } = {
+      controller, query: undefined, aborting: false,
+    };
     this.active = active;
     try {
+      // Inside the try: a synchronous throw from `query()` (bad options, spawn
+      // failure) is mapped through `mapper.fail()` below rather than rejecting
+      // `prompt()` after the user turn has already been persisted.
+      const q = this.queryFn({ prompt: buildPrompt(text, images), options: queryOptions });
+      active.query = q;
       for await (const message of q) mapper.handle(message);
       if (active.aborting) mapper.abort();
     } catch (err: any) {
@@ -210,6 +220,11 @@ export class ClaudeEngineSession implements EngineSession {
         mapper.fail(reason);
       }
     } finally {
+      // An abort that drained the loop on its own (or a hard-kill that hasn't
+      // fired yet) must still cancel the turn's signal, so any Nexus tool
+      // still running inside the MCP bridge (which reads this same signal)
+      // stops rather than continuing after Stop was pressed.
+      if (active.aborting && !controller.signal.aborted) controller.abort();
       this.active = null;
       correlator.clear();
       this.detailsByToolCall.clear();
@@ -238,7 +253,7 @@ export class ClaudeEngineSession implements EngineSession {
   private emit(event: EngineSessionEvent): void {
     for (const listener of this.listeners) {
       try {
-        void listener(event);
+        Promise.resolve(listener(event)).catch(() => {});
       } catch {
         /* a misbehaving subscriber must not break the turn */
       }
