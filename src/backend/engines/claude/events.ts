@@ -156,6 +156,14 @@ export class SdkEventMapper {
   private aborted = false;
   private resultError: string | undefined;
   private resultOk = true;
+  /**
+   * Set when the streaming `message_stop` event arrives — the API response
+   * itself has ended, even though nothing else has told the buffer to flush
+   * yet (no `user`/`result` frame, no next response's `message_start`). Reset
+   * on a new response's `message_start` and on every flush. See
+   * `maybeFlushOnStop`.
+   */
+  private stopSeen = false;
 
   constructor(private readonly sinks: MapperSinks) {}
 
@@ -327,6 +335,7 @@ export class SdkEventMapper {
         // A new response starts: whatever frames are still buffered belong to
         // the previous one.
         this.flushAssistant();
+        this.stopSeen = false;
         this.partial = null;
         this.ensurePartial(event.message?.model);
         return;
@@ -392,9 +401,31 @@ export class SdkEventMapper {
         if (event.usage?.output_tokens !== undefined) partial.usage.output = Number(event.usage.output_tokens);
         return;
       }
+      case 'message_stop':
+        // The API response itself has ended. Per-block `assistant` frames
+        // normally precede this, but a long-running tool call (e.g. the
+        // `question` MCP tool, which blocks until a human answers) means no
+        // `user` frame will arrive to flush the buffer — flush here instead,
+        // once it holds as many blocks as the streamed partial does.
+        this.stopSeen = true;
+        this.maybeFlushOnStop();
+        return;
       default:
         return;
     }
+  }
+
+  /**
+   * Flush the buffered response once `message_stop` has been seen and the
+   * buffer holds at least as many blocks as the streamed partial — the count
+   * guard tolerates a per-block frame that arrives after `message_stop` (a
+   * legitimate race, not a sign the buffer is still short a block) without
+   * splitting one response into two flushes.
+   */
+  private maybeFlushOnStop(): void {
+    if (!this.stopSeen || !this.pendingAssistant) return;
+    const streamedCount = this.partial ? this.partial.content.filter(Boolean).length : 0;
+    if (this.pendingAssistant.blocks.length >= streamedCount) this.flushAssistant();
   }
 
   private handleAssistant(msg: any): void {
@@ -424,8 +455,10 @@ export class SdkEventMapper {
     if (msg.context_usage) pending.contextUsage = msg.context_usage;
     // A frame that carries a stop reason ends the response; otherwise the
     // buffer waits for the next flush trigger (a `user`/`result` frame, a new
-    // response's `message_start`, or a frame with a different `message.id`).
+    // response's `message_start`, a frame with a different `message.id`, or
+    // `message_stop` once the buffer has caught up).
     if (pending.stopReason !== null) this.flushAssistant();
+    else this.maybeFlushOnStop();
   }
 
   /**
@@ -436,6 +469,7 @@ export class SdkEventMapper {
     const pending = this.pendingAssistant;
     if (!pending) return;
     this.pendingAssistant = null;
+    this.stopSeen = false;
     // A `message_delta` stop reason is the fallback when no frame carried one.
     const streamedStopReason = this.partial && this.partial.stopReason !== 'pending' ? this.partial.stopReason : undefined;
     const message: AssistantMessage = {

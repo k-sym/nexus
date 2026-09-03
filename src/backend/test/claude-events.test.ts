@@ -369,3 +369,70 @@ test('a buffered response flushed after markAborting() is persisted as aborted',
   // The turn never ran them, so an aborted flush announces no tool executions.
   assert.equal(h.events.filter((e) => e.type === 'tool_execution_start').length, 0);
 });
+
+// --- `message_stop` flush trigger -------------------------------------------
+// A long-running tool (e.g. the `question` MCP tool, which blocks until a
+// human answers) means no `user` frame arrives to flush the buffered
+// `assistant` frames until the tool resolves. `message_stop` (the streaming
+// signal that the API response itself has ended) must flush the buffer once
+// it holds as many blocks as the streamed partial does, so the tool_use block
+// (and its `tool_execution_start`) is announced immediately.
+
+const stopBlockFrame = (content: any[]) => ({
+  type: 'assistant', parent_tool_use_id: null, ...base,
+  message: {
+    id: 'msg-stop', type: 'message', role: 'assistant', model: 'claude-opus-5', content,
+    stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 2 },
+  },
+});
+
+test('message_stop flushes the buffered assistant before any user frame arrives (long-running tool)', () => {
+  const h = harness();
+  h.mapper.handle(stream({ type: 'message_start', message: { model: 'claude-opus-5', content: [], usage: {} } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Let me ask.' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_stop', index: 0 }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_q', name: 'mcp__nexus__question' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"questions":[]}' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_stop', index: 1 }) as any);
+  h.mapper.handle(stopBlockFrame([{ type: 'text', text: 'Let me ask.' }]) as any);
+  h.mapper.handle(stopBlockFrame([{ type: 'tool_use', id: 'toolu_q', name: 'mcp__nexus__question', input: { questions: [] } }]) as any);
+  h.mapper.handle(stream({ type: 'message_stop' }) as any);
+
+  // Assert right here, before the (still pending, in real use) `user` frame
+  // that only arrives once the human answers the question.
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1, 'message_stop flushed the buffer without waiting for a user frame');
+  assert.deepEqual(ends[0].message.content.map((b: any) => b.type), ['text', 'toolCall']);
+  assert.equal(h.persisted.filter((m) => m.role === 'assistant').length, 1);
+  const starts = h.events.filter((e) => e.type === 'tool_execution_start');
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0].toolName, 'question');
+
+  // The eventual answer still closes out normally and does not re-flush.
+  h.mapper.handle(toolResultFrame('toolu_q', 'Scope: Small') as any);
+  assert.equal(h.events.filter((e) => e.type === 'message_end').length, 1);
+  assert.equal(h.persisted.filter((m) => m.role === 'toolResult').length, 1);
+});
+
+test('a per-block frame that arrives after message_stop still flushes exactly once, after that late frame', () => {
+  const h = harness();
+  h.mapper.handle(stream({ type: 'message_start', message: { model: 'claude-opus-5', content: [], usage: {} } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Let me ask.' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_stop', index: 0 }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_q2', name: 'mcp__nexus__question' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"questions":[]}' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_stop', index: 1 }) as any);
+  h.mapper.handle(stopBlockFrame([{ type: 'text', text: 'Let me ask.' }]) as any);
+  // message_stop arrives before the tool_use frame has been merged in.
+  h.mapper.handle(stream({ type: 'message_stop' }) as any);
+  assert.equal(h.events.filter((e) => e.type === 'message_end').length, 0, 'still waiting on the tool_use block');
+
+  h.mapper.handle(stopBlockFrame([{ type: 'tool_use', id: 'toolu_q2', name: 'mcp__nexus__question', input: { questions: [] } }]) as any);
+
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1, 'flushed once, after the late frame');
+  assert.deepEqual(ends[0].message.content.map((b: any) => b.type), ['text', 'toolCall']);
+  assert.equal(h.persisted.filter((m) => m.role === 'assistant').length, 1);
+});

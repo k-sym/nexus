@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Type } from 'typebox';
-import { buildNexusToolDefinitions, collectPiTools, zodShapeFor } from '../engines/claude/pi-tools-bridge.js';
+import { buildNexusToolDefinitions, collectPiTools, createNexusMcpServer, zodShapeFor } from '../engines/claude/pi-tools-bridge.js';
 import { ToolUseCorrelator } from '../engines/claude/tool-use-correlator.js';
 import { createQuestionExtension, QuestionBroker } from '../pi/questions.js';
 import { createMemoryExtension } from '../pi/memory-tool.js';
@@ -61,4 +61,17 @@ test('a throwing Pi tool becomes an MCP error result instead of a crash', async 
   const result = await def.handler({ query: 'x' } as any, {});
   assert.equal(result.isError, true);
   assert.deepEqual(result.content, [{ type: 'text', text: 'daemon down' }]);
+});
+
+test('createNexusMcpServer marks its tools always-loaded so they are in the prompt from the start, not discovered via ToolSearch', async () => {
+  const tools = await collectPiTools([createQuestionExtension('t', new QuestionBroker())]);
+  const server = createNexusMcpServer(tools, context());
+  // The SDK applies `alwaysLoad` as `_meta['anthropic/alwaysLoad']` on each
+  // registered tool (see @anthropic-ai/claude-agent-sdk's createSdkMcpServer);
+  // `_registeredTools` is a plain (non-private) field on the returned
+  // McpServer instance, so this is observable without reaching into anything
+  // marked private.
+  const registered = (server.instance as any)._registeredTools?.question;
+  assert.ok(registered, 'the question tool was registered on the server instance');
+  assert.deepEqual(registered._meta, { 'anthropic/alwaysLoad': true });
 });

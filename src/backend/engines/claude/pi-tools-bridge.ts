@@ -107,5 +107,11 @@ export function createNexusMcpServer(tools: PiToolDefinition[], ctx: BridgeConte
     name: NEXUS_MCP_SERVER,
     version: '1.0.0',
     tools: buildNexusToolDefinitions(tools, ctx),
+    // Nexus tools (question, memory_recall, approvals, ...) must be in the
+    // prompt from the start rather than discovered via ToolSearch — a model
+    // that has to search for `question` first delays the human-in-the-loop
+    // card by a full extra turn. Applied by the SDK as
+    // `_meta['anthropic/alwaysLoad']` on each registered tool.
+    alwaysLoad: true,
   });
 }
