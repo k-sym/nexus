@@ -198,6 +198,26 @@ describe('PiAuthSection', () => {
     );
   });
 
+  it('shows a normal Configured row for an Anthropic API key even when the Claude Code engine is enabled', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/status') {
+        return jsonResponse({ providers: [{ id: 'anthropic', type: 'api_key' }] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<PiAuthSection claudeEngineEnabled />);
+    await screen.findByText('Anthropic (Claude)');
+
+    expect(screen.getByText('✓ Configured')).toBeInTheDocument();
+    expect(screen.queryByText('Handled by the Claude Code engine')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Subscription login Anthropic/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+  });
+
   it('keeps the normal Anthropic subscription login when the Claude Code engine is not enabled', async () => {
     global.fetch = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);

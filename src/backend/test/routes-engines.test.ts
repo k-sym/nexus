@@ -6,7 +6,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { registerEngineRoutes } from '../routes/engines.js';
 import { registerAuthRoutes } from '../routes/auth.js';
+import { registerPiRoutes } from '../routes/pi.js';
 import { claudeEngineStatus, isPiAnthropicOAuthHidden } from '../engines/claude/status.js';
+import { EngineRegistry } from '../engines/registry.js';
+import { PiEngine } from '../engines/pi-engine.js';
 
 const enabled = { enabled: true, auth: 'subscription' as const, oauth_token: '${CLAUDE_CODE_OAUTH_TOKEN}', executable_path: '' };
 
@@ -72,5 +75,43 @@ test('POST /api/auth/start-oauth refuses anthropic subscription login while the 
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/models/active honours the engine registry hidden set', async () => {
+  const models = [
+    { provider: 'anthropic', id: 'x', name: 'X', input: ['text'] },
+    { provider: 'anthropic', id: 'y', name: 'Y', input: ['text'] },
+  ];
+  const piRuntimeModels = {
+    find: (provider: string, id: string) => models.find((m) => m.provider === provider && m.id === id),
+    getAll: () => models,
+    getAvailable: () => models,
+  };
+  const piEngine = new PiEngine({ models: piRuntimeModels } as any, {
+    isHidden: (m) => m.provider === 'anthropic' && m.id === 'x',
+  });
+  const app = Fastify({ logger: false });
+  app.decorate('pi', { models: piRuntimeModels } as any);
+  app.decorate('engines', new EngineRegistry([piEngine]));
+  app.register(registerPiRoutes, {
+    capabilityResolver: { peek: () => ({} as any), resolve: async () => ({} as any) },
+  });
+  try {
+    const hidden = await app.inject({
+      method: 'POST',
+      url: '/api/models/active',
+      payload: { provider: 'anthropic', model: 'x' },
+    });
+    assert.deepEqual(hidden.json(), { ok: false, reason: 'model_not_found' });
+
+    const visible = await app.inject({
+      method: 'POST',
+      url: '/api/models/active',
+      payload: { provider: 'anthropic', model: 'y' },
+    });
+    assert.equal(visible.json().ok, true);
+  } finally {
+    await app.close();
   }
 });

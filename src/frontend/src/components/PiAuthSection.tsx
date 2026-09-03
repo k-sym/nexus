@@ -269,8 +269,9 @@ export function PiAuthSection({ claudeEngineEnabled = false }: { claudeEngineEna
       {knownProviders.map((p) => {
         const status = providers.find((x) => x.id === p.id);
         const configured = status?.type === 'api_key' || status?.type === 'oauth';
-        const handedOverToClaudeEngine = p.id === 'anthropic' && claudeEngineEnabled;
-        const supportsSubscription = subscriptionProviders.has(p.id) && !handedOverToClaudeEngine;
+        const anthropicEngineHandoff = p.id === 'anthropic' && claudeEngineEnabled;
+        const handedOverToClaudeEngine = anthropicEngineHandoff && status?.type !== 'api_key';
+        const supportsSubscription = subscriptionProviders.has(p.id) && !anthropicEngineHandoff;
         return (
           <div key={p.id} className="flex items-center gap-2">
             <span className="text-sm text-zinc-300 w-40">{p.label}</span>
