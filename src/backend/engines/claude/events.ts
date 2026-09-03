@@ -85,6 +85,7 @@ export class SdkEventMapper {
   private retrying: number | null = null;
   private compacting = false;
   private lastAssistantErrored = false;
+  private aborted = false;
   private resultError: string | undefined;
   private resultOk = true;
 
@@ -134,10 +135,11 @@ export class SdkEventMapper {
     }
   }
 
-  /** The turn was aborted: close any half-streamed message as `aborted`. */
-  abort(reason = 'Aborted'): void {
+  /** The turn was aborted: close any half-streamed message as `aborted`. Not an error — no `errorMessage`. */
+  abort(): void {
+    this.aborted = true;
     if (!this.partial) return;
-    const message: AssistantMessage = { ...this.partial, content: this.partial.content.filter(Boolean), stopReason: 'aborted', errorMessage: reason };
+    const message: AssistantMessage = { ...this.partial, content: this.partial.content.filter(Boolean), stopReason: 'aborted' };
     this.sinks.emit({ type: 'message_update', message, assistantMessageEvent: { type: 'error', reason: 'aborted', error: message } });
     this.sinks.emit({ type: 'message_end', message });
     this.sinks.persist(message);
@@ -147,8 +149,17 @@ export class SdkEventMapper {
 
   /** The query itself failed (process died, auth error thrown): show it like a provider error. */
   fail(message: string): void {
+    this.resultOk = false;
+    this.resultError = message;
     if (this.partial) {
-      this.abort(message);
+      const partial = this.partial;
+      const errored: AssistantMessage = { ...partial, content: partial.content.filter(Boolean), stopReason: 'error', errorMessage: message };
+      this.sinks.emit({ type: 'message_update', message: errored, assistantMessageEvent: { type: 'error', reason: 'error', error: errored } });
+      this.sinks.emit({ type: 'message_end', message: errored });
+      this.sinks.persist(errored);
+      this.lastAssistantErrored = true;
+      this.partial = null;
+      this.jsonBuffers.clear();
       return;
     }
     this.emitErrorMessage(message);
@@ -236,8 +247,11 @@ export class SdkEventMapper {
         if (block?.type === 'text') {
           partial.content[index] = { type: 'text', text: '' };
           this.update({ type: 'text_start', contentIndex: index });
-        } else if (block?.type === 'thinking' || block?.type === 'redacted_thinking') {
+        } else if (block?.type === 'thinking') {
           partial.content[index] = { type: 'thinking', thinking: '' };
+          this.update({ type: 'thinking_start', contentIndex: index });
+        } else if (block?.type === 'redacted_thinking') {
+          partial.content[index] = { type: 'thinking', thinking: '', redacted: true };
           this.update({ type: 'thinking_start', contentIndex: index });
         } else if (block?.type === 'tool_use') {
           const name = toDisplayToolName(block.name);
@@ -370,7 +384,13 @@ export class SdkEventMapper {
 
   private handleResult(msg: any): void {
     if (this.retrying !== null) {
-      this.sinks.emit({ type: 'auto_retry_end', success: false, attempt: this.retrying, finalError: msg.subtype });
+      const success = msg.subtype === 'success';
+      this.sinks.emit({
+        type: 'auto_retry_end',
+        success,
+        attempt: this.retrying,
+        ...(success ? {} : { finalError: msg.subtype }),
+      });
       this.retrying = null;
     }
     if (this.compacting) this.endCompaction('threshold', 'Turn ended during compaction');
@@ -378,7 +398,7 @@ export class SdkEventMapper {
     if (!failed) return;
     this.resultOk = false;
     this.resultError = msg.subtype;
-    if (this.lastAssistantErrored) return; // the assistant message already told the story
+    if (this.aborted || this.lastAssistantErrored) return; // already reported (aborted, or the assistant message told the story)
     const detail = typeof msg.result === 'string' && msg.result.trim() ? `: ${msg.result.trim()}` : '';
     this.emitErrorMessage(`${msg.subtype}${detail}`);
   }

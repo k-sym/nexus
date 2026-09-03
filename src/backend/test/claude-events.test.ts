@@ -131,9 +131,46 @@ test('abort mid-message persists the partial with stopReason aborted', () => {
   const last = h.events.at(-1);
   assert.equal(last.type, 'message_end');
   assert.equal(last.message.stopReason, 'aborted');
+  assert.equal(last.message.errorMessage, undefined);
   assert.equal(h.persisted[0].content[0].text, 'partial');
+  assert.equal(h.persisted[0].errorMessage, undefined);
   const err = h.events.find((e) => e.type === 'message_update' && e.assistantMessageEvent.type === 'error');
   assert.equal(err.assistantMessageEvent.reason, 'aborted');
+});
+
+test('fail() with no partial synthesises a single error message and fails finish()', () => {
+  const h = harness();
+  h.mapper.fail('spawn failed');
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].message.stopReason, 'error');
+  assert.equal(ends[0].message.errorMessage, 'spawn failed');
+  assert.deepEqual(h.mapper.finish(), { ok: false, error: 'spawn failed' });
+});
+
+test('fail() with a streamed partial closes it as an error, not an abort', () => {
+  const h = harness();
+  h.mapper.handle(stream({ type: 'message_start', message: { model: 'claude-opus-5', content: [], usage: {} } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } }) as any);
+  h.mapper.fail('boom');
+  assert.equal(h.persisted[0].content[0].text, 'partial');
+  assert.equal(h.persisted[0].stopReason, 'error');
+  assert.equal(h.persisted[0].errorMessage, 'boom');
+  const err = h.events.find((e) => e.type === 'message_update' && e.assistantMessageEvent.type === 'error');
+  assert.equal(err.assistantMessageEvent.reason, 'error');
+});
+
+test('abort then a failed result does not double-report', () => {
+  const h = harness();
+  h.mapper.handle(stream({ type: 'message_start', message: { model: 'claude-opus-5', content: [], usage: {} } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'partial' } }) as any);
+  h.mapper.abort();
+  h.mapper.handle({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], stop_reason: null, ...base } as any);
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1);
+  assert.equal(h.persisted.length, 1);
 });
 
 test('context usage from the assistant message is forwarded in Pi shape', () => {
