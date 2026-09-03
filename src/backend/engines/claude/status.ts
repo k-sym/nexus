@@ -14,6 +14,22 @@ export interface EngineStatus {
   authSource: 'token' | 'login' | 'api_key';
   executablePath: string | null;
   modelCount: number;
+  settingSources: string[];
+  skills: 'all' | 'none' | string[];
+}
+
+const SETTING_SOURCES = new Set(['user', 'project', 'local']);
+
+/** Filters `setting_sources` to the three known values and coerces `skills`
+ *  to `'all' | 'none' | string[]` (default `'all'`), so a malformed or
+ *  stale config value never reaches the SDK. */
+export function normalizeClaudeEngineConfig(cfg: ClaudeEngineConfig): { settingSources: Array<'user' | 'project' | 'local'>; skills: 'all' | 'none' | string[] } {
+  const settingSources = (Array.isArray(cfg.setting_sources) ? cfg.setting_sources : []).filter(
+    (s): s is 'user' | 'project' | 'local' => typeof s === 'string' && SETTING_SOURCES.has(s),
+  );
+  const raw = cfg.skills as unknown;
+  const skills = raw === 'none' ? 'none' : Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim().length > 0) : 'all';
+  return { settingSources, skills };
 }
 
 export function claudeEngineStatus(cfg: ClaudeEngineConfig, env: NodeJS.ProcessEnv = process.env): EngineStatus {
@@ -26,6 +42,7 @@ export function claudeEngineStatus(cfg: ClaudeEngineConfig, env: NodeJS.ProcessE
     authSource: cfg.auth === 'api_key' ? 'api_key' : tokenConfigured ? 'token' : 'login',
     executablePath: cfg.executable_path?.trim() || null,
     modelCount: CLAUDE_CODE_MODELS.length,
+    ...normalizeClaudeEngineConfig(cfg),
   };
 }
 

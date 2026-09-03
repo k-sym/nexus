@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PiRuntime } from '../pi/runtime.js';
@@ -16,7 +16,17 @@ const turn = [
 ];
 const queryFn = ((): any => Object.assign((async function* () { for (const m of turn) yield m; })(), { interrupt: async () => {} })) as unknown as QueryFn;
 
-const enabled = { enabled: true, auth: 'subscription' as const, oauth_token: '', executable_path: '' };
+/** Like `queryFn` above, but records the options each call was made with. */
+function recordingQueryFn() {
+  const calls: Array<{ options: any }> = [];
+  const fn = ((params: { options: any }) => {
+    calls.push({ options: params.options });
+    return Object.assign((async function* () { for (const m of turn) yield m; })(), { interrupt: async () => {} });
+  }) as unknown as QueryFn;
+  return { queryFn: fn, calls };
+}
+
+const enabled = { enabled: true, auth: 'subscription' as const, oauth_token: '', executable_path: '', setting_sources: [] as Array<'user' | 'project' | 'local'>, skills: 'all' as const };
 
 async function makeRuntime(dir: string) {
   return PiRuntime.create({ authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') }, {
@@ -91,6 +101,47 @@ test('dropping the Pi session also deletes the SDK transcript, even after a rest
     assert.ok(deleted.includes('sdk-sess-9@/repo'));
     assert.ok(deleted.includes('cold:sdk-sess-9@/repo'));
     assert.equal(engine.hasSession('thread-1', '/repo'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a session appends the project AGENTS.md to the system prompt', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-engine-'));
+  try {
+    const pi = await makeRuntime(dir);
+    const project = join(dir, 'project');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'AGENTS.md'), 'Prefer tabs.');
+    const { queryFn: recording, calls } = recordingQueryFn();
+    const engine = new ClaudeEngine({ pi, config: () => enabled, queryFn: recording });
+    const session = await engine.sessionFor('thread-1', project);
+    await session.prompt('hello');
+    assert.match(calls[0].options.systemPrompt.append, /Prefer tabs\./);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLAUDE.md is appended only when the SDK is not loading project settings itself', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-engine-'));
+  try {
+    const pi = await makeRuntime(dir);
+    const project = join(dir, 'project');
+    mkdirSync(project, { recursive: true });
+    writeFileSync(join(project, 'CLAUDE.md'), 'Use pnpm.');
+
+    const { queryFn: withProject, calls: projectCalls } = recordingQueryFn();
+    const engineWithProjectSettings = new ClaudeEngine({ pi, config: () => ({ ...enabled, setting_sources: ['project'] }), queryFn: withProject });
+    const sessionA = await engineWithProjectSettings.sessionFor('thread-a', project);
+    await sessionA.prompt('hello');
+    assert.doesNotMatch(projectCalls[0].options.systemPrompt.append ?? '', /Use pnpm\./);
+
+    const { queryFn: withoutProject, calls: noProjectCalls } = recordingQueryFn();
+    const engineWithoutProjectSettings = new ClaudeEngine({ pi, config: () => ({ ...enabled, setting_sources: [] }), queryFn: withoutProject });
+    const sessionB = await engineWithoutProjectSettings.sessionFor('thread-b', project);
+    await sessionB.prompt('hello');
+    assert.match(noProjectCalls[0].options.systemPrompt.append, /Use pnpm\./);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

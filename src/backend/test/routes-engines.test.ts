@@ -16,6 +16,7 @@ const enabled = { enabled: true, auth: 'subscription' as const, oauth_token: '${
 test('claudeEngineStatus reports token, login and api_key modes without leaking the token', () => {
   assert.deepEqual(claudeEngineStatus(enabled, { CLAUDE_CODE_OAUTH_TOKEN: 'secret' }), {
     id: 'claude-code', enabled: true, auth: 'subscription', tokenConfigured: true, authSource: 'token', executablePath: null, modelCount: 5,
+    settingSources: [], skills: 'all',
   });
   assert.equal(claudeEngineStatus(enabled, {}).authSource, 'login');
   assert.equal(claudeEngineStatus({ ...enabled, auth: 'api_key' }, {}).authSource, 'api_key');

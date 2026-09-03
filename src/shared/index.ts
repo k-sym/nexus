@@ -514,6 +514,13 @@ export interface NexusConfig {
       oauth_token: string;
       /** Optional path to a Claude Code executable instead of the SDK's bundled one. */
       executable_path: string;
+      /** Which Claude Code settings the SDK loads for engine sessions:
+       *  `user` = ~/.claude (skills, plugins, hooks, settings), `project` =
+       *  .claude/* + CLAUDE.md, `local` = .claude/settings.local.json. Empty
+       *  (default) = isolation: only Nexus's tools, policy and prompt. */
+      setting_sources: Array<'user' | 'project' | 'local'>;
+      /** Skills offered to the model: 'all' (default), 'none', or a list of skill names. */
+      skills: 'all' | 'none' | string[];
     };
   };
   /** Optional per-tool approval policy (see src/backend/pi/tool-policy.ts).

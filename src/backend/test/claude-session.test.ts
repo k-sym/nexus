@@ -40,7 +40,7 @@ function makeSession(dir: string, queryFn: QueryFn, overrides: Partial<Construct
   const session = new ClaudeEngineSession({
     threadId: 'thread-1', cwd, sessionManager, model: findClaudeModel('claude-opus-5')!, tools: [],
     systemPromptAppendix: 'Nexus orientation', policy: createToolPolicyResolver(), approvals: new ApprovalBroker(),
-    audit: NULL_APPROVAL_AUDIT, env: {}, queryFn, ...overrides,
+    audit: NULL_APPROVAL_AUDIT, env: {}, settingSources: [], skills: 'all', queryFn, ...overrides,
   });
   return { session, sessionManager };
 }
@@ -284,6 +284,31 @@ test('the PreToolUse hook asks Nexus about every tool, including read-only built
     const output2 = await mine({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'toolu_read2', tool_input: { file_path: 'b.ts' } } as any, undefined, {} as any);
     assert.equal((output2 as any).hookSpecificOutput.permissionDecision, 'ask');
     assert.equal(correlator.claim('Read', { file_path: 'b.ts' }), 'toolu_read2');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('settingSources and skills from deps flow into the query options', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    const { queryFn, calls } = fakeQuery(() => textTurn('ok'));
+    const { session } = makeSession(dir, queryFn, { settingSources: ['user'], skills: 'all' });
+    await session.prompt('go');
+    assert.deepEqual(calls[0].options.settingSources, ['user']);
+    assert.equal(calls[0].options.skills, 'all');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('an empty skills list is passed through as-is', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    const { queryFn, calls } = fakeQuery(() => textTurn('ok'));
+    const { session } = makeSession(dir, queryFn, { settingSources: [], skills: [] });
+    await session.prompt('go');
+    assert.deepEqual(calls[0].options.skills, []);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

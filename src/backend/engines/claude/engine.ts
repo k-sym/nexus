@@ -10,8 +10,10 @@ import { openSessionManagerFor, type PiRuntime } from '../../pi/runtime.js';
 import type { ChatEngine, EngineModel, EngineSession } from '../types.js';
 import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER, findClaudeModel } from './models.js';
 import { collectPiTools } from './pi-tools-bridge.js';
+import { projectContextAppendix } from './context-files.js';
 import { ClaudeEngineSession, type QueryFn } from './session.js';
 import { resolveClaudeAuthEnv, type ClaudeEngineConfig } from './auth.js';
+import { normalizeClaudeEngineConfig } from './status.js';
 
 export interface ClaudeEngineDeps {
   pi: PiRuntime;
@@ -105,17 +107,24 @@ export class ClaudeEngine implements ChatEngine {
     const sessionManager = await openSessionManagerFor(threadId, cwd, sessionDir);
     const tools = await collectPiTools(pi.extensionFactoriesFor(threadId, cwd));
     const cfg = this.deps.config();
+    const { settingSources, skills } = normalizeClaudeEngineConfig(cfg);
+    const systemPromptAppendix = [
+      pi.systemPromptAppendixFor(threadId, cwd),
+      projectContextAppendix(cwd, pi.paths.sessionsDir, settingSources),
+    ].filter(Boolean).join('\n\n');
     return new ClaudeEngineSession({
       threadId,
       cwd,
       sessionManager,
       model: CLAUDE_CODE_MODELS[0],
       tools,
-      systemPromptAppendix: pi.systemPromptAppendixFor(threadId, cwd),
+      systemPromptAppendix,
       policy: pi.policyFor(threadId, cwd),
       approvals: pi.approvals,
       audit: pi.auditSink,
       env: resolveClaudeAuthEnv(cfg),
+      settingSources,
+      skills: skills === 'none' ? [] : skills,
       executablePath: cfg.executable_path?.trim() || undefined,
       queryFn: this.deps.queryFn,
       log: this.deps.log ?? ((line) => console.log(line)),
