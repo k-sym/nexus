@@ -358,6 +358,75 @@ export class ApprovalBroker {
   }
 }
 
+export interface GateInput {
+  threadId: string;
+  cwd: string;
+  /** The POLICY name (Pi's lowercase names: `bash`, `edit`, …). */
+  toolName: string;
+  toolCallId: string;
+  input: unknown;
+  signal?: AbortSignal;
+  broker: ApprovalBroker;
+  policy: ToolPolicyResolver;
+  audit?: ApprovalAudit;
+  /** Tests pin this; production omits it so gates follow client presence. */
+  timeoutMs?: number;
+}
+
+/**
+ * The tool gate, engine-agnostic. Pi calls it from its `tool_call` hook; the
+ * Claude engine calls it from the SDK's `canUseTool`. Both get identical
+ * policy resolution, broker parking and audit rows.
+ *
+ *   - `allow`   → `{ block: false }`. Pays nothing beyond the resolver.
+ *   - `confirm` → park on the broker and await a human decision.
+ *   - `deny`    → block immediately; no gate registered, nothing waits.
+ */
+export async function decideToolCall(gate: GateInput): Promise<ApprovalDecision> {
+  const audit = gate.audit ?? NULL_APPROVAL_AUDIT;
+  const request = { toolName: gate.toolName, input: gate.input };
+  // resolveToolDecision owns the fail-closed behaviour: a resolver that throws
+  // or returns nonsense degrades to `confirm` for side-effectful tools.
+  const decision = resolveToolDecision(gate.policy, request);
+
+  let trace;
+  try { trace = gate.policy.explain?.(request); } catch { trace = undefined; }
+
+  const base = {
+    threadId: gate.threadId,
+    cwd: gate.cwd,
+    toolName: gate.toolName,
+    category: categorizeTool(gate.toolName),
+    inputSummary: summarizeToolInput(gate.input),
+    decision,
+    source: trace?.source ?? 'default',
+    ...(trace?.rule?.tool ? { ruleTool: trace.rule.tool } : {}),
+    ...(trace?.rule?.when ? { ruleWhen: trace.rule.when } : {}),
+  } satisfies Omit<ToolDecisionRecord, 'outcome' | 'answeredBy'>;
+
+  // A plain allow of a read-only tool with no rule is not worth a row.
+  const worthRecording = decision !== 'allow' || trace?.source === 'rule' || isSideEffectful(gate.toolName);
+
+  if (decision === 'allow') {
+    if (worthRecording) audit.record({ ...base, outcome: 'allowed', answeredBy: 'policy' });
+    return { block: false };
+  }
+  if (decision === 'deny') {
+    audit.record({ ...base, outcome: 'denied', answeredBy: 'policy' });
+    return { block: true, reason: `Blocked by policy: \`${gate.toolName}\` is not permitted in this session.` };
+  }
+
+  const result = await gate.broker.register(
+    gate.threadId, gate.toolCallId, gate.toolName, gate.input, gate.cwd, gate.signal, gate.timeoutMs,
+  );
+  audit.record({
+    ...base,
+    outcome: result.block ? 'denied' : 'allowed',
+    answeredBy: result.answeredBy ?? 'human',
+  });
+  return result;
+}
+
 /**
  * Extension that applies the session's tool policy to each tool call.
  *
@@ -384,52 +453,14 @@ export function createApprovalExtension(
 ): ExtensionFactory {
   return (pi) => {
     pi.on('tool_call', async (event, ctx) => {
-      const request = { toolName: event.toolName, input: event.input };
-      // resolveToolDecision owns the fail-closed behaviour: a resolver that
-      // throws or returns nonsense degrades to `confirm` for side-effectful
-      // tools rather than falling through to allow.
-      const decision = resolveToolDecision(policy, request);
-
-      // The source is best-effort — a throwing/absent explainer must not affect
-      // the call, only leave the record less specific.
-      let trace;
-      try { trace = policy.explain?.(request); } catch { trace = undefined; }
-
-      const base = {
-        threadId,
-        cwd,
-        toolName: event.toolName,
-        category: categorizeTool(event.toolName),
-        inputSummary: summarizeToolInput(event.input),
-        decision,
-        source: trace?.source ?? 'default',
-        ...(trace?.rule?.tool ? { ruleTool: trace.rule.tool } : {}),
-        ...(trace?.rule?.when ? { ruleWhen: trace.rule.when } : {}),
-      } satisfies Omit<ToolDecisionRecord, 'outcome' | 'answeredBy'>;
-
-      // Skip the noise: a plain allow of a read-only tool with no rule is not a
-      // "gated decision" worth a row. Everything else — confirms, denies, and
-      // allows that a rule drove or that touch the host — is recorded.
-      const worthRecording = decision !== 'allow' || trace?.source === 'rule' || isSideEffectful(event.toolName);
-
-      if (decision === 'allow') {
-        if (worthRecording) audit.record({ ...base, outcome: 'allowed', answeredBy: 'policy' });
-        return undefined;
-      }
-      if (decision === 'deny') {
-        audit.record({ ...base, outcome: 'denied', answeredBy: 'policy' });
-        return { block: true, reason: `Blocked by policy: \`${event.toolName}\` is not permitted in this session.` };
-      }
-
-      // confirm: park on the broker (ctx.signal aborts the gate on cancel), then
-      // record how it resolved — allowed/denied and by whom.
-      const result = await broker.register(threadId, event.toolCallId, event.toolName, event.input, cwd, ctx.signal, timeoutMs);
-      audit.record({
-        ...base,
-        outcome: result.block ? 'denied' : 'allowed',
-        answeredBy: result.answeredBy ?? 'human',
+      const decision = await decideToolCall({
+        threadId, cwd, toolName: event.toolName, toolCallId: event.toolCallId, input: event.input,
+        signal: ctx.signal, broker, policy, audit, timeoutMs,
       });
-      return result;
+      // A plain allow is "no opinion" to Pi's hook (undefined). A parked gate
+      // that settled as allow returns the broker's result so `answeredBy`
+      // reaches the caller exactly as before the extraction.
+      return decision.block || decision.answeredBy ? decision : undefined;
     });
   };
 }
