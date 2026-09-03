@@ -14,7 +14,7 @@ export type ClaudeEngineConfig = NexusConfig['engines']['claude'];
 
 const CLIENT_APP = 'nexus/0.1.0';
 
-function interpolate(value: string, env: NodeJS.ProcessEnv): string {
+export function interpolate(value: string, env: NodeJS.ProcessEnv): string {
   return value.replace(/\$\{(\w+)\}/g, (_match, name: string) => env[name] || '');
 }
 

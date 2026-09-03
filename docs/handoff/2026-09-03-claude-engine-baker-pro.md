@@ -111,3 +111,16 @@ Work through in order. Stop and report if any step fails in a way you cannot exp
 ## 7. Follow-ups already agreed (not blockers)
 
 From the final review's Minor triage: assert factory names (not just count) in the `extensionFactoriesFor` test; a key-order-independence test for `ToolUseCorrelator`; route `POST /api/models/active` through the registry; make `fastify.engines` optional in `fastify.d.ts` to drop two casts; tests for the fallback registry and the disabled-Claude 400; bound the `await interrupt()` in `abort()` with the grace timer; consider `disallowedTools: ['AskUserQuestion','Task']` until subagent traffic is rendered; legacy threads with `last_model_key = NULL` bypass the engine pin.
+
+## Follow-up 2026-09-03: Anthropic cutover
+
+Two more commits landed on top of this handoff (`feat(engines): hide Pi Anthropic OAuth …` and `feat(settings): Engines section and Anthropic hand-over …`), plus a fix-up commit for review findings. Net effect, while the Claude engine is enabled (the default):
+
+- Pi's own Anthropic **subscription** login is refused outright — `POST /api/auth/start-oauth` for `anthropic` returns `400 { ok: false, reason: 'claude_engine_owns_anthropic' }`.
+- Models under a stored Pi Anthropic **OAuth** credential are hidden from the catalog and from `POST /api/models/active` (which now resolves through the engine registry, so a hidden model comes back `{ ok: false, reason: 'model_not_found' }`, same as a nonexistent one). The credential itself is **not** deleted — remove it under Settings → Provider Auth if it's no longer wanted.
+- Anthropic through an **API key** in Pi is unaffected: it stays configured, keeps the `@blackbelt-technology/pi-anthropic-messages` tool-name bridge (mistakenly dropped in the first pass, restored in the fix-up commit), and shows a normal "✓ Configured" row in Provider Auth rather than being handed over to the Claude engine.
+- Settings gained an **Engines** section showing each engine's auth source (token / login / api_key) without exposing the token.
+
+`GET /api/engines` reports `piAnthropicOAuthHidden`; `GET /api/auth/status` is unaffected (the hide only touches the model catalog, not the credential list).
+
+baker-pro action after merge: `git pull` + `./scripts/restart-backend.sh` (or the equivalent `launchctl kickstart -k gui/$(id -u)/<nexus-backend label>`) to pick this up. No config changes needed unless you want to disable the Claude engine (`engines.claude.enabled: false` in `~/.nexus/config.yaml`), in which case Pi's Anthropic OAuth login and models return to normal automatically.

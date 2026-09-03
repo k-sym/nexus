@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from '../api';
 import SettingsPage from './SettingsPage';
 
@@ -78,6 +78,18 @@ vi.mock('./PiAuthSection', () => ({
 vi.mock('./ModelCurationSection', () => ({
   ModelCurationSection: () => <div>Model curation controls</div>,
 }));
+
+beforeEach(() => {
+  // EnginesSection fetches this directly via apiFetch (not the mocked ../api
+  // client), so give it a response instead of letting a real fetch happen.
+  global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url === '/api/engines') {
+      return { ok: true, json: async () => ({ engines: [], piAnthropicOAuthHidden: false }) } as Response;
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+});
 
 describe('SettingsPage', () => {
   it('keeps the scroll container full width instead of centered like an embedded frame', async () => {

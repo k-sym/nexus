@@ -291,12 +291,16 @@ test('POST /api/auth/start-oauth starts a flow', async () => {
       return { type: 'oauth', access: 'test', refresh: 'test', expires: Date.now() + 60_000 };
     },
   }));
+  // 'anthropic' is exercised separately (routes-engines.test.ts): while the
+  // Claude engine is enabled — the default — Pi's own Anthropic OAuth login
+  // is refused outright, so this generic flow-mechanics test uses a provider
+  // that rule doesn't touch.
   app.register(registerAuthRoutes);
   try {
     const res = await app.inject({
       method: 'POST',
       url: '/api/auth/start-oauth',
-      payload: { provider: 'anthropic' },
+      payload: { provider: 'openai-codex' },
     });
     assert.equal(res.statusCode, 200);
     assert.equal(typeof res.json().flowId, 'string');

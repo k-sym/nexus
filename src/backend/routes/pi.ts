@@ -88,7 +88,16 @@ export async function registerPiRoutes(fastify: FastifyInstance, options: Regist
     if (!body?.provider || !body?.model) {
       return { ok: false, reason: 'provider_and_model_required' };
     }
-    const found = fastify.pi.models.find(body.provider, body.model);
+    // When an engine registry is wired up (production always has one), resolve
+    // through it so a hidden model (e.g. Pi's Anthropic OAuth models while the
+    // Claude engine owns Anthropic) is treated as not found — falling back to
+    // the raw, unfiltered `fastify.pi.models.find` here would defeat the hide.
+    const engines = (fastify as any).engines as
+      | { resolveModel(key: string): { model: EngineModel } | undefined }
+      | undefined;
+    const found = engines
+      ? engines.resolveModel(`${body.provider}/${body.model}`)?.model
+      : fastify.pi.models.find(body.provider, body.model);
     if (!found) return { ok: false, reason: 'model_not_found' };
     const capabilities = await capabilityResolver.resolve(found as any);
     return { ok: true, provider: found.provider, id: found.id, capabilities };

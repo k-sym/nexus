@@ -65,6 +65,9 @@ import { backfillLocalCuratedModels } from './pi/local-model-curation-backfill.j
 import { EngineRegistry } from './engines/registry.js';
 import { PiEngine } from './engines/pi-engine.js';
 import { ClaudeEngine } from './engines/claude/engine.js';
+import type { ClaudeEngineConfig } from './engines/claude/auth.js';
+import { isPiAnthropicOAuthHidden } from './engines/claude/status.js';
+import { registerEngineRoutes } from './routes/engines.js';
 import {
   createHealthProbe,
   createListenerWatchdog,
@@ -165,17 +168,22 @@ async function main() {
 
   // Chat engines. Pi stays the default; `claude-code/*` model keys go through
   // the Claude Agent SDK so a Max/Pro login is used via Anthropic's own harness.
-  const claudeEngine = new ClaudeEngine({
-    pi,
-    config: () => {
-      try {
-        return loadConfig().engines.claude;
-      } catch {
-        return { enabled: false, auth: 'subscription', oauth_token: '', executable_path: '' };
-      }
-    },
+  const claudeConfig = (): ClaudeEngineConfig => {
+    try {
+      return loadConfig().engines.claude;
+    } catch {
+      return { enabled: false, auth: 'subscription' as const, oauth_token: '', executable_path: '' };
+    }
+  };
+  // Pi's own Anthropic OAuth path is the non-compliant one this engine
+  // replaces: while the Claude engine is on and Pi holds an OAuth credential
+  // for `anthropic`, those models are withheld from Pi's catalog so nothing
+  // routes through the bridge.
+  const piEngine = new PiEngine(pi, {
+    isHidden: (model) => model.provider === 'anthropic' && isPiAnthropicOAuthHidden(claudeConfig(), pi.paths.authFile),
   });
-  const engines = new EngineRegistry([new PiEngine(pi), claudeEngine]);
+  const claudeEngine = new ClaudeEngine({ pi, config: claudeConfig });
+  const engines = new EngineRegistry([piEngine, claudeEngine]);
 
   await initMemorySystem(db);
   const activityManager = new ActivityManager(db);
@@ -283,6 +291,7 @@ async function main() {
   app.register(registerDeviceRoutes);
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
+  app.register(registerEngineRoutes);
   app.register(registerActivityRoutes);
   app.register(registerApprovalRoutes);
   // The human-facing view of a thread's headless browser. Wired to the same

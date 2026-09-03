@@ -759,6 +759,8 @@ engines:
     executable_path: ''       # optional; empty ⇒ the SDK's bundled Claude Code
 ```
 
+**Anthropic cutover.** While the Claude engine is enabled (the default), Pi's own Anthropic **subscription** login is refused (`POST /api/auth/start-oauth` for `anthropic` returns `400 { ok: false, reason: 'claude_engine_owns_anthropic' }`) and any models under a stored Pi Anthropic **OAuth** credential are hidden from the catalog and from `POST /api/models/active` — that endpoint resolves through the engine registry, so a hidden model comes back `{ ok: false, reason: 'model_not_found' }` just like a nonexistent one. The credential itself is left in `~/.nexus/auth.json`; remove it under **Settings → Provider Auth** if you no longer need it. Anthropic reached through an **API key** in Pi is unaffected either way — it keeps working, keeps its Pi tool-name bridge (`@blackbelt-technology/pi-anthropic-messages`, which canonicalizes Pi's lowercase tool names for every `anthropic-messages` session), and shows a normal "✓ Configured" row rather than being handed over. The Settings **Engines** section shows each engine's auth source — a token from `CLAUDE_CODE_OAUTH_TOKEN`, this machine's `claude` login, or API-key mode — without exposing the token itself.
+
 ### Orchestrator
 
 There is no longer a headless dispatch loop. The orchestrator module was removed when task work moved into interactive chat threads (the backend's `index.ts` notes: *"the old headless orchestrator dispatch loop has been removed"*).

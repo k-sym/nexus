@@ -54,3 +54,18 @@ test('PiEngine exposes the runtime catalog with configured flags from getAvailab
   assert.strictEqual(pi.findModel('openrouter', 'a'), all[0]);
   assert.equal(pi.id, 'pi');
 });
+
+test('PiEngine hides models the predicate rejects from both listModels and findModel', () => {
+  const all = [
+    { provider: 'anthropic', id: 'claude-fable-5', name: 'Fable' },
+    { provider: 'openrouter', id: 'a', name: 'A' },
+  ];
+  const runtime = {
+    models: { getAll: () => all, getAvailable: () => all, find: (p: string, id: string) => all.find((m) => m.provider === p && m.id === id) },
+    sessionFor: async () => fakeSession, hasSession: () => false, dropSession: () => {},
+  };
+  const pi = new PiEngine(runtime as any, { isHidden: (m) => m.provider === 'anthropic' });
+  assert.deepEqual(pi.listModels().map((m) => m.id), ['a']);
+  assert.equal(pi.findModel('anthropic', 'claude-fable-5'), undefined);
+  assert.ok(pi.findModel('openrouter', 'a'));
+});

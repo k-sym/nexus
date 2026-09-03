@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PiAuthSection } from './PiAuthSection';
@@ -140,5 +140,97 @@ describe('PiAuthSection', () => {
     } finally {
       window.removeEventListener('nexus:models-refresh', listener);
     }
+  });
+
+  it('hands Anthropic over to the Claude Code engine when it is enabled', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/status') {
+        return jsonResponse({ providers: [{ id: 'anthropic', type: 'oauth' }] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<PiAuthSection claudeEngineEnabled />);
+    await screen.findByText('Anthropic (Claude)');
+
+    expect(screen.getByText('Handled by the Claude Code engine')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Subscription login Anthropic/i }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('still allows an Anthropic API key when the Claude Code engine owns subscription login', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/status') {
+        return jsonResponse({ providers: [] });
+      }
+      if (url === '/api/auth/save-key') {
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<PiAuthSection claudeEngineEnabled />);
+    await screen.findByText('Anthropic (Claude)');
+
+    expect(screen.getByText('Handled by the Claude Code engine')).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Subscription login Anthropic/i }),
+    ).not.toBeInTheDocument();
+
+    const anthropicRow = screen.getByText('Anthropic (Claude)').closest('div') as HTMLElement;
+    const input = within(anthropicRow).getByPlaceholderText('sk-…');
+
+    await userEvent.type(input, 'sk-ant-test');
+    await userEvent.click(within(anthropicRow).getByRole('button', { name: 'Save' }));
+
+    await waitFor(() =>
+      expect(global.fetch).toHaveBeenCalledWith(
+        '/api/auth/save-key',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({ provider: 'anthropic', key: 'sk-ant-test' }),
+        }),
+      ),
+    );
+  });
+
+  it('shows a normal Configured row for an Anthropic API key even when the Claude Code engine is enabled', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/status') {
+        return jsonResponse({ providers: [{ id: 'anthropic', type: 'api_key' }] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<PiAuthSection claudeEngineEnabled />);
+    await screen.findByText('Anthropic (Claude)');
+
+    expect(screen.getByText('✓ Configured')).toBeInTheDocument();
+    expect(screen.queryByText('Handled by the Claude Code engine')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: /Subscription login Anthropic/i }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+  });
+
+  it('keeps the normal Anthropic subscription login when the Claude Code engine is not enabled', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/auth/status') {
+        return jsonResponse({ providers: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<PiAuthSection />);
+    await screen.findByText('Anthropic (Claude)');
+
+    expect(screen.getByRole('button', { name: /Subscription login Anthropic/i })).toBeInTheDocument();
+    expect(screen.queryByText('Handled by the Claude Code engine')).not.toBeInTheDocument();
   });
 });
