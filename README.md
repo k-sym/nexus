@@ -744,6 +744,12 @@ Nexus has two chat engines, selected by the model key's provider prefix:
 
 Both engines share the tool policy, Supervise, the approval and question brokers, the audit trail, memory recall and the Nexus tools (offered to Claude as an in-process MCP server). Transcripts for both live in `~/.nexus/sessions/<repo>/…jsonl`; the Claude engine additionally keeps the SDK's own session under `~/.claude/projects/` and removes it when the thread is deleted or archived.
 
+Three things to know about the seam:
+
+- **A thread is pinned to the engine of its first turn.** The two engines hold their conversation state in different places (Pi's session vs. the SDK's own resumable session), so switching engines mid-thread would silently drop the history. Sending a turn on the other engine answers `409 { kind: 'engine_mismatch' }` — start a new thread instead.
+- **Every Claude tool call goes through the Nexus policy**, including Claude's read-only built-ins (`Read`, `Grep`, `Glob`, `LS`). The SDK would auto-allow those without asking the client; Nexus's `PreToolUse` hook returns `ask` so they reach `canUseTool` and Supervise and read-category rules apply to them like any other tool.
+- **Signal filters (tool-result projection) are Pi-only.** Claude turns stream tool results straight through; the noise filters configured under Settings → Signal filters do not apply to them.
+
 ```yaml
 engines:
   claude:

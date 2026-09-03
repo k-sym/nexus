@@ -20,12 +20,23 @@ codesign --force --options runtime --timestamp --entitlements "$ENT" \
 echo "[sign] every other nested Mach-O (.node / .dylib / .so / extensionless) by type"
 # Detect by `file`, not extension — sqlite-vec ships vec0.dylib, others ship .node,
 # and some prebuilds are extensionless. Skip the bundled node (signed above with
-# entitlements). Libraries get runtime + timestamp (no entitlements needed).
+# entitlements). Libraries get runtime + timestamp (no entitlements needed), but
+# the Claude Agent SDK's bundled `claude` is a Bun-compiled *executable* whose
+# JavaScriptCore JIT needs the same entitlements as node's V8 — signed without
+# them, the hardened runtime kills it on first run.
 NODE_BIN="$APP/Contents/Resources/node/bin/node"
 find "$APP/Contents/Resources" -type f ! -path "$NODE_BIN" -print0 | while IFS= read -r -d '' f; do
   if file -b "$f" | grep -q 'Mach-O'; then
-    codesign --force --options runtime --timestamp --sign "$ID" "$f"
-    echo "  signed: ${f#"$APP"/}"
+    case "$f" in
+      */@anthropic-ai/claude-agent-sdk-darwin-*/claude)
+        codesign --force --options runtime --timestamp --entitlements "$ENT" --sign "$ID" "$f"
+        echo "  signed (JIT entitlements): ${f#"$APP"/}"
+        ;;
+      *)
+        codesign --force --options runtime --timestamp --sign "$ID" "$f"
+        echo "  signed: ${f#"$APP"/}"
+        ;;
+    esac
   fi
 done
 

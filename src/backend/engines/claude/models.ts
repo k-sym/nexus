@@ -31,10 +31,6 @@ export function findClaudeModel(id: string): EngineModel | undefined {
   return CLAUDE_CODE_MODELS.find((model) => model.id === id);
 }
 
-export function contextWindowFor(model: EngineModel): number {
-  return model.contextWindow ?? 200_000;
-}
-
 /**
  * Nexus thinking level → SDK request options. `undefined` = leave the SDK's
  * adaptive default alone. `minimal` has no SDK equivalent and becomes `low`.
