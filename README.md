@@ -733,6 +733,26 @@ NEXUS no longer ships a "personas" abstraction. Instead, the **Pi runtime** (`@e
 
 > The legacy `personas` and `providers` SQLite tables are retained in `db.ts` for one more release as back-compat shims and are not surfaced in the UI or API. There is no `/api/personas` or `/api/providers` route.
 
+### Engines
+
+Nexus has two chat engines, selected by the model key's provider prefix:
+
+| Engine | Provider prefix | Auth | Notes |
+| --- | --- | --- | --- |
+| Pi runtime | everything else (`openrouter/…`, `local/…`, `github-copilot/…`, …) | API keys / provider OAuth in `~/.nexus/auth.json` | Default engine. |
+| Claude Agent SDK | `claude-code/…` | Your `claude` login (Max/Pro) or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` | Runs Claude through Anthropic's own Claude Code harness, which is the way consumer-plan credentials are permitted to be used. `ANTHROPIC_API_KEY` is stripped from the child process unless `engines.claude.auth: api_key`. |
+
+Both engines share the tool policy, Supervise, the approval and question brokers, the audit trail, memory recall and the Nexus tools (offered to Claude as an in-process MCP server). Transcripts for both live in `~/.nexus/sessions/<repo>/…jsonl`; the Claude engine additionally keeps the SDK's own session under `~/.claude/projects/` and removes it when the thread is deleted or archived.
+
+```yaml
+engines:
+  claude:
+    enabled: true
+    auth: subscription        # or api_key
+    oauth_token: ${CLAUDE_CODE_OAUTH_TOKEN}   # optional; empty ⇒ use this machine's claude login
+    executable_path: ''       # optional; empty ⇒ the SDK's bundled Claude Code
+```
+
 ### Orchestrator
 
 There is no longer a headless dispatch loop. The orchestrator module was removed when task work moved into interactive chat threads (the backend's `index.ts` notes: *"the old headless orchestrator dispatch loop has been removed"*).
