@@ -24,7 +24,9 @@ import {
   type ApprovalDecisionEvent,
   type ChatThread,
 } from '@nexus/shared';
-import type { AgentSession } from '@earendil-works/pi-coding-agent';
+import type { EngineSession } from '../engines/types.js';
+import { EngineRegistry } from '../engines/registry.js';
+import { PiEngine } from '../engines/pi-engine.js';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
 import { autoTitleSession, NEW_THREAD_TITLE } from '../sessions/auto-title.js';
 import { loadConfig } from '../config.js';
@@ -42,17 +44,12 @@ import type { ProjectRun } from '../pi/concurrency.js';
 const ABORT_GRACE_MS = 200;
 
 interface ActiveStream {
-  session: Pick<AgentSession, 'abort'>;
+  session: Pick<EngineSession, 'abort'>;
   runId: string;
   abortSource?: AgentRunAbortSource;
 }
 
-type ChatSession = Pick<
-  AgentSession,
-  'subscribe' | 'prompt' | 'abort' | 'setModel' | 'getContextUsage' | 'setThinkingLevel' | 'supportsThinking'
-> & {
-  sessionManager?: Pick<AgentSession['sessionManager'], 'appendCustomEntry' | 'getLeafId' | 'getLeafEntry' | 'getEntries'>;
-};
+type ChatSession = EngineSession;
 
 const CLIENT_ABORT_SOURCES = new Set<AgentRunAbortSource>(['user', 'frontend']);
 
@@ -197,6 +194,9 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
   const capabilityResolver = options.capabilityResolver ?? modelCapabilityResolver;
   const db = fastify.db;
   const pi = fastify.pi;
+  // Tests that decorate only `pi` get a Pi-only registry; production decorates
+  // the full one in index.ts.
+  const engines: EngineRegistry = (fastify as any).engines ?? new EngineRegistry([new PiEngine(pi as any)]);
   const concurrency = fastify.chatConcurrency;
   const detectGitBranch = options.detectGitBranch ?? detectProjectGitBranch;
   const threadRunClaims = new Map<string, ThreadRunClaim>();
@@ -462,19 +462,13 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       }
     }
 
-    let selectedModel: any;
-    if (body.modelKey) {
-      const sep = body.modelKey.indexOf('/');
-      if (sep > 0) {
-        const provider = body.modelKey.slice(0, sep);
-        const modelId = body.modelKey.slice(sep + 1);
-        selectedModel = pi.models.find(provider, modelId);
-        if (!selectedModel) {
-          reply.code(400);
-          return { error: `Model not found: ${body.modelKey}` };
-        }
-      }
+    const resolved = engines.resolveModel(modelKey);
+    if (!resolved) {
+      reply.code(400);
+      return { error: `Model not found: ${modelKey}` };
     }
+    const selectedModel: any = resolved.model;
+    const engine = resolved.engine;
     // Re-resolve here as well as on selection: UI hydration improves the
     // experience, but the send boundary remains authoritative for direct API
     // clients, stale tabs, and expired provider metadata.
@@ -546,7 +540,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       savedAttachments = saveFileAttachments(attachments, cwd);
       promptContent = promptWithFileReferences(body.content, savedAttachments);
       try {
-        session = await pi.sessionFor(threadId, cwd);
+        session = await engine.sessionFor(threadId, cwd);
       } catch (err: any) {
         reply.code(500);
         return { error: err?.message || 'failed to create session' };
@@ -980,7 +974,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
   });
 }
 
-function safeContextUsage(session: Partial<Pick<AgentSession, 'getContextUsage'>>): ReturnType<AgentSession['getContextUsage']> | undefined {
+function safeContextUsage(session: Partial<Pick<EngineSession, 'getContextUsage'>>): ReturnType<EngineSession['getContextUsage']> | undefined {
   if (typeof session.getContextUsage !== 'function') return undefined;
   try {
     return session.getContextUsage();

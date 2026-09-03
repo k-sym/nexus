@@ -8,11 +8,13 @@ import type { ActivityManager } from './activity/manager.js';
 import type { DbApprovalAudit } from './approvals/audit.js';
 import type { ApnsSender } from './apns/sender.js';
 import type { AgentBridgeService } from './agent-bridge/service.js';
+import type { EngineRegistry } from './engines/registry.js';
 
 declare module 'fastify' {
   interface FastifyInstance {
     db: Database.Database;
     pi: PiRuntime;
+    engines: EngineRegistry;
     chatConcurrency: ConcurrencyTracker;
     modelCuration: ModelCurationStore;
     oauthFlows: OAuthFlowManager;
