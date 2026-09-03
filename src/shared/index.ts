@@ -495,6 +495,27 @@ export interface NexusConfig {
      *  compose file that mounts any host path outside the repo is refused. */
     allow_host_mounts?: string[];
   };
+  /** Chat engines beside the Pi runtime. Model keys pick the engine by provider prefix. */
+  engines: {
+    /**
+     * Claude through the official Claude Agent SDK (the Claude Code harness).
+     * This is how a Claude Pro/Max login is used inside Nexus in the way
+     * Anthropic's terms permit — through Anthropic's own harness — rather than
+     * a third-party OAuth bridge.
+     */
+    claude: {
+      /** When false no `claude-code/*` model is listed. Default true. */
+      enabled: boolean;
+      /** `subscription` strips ANTHROPIC_API_KEY from the child process so the
+       *  login is used; `api_key` leaves the environment alone. */
+      auth: 'subscription' | 'api_key';
+      /** Optional long-lived token from `claude setup-token` (env-referenced).
+       *  Empty ⇒ the bundled Claude Code uses this machine's existing login. */
+      oauth_token: string;
+      /** Optional path to a Claude Code executable instead of the SDK's bundled one. */
+      executable_path: string;
+    };
+  };
   /** Optional per-tool approval policy (see src/backend/pi/tool-policy.ts).
    *  Absent ⇒ built-in defaults (read-only allowed, `services` confirmed).
    *  Category overrides and input-aware rules, global and per project. */
@@ -701,4 +722,5 @@ export const OPERATION_STATUSES = ['running', 'succeeded', 'failed', 'cancelled'
 export type OperationStatus = (typeof OPERATION_STATUSES)[number];
 
 export * from './agent-run.js';
+export * from './engine-session.js';
 export * from './approval-decision.js';

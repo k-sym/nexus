@@ -62,6 +62,9 @@ import { loadLocalEnvFile } from './env.js';
 import { registerBackendAuth } from './auth-gate.js';
 import { writeLocalModelsFile } from './pi/local-models.js';
 import { backfillLocalCuratedModels } from './pi/local-model-curation-backfill.js';
+import { EngineRegistry } from './engines/registry.js';
+import { PiEngine } from './engines/pi-engine.js';
+import { ClaudeEngine } from './engines/claude/engine.js';
 import {
   createHealthProbe,
   createListenerWatchdog,
@@ -160,6 +163,20 @@ async function main() {
     await pi.auth.setRuntimeApiKey('openrouter', openRouterKey);
   }
 
+  // Chat engines. Pi stays the default; `claude-code/*` model keys go through
+  // the Claude Agent SDK so a Max/Pro login is used via Anthropic's own harness.
+  const claudeEngine = new ClaudeEngine({
+    pi,
+    config: () => {
+      try {
+        return loadConfig().engines.claude;
+      } catch {
+        return { enabled: false, auth: 'subscription', oauth_token: '', executable_path: '' };
+      }
+    },
+  });
+  const engines = new EngineRegistry([new PiEngine(pi), claudeEngine]);
+
   await initMemorySystem(db);
   const activityManager = new ActivityManager(db);
   const stopActivityListening = activityManager.startListening();
@@ -237,6 +254,7 @@ async function main() {
 
   app.decorate('db', db);
   app.decorate('pi', pi);
+  app.decorate('engines', engines);
   const modelCuration = new ModelCurationStore(join(getNexusDir(), 'model-curation.json'));
 
   app.decorate('chatConcurrency', chatConcurrency);

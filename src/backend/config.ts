@@ -142,6 +142,14 @@ function defaultConfig(): NexusConfig {
       // tool policy (see pi/tool-policy.ts).
       enabled: false,
     },
+    engines: {
+      claude: {
+        enabled: true,
+        auth: 'subscription',
+        oauth_token: '${CLAUDE_CODE_OAUTH_TOKEN}',
+        executable_path: '',
+      },
+    },
     monday: {
       enabled: false,
       // '2024-10' was deprecated 2026-02-15; pinned to '2026-07', the current
@@ -172,6 +180,11 @@ function defaultConfig(): NexusConfig {
       key: '${APNS_KEY}',
     },
   };
+}
+
+/** The built-in defaults, for tests that assert on shape without touching ~/.nexus. */
+export function defaultConfigForTests(): NexusConfig {
+  return defaultConfig();
 }
 
 /**

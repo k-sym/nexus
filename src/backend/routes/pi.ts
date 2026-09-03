@@ -13,6 +13,7 @@ import {
   type ModelCapabilityResolver,
 } from '../pi/model-capabilities.js';
 import type { ThinkingLevel } from '../pi/thinking.js';
+import type { EngineModel } from '../engines/types.js';
 
 type CapabilityResolver = Pick<ModelCapabilityResolver, 'peek' | 'resolve'>;
 
@@ -24,12 +25,15 @@ export function buildModelCatalog(
   fastify: FastifyInstance,
   capabilityResolver: Pick<CapabilityResolver, 'peek'> = modelCapabilityResolver,
 ) {
-  const all = fastify.pi.models.getAll();
-  const available = fastify.pi.models.getAvailable();
+  const engines = (fastify as any).engines as { listModels(): EngineModel[] } | undefined;
+  const all: EngineModel[] = engines ? engines.listModels() : (fastify.pi.models.getAll() as unknown as EngineModel[]);
+  const available: EngineModel[] = engines
+    ? all.filter((m) => m.configured !== false)
+    : (fastify.pi.models.getAvailable() as unknown as EngineModel[]);
   const configuredKeys = new Set(available.map((m) => `${m.provider}/${m.id}`));
   return all.map((m) => {
     const thinkingLevels: ThinkingLevel[] = m.reasoning
-      ? (getSupportedThinkingLevels(m) as ThinkingLevel[])
+      ? (getSupportedThinkingLevels(m as any) as ThinkingLevel[])
       : [];
     return {
       provider: m.provider,
@@ -67,7 +71,7 @@ export async function registerPiRoutes(fastify: FastifyInstance, options: Regist
       reply.code(400);
       return { error: 'enabledModelKeys must be an array' };
     }
-    const available = fastify.pi.models.getAvailable();
+    const available = buildModelCatalog(fastify, capabilityResolver).filter((m) => m.configured !== false);
     const known = new Set(available.map((m) => `${m.provider}/${m.id}`));
     const enabled = body.enabledModelKeys.filter((key): key is string => typeof key === 'string' && known.has(key));
     fastify.modelCuration.save(enabled);
