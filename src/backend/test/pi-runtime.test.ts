@@ -303,7 +303,7 @@ test('PiRuntime.dropSession is a no-op for a thread that has no file on disk', a
   }
 });
 
-test('buildResourceLoaderOptions includes the Anthropic Messages bridge factory', async () => {
+test('buildResourceLoaderOptions passes the extension factories through unchanged', async () => {
   const { SettingsManager } = await import('@earendil-works/pi-coding-agent');
   const customFactory = () => {};
   const inputFactories = [customFactory];
@@ -315,12 +315,12 @@ test('buildResourceLoaderOptions includes the Anthropic Messages bridge factory'
   });
 
   assert.equal(options.noExtensions, true);
-  assert.equal(options.extensionFactories?.length, 2);
-  assert.strictEqual(options.extensionFactories?.[1], customFactory);
+  assert.equal(options.extensionFactories?.length, 1);
+  assert.strictEqual(options.extensionFactories?.[0], customFactory);
   assert.deepEqual(inputFactories, [customFactory], 'input extension array remains unchanged');
 });
 
-test('question and approval extensions install after the Anthropic bridge and before signal filtering', async () => {
+test('question and approval extensions install before signal filtering', async () => {
   const questions = new QuestionBroker();
   const approvals = new ApprovalBroker();
   const signalFactory = () => {};
@@ -334,19 +334,19 @@ test('question and approval extensions install after the Anthropic bridge and be
     extensionFactories: sessionFactories,
   });
 
-  // [0] Anthropic bridge (prepended), [1] question, [2] approval, [3] signal filter.
-  assert.equal(options.extensionFactories?.length, 4);
+  // [0] question, [1] approval, [2] signal filter.
+  assert.equal(options.extensionFactories?.length, 3);
   let tool: any;
-  await options.extensionFactories?.[1]?.({
+  await options.extensionFactories?.[0]?.({
     registerTool(value: unknown) { tool = value; },
   } as any);
   assert.equal(tool?.name, 'question');
   let approvalHandlerRegistered = false;
-  await options.extensionFactories?.[2]?.({
+  await options.extensionFactories?.[1]?.({
     on(event: string) { if (event === 'tool_call') approvalHandlerRegistered = true; },
   } as any);
   assert.equal(approvalHandlerRegistered, true, 'approval extension registers a tool_call handler');
-  assert.strictEqual(options.extensionFactories?.[3], signalFactory);
+  assert.strictEqual(options.extensionFactories?.[2], signalFactory);
 });
 
 /** Register the session's memory_recall tool and hand back its definition. */

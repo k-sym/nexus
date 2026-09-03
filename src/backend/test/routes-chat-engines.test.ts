@@ -119,6 +119,20 @@ test('a thread is pinned to the engine of its first turn', async () => {
   }
 });
 
+test('a thread last used on a now-hidden anthropic/* model still counts as the pi engine', async () => {
+  const { app, db, dir } = await makeApp();
+  try {
+    db.prepare('UPDATE chat_threads SET last_model_key = ? WHERE id = ?').run('anthropic/claude-fable-5', 'thread-1');
+    const res = await app.inject({ method: 'POST', url: '/api/threads/thread-1/messages/stream', payload: { content: 'x', modelKey: 'claude-code/m1' } });
+    assert.equal(res.statusCode, 409);
+    assert.equal(res.json().kind, 'engine_mismatch');
+    const ok = await app.inject({ method: 'POST', url: '/api/threads/thread-1/messages/stream', payload: { content: 'x', modelKey: 'openrouter/m1' } });
+    assert.equal(ok.statusCode, 200);
+  } finally {
+    await app.close(); db.close(); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('confirm-cancel waits out a Claude turn interrupt grace instead of 409-ing', async () => {
   const { app, db, dir } = await makeApp();
   try {

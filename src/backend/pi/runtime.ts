@@ -16,7 +16,6 @@ import {
   ModelRuntime,
   createAgentSession,
 } from '@earendil-works/pi-coding-agent';
-import anthropicMessagesBridge from '@blackbelt-technology/pi-anthropic-messages';
 import { QuestionBroker, createQuestionExtension } from './questions.js';
 import { ApprovalBroker, createApprovalExtension } from './approvals.js';
 import { createSignalFilterExtension } from '../signal-filters/extension.js';
@@ -127,7 +126,7 @@ export function buildResourceLoaderOptions(
   return {
     ...options,
     noExtensions: true,
-    extensionFactories: [anthropicMessagesBridge, ...(options.extensionFactories ?? [])],
+    extensionFactories: [...(options.extensionFactories ?? [])],
   };
 }
 

@@ -9,6 +9,8 @@
  */
 import { FastifyInstance } from 'fastify';
 import { buildModelCatalog } from './pi.js';
+import { loadConfig } from '../config.js';
+import type { ClaudeEngineConfig } from '../engines/claude/auth.js';
 
 interface AuthProvider {
   id: string;
@@ -17,8 +19,13 @@ interface AuthProvider {
 
 const OAUTH_PROVIDERS = new Set(['anthropic', 'openai-codex', 'github-copilot']);
 
-export async function registerAuthRoutes(fastify: FastifyInstance) {
+export interface RegisterAuthRoutesOptions {
+  config?: () => ClaudeEngineConfig;
+}
+
+export async function registerAuthRoutes(fastify: FastifyInstance, options: RegisterAuthRoutesOptions = {}) {
   const auth = fastify.pi.auth;
+  const config = options.config ?? (() => loadConfig().engines.claude);
 
   fastify.get('/api/auth/has-credentials', async () => {
     const ids = (await auth.listCredentials()).map((credential) => credential.providerId);
@@ -57,6 +64,22 @@ export async function registerAuthRoutes(fastify: FastifyInstance) {
     if (!body?.provider || !OAUTH_PROVIDERS.has(body.provider)) {
       reply.code(400);
       return { ok: false, reason: 'unsupported_provider' };
+    }
+    // Anthropic through Pi's OAuth bridge is the non-compliant path this
+    // engine replaces: while the Claude engine is enabled, subscription login
+    // through Pi is refused outright — regardless of whether a credential is
+    // already stored — so a new one can never be created either.
+    if (body.provider === 'anthropic') {
+      let cfg: ClaudeEngineConfig | undefined;
+      try {
+        cfg = config();
+      } catch {
+        cfg = undefined;
+      }
+      if (cfg?.enabled === true) {
+        reply.code(400);
+        return { ok: false, reason: 'claude_engine_owns_anthropic' };
+      }
     }
     const flow = fastify.oauthFlows.start(body.provider);
     return { ok: true, flowId: flow.id };

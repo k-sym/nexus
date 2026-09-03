@@ -438,15 +438,17 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     // claim is taken (and before a confirm-cancel aborts someone else's run).
     const previousModelKey = (thread as { last_model_key?: string | null }).last_model_key;
     if (previousModelKey) {
-      const previousEngine = engines.resolveModel(previousModelKey)?.engine;
+      // Keyed on the model-key prefix rather than a catalog lookup: a model
+      // that Pi no longer lists (e.g. an Anthropic OAuth model hidden once the
+      // Claude engine takes over) must still be recognized as "the pi engine"
+      // for a thread that used it before, or the guard would silently skip.
+      const previousEngineId = previousModelKey.startsWith('claude-code/') ? 'claude-code' : 'pi';
       const requestedEngine = engines.resolveModel(modelKey)?.engine;
-      // A `last_model_key` that no longer resolves (uninstalled provider) is
-      // not evidence of anything, so the guard skips it.
-      if (previousEngine && requestedEngine && previousEngine.id !== requestedEngine.id) {
+      if (requestedEngine && previousEngineId !== requestedEngine.id) {
         reply.code(409);
         return {
           kind: 'engine_mismatch',
-          error: `This session was started with the ${previousEngine.id} engine; start a new session to use ${requestedEngine.id}.`,
+          error: `This session was started with the ${previousEngineId} engine; start a new session to use ${requestedEngine.id}.`,
         };
       }
     }
