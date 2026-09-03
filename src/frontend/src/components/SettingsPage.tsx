@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
+import { apiFetch } from '../api-base';
 import { PiAuthSection } from './PiAuthSection';
+import { EnginesSection } from './EnginesSection';
 import { ModelCurationSection } from './ModelCurationSection';
 import { TrustPrivacySection } from './TrustPrivacySection';
 import { AgentBridgeInbox } from './AgentBridgeInbox';
@@ -34,6 +36,21 @@ export default function SettingsPage() {
   // Appearance prefs are local-only (localStorage) and apply instantly, so they
   // live outside the config object and the Save Changes flow.
   const [motion, setMotion] = useState<BackgroundMotion>(getBackgroundMotion);
+  // Whether the Claude Agent SDK engine owns Anthropic subscription login, so
+  // Provider Auth can hand that row over instead of offering a duplicate login.
+  const [claudeEngineEnabled, setClaudeEngineEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch('/api/engines')
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = await res.json();
+        if (!cancelled) setClaudeEngineEnabled(!!data.engines?.[0]?.enabled);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -248,8 +265,12 @@ export default function SettingsPage() {
             }
           />
 
+          <Section title="Engines">
+            <EnginesSection />
+          </Section>
+
           <Section title="Provider Auth">
-            <PiAuthSection />
+            <PiAuthSection claudeEngineEnabled={claudeEngineEnabled} />
           </Section>
 
           <Section title="Assistant">

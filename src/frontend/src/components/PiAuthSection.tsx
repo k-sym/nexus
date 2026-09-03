@@ -66,7 +66,7 @@ function normalizeFlow(data: OAuthFlowResponse): OAuthFlow {
   };
 }
 
-export function PiAuthSection() {
+export function PiAuthSection({ claudeEngineEnabled = false }: { claudeEngineEnabled?: boolean } = {}) {
   const [providers, setProviders] = useState<AuthProvider[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -269,13 +269,17 @@ export function PiAuthSection() {
       {knownProviders.map((p) => {
         const status = providers.find((x) => x.id === p.id);
         const configured = status?.type === 'api_key' || status?.type === 'oauth';
-        const supportsSubscription = subscriptionProviders.has(p.id);
+        const handedOverToClaudeEngine = p.id === 'anthropic' && claudeEngineEnabled;
+        const supportsSubscription = subscriptionProviders.has(p.id) && !handedOverToClaudeEngine;
         return (
           <div key={p.id} className="flex items-center gap-2">
             <span className="text-sm text-zinc-300 w-40">{p.label}</span>
+            {handedOverToClaudeEngine && (
+              <span className="text-xs text-amber-300">Handled by the Claude Code engine</span>
+            )}
             {configured ? (
               <>
-                <span className="text-xs text-green-400">✓ Configured</span>
+                {!handedOverToClaudeEngine && <span className="text-xs text-green-400">✓ Configured</span>}
                 <button
                   onClick={() => logout(p.id)}
                   disabled={saving === p.id}
