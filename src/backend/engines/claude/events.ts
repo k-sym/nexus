@@ -76,23 +76,43 @@ function mapBlocks(content: any[]): AssistantBlock[] {
   return blocks;
 }
 
-/** Two mapped blocks are "the same block" — tool calls by id, everything else by value. */
-function sameBlock(a: AssistantBlock | undefined, b: AssistantBlock): boolean {
-  if (!a || a.type !== b.type) return false;
-  if (a.type === 'toolCall' && b.type === 'toolCall') return a.id === b.id;
-  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+/**
+ * True when `incoming` is the same block as `existing`, re-sent by a frame that
+ * repeats accumulated content — identical, or grown by more streamed text. A
+ * repeat can only ever extend a block, never rewrite it, so anything else is a
+ * genuinely new block that happens to share a type.
+ */
+function repeatsBlock(existing: AssistantBlock, incoming: AssistantBlock): boolean {
+  if (existing.type !== incoming.type) return false;
+  if (existing.type === 'text' && incoming.type === 'text') return incoming.text.startsWith(existing.text);
+  if (existing.type === 'thinking' && incoming.type === 'thinking') return incoming.thinking.startsWith(existing.thinking);
+  return false;
 }
 
 /**
  * Merge one frame's blocks into the buffer. Frames normally carry exactly one
- * new block, so the default is to append; a producer that repeats the full
- * accumulated content instead is tolerated by skipping any block already held
- * at the same position.
+ * new block, so the default is to append. A producer that repeats the full
+ * accumulated content instead is tolerated:
+ *   - a tool call whose id is already buffered *anywhere* is dropped (ids are
+ *     unique per response, and a repeat must not add a second copy or a second
+ *     `tool_execution_start`);
+ *   - a text/thinking block that repeats the one already at the same position
+ *     replaces it, so the longer version wins.
+ * Two adjacent blocks of one type are still kept apart, because a new block
+ * does not extend the previous one.
  */
 function mergeBlocks(buffered: AssistantBlock[], incoming: AssistantBlock[]): AssistantBlock[] {
   const merged = buffered.slice();
   incoming.forEach((block, index) => {
-    if (index < buffered.length && sameBlock(buffered[index], block)) return;
+    if (block.type === 'toolCall') {
+      if (!merged.some((held) => held.type === 'toolCall' && held.id === block.id)) merged.push(block);
+      return;
+    }
+    const existing = merged[index];
+    if (existing && repeatsBlock(existing, block)) {
+      merged[index] = block;
+      return;
+    }
     merged.push(block);
   });
   return merged;
@@ -429,21 +449,32 @@ export class SdkEventMapper {
     } else if (pending.stopReason === 'refusal') {
       message.errorMessage = 'The model declined this request (refusal).';
     }
+    // Stop was pressed while these frames were buffered: what arrived is a
+    // truncated turn, not an error — close it the way `abort()` closes a
+    // streamed partial.
+    const aborted = this.aborted;
+    if (aborted) {
+      message.stopReason = 'aborted';
+      delete message.errorMessage;
+    }
     if (!pending.streamed) {
       this.sinks.emit({ type: 'message_start', message });
       this.sinks.emit({ type: 'message_update', message, assistantMessageEvent: { type: 'start', partial: message } });
     }
-    const isError = message.stopReason === 'error';
+    const isError = !aborted && message.stopReason === 'error';
     this.sinks.emit({
       type: 'message_update',
       message,
-      assistantMessageEvent: isError
-        ? { type: 'error', reason: 'error', error: message }
-        : { type: 'done', reason: message.stopReason as 'stop' | 'length' | 'toolUse', message },
+      assistantMessageEvent: aborted
+        ? { type: 'error', reason: 'aborted', error: message }
+        : isError
+          ? { type: 'error', reason: 'error', error: message }
+          : { type: 'done', reason: message.stopReason as 'stop' | 'length' | 'toolUse', message },
     });
     this.sinks.emit({ type: 'message_end', message });
     this.sinks.persist(message);
-    for (const block of message.content) {
+    // An aborted turn never ran its tool calls, so it announces none.
+    for (const block of aborted ? [] : message.content) {
       if (block.type !== 'toolCall') continue;
       this.toolNames.set(block.id, block.name);
       this.sinks.emit({ type: 'tool_execution_start', toolCallId: block.id, toolName: block.name, args: block.arguments });

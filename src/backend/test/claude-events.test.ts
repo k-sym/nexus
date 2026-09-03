@@ -292,3 +292,55 @@ test('markAborting() keeps the SDK\'s terminating error result from becoming an 
   assert.deepEqual(h.persisted, []);
   assert.deepEqual(h.mapper.finish(), { ok: false, error: 'error_during_execution' });
 });
+
+const namedBlockFrame = (id: string, content: any[]) => ({
+  type: 'assistant', parent_tool_use_id: null, ...base,
+  message: {
+    id, type: 'message', role: 'assistant', model: 'claude-opus-5', content,
+    stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 2 },
+  },
+});
+
+test('a frame that repeats the accumulated content adds nothing twice', () => {
+  const h = harness();
+  h.mapper.handle(namedBlockFrame('msg-acc', [{ type: 'text', text: 'Hello' }]) as any);
+  h.mapper.handle(namedBlockFrame('msg-acc', [{ type: 'text', text: 'Hello' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }]) as any);
+  h.mapper.handle(namedBlockFrame('msg-acc', [{ type: 'text', text: 'Hello' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }]) as any);
+  h.mapper.handle(toolResultFrame('t1', 'a.ts') as any);
+
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1);
+  assert.deepEqual(ends[0].message.content.map((b: any) => b.type), ['text', 'toolCall']);
+  assert.equal(ends[0].message.content[0].text, 'Hello');
+  assert.equal(ends[0].message.content[1].id, 't1');
+  assert.equal(h.events.filter((e) => e.type === 'tool_execution_start').length, 1);
+});
+
+test('a repeated block that grew replaces the shorter one instead of appending', () => {
+  const h = harness();
+  h.mapper.handle(namedBlockFrame('msg-grow', [{ type: 'text', text: 'Hel' }]) as any);
+  h.mapper.handle(namedBlockFrame('msg-grow', [{ type: 'text', text: 'Hello' }, { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }]) as any);
+  h.mapper.handle(toolResultFrame('t1', 'a.ts') as any);
+
+  const end = h.events.filter((e) => e.type === 'message_end').at(-1);
+  assert.deepEqual(end.message.content.map((b: any) => b.type), ['text', 'toolCall']);
+  assert.equal(end.message.content[0].text, 'Hello');
+  assert.equal(end.message.content[1].id, 't1');
+});
+
+test('a buffered response flushed after markAborting() is persisted as aborted', () => {
+  const h = harness();
+  h.mapper.handle(blockFrame([{ type: 'text', text: 'Half a thought' }]) as any);
+  h.mapper.handle(blockFrame([{ type: 'tool_use', id: 'toolu_3', name: 'Bash', input: { command: 'ls' } }]) as any);
+  h.mapper.markAborting();
+  h.mapper.handle({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], stop_reason: null, ...base } as any);
+
+  assert.equal(h.persisted.length, 1);
+  assert.equal(h.persisted[0].stopReason, 'aborted');
+  assert.equal(h.persisted[0].errorMessage, undefined);
+  assert.equal(h.persisted[0].content.length, 2);
+  const err = h.events.find((e) => e.type === 'message_update' && e.assistantMessageEvent.type === 'error');
+  assert.equal(err.assistantMessageEvent.reason, 'aborted');
+  // The turn never ran them, so an aborted flush announces no tool executions.
+  assert.equal(h.events.filter((e) => e.type === 'tool_execution_start').length, 0);
+});

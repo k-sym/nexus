@@ -49,8 +49,13 @@ test('Claude engine runs a tool through the Nexus policy and persists one entry 
     const toolResults = messages.filter((m: any) => m.role === 'toolResult');
     const ends = events.filter((e) => e.type === 'message_end');
     // The regression this guards: per-content-block `assistant` frames used to
-    // persist one entry per block, so a think→text→tool turn wrote three.
-    assert.equal(assistants.length, ends.length, 'one persisted assistant entry per message_end');
+    // persist one entry per block, so a think→text→tool turn wrote three
+    // single-block entries. A merged entry carries the tool call *together
+    // with* the prose or thinking that introduced it.
+    const merged = assistants.filter((m: any) =>
+      m.content.some((b: any) => b.type === 'toolCall')
+      && m.content.some((b: any) => b.type === 'text' || b.type === 'thinking'));
+    assert.ok(merged.length >= 1, 'a persisted assistant entry holds a tool call beside its text/thinking');
     assert.ok(toolResults.length >= 1, 'at least one tool result persisted');
     assert.ok(events.some((e) => e.type === 'tool_execution_start'), 'the tool call was announced');
     assert.match(ends.at(-1).message.content.map((b: any) => b.text ?? '').join(''), /nexus-live/);
