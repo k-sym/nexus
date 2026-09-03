@@ -761,6 +761,22 @@ engines:
 
 **Anthropic cutover.** While the Claude engine is enabled (the default), Pi's own Anthropic **subscription** login is refused (`POST /api/auth/start-oauth` for `anthropic` returns `400 { ok: false, reason: 'claude_engine_owns_anthropic' }`) and any models under a stored Pi Anthropic **OAuth** credential are hidden from the catalog and from `POST /api/models/active` — that endpoint resolves through the engine registry, so a hidden model comes back `{ ok: false, reason: 'model_not_found' }` just like a nonexistent one. The credential itself is left in `~/.nexus/auth.json`; remove it under **Settings → Provider Auth** if you no longer need it. Anthropic reached through an **API key** in Pi is unaffected either way — it keeps working, keeps its Pi tool-name bridge (`@blackbelt-technology/pi-anthropic-messages`, which canonicalizes Pi's lowercase tool names for every `anthropic-messages` session), and shows a normal "✓ Configured" row rather than being handed over. The Settings **Engines** section shows each engine's auth source — a token from `CLAUDE_CODE_OAUTH_TOKEN`, this machine's `claude` login, or API-key mode — without exposing the token itself.
 
+**Setting sources, skills and context files.** Claude Code sessions can optionally load your own Claude Code configuration instead of running fully isolated:
+
+```yaml
+engines:
+  claude:
+    setting_sources: []     # e.g. [user, project]
+    skills: all             # or none, or [pdf, docx]
+```
+
+- `setting_sources` (default `[]`, isolated) is a subset of `user` / `project` / `local`, matching the Claude Agent SDK's own `settingSources`: `user` loads your global `~/.claude` — skills, plugins, hooks and settings; `project` loads the repo's `.claude/*` and its `CLAUDE.md`; `local` loads `.claude/settings.local.json`. Unknown values are dropped rather than passed to the SDK.
+- `skills` (default `'all'`) controls which of the loaded skills are available to the model: `all`, `none`, or an explicit list of skill names.
+- **Context files.** Claude sessions always receive the project's `AGENTS.md` in the system prompt, the same way Pi sessions already do. `CLAUDE.md` is included too, *unless* `project` is one of the `setting_sources` — in that case the SDK loads `CLAUDE.md` itself and Nexus skips it to avoid sending it twice. Pi sessions are unaffected; they already load both files directly.
+- **Measured on the laptop (2026-09-03, SDK 0.3.258):** `setting_sources: []` → 20 bundled skills, 0 plugins, 31 tools. `setting_sources: [user]` → 68 skills (the `~/.claude/skills` set synced by skillshare), 6 plugins (codex, gitkraken-hooks, swift-lsp, ui-ux-pro-max, atlassian, superpowers), 130 tools (from plugin MCP servers), plus whatever hooks live in `~/.claude/settings.json`. Turning on `user` means a noticeably larger system prompt and more tools to enumerate, so expect a slower turn start.
+- **Nexus policy still wins.** Loading `user`/`project`/`local` can bring in `permissions.allow` rules from your own Claude Code settings, but they don't bypass Nexus: the existing `PreToolUse` hook still returns `ask` for every tool call, so it still reaches `canUseTool` and Supervise/read-category rules apply exactly as they do today.
+- The Settings **Engines** section shows the effective values in words: `Settings loaded: none (isolated)` or a comma-joined list like `Settings loaded: user, project`, and `Skills: all` / `Skills: none` / `Skills: 3 listed`.
+
 ### Orchestrator
 
 There is no longer a headless dispatch loop. The orchestrator module was removed when task work moved into interactive chat threads (the backend's `index.ts` notes: *"the old headless orchestrator dispatch loop has been removed"*).

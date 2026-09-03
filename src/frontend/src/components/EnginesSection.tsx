@@ -5,6 +5,7 @@ interface EngineStatus {
   id: string; enabled: boolean; auth: 'subscription' | 'api_key';
   tokenConfigured: boolean; authSource: 'token' | 'login' | 'api_key';
   executablePath: string | null; modelCount: number;
+  settingSources: string[]; skills: 'all' | 'none' | string[];
 }
 interface EnginesResponse { engines: EngineStatus[]; piAnthropicOAuthHidden: boolean }
 
@@ -30,6 +31,14 @@ export function EnginesSection() {
   if (!data) return <div className="text-xs text-zinc-500">Loading engine status…</div>;
   const claude = data.engines.find((e) => e.id === 'claude-code');
   if (!claude) return null;
+  const settingsLoadedText = claude.settingSources.length === 0
+    ? 'Settings loaded: none (isolated)'
+    : `Settings loaded: ${claude.settingSources.join(', ')}`;
+  const skillsText = claude.skills === 'all'
+    ? 'Skills: all'
+    : claude.skills === 'none'
+      ? 'Skills: none'
+      : `Skills: ${claude.skills.length} listed`;
   return (
     <div className="space-y-2 text-xs text-zinc-300">
       <div className="flex items-center gap-2">
@@ -38,6 +47,8 @@ export function EnginesSection() {
         <span className="text-zinc-500">· {claude.modelCount} models as claude-code/*</span>
       </div>
       <p className="text-zinc-400">{AUTH_TEXT[claude.authSource]}</p>
+      <p className="text-zinc-500">{settingsLoadedText}</p>
+      <p className="text-zinc-500">{skillsText}</p>
       {claude.executablePath && <p className="text-zinc-500">Executable: <span className="font-mono">{claude.executablePath}</span></p>}
       {data.piAnthropicOAuthHidden && (
         <p className="text-amber-300/90">Anthropic subscription models via Pi are hidden while this engine is on. Remove the Pi Anthropic login under Provider Auth to tidy up; an Anthropic API key is unaffected.</p>
