@@ -10,6 +10,7 @@ function harness() {
   const sinks: MapperSinks = {
     provider: 'claude-code',
     model: 'claude-opus-5',
+    contextWindow: 1_000_000,
     emit: (ev) => { events.push(ev); },
     persist: (m) => { persisted.push(m); },
     detailsFor: (id) => (id === 'toolu_q' ? { status: 'answered' } : undefined),
@@ -203,6 +204,30 @@ test('context usage from the assistant message is forwarded in Pi shape', () => 
     context_usage: { model: 'claude-opus-5', total_tokens: 12_000, raw_max_tokens: 1_000_000, percentage: 1.2, categories: [], mcp_tools: [] },
   }) as any);
   assert.deepEqual(h.usage, [{ tokens: 12_000, contextWindow: 1_000_000, percent: 1.2 }]);
+});
+
+test('a successful result derives context usage from the last assistant usage and the result modelUsage window', () => {
+  const h = harness();
+  h.mapper.handle({
+    type: 'assistant', parent_tool_use_id: null, ...base,
+    message: { id: 'msg', type: 'message', role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn', stop_sequence: null,
+      usage: { input_tokens: 150_000, output_tokens: 5, cache_read_input_tokens: 3, cache_creation_input_tokens: 1 } },
+  } as any);
+  h.mapper.handle({
+    type: 'result', subtype: 'success', is_error: false, result: 'ok', num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0,
+    usage: {}, modelUsage: { 'claude-opus-5': { contextWindow: 200_000 } }, permission_denials: [], stop_reason: 'end_turn', ...base,
+  } as any);
+  assert.deepEqual(h.usage.at(-1), { tokens: 150_009, contextWindow: 200_000, percent: 75 });
+});
+
+test('a result with no modelUsage and no prior assistant falls back to the result usage and the sink context window', () => {
+  const h = harness();
+  h.mapper.handle({
+    type: 'result', subtype: 'success', is_error: false, result: 'ok', num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0,
+    usage: { input_tokens: 40, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    modelUsage: {}, permission_denials: [], stop_reason: 'end_turn', ...base,
+  } as any);
+  assert.deepEqual(h.usage.at(-1), { tokens: 50, contextWindow: 1_000_000, percent: 0 });
 });
 
 // --- Per-content-block assistant frames -------------------------------------

@@ -30,6 +30,8 @@ import { toDisplayToolName } from './tool-names.js';
 export interface MapperSinks {
   provider: string;
   model: string;
+  /** The catalog model's context window; used when the SDK's `result` carries no usable window of its own. */
+  contextWindow: number;
   emit(event: EngineSessionEvent): void;
   persist(message: AssistantMessage | ToolResultMessage): void;
   /** Structured details a bridged Nexus tool produced for this tool call (Task 8 side channel). */
@@ -150,6 +152,7 @@ export class SdkEventMapper {
   private retrying: number | null = null;
   private compacting = false;
   private lastAssistantErrored = false;
+  private lastAssistantUsage: Usage | null = null;
   private aborted = false;
   private resultError: string | undefined;
   private resultOk = true;
@@ -473,6 +476,7 @@ export class SdkEventMapper {
     });
     this.sinks.emit({ type: 'message_end', message });
     this.sinks.persist(message);
+    this.lastAssistantUsage = message.usage;
     // An aborted turn never ran its tool calls, so it announces none.
     for (const block of aborted ? [] : message.content) {
       if (block.type !== 'toolCall') continue;
@@ -529,6 +533,7 @@ export class SdkEventMapper {
       this.retrying = null;
     }
     if (this.compacting) this.endCompaction('threshold', 'Turn ended during compaction');
+    this.emitContextUsageFromResult(msg);
     const failed = msg.is_error === true || msg.subtype !== 'success';
     if (!failed) return;
     this.resultOk = false;
@@ -536,6 +541,40 @@ export class SdkEventMapper {
     if (this.aborted || this.lastAssistantErrored) return; // already reported (aborted, or the assistant message told the story)
     const detail = typeof msg.result === 'string' && msg.result.trim() ? `: ${msg.result.trim()}` : '';
     this.emitErrorMessage(`${msg.subtype}${detail}`);
+  }
+
+  /**
+   * The SDK never populates `assistant.context_usage` for us (that field only
+   * comes from a control request Nexus doesn't make); derive the same shape
+   * from the last assistant message's token usage against the model's context
+   * window, the way Pi does. Mirrors the SDK-provided `context_usage` path in
+   * `flushAssistant`, which still wins if it ever fires.
+   */
+  private emitContextUsageFromResult(msg: any): void {
+    const modelUsage = msg.modelUsage ?? {};
+    const entries = Object.entries(modelUsage) as Array<[string, any]>;
+    const isPositiveWindow = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0;
+    const own = entries.find(([id]) => id === this.sinks.model);
+    const anyPositive = entries.find(([, usage]) => isPositiveWindow(usage?.contextWindow));
+    const chosen = own && isPositiveWindow(own[1]?.contextWindow) ? own : anyPositive;
+    const contextWindow = chosen ? chosen[1].contextWindow : this.sinks.contextWindow;
+
+    const fromLastAssistant = this.lastAssistantUsage
+      ? this.lastAssistantUsage.input + this.lastAssistantUsage.cacheRead + this.lastAssistantUsage.cacheWrite + this.lastAssistantUsage.output
+      : 0;
+    let tokens: number | null;
+    if (fromLastAssistant > 0) {
+      tokens = fromLastAssistant;
+    } else {
+      const u = msg.usage ?? {};
+      const fromResult = Number(u.input_tokens ?? 0) + Number(u.cache_read_input_tokens ?? 0) + Number(u.cache_creation_input_tokens ?? 0) + Number(u.output_tokens ?? 0);
+      tokens = fromResult > 0 ? fromResult : null;
+    }
+    this.sinks.onContextUsage({
+      tokens,
+      contextWindow,
+      percent: tokens === null ? null : Math.round((tokens / contextWindow) * 1000) / 10,
+    } as ContextUsage);
   }
 
   private emitErrorMessage(errorMessage: string): void {

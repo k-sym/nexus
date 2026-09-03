@@ -71,6 +71,22 @@ test('prompt persists the user turn, streams events, persists the reply and reco
   }
 });
 
+test('getContextUsage() reflects the context window reported in the result', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    const { queryFn } = fakeQuery(() => [
+      init,
+      { type: 'assistant', parent_tool_use_id: null, ...base, message: { role: 'assistant', model: 'claude-opus-5', content: [{ type: 'text', text: 'Hello' }], stop_reason: 'end_turn', usage: { input_tokens: 100, output_tokens: 5 } } },
+      { type: 'result', subtype: 'success', is_error: false, result: 'Hello', num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: {}, modelUsage: { 'claude-opus-5': { contextWindow: 200_000 } }, permission_denials: [], stop_reason: 'end_turn', ...base },
+    ]);
+    const { session } = makeSession(dir, queryFn);
+    await session.prompt('hi');
+    assert.deepEqual(session.getContextUsage(), { tokens: 105, contextWindow: 200_000, percent: 0.1 });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('the second turn resumes the recorded SDK session and applies model + thinking changes', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
   try {

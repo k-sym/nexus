@@ -190,6 +190,7 @@ export class ClaudeEngineSession implements EngineSession {
     const mapper = new SdkEventMapper({
       provider: CLAUDE_CODE_PROVIDER,
       model: this.model.id,
+      contextWindow: this.model.contextWindow ?? 200_000,
       emit: (event) => this.emit(event),
       persist: (message) => { this.sessionManager.appendMessage(message as any); },
       detailsFor: (toolCallId) => this.detailsByToolCall.get(toolCallId),
@@ -298,7 +299,8 @@ export class ClaudeEngineSession implements EngineSession {
   private recordSessionId(sessionId: string, source: string): void {
     if (!this.loggedAuthSource) {
       this.loggedAuthSource = true;
-      this.deps.log?.(`[claude-engine ${this.deps.threadId}] auth source: ${source}`);
+      const label = source === 'none' ? 'none (no API key; using the claude login)' : source;
+      this.deps.log?.(`[claude-engine ${this.deps.threadId}] auth source: ${label}`);
     }
     if (sessionId === this.sdkSessionId) return;
     this.sdkSessionId = sessionId;
