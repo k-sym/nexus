@@ -173,6 +173,16 @@ test('abort then a failed result does not double-report', () => {
   assert.equal(h.persisted.length, 1);
 });
 
+test('a failed result then fail() does not double-report', () => {
+  const h = harness();
+  h.mapper.handle({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], stop_reason: null, ...base } as any);
+  h.mapper.fail('x');
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1);
+  assert.equal(h.persisted.length, 1);
+  assert.deepEqual(h.mapper.finish(), { ok: false, error: 'x' });
+});
+
 test('context usage from the assistant message is forwarded in Pi shape', () => {
   const h = harness();
   h.mapper.handle(assistant([{ type: 'text', text: 'x' }], 'end_turn', {
