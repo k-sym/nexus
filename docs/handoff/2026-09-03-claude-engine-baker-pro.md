@@ -71,7 +71,7 @@ Work through in order. Stop and report if any step fails in a way you cannot exp
    ```bash
    cd src/backend && NEXUS_LIVE_CLAUDE=1 npx tsx --test test/live/claude-engine.test.ts
    ```
-   Expect 2/2 passing and a log line `[claude-engine …] auth source: <source>` where source is an OAuth/login source, **not** `ANTHROPIC_API_KEY` or `none`. Interpret failures with §5.
+   Expect 2/2 passing and a log line `[claude-engine …] auth source: none (no API key; using the claude login)` — the SDK reports `apiKeySource: 'none'` both for a keychain login and for `CLAUDE_CODE_OAUTH_TOKEN`; only `ANTHROPIC_API_KEY` would be wrong. **Done on baker-pro 2026-09-03: 2/2 pass** — but only after `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) was added to `~/Projects/nexus/.env`: the keychain login is unreadable from ssh and unsafe for a LaunchAgent using a different `claude` binary, so the token is the required setup on this host. Interpret failures with §5.
 
 4. **Deploy the backend** (`npm run build` done above) → `launchctl kickstart -k gui/$(id -u)/<nexus-backend label>` → wait ~30 s → `curl -s localhost:4173/api/models | jq '.allModels[] | select(.provider=="claude-code") | {id, configured}'` should list the five Claude models with `configured: true`.
 
