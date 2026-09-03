@@ -65,6 +65,24 @@ export function readStoredSessionId(sessionManager: Pick<SessionManager, 'getEnt
   return undefined;
 }
 
+/**
+ * Records the `(tool_name, tool_use_id, input)` triple the in-process MCP
+ * bridge needs to claim its Claude tool-call id, and — crucially — answers
+ * `ask` so that *every* tool call reaches `canUseTool`.
+ *
+ * Without the `ask`, `permissionMode: 'default'` lets the CLI auto-allow its
+ * read-only built-ins (`Read`/`Grep`/`Glob`/`LS`) without consulting the
+ * client, which would silently bypass Supervise and any `deny`/`confirm` rule
+ * Nexus has for the read category.
+ */
+export function preToolUseHook(correlator: ToolUseCorrelator): HookCallback {
+  return async (input) => {
+    if (input.hook_event_name !== 'PreToolUse') return {};
+    correlator.remember(input.tool_name, input.tool_use_id, input.tool_input);
+    return { hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'ask' } };
+  };
+}
+
 async function* single(message: SDKUserMessage): AsyncIterable<SDKUserMessage> {
   yield message;
 }
@@ -87,6 +105,14 @@ function buildPrompt(text: string, images: ImageContent[]): string | AsyncIterab
   });
 }
 
+/** The turn in flight: `abort()` reaches the mapper and the query through it. */
+interface ActiveTurn {
+  controller: AbortController;
+  query: Query | undefined;
+  aborting: boolean;
+  mapper: SdkEventMapper;
+}
+
 export class ClaudeEngineSession implements EngineSession {
   readonly sessionManager: SessionManager;
   private readonly listeners = new Set<AgentSessionEventListener>();
@@ -94,7 +120,7 @@ export class ClaudeEngineSession implements EngineSession {
   private model: EngineModel;
   private thinkingLevel: ThinkingLevel | undefined;
   private sdkSessionId: string | undefined;
-  private active: { controller: AbortController; query: Query | undefined; aborting: boolean } | null = null;
+  private active: ActiveTurn | null = null;
   private lastContextUsage: ContextUsage | undefined;
   private readonly detailsByToolCall = new Map<string, unknown>();
   private loggedAuthSource = false;
@@ -135,6 +161,10 @@ export class ClaudeEngineSession implements EngineSession {
     const active = this.active;
     if (!active) return;
     active.aborting = true;
+    // Tell the mapper first: the CLI answers `interrupt()` with a terminating
+    // `result` (`error_during_execution`) that arrives inside the loop below,
+    // and without this it would be rendered as a spurious error bubble.
+    active.mapper.markAborting();
     // Arm the hard-abort fallback *before* awaiting `interrupt()`: SDK control
     // requests have no timeout of their own, so if the CLI never answers, this
     // timer is the only thing that still cancels the turn.
@@ -173,10 +203,6 @@ export class ClaudeEngineSession implements EngineSession {
       onUpdate: (toolCallId, toolName, partial) => this.emit({ type: 'tool_execution_update', toolCallId, toolName, args: {}, partialResult: partial }),
       onDetails: (toolCallId, details) => { this.detailsByToolCall.set(toolCallId, details); },
     });
-    const rememberToolUse: HookCallback = async (input) => {
-      if (input.hook_event_name === 'PreToolUse') correlator.remember(input.tool_name, input.tool_use_id, input.tool_input);
-      return {};
-    };
     const appendix = this.deps.systemPromptAppendix;
     const queryOptions: Options = {
       cwd: this.deps.cwd,
@@ -192,16 +218,14 @@ export class ClaudeEngineSession implements EngineSession {
       disallowedTools: ['AskUserQuestion'],
       mcpServers: { [NEXUS_MCP_SERVER]: mcp },
       canUseTool: this.gate(controller.signal),
-      hooks: { PreToolUse: [{ hooks: [rememberToolUse] }] },
+      hooks: { PreToolUse: [{ hooks: [preToolUseHook(correlator)] }] },
       abortController: controller,
       env: this.deps.env,
       ...(this.deps.executablePath ? { pathToClaudeCodeExecutable: this.deps.executablePath } : {}),
       stderr: (data) => this.deps.log?.(`[claude-engine ${this.deps.threadId}] ${data.trimEnd()}`),
     };
 
-    const active: { controller: AbortController; query: Query | undefined; aborting: boolean } = {
-      controller, query: undefined, aborting: false,
-    };
+    const active: ActiveTurn = { controller, query: undefined, aborting: false, mapper };
     this.active = active;
     try {
       // Inside the try: a synchronous throw from `query()` (bad options, spawn
@@ -239,7 +263,9 @@ export class ClaudeEngineSession implements EngineSession {
         toolName: toPolicyToolName(toolName),
         toolCallId: opts.toolUseID,
         input,
-        signal: opts.signal ?? turnSignal,
+        // Both: the SDK's per-call signal frees the gate when Claude drops the
+        // call, and the turn signal frees it when Stop hard-kills the turn.
+        signal: opts.signal ? AbortSignal.any([opts.signal, turnSignal]) : turnSignal,
         broker: this.deps.approvals,
         policy: this.deps.policy,
         audit: this.deps.audit,

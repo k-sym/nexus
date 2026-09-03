@@ -4,10 +4,14 @@
  * sinks, so the mapping is testable with fixtures.
  *
  * Streaming: the SDK's `stream_event` messages (`includePartialMessages`) give
- * the deltas; the following `assistant` message is authoritative and is what
- * gets persisted. Tool results arrive as `user` messages carrying
- * `tool_result` blocks. Subagent traffic (`parent_tool_use_id` set) is ignored
- * — only the main thread is rendered, as Pi has no subagents either.
+ * the deltas; the `assistant` messages are authoritative and are what gets
+ * persisted. While a response streams the CLI emits *one `assistant` message
+ * per completed content block* — consecutive frames share `message.id`, each
+ * carries only its own block, `stop_reason` is null and `usage` is not final —
+ * so frames are buffered per `message.id` and flushed once as a single Pi
+ * message (see `flushAssistant`). Tool results arrive as `user` messages
+ * carrying `tool_result` blocks. Subagent traffic (`parent_tool_use_id` set)
+ * is ignored — only the main thread is rendered, as Pi has no subagents either.
  */
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ContextUsage } from '@earendil-works/pi-coding-agent';
@@ -72,14 +76,55 @@ function mapBlocks(content: any[]): AssistantBlock[] {
   return blocks;
 }
 
+/** Two mapped blocks are "the same block" — tool calls by id, everything else by value. */
+function sameBlock(a: AssistantBlock | undefined, b: AssistantBlock): boolean {
+  if (!a || a.type !== b.type) return false;
+  if (a.type === 'toolCall' && b.type === 'toolCall') return a.id === b.id;
+  try { return JSON.stringify(a) === JSON.stringify(b); } catch { return false; }
+}
+
+/**
+ * Merge one frame's blocks into the buffer. Frames normally carry exactly one
+ * new block, so the default is to append; a producer that repeats the full
+ * accumulated content instead is tolerated by skipping any block already held
+ * at the same position.
+ */
+function mergeBlocks(buffered: AssistantBlock[], incoming: AssistantBlock[]): AssistantBlock[] {
+  const merged = buffered.slice();
+  incoming.forEach((block, index) => {
+    if (index < buffered.length && sameBlock(buffered[index], block)) return;
+    merged.push(block);
+  });
+  return merged;
+}
+
 function extractText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content.map((b: any) => (b?.type === 'text' ? b.text ?? '' : '')).join('');
 }
 
+/** One response's `assistant` frames, buffered until the turn moves on. */
+interface PendingAssistant {
+  /** `message.id`; frames of one response share it. */
+  id: string | undefined;
+  blocks: AssistantBlock[];
+  usage: Usage;
+  /** Raw SDK stop reason; null until a frame carries one. */
+  stopReason: string | null;
+  model: string | undefined;
+  timestamp: number;
+  /** A streamed partial already emitted `message_start` for this response. */
+  streamed: boolean;
+  error?: unknown;
+  errorText?: string;
+  contextUsage?: any;
+}
+
+/** One instance per `query()`: it holds that turn's streaming and buffering state. */
 export class SdkEventMapper {
   private partial: AssistantMessage | null = null;
+  private pendingAssistant: PendingAssistant | null = null;
   private readonly jsonBuffers = new Map<number, string>();
   private readonly toolNames = new Map<string, string>();
   private retrying: number | null = null;
@@ -125,9 +170,12 @@ export class SdkEventMapper {
         return;
       case 'user':
         if ((msg as any).parent_tool_use_id) return;
+        // The turn moved on: close the buffered response before its results.
+        this.flushAssistant();
         this.handleUser(msg as any);
         return;
       case 'result':
+        this.flushAssistant();
         this.handleResult(msg as any);
         return;
       default:
@@ -138,6 +186,10 @@ export class SdkEventMapper {
   /** The turn was aborted: close any half-streamed message as `aborted`. Not an error — no `errorMessage`. */
   abort(): void {
     this.aborted = true;
+    // The streamed partial holds everything the buffered frames do (the SDK is
+    // always run with `includePartialMessages`), so the buffer is dropped
+    // rather than flushed — flushing it would double-report the same content.
+    this.pendingAssistant = null;
     if (!this.partial) return;
     const message: AssistantMessage = { ...this.partial, content: this.partial.content.filter(Boolean), stopReason: 'aborted' };
     this.sinks.emit({ type: 'message_update', message, assistantMessageEvent: { type: 'error', reason: 'aborted', error: message } });
@@ -151,6 +203,7 @@ export class SdkEventMapper {
   fail(message: string): void {
     this.resultOk = false;
     this.resultError = message;
+    this.pendingAssistant = null;
     if (!this.partial && this.lastAssistantErrored) return;
     if (this.partial) {
       const partial = this.partial;
@@ -164,6 +217,16 @@ export class SdkEventMapper {
       return;
     }
     this.emitErrorMessage(message);
+  }
+
+  /**
+   * Stop was pressed. The SDK answers `interrupt()` with a terminating `result`
+   * (`error_during_execution`) that arrives while the loop is still draining;
+   * marking the abort here keeps `handleResult` from turning it into a spurious
+   * error bubble. Nothing else changes — `abort()` still closes the partial.
+   */
+  markAborting(): void {
+    this.aborted = true;
   }
 
   finish(): { ok: boolean; error?: string } {
@@ -238,6 +301,9 @@ export class SdkEventMapper {
   private handleStreamEvent(event: any): void {
     switch (event?.type) {
       case 'message_start':
+        // A new response starts: whatever frames are still buffered belong to
+        // the previous one.
+        this.flushAssistant();
         this.partial = null;
         this.ensurePartial(event.message?.model);
         return;
@@ -310,23 +376,60 @@ export class SdkEventMapper {
 
   private handleAssistant(msg: any): void {
     const beta = msg.message ?? {};
-    const streamed = this.partial;
-    const message: AssistantMessage = {
-      ...this.newAssistant(beta.model),
-      ...(streamed ? { timestamp: streamed.timestamp } : {}),
-      content: mapBlocks(beta.content),
-      usage: mapUsage(beta.usage),
-      stopReason: mapStopReason(beta.stop_reason),
-      ...(beta.id ? { responseId: beta.id } : {}),
-    };
+    const id: string | undefined = beta.id;
+    if (this.pendingAssistant && this.pendingAssistant.id !== id) this.flushAssistant();
+    if (!this.pendingAssistant) {
+      this.pendingAssistant = {
+        id,
+        blocks: [],
+        usage: zeroUsage(),
+        stopReason: null,
+        model: beta.model,
+        timestamp: this.partial?.timestamp ?? this.now(),
+        streamed: this.partial !== null,
+      };
+    }
+    const pending = this.pendingAssistant;
+    pending.blocks = mergeBlocks(pending.blocks, mapBlocks(beta.content));
+    if (beta.model) pending.model = beta.model;
+    if (beta.usage) pending.usage = mapUsage(beta.usage);
+    if (beta.stop_reason != null) pending.stopReason = beta.stop_reason;
     if (msg.error) {
+      pending.error = msg.error;
+      pending.errorText = extractText(beta.content);
+    }
+    if (msg.context_usage) pending.contextUsage = msg.context_usage;
+    // A frame that carries a stop reason ends the response; otherwise the
+    // buffer waits for the next flush trigger (a `user`/`result` frame, a new
+    // response's `message_start`, or a frame with a different `message.id`).
+    if (pending.stopReason !== null) this.flushAssistant();
+  }
+
+  /**
+   * Close the buffered response: one merged Pi message, announced once,
+   * persisted once, with `tool_execution_start` for each of its tool calls.
+   */
+  private flushAssistant(): void {
+    const pending = this.pendingAssistant;
+    if (!pending) return;
+    this.pendingAssistant = null;
+    // A `message_delta` stop reason is the fallback when no frame carried one.
+    const streamedStopReason = this.partial && this.partial.stopReason !== 'pending' ? this.partial.stopReason : undefined;
+    const message: AssistantMessage = {
+      ...this.newAssistant(pending.model),
+      timestamp: pending.timestamp,
+      content: pending.blocks,
+      usage: pending.usage,
+      stopReason: pending.stopReason !== null ? mapStopReason(pending.stopReason) : streamedStopReason ?? 'stop',
+      ...(pending.id ? { responseId: pending.id } : {}),
+    };
+    if (pending.error !== undefined) {
       message.stopReason = 'error';
-      const text = extractText(beta.content);
-      message.errorMessage = text ? `${msg.error}: ${text}` : String(msg.error);
-    } else if (beta.stop_reason === 'refusal') {
+      message.errorMessage = pending.errorText ? `${pending.error}: ${pending.errorText}` : String(pending.error);
+    } else if (pending.stopReason === 'refusal') {
       message.errorMessage = 'The model declined this request (refusal).';
     }
-    if (!streamed) {
+    if (!pending.streamed) {
       this.sinks.emit({ type: 'message_start', message });
       this.sinks.emit({ type: 'message_update', message, assistantMessageEvent: { type: 'start', partial: message } });
     }
@@ -345,8 +448,8 @@ export class SdkEventMapper {
       this.toolNames.set(block.id, block.name);
       this.sinks.emit({ type: 'tool_execution_start', toolCallId: block.id, toolName: block.name, args: block.arguments });
     }
-    if (msg.context_usage) {
-      const cu = msg.context_usage;
+    if (pending.contextUsage) {
+      const cu = pending.contextUsage;
       this.sinks.onContextUsage({ tokens: cu.total_tokens, contextWindow: cu.raw_max_tokens, percent: cu.percentage } as ContextUsage);
     }
     this.lastAssistantErrored = isError;

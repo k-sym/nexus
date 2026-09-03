@@ -204,3 +204,91 @@ test('context usage from the assistant message is forwarded in Pi shape', () => 
   }) as any);
   assert.deepEqual(h.usage, [{ tokens: 12_000, contextWindow: 1_000_000, percent: 1.2 }]);
 });
+
+// --- Per-content-block assistant frames -------------------------------------
+// While a response streams the CLI emits one `assistant` message per completed
+// content block: consecutive frames share `message.id`, each carries just that
+// block, `stop_reason` is null and `usage` is not final.
+
+const blockFrame = (content: any[], extra: any = {}) => ({
+  type: 'assistant', parent_tool_use_id: null, ...base, ...extra,
+  message: {
+    id: 'msg-multi', type: 'message', role: 'assistant', model: 'claude-opus-5', content,
+    stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 2 },
+  },
+});
+
+const toolResultFrame = (toolUseId: string, text: string) => ({
+  type: 'user', parent_tool_use_id: null, ...base,
+  message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: toolUseId, content: [{ type: 'text', text }], is_error: false }] },
+});
+
+const resultFrame = { type: 'result', subtype: 'success', is_error: false, result: 'ok', num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], stop_reason: 'end_turn', ...base };
+
+test('per-block assistant frames merge into one message, flushed by the tool_result turn', () => {
+  const h = harness();
+  h.mapper.handle(blockFrame([{ type: 'thinking', thinking: 'weighing it', signature: 'sig' }]) as any);
+  h.mapper.handle(blockFrame([{ type: 'text', text: 'Listing the files.' }]) as any);
+  h.mapper.handle(blockFrame([{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } }]) as any);
+  assert.equal(h.events.filter((e) => e.type === 'message_end').length, 0, 'the turn is still open');
+
+  h.mapper.handle(toolResultFrame('toolu_1', 'a.ts') as any);
+
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1, 'exactly one message_end for the whole response');
+  assert.deepEqual(ends[0].message.content.map((b: any) => b.type), ['thinking', 'text', 'toolCall']);
+  assert.equal(ends[0].message.content[0].thinking, 'weighing it');
+  assert.equal(ends[0].message.content[1].text, 'Listing the files.');
+  assert.equal(ends[0].message.content[2].id, 'toolu_1');
+  assert.equal(h.persisted.filter((m) => m.role === 'assistant').length, 1);
+  assert.equal(h.persisted.filter((m) => m.role === 'toolResult').length, 1);
+
+  const starts = h.events.filter((e) => e.type === 'tool_execution_start');
+  assert.equal(starts.length, 1);
+  assert.deepEqual(starts[0].args, { command: 'ls' });
+  assert.ok(
+    h.events.indexOf(starts[0]) < h.events.findIndex((e) => e.type === 'tool_execution_end'),
+    'tool_execution_start precedes tool_execution_end',
+  );
+});
+
+test('per-block assistant frames closed by the result message flush once', () => {
+  const h = harness();
+  h.mapper.handle(blockFrame([{ type: 'thinking', thinking: 'ok' }]) as any);
+  h.mapper.handle(blockFrame([{ type: 'text', text: 'Done.' }]) as any);
+  h.mapper.handle(resultFrame as any);
+
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1);
+  assert.deepEqual(ends[0].message.content.map((b: any) => b.type), ['thinking', 'text']);
+  assert.equal(ends[0].message.stopReason, 'stop');
+  assert.equal(h.persisted.length, 1);
+  assert.deepEqual(h.mapper.finish(), { ok: true });
+});
+
+test('per-block frames inherit the streamed message_delta stop reason', () => {
+  const h = harness();
+  h.mapper.handle(stream({ type: 'message_start', message: { model: 'claude-opus-5', content: [], usage: {} } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Listing' } }) as any);
+  h.mapper.handle(stream({ type: 'content_block_stop', index: 0 }) as any);
+  h.mapper.handle(stream({ type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 9 } }) as any);
+  h.mapper.handle(blockFrame([{ type: 'text', text: 'Listing' }]) as any);
+  h.mapper.handle(blockFrame([{ type: 'tool_use', id: 'toolu_2', name: 'Bash', input: { command: 'ls' } }]) as any);
+  h.mapper.handle(toolResultFrame('toolu_2', 'a.ts') as any);
+
+  const ends = h.events.filter((e) => e.type === 'message_end');
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].message.stopReason, 'toolUse');
+  assert.equal(h.events.filter((e) => e.type === 'message_start').length, 1, 'the streamed start is reused');
+  assert.equal(h.persisted.filter((m) => m.role === 'assistant').length, 1);
+});
+
+test('markAborting() keeps the SDK\'s terminating error result from becoming an error bubble', () => {
+  const h = harness();
+  h.mapper.markAborting();
+  h.mapper.handle({ type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], stop_reason: null, ...base } as any);
+  assert.deepEqual(h.events, []);
+  assert.deepEqual(h.persisted, []);
+  assert.deepEqual(h.mapper.finish(), { ok: false, error: 'error_during_execution' });
+});

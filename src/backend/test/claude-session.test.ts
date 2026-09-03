@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { SessionManager } from '@earendil-works/pi-coding-agent';
 import { ENGINE_SESSION_CUSTOM_TYPE } from '@nexus/shared';
-import { ClaudeEngineSession, readStoredSessionId, type QueryFn } from '../engines/claude/session.js';
+import { ClaudeEngineSession, preToolUseHook, readStoredSessionId, type QueryFn } from '../engines/claude/session.js';
+import { ToolUseCorrelator } from '../engines/claude/tool-use-correlator.js';
 import { findClaudeModel } from '../engines/claude/models.js';
 import { ApprovalBroker } from '../pi/approvals.js';
 import { createToolPolicyResolver } from '../pi/tool-policy.js';
@@ -216,6 +217,80 @@ test('a synchronously throwing queryFn resolves prompt() with an error reply', a
     const assistant = sessionManager.getEntries().find((e: any) => e.type === 'message' && e.message.role === 'assistant') as any;
     assert.equal(assistant.message.stopReason, 'error');
     assert.equal(assistant.message.errorMessage, 'bad options');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('stop does not surface the SDK terminating error result as an error bubble', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    // What the CLI really does after `interrupt()`: it ends the turn with a
+    // failed `result` rather than throwing, and that arrives inside the loop.
+    const { queryFn, onInterrupt } = fakeQuery(() => (async function* () {
+      yield init;
+      await gate;
+      yield { type: 'result', subtype: 'error_during_execution', is_error: true, num_turns: 1, duration_ms: 1, duration_api_ms: 1, total_cost_usd: 0, usage: {}, modelUsage: {}, permission_denials: [], stop_reason: null, ...base };
+    })());
+    onInterrupt(() => release());
+    const { session, sessionManager } = makeSession(dir, queryFn);
+    const events: any[] = [];
+    session.subscribe((ev) => { events.push(ev); });
+    const turn = session.prompt('long');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await session.abort();
+    await turn;
+
+    const assistants = sessionManager.getEntries().filter((e: any) => e.type === 'message' && e.message.role === 'assistant') as any[];
+    assert.equal(assistants.some((e) => e.message.stopReason === 'error'), false, 'no error reply persisted for a user-requested stop');
+    assert.equal(events.some((e) => e.type === 'message_end' && e.message.errorMessage), false, 'no error bubble emitted');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the PreToolUse hook asks Nexus about every tool, including read-only built-ins', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    const { queryFn, calls } = fakeQuery(() => textTurn('ok'));
+    const { session } = makeSession(dir, queryFn);
+    await session.prompt('go');
+    const hook = calls[0].options.hooks.PreToolUse[0].hooks[0];
+    const output = await hook({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'toolu_read', tool_input: { file_path: 'a.ts' } } as any, undefined, {} as any);
+    assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'ask', 'read-only built-ins must still reach canUseTool');
+
+    // Same callback, with a correlator the test can read back.
+    const correlator = new ToolUseCorrelator();
+    const mine = preToolUseHook(correlator);
+    const output2 = await mine({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'toolu_read2', tool_input: { file_path: 'b.ts' } } as any, undefined, {} as any);
+    assert.equal((output2 as any).hookSpecificOutput.permissionDecision, 'ask');
+    assert.equal(correlator.claim('Read', { file_path: 'b.ts' }), 'toolu_read2');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a parked approval is released by the turn hard-abort even when the per-call signal never fires', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    const { queryFn, calls } = fakeQuery(() => textTurn('ok'));
+    const approvals = new ApprovalBroker();
+    const policy = createToolPolicyResolver({ isSupervised: () => true });
+    const { session } = makeSession(dir, queryFn, { approvals, policy });
+    await session.prompt('go');
+    const canUseTool = calls[0].options.canUseTool;
+
+    const neverAborts = new AbortController().signal;
+    const pending = canUseTool('Bash', { command: 'ls' }, { toolUseID: 't9', signal: neverAborts });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(approvals.pendingCount('thread-1'), 1);
+
+    calls[0].options.abortController.abort();
+    assert.equal((await pending).behavior, 'deny');
+    assert.equal(approvals.pendingCount('thread-1'), 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
