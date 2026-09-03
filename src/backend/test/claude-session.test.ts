@@ -302,13 +302,27 @@ test('settingSources and skills from deps flow into the query options', async ()
   }
 });
 
-test('an empty skills list is passed through as-is', async () => {
+test('an empty skills list is passed through as-is and also disables Claude Code\'s bundled skills', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
   try {
     const { queryFn, calls } = fakeQuery(() => textTurn('ok'));
     const { session } = makeSession(dir, queryFn, { settingSources: [], skills: [] });
     await session.prompt('go');
     assert.deepEqual(calls[0].options.skills, []);
+    assert.equal(calls[0].options.settings?.disableBundledSkills, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('skills: all does not disable Claude Code\'s bundled skills', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-'));
+  try {
+    const { queryFn, calls } = fakeQuery(() => textTurn('ok'));
+    const { session } = makeSession(dir, queryFn, { settingSources: [], skills: 'all' });
+    await session.prompt('go');
+    assert.equal(calls[0].options.skills, 'all');
+    assert.equal(calls[0].options.settings, undefined);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

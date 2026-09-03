@@ -37,7 +37,7 @@ export function EnginesSection() {
   const skillsText = claude.skills === 'all'
     ? 'Skills: all'
     : claude.skills === 'none'
-      ? 'Skills: none'
+      ? 'Skills: none (bundled skills disabled)'
       : `Skills: ${claude.skills.length} listed`;
   return (
     <div className="space-y-2 text-xs text-zinc-300">

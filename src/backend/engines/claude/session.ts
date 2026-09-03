@@ -224,6 +224,12 @@ export class ClaudeEngineSession implements EngineSession {
       // below still routes every call through `canUseTool`).
       settingSources: this.deps.settingSources,
       skills: this.deps.skills,
+      // An empty `skills` list (`'none'` normalised by the caller) only hides
+      // skills from the model's listing — the CLI's bundled skills/workflows
+      // still ship by default. `disableBundledSkills` (an Options `settings`
+      // field, equivalent to CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1) removes
+      // them outright, so `skills: 'none'` really means none.
+      ...(Array.isArray(this.deps.skills) && this.deps.skills.length === 0 ? { settings: { disableBundledSkills: true } } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', ...(appendix ? { append: appendix } : {}) },
       // Nexus's `question` tool (via MCP) replaces Claude's built-in so the existing question UI/broker/iOS flow works.
       disallowedTools: ['AskUserQuestion'],

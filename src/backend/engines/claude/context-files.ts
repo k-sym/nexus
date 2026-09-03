@@ -43,6 +43,13 @@ export function formatContextFiles(files: ContextFile[]): string {
 /**
  * Reads the project's context files via Pi's own loader, drops what the SDK
  * will load itself, and formats the rest for the system-prompt appendix.
+ *
+ * `loadProjectContextFiles` reads the first `AGENTS.override.md` / `AGENTS.md`
+ * / `CLAUDE.md` it finds in `cwd`, and does the same in every ancestor
+ * directory up to `/` (so e.g. a `~/AGENTS.md` is picked up), plus one more
+ * from `agentDir` (`~/.nexus/sessions`) — matching Pi's and Claude Code's own
+ * lookup. This is intentional, not a bug: deliberately keep it.
+ *
  * Never throws — a read failure (missing directory, permissions) yields ''
  * rather than failing the turn.
  */

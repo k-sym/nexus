@@ -517,9 +517,16 @@ export interface NexusConfig {
       /** Which Claude Code settings the SDK loads for engine sessions:
        *  `user` = ~/.claude (skills, plugins, hooks, settings), `project` =
        *  .claude/* + CLAUDE.md, `local` = .claude/settings.local.json. Empty
-       *  (default) = isolation: only Nexus's tools, policy and prompt. */
+       *  (default) = isolation: only Nexus's tools, policy and prompt.
+       *  Independent of this: Claude sessions always read the project's
+       *  `AGENTS.md`/`CLAUDE.md` from the project directory and each ancestor
+       *  directory up to `/` (the same lookup Pi sessions use), plus one from
+       *  the Nexus sessions directory. */
       setting_sources: Array<'user' | 'project' | 'local'>;
-      /** Skills offered to the model: 'all' (default), 'none', or a list of skill names. */
+      /** Skills offered to the model: 'all' (default), 'none', or a list of
+       *  skill names. `'none'` also disables Claude Code's bundled
+       *  skills/workflows outright (`disableBundledSkills`); a list only
+       *  filters which discovered skills are visible to the model. */
       skills: 'all' | 'none' | string[];
     };
   };

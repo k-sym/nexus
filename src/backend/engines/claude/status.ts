@@ -22,13 +22,23 @@ const SETTING_SOURCES = new Set(['user', 'project', 'local']);
 
 /** Filters `setting_sources` to the three known values and coerces `skills`
  *  to `'all' | 'none' | string[]` (default `'all'`), so a malformed or
- *  stale config value never reaches the SDK. */
+ *  stale config value never reaches the SDK. An empty list — literally `[]`,
+ *  or one that filters down to nothing — is normalised to `'none'` rather
+ *  than passed through as an empty array. */
 export function normalizeClaudeEngineConfig(cfg: ClaudeEngineConfig): { settingSources: Array<'user' | 'project' | 'local'>; skills: 'all' | 'none' | string[] } {
   const settingSources = (Array.isArray(cfg.setting_sources) ? cfg.setting_sources : []).filter(
     (s): s is 'user' | 'project' | 'local' => typeof s === 'string' && SETTING_SOURCES.has(s),
   );
   const raw = cfg.skills as unknown;
-  const skills = raw === 'none' ? 'none' : Array.isArray(raw) ? raw.filter((s): s is string => typeof s === 'string' && s.trim().length > 0) : 'all';
+  let skills: 'all' | 'none' | string[];
+  if (raw === 'none') {
+    skills = 'none';
+  } else if (Array.isArray(raw)) {
+    const filtered = raw.filter((s): s is string => typeof s === 'string' && s.trim().length > 0);
+    skills = filtered.length === 0 ? 'none' : filtered;
+  } else {
+    skills = 'all';
+  }
   return { settingSources, skills };
 }
 

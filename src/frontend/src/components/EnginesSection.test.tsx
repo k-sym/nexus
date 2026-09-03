@@ -122,7 +122,7 @@ describe('EnginesSection', () => {
     render(<EnginesSection />);
 
     expect(await screen.findByText('Settings loaded: none (isolated)')).toBeInTheDocument();
-    expect(await screen.findByText('Skills: none')).toBeInTheDocument();
+    expect(await screen.findByText('Skills: none (bundled skills disabled)')).toBeInTheDocument();
   });
 
   it('shows loaded setting sources and a skill count for a list', async () => {
