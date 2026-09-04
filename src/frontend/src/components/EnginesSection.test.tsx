@@ -22,6 +22,8 @@ function baseEngine(overrides: Partial<Record<string, unknown>> = {}) {
     authSource: 'token',
     executablePath: '/usr/local/bin/claude',
     modelCount: 3,
+    settingSources: [],
+    skills: 'all',
     ...overrides,
   };
 }
@@ -103,6 +105,42 @@ describe('EnginesSection', () => {
     expect(
       await screen.findByText(/Anthropic subscription models via Pi are hidden while this engine is on/),
     ).toBeInTheDocument();
+  });
+
+  it('shows isolated settings and no skills for an empty configuration', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/engines') {
+        return jsonResponse({
+          engines: [baseEngine({ settingSources: [], skills: 'none' })],
+          piAnthropicOAuthHidden: false,
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<EnginesSection />);
+
+    expect(await screen.findByText('Settings loaded: none (isolated)')).toBeInTheDocument();
+    expect(await screen.findByText('Skills: none (bundled skills disabled)')).toBeInTheDocument();
+  });
+
+  it('shows loaded setting sources and a skill count for a list', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/engines') {
+        return jsonResponse({
+          engines: [baseEngine({ settingSources: ['user', 'project'], skills: ['pdf', 'docx', 'xlsx'] })],
+          piAnthropicOAuthHidden: false,
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    render(<EnginesSection />);
+
+    expect(await screen.findByText('Settings loaded: user, project')).toBeInTheDocument();
+    expect(await screen.findByText('Skills: 3 listed')).toBeInTheDocument();
   });
 
   it('degrades to a one-line error when the request fails', async () => {

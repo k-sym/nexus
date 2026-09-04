@@ -11,6 +11,8 @@ test('default config has a subscription-first claude engine block', () => {
       auth: 'subscription',
       oauth_token: '${CLAUDE_CODE_OAUTH_TOKEN}',
       executable_path: '',
+      setting_sources: [],
+      skills: 'all',
     },
   });
 });

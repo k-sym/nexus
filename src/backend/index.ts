@@ -172,7 +172,7 @@ async function main() {
     try {
       return loadConfig().engines.claude;
     } catch {
-      return { enabled: false, auth: 'subscription' as const, oauth_token: '', executable_path: '' };
+      return { enabled: false, auth: 'subscription' as const, oauth_token: '', executable_path: '', setting_sources: [], skills: 'all' };
     }
   };
   // Pi's own Anthropic OAuth path is the non-compliant one this engine

@@ -47,6 +47,12 @@ export interface ClaudeSessionDeps {
   approvals: ApprovalBroker;
   audit: ApprovalAudit;
   env: Record<string, string | undefined>;
+  /** Which Claude Code settings the SDK loads for this session (see
+   *  `NexusConfig.engines.claude.setting_sources`). Empty = isolation. */
+  settingSources: Array<'user' | 'project' | 'local'>;
+  /** Skills offered to the model. `'none'` is already mapped to `[]` by the
+   *  caller (see `normalizeClaudeEngineConfig`/`ClaudeEngine.createSession`). */
+  skills: 'all' | string[];
   executablePath?: string;
   /** Injected by tests; production uses the SDK's `query`. */
   queryFn?: QueryFn;
@@ -212,8 +218,18 @@ export class ClaudeEngineSession implements EngineSession {
       ...(this.sdkSessionId ? { resume: this.sdkSessionId } : {}),
       includePartialMessages: true,
       permissionMode: 'default',
-      // No ~/.claude or project settings: Nexus's tool policy is the only permission source.
-      settingSources: [],
+      // Which of ~/.claude / project / local settings the SDK loads. Empty
+      // (the default) is isolation: Nexus's tool policy is the only
+      // permission source, regardless of what this yields (the `ask` hook
+      // below still routes every call through `canUseTool`).
+      settingSources: this.deps.settingSources,
+      skills: this.deps.skills,
+      // An empty `skills` list (`'none'` normalised by the caller) only hides
+      // skills from the model's listing — the CLI's bundled skills/workflows
+      // still ship by default. `disableBundledSkills` (an Options `settings`
+      // field, equivalent to CLAUDE_CODE_DISABLE_BUNDLED_SKILLS=1) removes
+      // them outright, so `skills: 'none'` really means none.
+      ...(Array.isArray(this.deps.skills) && this.deps.skills.length === 0 ? { settings: { disableBundledSkills: true } } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', ...(appendix ? { append: appendix } : {}) },
       // Nexus's `question` tool (via MCP) replaces Claude's built-in so the existing question UI/broker/iOS flow works.
       disallowedTools: ['AskUserQuestion'],
