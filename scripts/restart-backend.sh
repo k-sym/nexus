@@ -17,12 +17,13 @@
 # Falls back to a plain foreground start when the launchd job isn't installed,
 # so this still works on a machine that runs the backend by hand.
 #
-# The health wait is generous (2 minutes) on purpose. The LaunchAgent sets
-# ProcessType=Background, which puts the job in a throttled I/O and CPU band, so
-# a cold start right after `npm install` rewrites node_modules can spend a minute
-# in V8's script compilation at ~0% CPU just reading the module tree — measured
-# at ~62s under launchd against 4s for the same build run by hand. That is a slow
-# start, not a failure, so the wait prints progress instead of sitting silent.
+# The health wait is generous (2 minutes) on purpose. With ProcessType=Background
+# the job sat in a throttled I/O and CPU band, and a cold start right after
+# `npm install` rewrote node_modules spent ~62s in V8 script compilation at ~0%
+# CPU (13 minutes on 2026-09-07 with Spotlight reindexing the tree). The plists
+# now use ProcessType=Standard and ~/Projects is excluded from Spotlight on
+# baker-pro, so a boot should take seconds; the wait stays generous and prints
+# progress so a slow start still reads as slow rather than failed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
