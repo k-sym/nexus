@@ -4,7 +4,6 @@
   "version": "0.1.0",
   "description": "Personal agent orchestration platform",
   "scripts": {
-    "postinstall": "node scripts/fix-node-pty-permissions.cjs",
     "dev": "npm run tauri:dev",
     "dev:daemon": "npm --prefix src/memory-daemon run start",
     "dev:backend": "npm run --workspace=src/backend dev",

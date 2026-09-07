@@ -121,6 +121,31 @@ export class DaemonRequestError extends Error {
   }
 }
 
+/** The daemon accepted the connection but produced no (complete) response in time.
+ *  Deliberately not a DaemonRequestError: callers map those by HTTP status, and a
+ *  timeout has none — it falls through to their generic "daemon unavailable" path. */
+export class DaemonTimeoutError extends Error {
+  constructor(readonly timeoutMs: number, method: string, path: string) {
+    super(`Memory daemon did not respond within ${timeoutMs}ms (${method} ${path})`);
+    this.name = 'DaemonTimeoutError';
+  }
+}
+
+export interface DaemonRequestOptions {
+  /** Upper bound for the whole request (connect, headers and body). */
+  timeoutMs?: number;
+}
+
+/** Boot health probe. A wedged daemon (2026-09-07: accepting TCP, never answering)
+ *  must degrade to the "unreachable at boot" warning, not block app.listen(). */
+export const HEALTH_TIMEOUT_MS = 5_000;
+/** Ordinary reads/writes and the short generation calls; the daemon's own caps for
+ *  those are 30 s or less (embed/title/next-message), so this only trips on a wedge. */
+export const DEFAULT_TIMEOUT_MS = 60_000;
+/** rebuild-index, clear-nexus (reconciles the index) and archive summaries, which the
+ *  daemon caps at 300 s per generation call. */
+export const HEAVY_TIMEOUT_MS = 600_000;
+
 function daemonUrl(): string {
   return process.env.MEMORY_DAEMON_URL || loadConfig().memory.daemon_url || 'http://127.0.0.1:4100';
 }
@@ -143,12 +168,26 @@ async function readErrorDetail(res: Response): Promise<string | undefined> {
   }
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(`${daemonUrl()}${path}`, {
-    method,
-    headers: body ? { 'Content-Type': 'application/json' } : {},
-    body: body ? JSON.stringify(body) : undefined,
-  });
+function isTimeout(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError');
+}
+
+async function req<T>(method: string, path: string, body?: unknown, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
+  // AbortSignal.timeout also covers the body read, so a daemon that sends headers
+  // and then stalls is bounded too.
+  const signal = AbortSignal.timeout(timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(`${daemonUrl()}${path}`, {
+      method,
+      headers: body ? { 'Content-Type': 'application/json' } : {},
+      body: body ? JSON.stringify(body) : undefined,
+      signal,
+    });
+  } catch (err) {
+    if (isTimeout(err)) throw new DaemonTimeoutError(timeoutMs, method, path);
+    throw err;
+  }
   if (!res.ok) {
     // Status is enough for callers to preserve validation/conflict semantics.
     // Deliberately do not forward an arbitrary daemon body or stack trace — only
@@ -162,7 +201,12 @@ async function req<T>(method: string, path: string, body?: unknown): Promise<T> 
         : 'Memory daemon request failed';
     throw new DaemonRequestError(res.status, message, detail);
   }
-  return (res.status === 204 ? null : await res.json()) as T;
+  try {
+    return (res.status === 204 ? null : await res.json()) as T;
+  } catch (err) {
+    if (isTimeout(err)) throw new DaemonTimeoutError(timeoutMs, method, path);
+    throw err;
+  }
 }
 
 export const daemon = {
@@ -184,17 +228,17 @@ export const daemon = {
   remove(id: string) {
     return req<unknown>('DELETE', `/memories/${encodeURIComponent(id)}`);
   },
-  health() {
-    return req<DaemonHealth>('GET', '/health');
+  health(opts: DaemonRequestOptions = {}) {
+    return req<DaemonHealth>('GET', '/health', undefined, opts.timeoutMs ?? HEALTH_TIMEOUT_MS);
   },
-  rebuildIndex() {
-    return req<ReindexStats>('POST', '/operations/rebuild-index');
+  rebuildIndex(opts: DaemonRequestOptions = {}) {
+    return req<ReindexStats>('POST', '/operations/rebuild-index', undefined, opts.timeoutMs ?? HEAVY_TIMEOUT_MS);
   },
-  clearNexusMemory(confirmation: string) {
-    return req<ClearNexusResult>('POST', '/operations/clear-nexus', { confirmation });
+  clearNexusMemory(confirmation: string, opts: DaemonRequestOptions = {}) {
+    return req<ClearNexusResult>('POST', '/operations/clear-nexus', { confirmation }, opts.timeoutMs ?? HEAVY_TIMEOUT_MS);
   },
-  summarizeSessionArchive(input: SessionArchiveSummaryRequest) {
-    return req<SessionArchiveSummaryResponse>('POST', '/operations/summarize-session-archive', input);
+  summarizeSessionArchive(input: SessionArchiveSummaryRequest, opts: DaemonRequestOptions = {}) {
+    return req<SessionArchiveSummaryResponse>('POST', '/operations/summarize-session-archive', input, opts.timeoutMs ?? HEAVY_TIMEOUT_MS);
   },
   generateSessionTitle(input: SessionTitleRequest) {
     return req<SessionTitleResponse>('POST', '/operations/generate-session-title', input);
