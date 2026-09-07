@@ -39,8 +39,10 @@ coverage/
 playwright-report/
 test-results/
 
-# Claude Code
-.claude/
+# Claude Code — local state stays out, but the repo's skills are versioned
+# (.claude/skills/ is the playbook home for institutional knowledge; see AGENTS.md).
+.claude/*
+!.claude/skills/
 
 # KS Workflows
 # Design/architecture notes (AGENTS.md sends docs here). Ignored so new notes
