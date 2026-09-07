@@ -76,6 +76,8 @@ function researchBriefTemplate(idea: Idea): string {
     '',
     'What "done" looks like:',
     '- A findings summary with trade-offs, links, and a recommendation I can pull apart here in this thread.',
+    '',
+    'Use the nexus-idea-research skill for the findings format.',
   ].join('\n');
 }
 
@@ -85,6 +87,7 @@ function draftIssuesPrompt(repo: string): string {
     'For each issue give: a crisp title, a full Markdown body (context, motivation, proposed approach, acceptance criteria), and suggested labels.',
     'If the work splits naturally, propose multiple issues and note the cross-links between them.',
     'Base it on our whole discussion above, including any research findings.',
+    'Use the nexus-idea-graduate skill for the issue shape.',
   ].join(' ');
 }
 
