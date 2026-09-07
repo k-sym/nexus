@@ -41,7 +41,11 @@
     <key>StandardErrorPath</key>
     <string>__REPLACE_WITH_HOME__/Library/Logs/nexus-memory.log</string>
 
+    <!-- Standard, not Background: Background puts the job in a throttled CPU and
+         I/O band, and a cold start behind a busy disk (Spotlight after npm ci)
+         took the daemon and backend many minutes to reach their first log line
+         on 2026-09-07. Standard boots in seconds. -->
     <key>ProcessType</key>
-    <string>Background</string>
+    <string>Standard</string>
 </dict>
 </plist>
