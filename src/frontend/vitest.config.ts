@@ -12,7 +12,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      '@nexus/shared': path.resolve(__dirname, '../shared/index.ts'),
+      '@nexus/shared': path.resolve(import.meta.dirname, '../shared/index.ts'),
     },
   },
 });

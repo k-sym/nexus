@@ -1,4 +1,4 @@
-import '@testing-library/jest-dom';
+import '@testing-library/jest-dom/vitest';
 
 // jsdom under vitest does not expose the Web Storage API — `window.localStorage`
 // and `window.sessionStorage` are undefined, which breaks any component or test
