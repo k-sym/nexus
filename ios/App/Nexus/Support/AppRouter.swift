@@ -1,8 +1,18 @@
 import SwiftUI
 
+/// A first turn to send as soon as a chat opens (ticket to session, #432):
+/// the server-composed prompt and the model the user picked.
+struct ChatSeed: Hashable {
+    let text: String
+    let modelKey: String?
+}
+
 /// Wrapper so a thread deep-link can drive a `fullScreenCover(item:)`.
 struct OpenThread: Identifiable, Hashable {
     let id: String
+    var title: String = "Chat"
+    /// Sent once after history loads; nil for a plain open.
+    var seed: ChatSeed? = nil
 }
 
 /// Shared navigation intent, driven by push-notification taps (and a DEBUG

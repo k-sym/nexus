@@ -19,11 +19,14 @@ final class TicketsViewModel {
     }
 }
 
-/// Read-only Jira mirror. Tapping a row opens the ticket in Jira (its `url`).
+/// Jira mirror. Tapping a row opens the ticket detail: read it, draft the
+/// problem with Sonnet, pick a project and model, Go into a session (#432).
 struct TicketsView: View {
     @State private var vm: TicketsViewModel
+    private let api: APIClient
 
     init(api: APIClient) {
+        self.api = api
         _vm = State(initialValue: TicketsViewModel(api: api))
     }
 
@@ -44,7 +47,11 @@ struct TicketsView: View {
                 ContentUnavailableView("No tickets", systemImage: "ticket", description: Text("Jira tickets synced to Nexus appear here."))
             } else {
                 List(tickets) { ticket in
-                    TicketRow(ticket: ticket)
+                    NavigationLink {
+                        TicketDetailView(api: api, ticket: ticket)
+                    } label: {
+                        TicketRow(ticket: ticket)
+                    }
                 }
             }
         case .failed(let message):
@@ -57,9 +64,17 @@ struct TicketRow: View {
     let ticket: Ticket
 
     var body: some View {
-        let row = VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(ticket.key).font(.caption.weight(.bold)).foregroundStyle(Theme.accent)
+                if ticket.session != nil {
+                    Text("SESSION")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Theme.accent)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.accent.opacity(0.5)))
+                        .accessibilityLabel("Has a session")
+                }
                 Spacer()
                 Text(ticket.status).font(.caption).foregroundStyle(.secondary)
             }
@@ -74,12 +89,5 @@ struct TicketRow: View {
             .foregroundStyle(.secondary)
         }
         .padding(.vertical, 2)
-
-        if let urlString = ticket.url, let url = URL(string: urlString) {
-            Link(destination: url) { row }
-                .buttonStyle(.plain)
-        } else {
-            row
-        }
     }
 }
