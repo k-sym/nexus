@@ -17,7 +17,6 @@ updates:
       pi-runtime:
         patterns:
           - "@earendil-works/pi-*"
-          - "@blackbelt-technology/pi-anthropic-messages"
         update-types:
           - minor
           - patch
@@ -26,7 +25,6 @@ updates:
           - "*"
         exclude-patterns:
           - "@earendil-works/pi-*"
-          - "@blackbelt-technology/pi-anthropic-messages"
         update-types:
           - minor
           - patch
