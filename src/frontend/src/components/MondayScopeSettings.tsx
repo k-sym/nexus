@@ -384,6 +384,11 @@ export function MondayScopeSettings({ projectId, current, onSaved, onCancel }: P
             />
             Post progress to the item&apos;s updates feed
           </label>
+          <p className="text-xs text-zinc-500">
+            When a linked task moves into Review or Deploy, Nexus posts a note on the item naming the task and
+            linking its GitHub issue, so colleagues see it without opening Nexus. It also lets the agent post its own
+            notes. Posts inside the interval are held and combined into one.
+          </p>
           <div className="flex items-center gap-2">
             <input
               type="number"

@@ -50,6 +50,7 @@ import { AgentBridgeService } from './agent-bridge/service.js';
 import { initMemorySystem, recallForRepoPath } from './memory/index.js';
 import { startJiraSync } from './jira/poll.js';
 import { startMondayPoll } from './monday/poll.js';
+import { startUpdatesFeedFlush, setUpdatesFeedEmitter } from './monday/updates-feed.js';
 import { buildMondayContext, buildMondayToolDeps } from './monday/session-deps.js';
 import { buildHelpersToolDeps } from './helpers/resolve.js';
 import { ActivityManager } from './activity/manager.js';
@@ -239,6 +240,10 @@ async function main() {
 
   startJiraSync(db, activityManager);
   startMondayPoll(db, activityManager.bus.emit.bind(activityManager.bus));
+  // Trailing flush for the Monday updates feed; the emitter is what the
+  // per-thread agent tool uses, since it is built without an ActivityManager.
+  setUpdatesFeedEmitter(activityManager.bus.emit.bind(activityManager.bus));
+  startUpdatesFeedFlush(db, activityManager.bus.emit.bind(activityManager.bus));
   // Every potentially mutating chat run claims a per-project working-tree slot.
   const chatConcurrency = new ConcurrencyTracker();
 

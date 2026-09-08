@@ -2,11 +2,10 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { MondayProjectConfig } from '@nexus/shared';
 import { getDb } from '../db';
-import { UpdateThrottle, writeRollup, postItemUpdate, __resetWriteState } from '../monday/writes';
+import { writeRollup, postItemUpdate, __resetWriteState } from '../monday/writes';
 import { upsertItems, linkTask } from '../monday/store';
 
 const OPTS = { token: 'tok', apiVersion: '2024-10' };
-const MINUTE = 60_000;
 
 // lastWritten is module-level, so without this a value written by one test
 // suppresses a write in the next.
@@ -40,70 +39,6 @@ function seedTasks(db: ReturnType<typeof getDb>, statuses: string[], itemId = '1
     linkTask(db, { task_id: `t${i}`, item_id: itemId, project_id: 'p1', created_at: 'now' });
   });
 }
-
-test('an isolated event posts immediately', () => {
-  const throttle = new UpdateThrottle(30 * MINUTE);
-  assert.deepEqual(throttle.record('1', 'task moved to Review', 0), ['task moved to Review']);
-});
-
-test('events inside the window are coalesced, not dropped', () => {
-  const throttle = new UpdateThrottle(30 * MINUTE);
-  throttle.record('1', 'first', 0);
-  assert.equal(throttle.record('1', 'second', 1 * MINUTE), null);
-  assert.equal(throttle.record('1', 'third', 2 * MINUTE), null);
-  assert.deepEqual(throttle.due(31 * MINUTE), ['1']);
-  assert.deepEqual(throttle.drain('1', 31 * MINUTE), ['second', 'third']);
-});
-
-test('nothing is due before the window elapses', () => {
-  const throttle = new UpdateThrottle(30 * MINUTE);
-  throttle.record('1', 'first', 0);
-  throttle.record('1', 'second', 5 * MINUTE);
-  assert.deepEqual(throttle.due(20 * MINUTE), []);
-});
-
-// A boundary-straddling event must not starve whatever is already pending:
-// t=0 posts and opens the window; t=1min queues; t=31min satisfies the
-// window from t=0, but must carry 'second' out with it, in order, rather
-// than resetting the window and stranding 'second' for another 30 minutes.
-test('a leading-edge fire drains anything already pending, in order, leaving nothing stranded', () => {
-  const throttle = new UpdateThrottle(30 * MINUTE);
-  assert.deepEqual(throttle.record('1', 'first', 0), ['first']);
-  assert.equal(throttle.record('1', 'second', 1 * MINUTE), null);
-  assert.deepEqual(throttle.record('1', 'third', 31 * MINUTE), ['second', 'third']);
-  // Nothing left stranded in the pending queue.
-  assert.deepEqual(throttle.due(31 * MINUTE), []);
-  assert.deepEqual(throttle.drain('1', 31 * MINUTE), []);
-});
-
-// The probe (40min) is chosen to discriminate: it is only 9min after the
-// drain at t=31 (so a correctly-reset window must still QUEUE it), but 40min
-// after the original post at t=0 (so a drain that failed to update
-// lastPostAt would incorrectly post it immediately). A probe far past both
-// reference points -- e.g. 90min -- would pass either way and prove nothing.
-test('draining resets the window so a probe soon after is still queued, not posted', () => {
-  const throttle = new UpdateThrottle(30 * MINUTE);
-  throttle.record('1', 'first', 0);
-  throttle.record('1', 'second', 1 * MINUTE);
-  throttle.drain('1', 31 * MINUTE);
-  assert.equal(throttle.record('1', 'probe', 40 * MINUTE), null);
-});
-
-test('draining an empty pending queue returns [] and does not disturb the window', () => {
-  const throttle = new UpdateThrottle(30 * MINUTE);
-  assert.deepEqual(throttle.record('1', 'first', 0), ['first']);
-  assert.deepEqual(throttle.drain('1', 10 * MINUTE), []);
-  // If drain had incorrectly reset the window to t=10, this event (only
-  // 25min after that drain) would still be queued. The window is anchored to
-  // the original post at t=0, so 35min after that must fire immediately.
-  assert.deepEqual(throttle.record('1', 'second', 35 * MINUTE), ['second']);
-});
-
-test('throttling is per item', () => {
-  const throttle = new UpdateThrottle(30 * MINUTE);
-  throttle.record('1', 'a', 0);
-  assert.deepEqual(throttle.record('2', 'b', 1 * MINUTE), ['b']);
-});
 
 test('writeRollup writes the formatted text to the configured column', async () => {
   const db = getDb(':memory:');

@@ -152,6 +152,17 @@ function runMigrations(db: Database.Database) {
       created_at TEXT NOT NULL
     );
 
+    -- Per-item throttle state for the Monday updates feed (monday/updates-feed.ts):
+    -- when Nexus last posted to the item and the events still waiting for the
+    -- window to elapse. Persisted so a restart neither loses a queued note nor
+    -- forgets the window. Rebuildable-ish (a wipe only loses queued notes).
+    CREATE TABLE IF NOT EXISTS monday_update_feed (
+      item_id        TEXT PRIMARY KEY,
+      project_id     TEXT NOT NULL,
+      last_posted_at TEXT,
+      pending_json   TEXT NOT NULL DEFAULT '[]'
+    );
+
     -- Idea Watcher (#352). An idea's dialogue lives in the assistant session
     -- referenced by session_id; this row is just the metadata. Successor to
     -- braindump_ideas, whose table is retained (not dropped) in existing DBs

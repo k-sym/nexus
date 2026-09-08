@@ -16,6 +16,7 @@ import { loadConfig } from '../config.js';
 import {
   scheduleRollup, scheduleRollupForItem, scheduleStatusSync, scheduleStatusSyncForItem,
 } from '../monday/trigger.js';
+import { scheduleFeedMove } from '../monday/updates-feed.js';
 import { getLinkForTask, unlinkTask } from '../monday/store.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
@@ -579,6 +580,10 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       // aggregate stage. `false` — a plain move never advances an item off a
       // label a human set outside the mapping (see status-sync.ts's hold rule).
       void scheduleStatusSync(db, id, `task moved to ${body.status}`, false, emit);
+      // And the updates feed: a move into Review or Deploy is a note a
+      // colleague reading the Monday item can act on. scheduleFeedMove is a
+      // no-op for every other status and for projects that have not opted in.
+      void scheduleFeedMove(db, updated, emit);
     }
 
     // Summarize a completed task-chat into memory + Obsidian when its card is
