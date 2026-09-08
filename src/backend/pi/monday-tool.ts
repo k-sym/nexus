@@ -22,8 +22,10 @@ export interface MondayItemDetail {
 export interface MondayToolDeps {
   search(query: string, boardId?: string): Promise<MondayItem[]>;
   getItem(itemId: string): Promise<MondayItemDetail | null>;
-  /** Present only when the project has opted in to agent-authored updates. */
-  postUpdate?(itemId: string, body: string): Promise<void>;
+  /** Present only when the project has opted in to agent-authored updates.
+   *  Resolves 'posted' when the note went out now, 'queued' when the item's
+   *  throttle window is closed and it will post at window end (never lost). */
+  postUpdate?(itemId: string, body: string): Promise<'posted' | 'queued' | void>;
 }
 
 const SearchSchema = Type.Object({
@@ -180,10 +182,13 @@ export function createMondayExtension(deps: MondayToolDeps): ExtensionFactory {
       async execute(_toolCallId, params): Promise<AgentToolResult<{ status: string }>> {
         const body = params.body?.trim() ?? '';
         if (!body) throw new Error('monday_post_update needs a non-empty body.');
-        await postUpdate(params.item_id, body);
+        const outcome = (await postUpdate(params.item_id, body)) ?? 'posted';
+        const text = outcome === 'queued'
+          ? `Queued an update for Monday item ${params.item_id}; it will post when the item's update window reopens. Do not post it again.`
+          : `Posted an update to Monday item ${params.item_id}.`;
         return {
-          content: [{ type: 'text', text: `Posted an update to Monday item ${params.item_id}.` }],
-          details: { status: 'ok' },
+          content: [{ type: 'text', text }],
+          details: { status: outcome },
         };
       },
     });

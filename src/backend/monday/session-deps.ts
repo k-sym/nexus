@@ -13,7 +13,7 @@ import { resolveMondayToken } from './poll.js';
 import { getItem, listLinkedTaskStatuses } from './store.js';
 import { fetchBoardItems, type MondayClientOptions } from './client.js';
 import { mapItem } from './map.js';
-import { postItemUpdate } from './writes.js';
+import { scheduleFeedNote, updatesFeedEmitter } from './updates-feed.js';
 import { computeRollup, formatRollupText } from './rollup.js';
 import type { MondayToolDeps, MondayItemDetail } from '../pi/monday-tool.js';
 import type { MondayContextInput } from '../pi/monday-context.js';
@@ -202,9 +202,14 @@ export function buildMondayToolDeps(db: Database.Database, threadId: string): Mo
     if (resolved.cfg.updates?.enabled) {
       const task = db.prepare('SELECT title FROM tasks WHERE id = ?').get(resolved.taskId) as { title: string } | undefined;
       const provenance = `Nexus task "${task?.title ?? resolved.taskId}" (thread ${threadId})`;
-      deps.postUpdate = async (itemId, body) => {
-        await postItemUpdate(db, opts, itemId, body, provenance);
-      };
+      // Routed through the updates feed, not straight to the API: the same
+      // per-item throttle and monday_write Activity operation the automated
+      // Review/Deploy notes use, so an agent cannot out-run the project's
+      // min_interval_minutes (#260).
+      const projectId = resolved.projectId;
+      const cfg = resolved.cfg;
+      deps.postUpdate = (itemId, body) =>
+        scheduleFeedNote(db, opts, projectId, cfg, itemId, body, provenance, updatesFeedEmitter());
     }
 
     return deps;

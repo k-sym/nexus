@@ -11,66 +11,15 @@
  * forward-only, no-op-if-unchanged) — it reuses the self-healing baseline
  * (mirrorColumnText + the lastWritten/synced_at dance) exported from here.
  *
- * Throttling is leading-edge with a trailing flush: an isolated event posts
- * at once, and everything that arrives inside the window merges into a single
- * later post. Nothing is dropped, and a quiet project never waits 30 minutes
- * to say something.
+ * Update posts are throttled and coalesced per item by updates-feed.ts, which
+ * owns the window (`updates.min_interval_minutes`) and persists its state;
+ * this module only knows how to render and send one update.
  */
 import type Database from 'better-sqlite3';
 import type { MondayItem, MondayProjectConfig } from '@nexus/shared';
 import { setSimpleColumnValue, createUpdate, type MondayClientOptions } from './client.js';
 import { computeRollup, formatRollupText, formatRollupPercent } from './rollup.js';
 import { listLinkedTaskStatuses, getItem } from './store.js';
-
-/** Per-item throttle with coalescing. Pure: the clock is passed in. */
-export class UpdateThrottle {
-  private readonly lastPostAt = new Map<string, number>();
-  private readonly pending = new Map<string, string[]>();
-
-  constructor(private readonly windowMs: number) {}
-
-  /**
-   * Record an event. Returns the events to post NOW (leading edge), or null
-   * when the event was queued for the trailing flush.
-   *
-   * A leading-edge fire must also take and clear anything already pending —
-   * otherwise an event that lands exactly on the boundary posts alone, out of
-   * order, and strands the queue behind a newly-reset window (each such event
-   * would defer the stranded batch another full window).
-   */
-  record(itemId: string, event: string, now: number): string[] | null {
-    const last = this.lastPostAt.get(itemId);
-    if (last === undefined || now - last >= this.windowMs) {
-      this.lastPostAt.set(itemId, now);
-      const queued = this.pending.get(itemId);
-      this.pending.delete(itemId);
-      return queued && queued.length > 0 ? [...queued, event] : [event];
-    }
-    const queue = this.pending.get(itemId) ?? [];
-    queue.push(event);
-    this.pending.set(itemId, queue);
-    return null;
-  }
-
-  /** Item ids whose queued events are ready to flush. */
-  due(now: number): string[] {
-    const out: string[] = [];
-    for (const [itemId, queue] of this.pending) {
-      if (queue.length === 0) continue;
-      const last = this.lastPostAt.get(itemId) ?? 0;
-      if (now - last >= this.windowMs) out.push(itemId);
-    }
-    return out;
-  }
-
-  /** Take an item's queued events and restart its window. */
-  drain(itemId: string, now: number): string[] {
-    const queue = this.pending.get(itemId) ?? [];
-    this.pending.delete(itemId);
-    if (queue.length > 0) this.lastPostAt.set(itemId, now);
-    return queue;
-  }
-}
 
 export interface RollupWriteDeps {
   setColumn: typeof setSimpleColumnValue;
