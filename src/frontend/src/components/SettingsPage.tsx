@@ -16,6 +16,12 @@ const MOTION_OPTIONS: { mode: BackgroundMotion; label: string }[] = [
 
 // The curated API helpers (#291). id matches the config key and the backend
 // provider id; env is the default ${ENV} the key resolves from.
+/** Weekday toggles for the Monday work-hours window (JS getDay numbering). */
+const WEEKDAYS: { day: number; label: string }[] = [
+  { day: 1, label: 'Mon' }, { day: 2, label: 'Tue' }, { day: 3, label: 'Wed' },
+  { day: 4, label: 'Thu' }, { day: 5, label: 'Fri' }, { day: 6, label: 'Sat' }, { day: 0, label: 'Sun' },
+];
+
 const HELPER_PROVIDERS: { id: string; label: string; env: string; blurb: string }[] = [
   { id: 'brave', label: 'Brave Search', env: 'BRAVE_API_KEY', blurb: 'Web search results.' },
   { id: 'exa', label: 'Exa', env: 'EXA_API_KEY', blurb: 'Neural search with page text inline.' },
@@ -72,7 +78,9 @@ export default function SettingsPage() {
     setConfig((prev: any) => {
       const next = structuredClone(prev);
       let node = next;
-      for (let i = 0; i < path.length - 1; i++) node = node[path[i]];
+      // Create missing intermediate blocks so a key added after this config
+      // was written (e.g. monday.work_hours) can be set before a reload.
+      for (let i = 0; i < path.length - 1; i++) node = node[path[i]] ??= {};
       node[path[path.length - 1]] = value;
       return next;
     });
@@ -534,6 +542,53 @@ export default function SettingsPage() {
                 onChange={(e) => update(['monday', 'poll_minutes'], parseInt(e.target.value, 10) || 10)}
                 className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
+            </Field>
+            <Field label="Work hours">
+              <div className="space-y-2">
+                <button
+                  onClick={() => update(['monday', 'work_hours', 'enabled'], !(config.monday?.work_hours?.enabled ?? true))}
+                  className={`px-3 py-1 text-xs rounded-sm transition-colors ${(config.monday?.work_hours?.enabled ?? true) ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                >
+                  {(config.monday?.work_hours?.enabled ?? true) ? 'Poll only during work hours' : 'Poll around the clock'}
+                </button>
+                {(config.monday?.work_hours?.enabled ?? true) && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    {WEEKDAYS.map(({ day, label }) => {
+                      const days: number[] = config.monday?.work_hours?.days ?? [1, 2, 3, 4, 5];
+                      const on = days.includes(day);
+                      return (
+                        <button
+                          key={day}
+                          aria-pressed={on}
+                          onClick={() => update(['monday', 'work_hours', 'days'], on ? days.filter((d) => d !== day) : [...days, day].sort())}
+                          className={`px-2 py-0.5 rounded-sm ${on ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                    <input
+                      type="time"
+                      aria-label="Work hours start"
+                      value={config.monday?.work_hours?.start ?? '08:00'}
+                      onChange={(e) => update(['monday', 'work_hours', 'start'], e.target.value)}
+                      className="surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
+                    />
+                    <span className="text-faint">to</span>
+                    <input
+                      type="time"
+                      aria-label="Work hours end"
+                      value={config.monday?.work_hours?.end ?? '18:00'}
+                      onChange={(e) => update(['monday', 'work_hours', 'end'], e.target.value)}
+                      className="surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
+                    />
+                  </div>
+                )}
+                <p className="text-[10px] text-faint">
+                  Applies to the background refresh of linked items only, on the server&apos;s local clock. Opening the
+                  Project Management view or pressing Refresh always syncs.
+                </p>
+              </div>
             </Field>
             <p className="text-xs text-faint">
               The API token is read from the <span className="font-mono text-muted">MONDAY_TOKEN</span> environment

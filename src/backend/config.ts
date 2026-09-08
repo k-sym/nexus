@@ -159,6 +159,11 @@ function defaultConfig(): NexusConfig {
       // developer.monday.com/api-reference/docs/api-versioning).
       api_version: '2026-07',
       poll_minutes: 10,
+      // Poll only during the working week by default: the linked-item refresh
+      // exists so roll-ups and context stay current while someone is working,
+      // and a board nobody is touching overnight doesn't need re-reading every
+      // 10 minutes. deepMerge backfills this block onto older configs.
+      work_hours: { enabled: true, days: [1, 2, 3, 4, 5], start: '08:00', end: '18:00' },
     },
     helpers: {
       // All off by default: each reaches the network with a paid key, so it's

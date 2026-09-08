@@ -6,7 +6,7 @@ import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
 import { getDb } from '../db';
-import { runMondayRefreshOnce, resolveMondayToken, __resetPollErrorState } from '../monday/poll';
+import { runMondayRefreshOnce, resolveMondayToken, __resetPollErrorState, withinWorkHours, describeWorkHours } from '../monday/poll';
 import { MondayError } from '../monday/client';
 import type { ActivityEvent } from '../activity/events';
 
@@ -126,4 +126,40 @@ test('resolveMondayToken treats whitespace-only value as absent', () => {
   process.env.MONDAY_TOKEN = '   ';
   assert.equal(resolveMondayToken(), undefined);
   delete process.env.MONDAY_TOKEN;
+});
+
+// --- work hours -------------------------------------------------------------
+
+
+const WEEKDAYS = { enabled: true, days: [1, 2, 3, 4, 5], start: '08:00', end: '18:00' };
+// 2026-09-07 is a Monday; 2026-09-06 a Sunday.
+const monday = (h: number, m = 0) => new Date(2026, 8, 7, h, m);
+const sunday = (h: number) => new Date(2026, 8, 6, h, 0);
+
+test('withinWorkHours is inclusive of start and exclusive of end', () => {
+  assert.equal(withinWorkHours(WEEKDAYS, monday(7, 59)), false);
+  assert.equal(withinWorkHours(WEEKDAYS, monday(8, 0)), true);
+  assert.equal(withinWorkHours(WEEKDAYS, monday(12)), true);
+  assert.equal(withinWorkHours(WEEKDAYS, monday(17, 59)), true);
+  assert.equal(withinWorkHours(WEEKDAYS, monday(18, 0)), false);
+});
+
+test('withinWorkHours excludes days not listed', () => {
+  assert.equal(withinWorkHours(WEEKDAYS, sunday(12)), false);
+  assert.equal(withinWorkHours({ ...WEEKDAYS, days: [0] }, sunday(12)), true);
+});
+
+test('withinWorkHours is always-on when disabled, missing, or malformed', () => {
+  assert.equal(withinWorkHours(undefined, sunday(3)), true);
+  assert.equal(withinWorkHours({ ...WEEKDAYS, enabled: false }, sunday(3)), true);
+  // A typo must not silently switch the poll off for good.
+  assert.equal(withinWorkHours({ ...WEEKDAYS, start: 'nine' }, sunday(3)), true);
+  assert.equal(withinWorkHours({ ...WEEKDAYS, start: '18:00', end: '08:00' }, sunday(3)), true);
+  assert.equal(withinWorkHours({ ...WEEKDAYS, days: [] }, sunday(3)), true);
+});
+
+test('describeWorkHours summarises the window for the log line', () => {
+  assert.equal(describeWorkHours(WEEKDAYS), 'Mon,Tue,Wed,Thu,Fri 08:00–18:00');
+  assert.equal(describeWorkHours({ ...WEEKDAYS, enabled: false }), 'always');
+  assert.equal(describeWorkHours(undefined), 'always');
 });

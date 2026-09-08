@@ -7,7 +7,7 @@
  * syncs are lazy and driven by the Project Management view instead.
  */
 import type Database from 'better-sqlite3';
-import type { NexusConfig } from '@nexus/shared';
+import type { NexusConfig, MondayWorkHours } from '@nexus/shared';
 import { loadConfig } from '../config.js';
 import { refreshLinkedItems } from './sync.js';
 import type { MondayClientOptions } from './client.js';
@@ -83,17 +83,70 @@ export async function runMondayRefreshOnce(
   }
 }
 
+/** Parse `HH:MM` into minutes since midnight; null when malformed. */
+function parseClock(value: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value?.trim() ?? '');
+  if (!m) return null;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 24 || min > 59) return null;
+  return h * 60 + min;
+}
+
+/**
+ * Pure: is `now` inside the configured working window? The window is
+ * [start, end) on each listed weekday, evaluated on the server's local clock.
+ * A disabled or malformed window means "always on" — a typo in config must
+ * not silently switch the poll off for good.
+ */
+export function withinWorkHours(hours: MondayWorkHours | undefined, now: Date = new Date()): boolean {
+  if (!hours || !hours.enabled) return true;
+  const start = parseClock(hours.start);
+  const end = parseClock(hours.end);
+  if (start === null || end === null || start >= end) return true;
+  if (!Array.isArray(hours.days) || hours.days.length === 0) return true;
+  if (!hours.days.includes(now.getDay())) return false;
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  return minutes >= start && minutes < end;
+}
+
+/** Human summary for the startup log line, e.g. "Mon–Fri 08:00–18:00". */
+export function describeWorkHours(hours: MondayWorkHours | undefined): string {
+  if (!hours?.enabled) return 'always';
+  const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const days = [...new Set(hours.days)].filter((d) => d >= 0 && d <= 6).sort((a, b) => a - b);
+  return `${days.map((d) => names[d]).join(',')} ${hours.start}–${hours.end}`;
+}
+
 /** Start the interval loop. Returns a stop function. */
 export function startMondayPoll(
   db: Database.Database,
   emit?: (event: ActivityEvent) => void,
+  now: () => Date = () => new Date(),
 ): () => void {
   const cfg = loadConfig().monday;
   if (!cfg.enabled) return () => {};
 
+  // Log the work-hours transition once, not every skipped tick: a quiet
+  // overnight poll would otherwise fill the log with "skipped" lines, which is
+  // the noise this gate exists to remove.
+  let quiet = false;
   const tick = () => {
-    void runMondayRefreshOnce(db, loadConfig().monday, resolveMondayToken(), undefined, emit);
+    const current = loadConfig().monday;
+    if (!withinWorkHours(current.work_hours, now())) {
+      if (!quiet) {
+        quiet = true;
+        console.log(`[monday] outside work hours (${describeWorkHours(current.work_hours)}) — poll paused`);
+      }
+      return;
+    }
+    if (quiet) {
+      quiet = false;
+      console.log('[monday] inside work hours — poll resumed');
+    }
+    void runMondayRefreshOnce(db, current, resolveMondayToken(), undefined, emit);
   };
+  console.log(`[monday] poll started — every ${cfg.poll_minutes}m, work hours ${describeWorkHours(cfg.work_hours)}`);
   const handle = setInterval(tick, Math.max(1, cfg.poll_minutes) * 60_000);
   tick();
   return () => clearInterval(handle);
