@@ -60,7 +60,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira/GitHub sync that changed tickets, a sync failure, or a task summary being written. Backed by a `notifications` table the frontend polls. |
 | **Mission Control** | The landing dashboard: memory-daemon health, your curated model list with per-provider auth health, and usage stats (Claude/Codex/OpenRouter session windows). |
 | **Trust & Privacy** | A read-only trust snapshot surfaced in Settings — services, storage, secret sources, outbound destinations, and maintenance controls (rebuild index, clear Nexus memory). |
-| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, Jira + GitHub sync, signal filters. |
+| **Settings** | In-app editor for `~/.nexus/config.yaml` — API keys, models, memory budget, Jira + GitHub sync, signal filters, the composer's next-message suggestion model (`models.next_message`, default Sonnet through the Claude engine, local-model fallback). |
 
 ---
 

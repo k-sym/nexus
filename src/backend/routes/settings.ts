@@ -151,6 +151,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
           embedding_model: incoming.models?.local?.embedding_model ?? current.models.local.embedding_model,
           rerank_model: incoming.models?.local?.rerank_model ?? current.models.local.rerank_model,
         },
+        next_message: incoming.models?.next_message ?? current.models.next_message,
       },
     };
 
