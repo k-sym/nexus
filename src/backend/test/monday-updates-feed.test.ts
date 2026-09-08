@@ -13,7 +13,7 @@ import { loadConfig, saveConfig } from '../config';
 import { upsertItems, linkTask } from '../monday/store';
 import {
   formatFeedUpdate, feedWindowMs, taskIssueUrl, recordFeedEvent, flushDueFeedUpdates,
-  scheduleFeedMove, scheduleFeedNote, type FeedEvent, type FeedDeps,
+  scheduleFeedMove, scheduleFeedNote, flushFeedForItem, type FeedEvent, type FeedDeps,
 } from '../monday/updates-feed';
 import type { ActivityEvent } from '../activity/events';
 
@@ -297,5 +297,17 @@ test('scheduleFeedNote (the agent path) shares the item window with automated mo
     assert.equal(await flushDueFeedUpdates(db, T0 + 30 * MINUTE, deps), 1);
   });
   assert.match(posts[1].body, /Halfway there<br>— posted by Nexus on behalf of Nexus task &quot;A&quot; \(thread th1\)/);
+  db.close();
+});
+
+test('flushFeedForItem posts the queue now regardless of the window (Activity Console retry)', async () => {
+  const db = getDb(':memory:');
+  seed(db);
+  const failing = fakePoster(true);
+  await recordFeedEvent(db, OPTS, 'p1', cfg(), 'i1', moved('t1', 'A', 'review'), T0, failing.deps);
+  const ok = fakePoster();
+  assert.equal(await flushFeedForItem(db, OPTS, 'i1', T0 + MINUTE, ok.deps), 'posted');
+  assert.equal(ok.posts.length, 1);
+  assert.equal(await flushFeedForItem(db, OPTS, 'i1', T0 + 2 * MINUTE, ok.deps), 'nothing');
   db.close();
 });

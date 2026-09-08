@@ -628,3 +628,69 @@ test('mapItem never reads updates out of column_values', () => {
   } as any, 'now');
   assert.deepEqual(JSON.parse(row.updates_json!), []);
 });
+
+// --- in-process retry on rate limit / complexity ----------------------------
+
+test('a 429 is retried once after the Retry-After hint, and the retry result is returned', async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  const fakeFetch = async () => {
+    calls++;
+    if (calls === 1) return new Response('', { status: 429, headers: { 'retry-after': '7' } });
+    return jsonResponse({ data: { ok: true } });
+  };
+  const result = await mondayGraphql<{ ok: boolean }>(
+    { ...OPTS, fetchImpl: fakeFetch as any, sleepImpl: async (ms) => { waits.push(ms); } },
+    'query { ok }', {},
+  );
+  assert.deepEqual(result, { ok: true });
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [7000]);
+});
+
+test('a 429 with no hint waits the default, and a second 429 in a row surfaces the error', async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  const fakeFetch = async () => { calls++; return new Response('', { status: 429 }); };
+  await assert.rejects(
+    () => mondayGraphql({ ...OPTS, fetchImpl: fakeFetch as any, sleepImpl: async (ms) => { waits.push(ms); } }, 'query { ok }', {}),
+    (err: unknown) => err instanceof MondayError && err.status === 429,
+  );
+  assert.equal(calls, 2, 'exactly one retry, never a loop');
+  assert.deepEqual(waits, [5000]);
+});
+
+test('complexity exhaustion is retried after reset_in_x_seconds', async () => {
+  let calls = 0;
+  const waits: number[] = [];
+  const fakeFetch = async () => {
+    calls++;
+    if (calls === 1) {
+      return jsonResponse({
+        errors: [{ message: 'Complexity budget exhausted', extensions: { code: 'ComplexityException' } }],
+        extensions: { complexity: { reset_in_x_seconds: 12 } },
+      });
+    }
+    return jsonResponse({ data: { ok: true } });
+  };
+  await mondayGraphql({ ...OPTS, fetchImpl: fakeFetch as any, sleepImpl: async (ms) => { waits.push(ms); } }, 'query { ok }', {});
+  assert.equal(calls, 2);
+  assert.deepEqual(waits, [12000]);
+});
+
+test('a reset hint longer than a minute is not waited on; the error surfaces for the slower retry path', async () => {
+  let calls = 0;
+  const fakeFetch = async () => { calls++; return new Response('', { status: 429, headers: { 'retry-after': '900' } }); };
+  await assert.rejects(() => mondayGraphql({ ...OPTS, fetchImpl: fakeFetch as any, sleepImpl: async () => {} }, 'query { ok }', {}));
+  assert.equal(calls, 1);
+});
+
+test('an auth failure is never retried', async () => {
+  let calls = 0;
+  const fakeFetch = async () => {
+    calls++;
+    return jsonResponse({ errors: [{ message: 'Not Authenticated', extensions: { code: 'UserUnauthorizedException' } }] });
+  };
+  await assert.rejects(() => mondayGraphql({ ...OPTS, fetchImpl: fakeFetch as any, sleepImpl: async () => {} }, 'query { ok }', {}));
+  assert.equal(calls, 1);
+});

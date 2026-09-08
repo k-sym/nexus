@@ -38,7 +38,16 @@ export interface MondayClientOptions {
   token: string;
   apiVersion: string;
   fetchImpl?: typeof fetch;
+  /** Injectable wait, so the retry path is testable without real time. */
+  sleepImpl?: (ms: number) => Promise<void>;
 }
+
+/** Longest the transport will wait on Monday's reset hint before giving up
+ *  and surfacing the error for the caller's own retry (Activity Console, the
+ *  next feed window, the next poll tick). */
+const MAX_RETRY_WAIT_SECONDS = 60;
+/** Wait when a 429 arrives with no Retry-After header at all. */
+const DEFAULT_RETRY_WAIT_SECONDS = 5;
 
 interface GraphqlErrorShape {
   message?: string;
@@ -106,8 +115,35 @@ export interface RawMondayItem {
   updates?: RawMondayUpdate[] | null;
 }
 
-/** Single transport entry point. Every query and mutation goes through here. */
+/**
+ * Single transport entry point. Every query and mutation goes through here.
+ *
+ * A rate limit (429) or complexity exhaustion is retried once, in process,
+ * after Monday's own reset hint (capped at MAX_RETRY_WAIT_SECONDS). Anything
+ * else — and a second limit in a row — surfaces as a MondayError for the
+ * caller's slower retry path. One retry, not a loop: the poll, the feed
+ * window, and the Activity Console each already come back later.
+ */
 export async function mondayGraphql<T>(
+  opts: MondayClientOptions,
+  query: string,
+  variables: Record<string, unknown>,
+): Promise<T> {
+  try {
+    return await mondayGraphqlOnce<T>(opts, query, variables);
+  } catch (err) {
+    const monday = err as MondayError;
+    const limited = monday instanceof MondayError && (monday.status === 429 || monday.code === 'ComplexityException');
+    if (!limited) throw err;
+    const hint = monday.retryAfterSeconds ?? DEFAULT_RETRY_WAIT_SECONDS;
+    if (hint > MAX_RETRY_WAIT_SECONDS) throw err;
+    const sleep = opts.sleepImpl ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+    await sleep(Math.max(0, hint) * 1000);
+    return mondayGraphqlOnce<T>(opts, query, variables);
+  }
+}
+
+async function mondayGraphqlOnce<T>(
   opts: MondayClientOptions,
   query: string,
   variables: Record<string, unknown>,

@@ -153,6 +153,25 @@ export async function registerActivityRoutes(fastify: FastifyInstance) {
       });
       return res.json();
     }
+    if (row.kind === 'monday_sync') {
+      const res = await fastify.inject({ method: 'POST', url: '/api/monday/refresh' });
+      reply.code(res.statusCode);
+      return res.json();
+    }
+    if (row.kind === 'monday_write') {
+      const itemId = (parseJson(row.diagnostics_json) as { itemId?: string } | undefined)?.itemId;
+      if (!itemId || !row.project_id) {
+        reply.code(409);
+        return { error: 'This Monday write predates retry support (no item id recorded); the next task move re-runs it' };
+      }
+      const res = await fastify.inject({
+        method: 'POST',
+        url: `/api/monday/items/${encodeURIComponent(itemId)}/retry-writes`,
+        payload: { project_id: row.project_id },
+      });
+      reply.code(res.statusCode);
+      return res.json();
+    }
     reply.code(409);
     return { error: `Retry not supported for ${row.kind}` };
   });

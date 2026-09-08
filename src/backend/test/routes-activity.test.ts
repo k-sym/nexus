@@ -143,3 +143,64 @@ test('POST /api/activity/:id/retry returns 409 for unsupported kind', async () =
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// --- Monday kinds route to their own retry endpoints ------------------------
+
+/** Stand-ins for the two Monday endpoints the retry route injects into,
+ *  registered on the same app so `fastify.inject` reaches them. */
+function withMondayStubs(app: ReturnType<typeof makeApp>['app'], seen: { url: string; body: unknown }[]) {
+  app.post('/api/monday/refresh', async () => { seen.push({ url: '/api/monday/refresh', body: null }); return { ok: true, refreshed: 3 }; });
+  app.post('/api/monday/items/:itemId/retry-writes', async (request) => {
+    seen.push({ url: request.url, body: request.body });
+    return { ok: true, feed: 'nothing' };
+  });
+}
+
+test('POST /api/activity/:id/retry re-runs a monday_sync via the refresh endpoint', async () => {
+  const { app, dir, activity } = makeApp();
+  const seen: { url: string; body: unknown }[] = [];
+  withMondayStubs(app, seen);
+  try {
+    activity.bus.emit({ type: 'start', operationId: 'op-ms', kind: 'monday_sync', title: 'Monday refresh' });
+    activity.bus.emit({ type: 'stop', operationId: 'op-ms', kind: 'monday_sync', title: 'Monday refresh', status: 'failed', error: 'rate limit' });
+    const res = await app.inject({ method: 'POST', url: '/api/activity/op-ms/retry' });
+    assert.equal(res.statusCode, 200);
+    assert.deepEqual(res.json(), { ok: true, refreshed: 3 });
+    assert.equal(seen[0].url, '/api/monday/refresh');
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/activity/:id/retry re-runs a monday_write for the item recorded in its diagnostics', async () => {
+  const { app, dir, activity } = makeApp();
+  const seen: { url: string; body: unknown }[] = [];
+  withMondayStubs(app, seen);
+  try {
+    activity.bus.emit({ type: 'start', operationId: 'op-mw', kind: 'monday_write', title: 'Monday roll-up', projectId: 'p1', taskId: 't1', diagnostics: { itemId: 'item-9' } });
+    activity.bus.emit({ type: 'stop', operationId: 'op-mw', kind: 'monday_write', title: 'Monday roll-up', status: 'failed', error: 'boom' });
+    const res = await app.inject({ method: 'POST', url: '/api/activity/op-mw/retry' });
+    assert.equal(res.statusCode, 200);
+    assert.equal(seen[0].url, '/api/monday/items/item-9/retry-writes');
+    assert.deepEqual(seen[0].body, { project_id: 'p1' });
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('POST /api/activity/:id/retry explains a monday_write that recorded no item id instead of failing opaquely', async () => {
+  const { app, dir, activity } = makeApp();
+  withMondayStubs(app, []);
+  try {
+    activity.bus.emit({ type: 'start', operationId: 'op-old', kind: 'monday_write', title: 'Monday roll-up', projectId: 'p1' });
+    activity.bus.emit({ type: 'stop', operationId: 'op-old', kind: 'monday_write', title: 'Monday roll-up', status: 'failed', error: 'boom' });
+    const res = await app.inject({ method: 'POST', url: '/api/activity/op-old/retry' });
+    assert.equal(res.statusCode, 409);
+    assert.match(res.json().error, /no item id recorded/);
+  } finally {
+    await app.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
