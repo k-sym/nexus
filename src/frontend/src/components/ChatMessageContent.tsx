@@ -120,6 +120,130 @@ function tokenize(text: string): Token[] {
   return tokens;
 }
 
+/**
+ * The react-markdown `components` map lives at module scope on purpose. React
+ * identifies an element by its type *reference*, so a map rebuilt inside the
+ * render body (fresh closures every time) turns each paragraph, list item,
+ * heading and link into a "new" element on every render: React unmounts and
+ * remounts their DOM instead of updating it in place. ChatPanel re-renders on
+ * a 2 s poll, so that wiped any text selection inside an assistant message
+ * within seconds (unable to copy from a session). The one per-instance input
+ * the overrides need, `onOpenPath`, reaches them through context, which
+ * updates consumers without remounting them.
+ */
+const OpenPathContext = React.createContext<(path: string) => void>(() => {});
+
+function LinkedChildren({ children }: { children?: React.ReactNode }) {
+  const onOpenPath = React.useContext(OpenPathContext);
+  return (
+    <>
+      {React.Children.map(children, (child, index) =>
+        typeof child === 'string' ? (
+          <ChatArtifactLinks key={`artifact-text-${index}`} text={child} onOpenPath={onOpenPath} />
+        ) : (
+          child
+        ),
+      )}
+    </>
+  );
+}
+
+function MarkdownCode({ className, children }: { className?: string; children?: React.ReactNode }) {
+  const onOpenPath = React.useContext(OpenPathContext);
+  const hasLanguage = typeof className === 'string' && className.startsWith('language-');
+  const codeText = String(children);
+  const hasNewline = codeText.includes('\n');
+  if (!hasLanguage && !hasNewline && containsArtifactPath(codeText)) {
+    return <ChatArtifactLinks text={codeText} onOpenPath={onOpenPath} />;
+  }
+  return (
+    <code className={hasLanguage || hasNewline ? className : 'rounded-sm border border-subtle bg-zinc-950/45 px-1 py-0.5 text-[0.92em] accent-text'}>
+      {children}
+    </code>
+  );
+}
+
+const REMARK_PLUGINS = [remarkGfm];
+
+const MARKDOWN_COMPONENTS: Components = {
+  a({ href, children }) {
+    if (!isAllowedLinkUrl(href)) {
+      return <span>{children}</span>;
+    }
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="accent-text underline decoration-[var(--border-strong)] underline-offset-2 transition-colors hover:text-[var(--accent)]"
+      >
+        {children}
+      </a>
+    );
+  },
+  blockquote({ children }) {
+    return <blockquote className="border-l-2 border-subtle pl-3 text-muted">{children}</blockquote>;
+  },
+  code: MarkdownCode,
+  h1({ children }) {
+    return <h1><LinkedChildren>{children}</LinkedChildren></h1>;
+  },
+  h2({ children }) {
+    return <h2><LinkedChildren>{children}</LinkedChildren></h2>;
+  },
+  h3({ children }) {
+    return <h3><LinkedChildren>{children}</LinkedChildren></h3>;
+  },
+  h4({ children }) {
+    return <h4><LinkedChildren>{children}</LinkedChildren></h4>;
+  },
+  img({ src, alt }) {
+    if (!isAllowedImageUrl(src)) {
+      return <span>{src ? `![${alt ?? ''}](${src})` : alt}</span>;
+    }
+    return (
+      <a
+        href={src}
+        target="_blank"
+        rel="noreferrer noopener"
+        className="mt-1 block"
+      >
+        <img
+          src={src}
+          alt={alt || 'Attached image'}
+          loading="lazy"
+          className="max-h-80 max-w-full rounded-lg border border-subtle object-contain"
+        />
+      </a>
+    );
+  },
+  input(props) {
+    return <input {...props} disabled className="mr-2 align-middle accent-[var(--accent)]" />;
+  },
+  li({ children }) {
+    return <li><LinkedChildren>{children}</LinkedChildren></li>;
+  },
+  p({ children }) {
+    return <p><LinkedChildren>{children}</LinkedChildren></p>;
+  },
+  pre({ children }) {
+    return (
+      <pre className="max-w-full overflow-x-auto rounded-lg border border-subtle bg-zinc-950/55 p-3 text-xs leading-relaxed text-zinc-100">
+        {children}
+      </pre>
+    );
+  },
+  strong({ children }) {
+    return <strong><LinkedChildren>{children}</LinkedChildren></strong>;
+  },
+  td({ children }) {
+    return <td><LinkedChildren>{children}</LinkedChildren></td>;
+  },
+  th({ children }) {
+    return <th><LinkedChildren>{children}</LinkedChildren></th>;
+  },
+};
+
 export default function ChatMessageContent({ text, onOpenPath, linkifyPaths = true }: ChatMessageContentProps) {
   const renderUserText = (runText: string, key: string) => {
     const parts = runText.split(/(`[^`\r\n]+`)/g);
@@ -150,115 +274,14 @@ export default function ChatMessageContent({ text, onOpenPath, linkifyPaths = tr
     );
 
   if (linkifyPaths) {
-    const renderLinkedChildren = (children: React.ReactNode) => (
-      <>
-        {React.Children.map(children, (child, index) =>
-          typeof child === 'string' ? (
-            <ChatArtifactLinks key={`artifact-text-${index}`} text={child} onOpenPath={onOpenPath} />
-          ) : (
-            child
-          ),
-        )}
-      </>
-    );
-
-    const components: Components = {
-      a({ href, children }) {
-        if (!isAllowedLinkUrl(href)) {
-          return <span>{children}</span>;
-        }
-        return (
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="accent-text underline decoration-[var(--border-strong)] underline-offset-2 transition-colors hover:text-[var(--accent)]"
-          >
-            {children}
-          </a>
-        );
-      },
-      blockquote({ children }) {
-        return <blockquote className="border-l-2 border-subtle pl-3 text-muted">{children}</blockquote>;
-      },
-      code({ className, children }) {
-        const hasLanguage = typeof className === 'string' && className.startsWith('language-');
-        const codeText = String(children);
-        const hasNewline = codeText.includes('\n');
-        if (!hasLanguage && !hasNewline && containsArtifactPath(codeText)) {
-          return <ChatArtifactLinks text={codeText} onOpenPath={onOpenPath} />;
-        }
-        return (
-          <code className={hasLanguage || hasNewline ? className : 'rounded-sm border border-subtle bg-zinc-950/45 px-1 py-0.5 text-[0.92em] accent-text'}>
-            {children}
-          </code>
-        );
-      },
-      h1({ children }) {
-        return <h1>{renderLinkedChildren(children)}</h1>;
-      },
-      h2({ children }) {
-        return <h2>{renderLinkedChildren(children)}</h2>;
-      },
-      h3({ children }) {
-        return <h3>{renderLinkedChildren(children)}</h3>;
-      },
-      h4({ children }) {
-        return <h4>{renderLinkedChildren(children)}</h4>;
-      },
-      img({ src, alt }) {
-        if (!isAllowedImageUrl(src)) {
-          return <span>{src ? `![${alt ?? ''}](${src})` : alt}</span>;
-        }
-        return (
-          <a
-            href={src}
-            target="_blank"
-            rel="noreferrer noopener"
-            className="mt-1 block"
-          >
-            <img
-              src={src}
-              alt={alt || 'Attached image'}
-              loading="lazy"
-              className="max-h-80 max-w-full rounded-lg border border-subtle object-contain"
-            />
-          </a>
-        );
-      },
-      input(props) {
-        return <input {...props} disabled className="mr-2 align-middle accent-[var(--accent)]" />;
-      },
-      li({ children }) {
-        return <li>{renderLinkedChildren(children)}</li>;
-      },
-      p({ children }) {
-        return <p>{renderLinkedChildren(children)}</p>;
-      },
-      pre({ children }) {
-        return (
-          <pre className="max-w-full overflow-x-auto rounded-lg border border-subtle bg-zinc-950/55 p-3 text-xs leading-relaxed text-zinc-100">
-            {children}
-          </pre>
-        );
-      },
-      strong({ children }) {
-        return <strong>{renderLinkedChildren(children)}</strong>;
-      },
-      td({ children }) {
-        return <td>{renderLinkedChildren(children)}</td>;
-      },
-      th({ children }) {
-        return <th>{renderLinkedChildren(children)}</th>;
-      },
-    };
-
     return (
-      <div className="chat-markdown">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-          {normalizeAllowedRawImages(text)}
-        </ReactMarkdown>
-      </div>
+      <OpenPathContext.Provider value={onOpenPath}>
+        <div className="chat-markdown">
+          <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MARKDOWN_COMPONENTS}>
+            {normalizeAllowedRawImages(text)}
+          </ReactMarkdown>
+        </div>
+      </OpenPathContext.Provider>
     );
   }
 

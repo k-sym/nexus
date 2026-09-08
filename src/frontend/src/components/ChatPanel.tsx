@@ -187,6 +187,17 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
   // making it vanish before the backend has written the turn (persist is at run_end).
   const loadedMessagesRef = useRef<StreamMessage[]>([]);
   loadedMessagesRef.current = loadedMessages;
+  // `submit` awaits a stream that (deliberately) outlives navigation: the
+  // transport keeps reading until run_end even after this instance unmounts
+  // (project switch — ChatPanel is keyed on the project) or the visible thread
+  // changes. Its continuation checks these before touching anything.
+  const mountedRef = useRef(true);
+  const threadIdRef = useRef<string | null>(threadId ?? null);
+  threadIdRef.current = threadId ?? null;
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   const turnBaselineRef = useRef<number | null>(null);
   const streamContentVersion = [
     loadedMessages.length,
@@ -287,11 +298,19 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
         const data = await res.json();
         if (!cancelled) {
           if (data.busy && data.activeThreadId !== threadId) {
-            setProjectRunBusy({
-              threadId: data.activeThreadId,
-              title: data.activeTitle,
+            const next = {
+              threadId: data.activeThreadId as string,
+              title: data.activeTitle as string,
               waitingForResponse: data.waitingForResponse === true,
-            });
+            };
+            // Same holder as last tick: keep the old object so the 2 s poll
+            // doesn't re-render the panel for nothing.
+            setProjectRunBusy((prev) => (
+              prev && prev.threadId === next.threadId && prev.title === next.title
+                && prev.waitingForResponse === next.waitingForResponse
+                ? prev
+                : next
+            ));
           } else {
             setProjectRunBusy(null);
           }
@@ -497,10 +516,18 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
           },
           // Backend auto-named this session mid-turn — pull the new title into
           // the sidebar now rather than at the end of the turn.
-          onTitle: () => onThreadsChanged?.(),
+          onTitle: () => { if (mountedRef.current) onThreadsChanged?.(); },
         });
+        // A dead instance must go quiet: its onThreadsChanged closure would
+        // reload the *old* project's thread list into App, which deselects
+        // whatever the user has open in the new project and wipes their draft.
+        if (!mountedRef.current) return false;
         if (streamError) return false;
         onThreadsChanged?.();
+        // The turn belongs to the thread it started on. If the user has since
+        // switched threads, the history on screen is the other thread's — the
+        // thread-switch effect already reset the stream state; leave it alone.
+        if (threadIdRef.current !== threadId) return true;
         const msgs = await fetchThreadMessages(threadId);
         if (msgs.length > 0) {
           // On a clean completion, adopt persisted history as the source of

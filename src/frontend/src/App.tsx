@@ -1,7 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { X } from '@phosphor-icons/react';
 import { Project, Task, Ticket, ChatThread, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
 import { api, MissionStatus } from './api';
+import { keepIfSameJson, keepIfSameSet } from './lib/stable';
 import TopBar from './components/TopBar';
 import CommandPalette, { Command } from './components/CommandPalette';
 import Sidebar, { SubView, ThreadMeta, type SidebarSession, type SessionActivity } from './components/Sidebar';
@@ -100,6 +101,10 @@ export default function App() {
   const [archivingThreadIds, setArchivingThreadIds] = useState<Set<string>>(() => new Set());
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [assistantActive, setAssistantActive] = useState(false);
+  // Mirrors activeProjectId for async work that must not act on a stale
+  // project once its result lands (see loadThreads).
+  const activeProjectIdRef = useRef(activeProjectId);
+  activeProjectIdRef.current = activeProjectId;
 
   const loadStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -174,6 +179,12 @@ export default function App() {
   const loadThreads = useCallback(async (projectId: string) => {
     try {
       const data = await api.chat.threads(projectId);
+      // A reload can land after the user has moved on to another project: a
+      // stream started in a since-unmounted ChatPanel still names the project
+      // it began in when it reports its turn finished. Adopting that list here
+      // would make the ghost-thread guard below deselect the thread open in the
+      // current project (and blank the composer with it).
+      if (activeProjectIdRef.current !== projectId) return;
       setThreads(data);
     } catch (err) {
       console.error('Failed to load threads:', err);
@@ -240,14 +251,20 @@ export default function App() {
   const refreshActiveChatRuns = useCallback(async () => {
     try {
       const data = await api.chat.activeRuns();
-      setRunningThreadIds(new Set(data.activeThreadIds));
-      setWaitingSessionIds(new Set(data.runs.filter((run) => run.waitingForResponse).map((run) => run.threadId)));
-      setActiveRuns(data.runs.map((run) => ({
+      // Hand back the previous value when nothing changed: this runs every
+      // 2 s and a fresh Set/array each tick re-renders the whole chat for no
+      // reason (ChatPanel receives runningThreadIds as a prop).
+      setRunningThreadIds((prev) => keepIfSameSet(prev, new Set(data.activeThreadIds)));
+      setWaitingSessionIds((prev) => keepIfSameSet(
+        prev,
+        new Set(data.runs.filter((run) => run.waitingForResponse).map((run) => run.threadId)),
+      ));
+      setActiveRuns((prev) => keepIfSameJson(prev, data.runs.map((run) => ({
         threadId: run.threadId,
         title: run.title,
         projectId: run.projectId,
         waitingForResponse: run.waitingForResponse,
-      })));
+      }))));
     } catch (err) {
       console.error('Failed to load active chat runs:', err);
     }
@@ -264,7 +281,7 @@ export default function App() {
   const refreshLiveSessions = useCallback(async () => {
     try {
       const { sessions } = await api.chat.sessions();
-      setLiveSessions(sessions);
+      setLiveSessions((prev) => keepIfSameJson(prev, sessions));
     } catch (err) {
       console.error('Failed to load sessions:', err);
     }
