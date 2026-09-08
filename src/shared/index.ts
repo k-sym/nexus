@@ -542,6 +542,11 @@ export interface NexusConfig {
     api_version: string;
     /** Linked-item refresh cadence in minutes while Nexus is running. */
     poll_minutes: number;
+    /** When enabled, the background linked-item refresh only ticks inside these
+     *  hours (server-local clock). Manual syncs and the view-open scope sync are
+     *  never gated — this is about not hitting Monday every N minutes overnight
+     *  and at weekends when nothing on the board is moving. */
+    work_hours: MondayWorkHours;
   };
   /** User-enabled external API helpers (#291). Each provider is off by default
    *  and reaches the network with a paid key, so nothing is registered until the
@@ -688,6 +693,16 @@ export interface MondayProjectConfig {
      *  here should map to the human-owned inbox label ("Wants attention"). */
     mapping: Partial<Record<TaskStatus, string>>;
   };
+}
+
+/** Working window for the Monday background poll. `days` are JS weekday
+ *  numbers (0 = Sunday … 6 = Saturday); `start`/`end` are 24h `HH:MM` in the
+ *  server's local time zone, and the window is [start, end). */
+export interface MondayWorkHours {
+  enabled: boolean;
+  days: number[];
+  start: string;
+  end: string;
 }
 
 export interface ProjectConfig {

@@ -316,3 +316,37 @@ describe('SettingsPage', () => {
     });
   });
 });
+
+describe('Monday work hours', () => {
+  it('shows the weekday and time controls and writes them back under monday.work_hours', async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.settings.get).mockResolvedValueOnce({
+      server: { port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
+      assistant: { url: '', api_key: '${ASSISTANT_API_KEY}' },
+      models: { local: { base_url: '', api_key: '', display_name: 'Local Model', chat_model: '', supports_images: false } },
+      jira: { enabled: false, user: '', instance: '', project: '', poll_minutes: 15 },
+      monday: {
+        enabled: true, api_version: '2026-07', poll_minutes: 10,
+        work_hours: { enabled: true, days: [1, 2, 3, 4, 5], start: '08:00', end: '18:00' },
+      },
+      helpers: {
+        brave: { enabled: false, api_key: '' },
+        exa: { enabled: false, api_key: '' },
+        perplexity: { enabled: false, api_key: '' },
+        context7: { enabled: false, api_key: '' },
+        search_default: 'exa',
+      },
+    } as any);
+    render(<SettingsPage />);
+    await screen.findByRole('heading', { name: 'Monday.com' });
+    expect(screen.getByRole('button', { name: 'Mon' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Sat' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByLabelText('Work hours start')).toHaveValue('08:00');
+
+    await user.click(screen.getByRole('button', { name: 'Sat' }));
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+    await waitFor(() => expect(api.settings.update).toHaveBeenCalled());
+    const sent = vi.mocked(api.settings.update).mock.calls.at(-1)![0] as any;
+    expect(sent.monday.work_hours.days).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+});
