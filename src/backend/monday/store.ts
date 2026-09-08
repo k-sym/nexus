@@ -106,6 +106,17 @@ export function pruneScope(
   return stale.length;
 }
 
+/**
+ * Wipe the mirror. The maintenance action the trust panel offers beside the
+ * memory-index rebuild: monday_items is disposable (Monday stays canonical
+ * and the next view open or poll rebuilds it), while task_monday_links is
+ * user intent and is deliberately left alone — which is exactly why the two
+ * are separate tables.
+ */
+export function clearMirror(db: Database.Database): number {
+  return db.prepare('DELETE FROM monday_items').run().changes;
+}
+
 export function getItem(db: Database.Database, itemId: string): MondayItem | undefined {
   return db.prepare(`SELECT ${ITEM_COLUMNS} FROM monday_items WHERE item_id = ?`).get(itemId) as MondayItem | undefined;
 }

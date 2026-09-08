@@ -7,7 +7,7 @@ export function TrustPrivacySection() {
   const [snapshot, setSnapshot] = useState<TrustSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
-  const [operation, setOperation] = useState<'rebuild' | 'clear' | null>(null);
+  const [operation, setOperation] = useState<'rebuild' | 'clear' | 'mirror' | null>(null);
   const [confirmation, setConfirmation] = useState('');
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
@@ -36,6 +36,24 @@ export function TrustPrivacySection() {
       await load();
     } catch (error) {
       setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Memory index rebuild failed.' });
+    } finally {
+      setOperation(null);
+    }
+  };
+
+  // The mirror is disposable (Monday stays canonical; the next view open or
+  // poll rebuilds it) and links survive, so a plain confirm is enough — no
+  // phrase, unlike clearing canonical memory below.
+  const clearMirror = async () => {
+    if (!window.confirm('Clear the Monday item mirror? Task links are kept; the next Project Management view open re-syncs it.')) return;
+    setOperation('mirror');
+    setMessage(null);
+    try {
+      const result = await api.trust.clearMondayMirror();
+      setMessage({ kind: 'success', text: `Monday mirror cleared: ${result.cleared} items removed, ${result.links_kept} links kept.` });
+      await load();
+    } catch (error) {
+      setMessage({ kind: 'error', text: error instanceof Error ? error.message : 'Clearing the Monday mirror failed.' });
     } finally {
       setOperation(null);
     }
@@ -128,6 +146,17 @@ export function TrustPrivacySection() {
             {operation === 'rebuild' ? 'Rebuilding…' : 'Rebuild memory index'}
           </button>
           <p className="text-[10px] text-faint mt-1">Regenerates the disposable search index without deleting canonical Markdown.</p>
+        </div>
+        <div>
+          <button
+            type="button"
+            onClick={() => void clearMirror()}
+            disabled={operation !== null}
+            className="px-3 py-1.5 surface-elevated rounded-sm text-xs text-primary disabled:opacity-40"
+          >
+            {operation === 'mirror' ? 'Clearing…' : 'Clear Monday mirror'}
+          </button>
+          <p className="text-[10px] text-faint mt-1">Drops the disposable copy of Monday items; task↔item links are kept and the next view open re-syncs.</p>
         </div>
         <div>
           <label htmlFor="clear-nexus-confirmation" className="block text-xs text-faint mb-1">Confirmation phrase</label>
