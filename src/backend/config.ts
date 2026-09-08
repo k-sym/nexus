@@ -68,6 +68,7 @@ function defaultConfig(): NexusConfig {
         embedding_model: '',
         rerank_model: '',
       },
+      next_message: 'claude-code/claude-sonnet-5',
     },
     assistant: {
       url: '',

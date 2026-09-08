@@ -312,6 +312,21 @@ export default function SettingsPage() {
             <ModelCurationSection />
           </Section>
 
+          <Section title="Composer">
+            <Field label="Next-message suggestion model">
+              <input
+                type="text"
+                value={(config.models.next_message ?? '') as string}
+                onChange={(e) => update(['models', 'next_message'], e.target.value)}
+                placeholder="claude-code/claude-sonnet-5"
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary font-mono"
+              />
+              <p className="text-[10px] text-faint mt-1">
+                Predicts the placeholder in the chat composer. A <span className="font-mono text-muted">claude-code/</span> model runs through the Claude engine and falls back to the memory daemon's local model if it fails; leave empty for the local model only.
+              </p>
+            </Field>
+          </Section>
+
           {/* Endpoint config — kept here because it's an env-style detail
               that doesn't fit a per-provider API key. "Custom" rather than
               "local": the endpoint is wherever you point it, which may be

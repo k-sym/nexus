@@ -6,8 +6,10 @@ import {
   MAX_CONTEXT_CHARS,
   MAX_TURNS,
   MAX_TURN_CHARS,
+  cleanSuggestion,
   parseTranscript,
   renderTranscript,
+  resolveNextMessageGenerator,
   suggestNextMessage,
 } from '../sessions/next-message';
 
@@ -104,4 +106,23 @@ test('route returns an empty suggestion for a transcript with no assistant turn'
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.json(), { suggestion: '' });
   await app.close();
+});
+
+const engineOn = { claude: { enabled: true, auth: 'subscription', oauth_token: '', executable_path: '', setting_sources: [], skills: 'all' } } as any;
+const engineOff = { claude: { ...engineOn.claude, enabled: false } } as any;
+const models = (next_message: string) => ({ openrouter: { api_key: '' }, local: {} as any, next_message });
+
+test('resolveNextMessageGenerator picks Claude only for a known claude-code model with the engine on', () => {
+  assert.deepEqual(resolveNextMessageGenerator({ models: models('claude-code/claude-sonnet-5'), engines: engineOn }), { kind: 'claude', modelId: 'claude-sonnet-5' });
+  assert.deepEqual(resolveNextMessageGenerator({ models: models('claude-code/claude-sonnet-5'), engines: engineOff }), { kind: 'daemon' });
+  assert.deepEqual(resolveNextMessageGenerator({ models: models('claude-code/not-a-model'), engines: engineOn }), { kind: 'daemon' });
+  assert.deepEqual(resolveNextMessageGenerator({ models: models('openrouter/owl-alpha'), engines: engineOn }), { kind: 'daemon' });
+  assert.deepEqual(resolveNextMessageGenerator({ models: models(''), engines: engineOn }), { kind: 'daemon' });
+  assert.deepEqual(resolveNextMessageGenerator({ models: models('claude-code/'), engines: engineOn }), { kind: 'daemon' });
+});
+
+test('cleanSuggestion keeps the first line, drops labels and quotes, keeps a trailing question mark', () => {
+  assert.equal(cleanSuggestion('Next message: "run the tests"\nignored'), 'run the tests');
+  assert.equal(cleanSuggestion('\n  what broke?  '), 'what broke?');
+  assert.equal(cleanSuggestion(''), '');
 });

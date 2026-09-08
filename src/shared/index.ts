@@ -465,6 +465,12 @@ export interface NexusConfig {
       embedding_model: string;
       rerank_model: string;
     };
+    /** `provider/id` that predicts the composer's next-message placeholder
+     *  (#434). A `claude-code/*` key runs a one-shot through the Claude Agent
+     *  SDK engine and falls back to the memory daemon's local model on failure
+     *  or when the engine is off; empty ⇒ the local model only. Default
+     *  `claude-code/claude-sonnet-5`. */
+    next_message: string;
   };
   assistant: {
     /** OpenAI-compatible remote assistant endpoint, e.g. Hermes/OpenClaw. */
