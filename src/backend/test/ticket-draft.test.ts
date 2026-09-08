@@ -5,6 +5,7 @@ import {
   buildDraftPrompt,
   buildFirstTurn,
   draftTicket,
+  draftTicketRaw,
   extractJsonObject,
   parseDraft,
   resolveProjectId,
@@ -88,4 +89,28 @@ test('buildFirstTurn carries the problem, the ticket, the branch and the trailer
   assert.match(turn, /branch `fix\/SUP123-last-score`/);
   assert.match(turn, /push `fix\/SUP123-last-score`/);
   assert.match(turn, /Do not touch Jira/);
+});
+
+// Regression (#432): one in four SUP-1317 drafts came back fenced with a
+// trailing comma before the closing brace; JSON.parse rejected it and the
+// route answered 502 "nothing usable".
+test('extractJsonObject tolerates a trailing comma in a fenced reply', () => {
+  const reply = '```json\n{\n  "problem": "Export download fails for TBT.",\n  "project": "p-wse",\n  "branchType": "fix",\n  "branchDescription": "tbt-download-export",\n}\n```';
+  assert.deepEqual(extractJsonObject(reply), {
+    problem: 'Export download fails for TBT.',
+    project: 'p-wse',
+    branchType: 'fix',
+    branchDescription: 'tbt-download-export',
+  });
+});
+
+test('extractJsonObject tolerates a trailing comma inside a nested array and leaves strings alone', () => {
+  const reply = '{"problem": "x, }", "tags": ["a", "b",], "branchDescription": "y",}';
+  assert.deepEqual(extractJsonObject(reply), { problem: 'x, }', tags: ['a', 'b'], branchDescription: 'y' });
+});
+
+test('draftTicketRaw returns the raw model text alongside a null draft', async () => {
+  const result = await draftTicketRaw(input, projects, { model: 'm', generate: async () => 'I cannot help with that.' });
+  assert.equal(result.draft, null);
+  assert.equal(result.text, 'I cannot help with that.');
 });

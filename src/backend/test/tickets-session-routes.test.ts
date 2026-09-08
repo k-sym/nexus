@@ -46,12 +46,25 @@ test('draft returns a parsed TicketDraft from the injected generator and records
   await app.close(); cleanup();
 });
 
-test('draft 404s an unknown ticket and 502s an unusable reply', async () => {
-  const { app, cleanup } = appWithDb(async () => 'I cannot help with that.');
+test('draft 404s an unknown ticket and 502s an unusable reply, keeping the raw text for diagnosis', async () => {
+  const { app, events, cleanup } = appWithDb(async () => 'I cannot help with that.');
   assert.equal((await app.inject({ method: 'POST', url: '/api/tickets/NOPE-1/draft' })).statusCode, 404);
-  const res = await app.inject({ method: 'POST', url: '/api/tickets/SUP-123/draft' });
+  const logged: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(' ')); };
+  let res;
+  try {
+    res = await app.inject({ method: 'POST', url: '/api/tickets/SUP-123/draft' });
+  } finally {
+    console.error = origError;
+  }
   assert.equal(res.statusCode, 502);
   assert.match(res.json().error, /nothing usable/);
+  // #432: the raw reply goes to stderr and into the stop event so the failure is diagnosable.
+  assert.ok(logged.some((l) => l.startsWith('[ticket-draft] SUP-123') && l.includes('I cannot help with that.')), logged.join('\n'));
+  const stop = events.find((e: any) => e.type === 'stop') as any;
+  assert.equal(stop.status, 'failed');
+  assert.deepEqual(stop.diagnostics, { rawLength: 24, rawSnippet: 'I cannot help with that.' });
   await app.close(); cleanup();
 });
 
