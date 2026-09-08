@@ -13,6 +13,13 @@ updates:
       include: scope
     labels:
       - dependencies
+    # Pi ships an x.0 roughly weekly and a fix lands within a day or two
+    # (0.81.0, 0.82.0, 0.84.0, 0.85.0 all did). Wait for that fix rather
+    # than proposing a fresh x.0. Other packages are not held back.
+    cooldown:
+      default-days: 3
+      include:
+        - "@earendil-works/pi-*"
     groups:
       pi-runtime:
         patterns:
