@@ -349,9 +349,7 @@ describe('ProjectManagementView', () => {
   // --- Task 15: per-project Monday scope configuration --------------------
 
   it('renders the Monday scope settings panel instead of the error screen when the project is unconfigured', async () => {
-    vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(
-      Object.assign(new Error('no Monday scope configured for this project'), { code: 'unconfigured' }),
-    );
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue(null as never);
     vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([] as never);
     render(<ProjectManagementView projectId="p1" />);
     expect(await screen.findByText(/configure monday scope/i)).toBeTruthy();
@@ -360,16 +358,14 @@ describe('ProjectManagementView', () => {
   });
 
   it('does not offer a Cancel control when there is no already-loaded view to fall back to', async () => {
-    vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(
-      Object.assign(new Error('no Monday scope configured for this project'), { code: 'unconfigured' }),
-    );
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue(null as never);
     vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([] as never);
     render(<ProjectManagementView projectId="p1" />);
     await screen.findByText(/configure monday scope/i);
     expect(screen.queryByRole('button', { name: /cancel/i })).toBeNull();
   });
 
-  it('still renders the error screen (not the config panel) for a distinct, non-unconfigured 409 like monday_disabled', async () => {
+  it('still renders the error screen (not the config panel) for a genuine failure like monday_disabled', async () => {
     vi.spyOn(api, 'fetchMondayItems').mockRejectedValue(
       Object.assign(new Error('Monday is disabled or MONDAY_TOKEN is not set'), { code: 'monday_disabled' }),
     );
@@ -429,9 +425,7 @@ describe('ProjectManagementView', () => {
 
   it('reloads items after a successful save from the (unconfigured-triggered) config panel', async () => {
     const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
-    fetchSpy.mockRejectedValueOnce(
-      Object.assign(new Error('no Monday scope configured for this project'), { code: 'unconfigured' }),
-    );
+    fetchSpy.mockResolvedValueOnce(null as never);
     vi.spyOn(api, 'fetchMondayBoards').mockResolvedValue([{ id: 'b1', name: 'Portfolio', workspace: null }] as never);
     const save = vi.spyOn(api, 'saveMondayProjectConfig').mockResolvedValue({} as never);
     fetchSpy.mockResolvedValueOnce([ITEM] as never);

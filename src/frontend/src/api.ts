@@ -297,17 +297,21 @@ export async function fetchBrowserView(threadId: string, known?: number): Promis
 // Monday.com — the Project Management view's read paths and link CRUD.
 // Free-standing exports (not nested under `api`) so ProjectManagementView can
 // import and mock them directly, matching the Task 11 brief's client surface.
-export async function fetchMondayItems(projectId: string, refresh = false): Promise<MondayItemWithLinks[]> {
+/** Resolves to `null` when the project has no Monday scope yet — the normal
+ *  first-run state, which the backend reports as `200 { configured: false }`
+ *  rather than an error (#259). Every other failure still throws. */
+export async function fetchMondayItems(projectId: string, refresh = false): Promise<MondayItemWithLinks[] | null> {
   const query = refresh ? '?refresh=1' : '';
-  const data = await fetchJson<{ items: MondayItemWithLinks[] }>(`/api/monday/projects/${projectId}/items${query}`);
-  return data.items;
+  const data = await fetchJson<{ configured: boolean; items: MondayItemWithLinks[] }>(`/api/monday/projects/${projectId}/items${query}`);
+  return data.configured === false ? null : data.items;
 }
 
+/** An unconfigured project searches as empty rather than failing. */
 export async function searchMondayItems(projectId: string, query: string): Promise<MondayItem[]> {
-  const data = await fetchJson<{ items: MondayItem[] }>(
+  const data = await fetchJson<{ configured?: boolean; items: MondayItem[] }>(
     `/api/monday/projects/${projectId}/search?q=${encodeURIComponent(query)}`,
   );
-  return data.items;
+  return data.configured === false ? [] : data.items;
 }
 
 export async function fetchMondayLinks(projectId: string): Promise<TaskMondayLink[]> {

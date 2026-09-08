@@ -146,7 +146,7 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
 
   fastify.get('/api/monday/boards', async (_request, reply) => {
     const opts = clientOptions();
-    if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled' });
+    if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled', retryable: false });
     try {
       const boards = await fetchBoards(opts);
       return { boards };
@@ -159,7 +159,7 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
   fastify.get('/api/monday/boards/:boardId/meta', async (request, reply) => {
     const { boardId } = request.params as { boardId: string };
     const opts = clientOptions();
-    if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled' });
+    if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled', retryable: false });
     try {
       const meta = await fetchBoardMeta(opts, boardId);
       return meta;
@@ -231,12 +231,16 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
     if (!project) return reply.code(404).send({ error: 'project not found' });
 
+    // "Not set up yet" is the normal first-run state of every project, not a
+    // fault, so it travels on the success channel as a discriminated body
+    // (#259). The distinction from "scoped but the board is empty" still has
+    // to reach the client, which is why this is not a bare `{ items: [] }`.
     const cfg = projectMondayConfig(project);
-    if (!cfg) return reply.code(409).send({ error: 'no Monday scope configured for this project', code: 'unconfigured' });
+    if (!cfg) return { configured: false, items: [] };
 
     if (refresh === '1') {
       const opts = clientOptions();
-      if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled' });
+      if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled', retryable: false });
       try {
         await syncScope(db, opts, cfg.board_id, cfg.group_id ?? null, new Date().toISOString());
       } catch (err) {
@@ -256,7 +260,7 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
         const counts = computeRollup(listLinkedTaskStatuses(db, item.item_id));
         return { ...item, rollup: counts, rollup_text: formatRollupText(counts), task_ids: byItem.get(item.item_id) ?? [] };
       });
-    return { items };
+    return { configured: true, items };
   });
 
   fastify.get('/api/monday/projects/:projectId/search', async (request, reply) => {
@@ -266,9 +270,9 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
     if (!project) return reply.code(404).send({ error: 'project not found' });
     const cfg = projectMondayConfig(project);
-    if (!cfg) return reply.code(409).send({ error: 'no Monday scope configured for this project', code: 'unconfigured' });
+    if (!cfg) return { configured: false, items: [] };
     const opts = clientOptions();
-    if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled' });
+    if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled', retryable: false });
 
     const query = (q ?? '').trim().toLowerCase();
     try {
@@ -278,7 +282,7 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
         .map((r) => mapItem(r, now))
         .filter((item) => !query || item.name.toLowerCase().includes(query))
         .slice(0, 50);
-      return { items };
+      return { configured: true, items };
     } catch (err) {
       const monday = err as MondayError;
       return reply.code(502).send({ error: monday.message, code: monday.code, retryable: monday.retryable ?? false });

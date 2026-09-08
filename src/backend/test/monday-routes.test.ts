@@ -411,13 +411,14 @@ test('GET items 404s for an unknown project', async () => {
   db.close();
 });
 
-test('GET items 409s when the project has no Monday scope configured', async () => {
+test('GET items returns 200 { configured: false } when the project has no Monday scope configured', async () => {
   const db = getDb(':memory:');
   db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
               VALUES ('p2','p2','P2','P2','','', '{}', 0, '', 'now','now')`).run();
   const app = await buildApp(db);
   const res = await app.inject({ method: 'GET', url: '/api/monday/projects/p2/items' });
-  assert.equal(res.statusCode, 409);
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().configured, false);
   await app.close();
   db.close();
 });
