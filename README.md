@@ -871,6 +871,17 @@ it gets populated:
 > Jira search endpoint returns an empty result (HTTP 200) rather than an auth error, so it just looks like
 > "no tickets." The instance host accepts either `your-company.atlassian.net` or a full `https://…` URL.
 
+**Ticket to session (#432).** Selecting a ticket shows its cleaned body and a session panel (web sidebar;
+a detail screen on iOS). **Draft with Sonnet** runs a one-shot Claude Agent SDK call (tools off, one turn,
+nothing persisted) that distils the real problem out of the forwarded-mail noise, suggests a project, and
+proposes a branch in SSUK's form `fix/SUP123-short-description` (`fix` / `hotfix` / `feature`). You pick the
+project and a model from the curated list, edit the prompt and branch, and press **Go**: Nexus opens a
+thread in that project stamped with the ticket key and sends the edited prompt as its first turn, with a
+fixed trailer telling the agent to work on that branch, push it when done, and never touch Jira. Tickets
+with a session show a badge and open it. The drafting model is `jira.draft_model` (default
+`claude-code/claude-sonnet-5`; must be a `claude-code/*` key). The session replaces the old
+"create a Kanban task" action. Nexus still never writes to Jira; close the ticket there yourself.
+
 ### Mission Control
 
 The landing dashboard. A single `GET /api/mission-control` call aggregates:
@@ -1016,7 +1027,10 @@ Base URL: `http://127.0.0.1:4173`
 ### Tickets (Jira mirror)
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/tickets` | List mirrored Jira tickets |
+| GET | `/api/tickets` | List mirrored Jira tickets (each with `session: { thread_id, project_id } \| null`) |
+| GET | `/api/tickets/:key/description` | Cleaned ticket body (`?refresh=1` re-fetches from Jira) |
+| POST | `/api/tickets/:key/draft` | Sonnet drafts `{ problem, projectId, branchType, branchName, model }` from the ticket |
+| POST | `/api/tickets/:key/session` | `{ projectId, problem, branchName }` → `{ thread, firstTurn }`; the client sends `firstTurn` through the chat stream |
 | POST | `/api/jira/sync` | Upsert the mirror (`{ tickets, source, replaceAll }`) — used by external push agents; the native poll shares the same upsert |
 
 ### Notifications
