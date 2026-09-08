@@ -33,7 +33,7 @@ struct RootShellView: View {
         return shell
             .fullScreenCover(item: $router.openThread) { open in
                 NavigationStack {
-                    StreamingChatView(api: api, threadId: open.id, title: "Chat")
+                    StreamingChatView(api: api, threadId: open.id, title: open.title, seed: open.seed)
                         .toolbar {
                             ToolbarItem(placement: .cancellationAction) {
                                 Button("Done") { router.openThread = nil }

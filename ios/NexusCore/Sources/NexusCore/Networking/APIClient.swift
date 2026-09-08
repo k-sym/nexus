@@ -165,6 +165,21 @@ public actor APIClient {
         try await request(.tickets)
     }
 
+    public func ticketDescription(key: String, refresh: Bool = false) async throws -> TicketDescription {
+        try await request(.ticketDescription(key, refresh: refresh))
+    }
+
+    /// Ticket to session (#432): a one-shot Sonnet draft. Slow (seconds).
+    public func ticketDraft(key: String) async throws -> TicketDraft {
+        try await request(.ticketDraft(key), decoder: plainDecoder)
+    }
+
+    /// Ticket to session (#432): opens the thread; send `firstTurn` through the stream.
+    public func createTicketSession(key: String, _ req: TicketSessionRequest) async throws -> TicketSessionResult {
+        let body = try JSONEncoder().encode(req)
+        return try await request(.createTicketSession(key, body: body), decoder: plainDecoder)
+    }
+
     public func activity() async throws -> ActivityResponse {
         try await request(.activity)
     }

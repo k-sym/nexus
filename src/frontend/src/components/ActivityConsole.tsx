@@ -31,6 +31,7 @@ const KIND_LABELS: Record<OperationKind, string> = {
   chat_turn: 'Chat turn',
   assistant_stream: 'Assistant stream',
   jira_sync: 'Jira sync',
+  ticket_draft: 'Ticket draft',
   github_sync: 'GitHub sync',
   monday_sync: 'Monday refresh',
   monday_write: 'Monday write',

@@ -3,7 +3,7 @@ import Foundation
 /// A long-running backend operation surfaced in the Activity console. Mirrors
 /// `OperationKind` in `src/shared/index.ts`; forward-compatible via `.unknown`.
 public enum OperationKind: Codable, Hashable, Sendable {
-    case chatTurn, assistantStream, jiraSync, githubSync, mondaySync, mondayWrite
+    case chatTurn, assistantStream, jiraSync, ticketDraft, githubSync, mondaySync, mondayWrite
     // missionTick is legacy: Missions were removed (#353), but existing DBs
     // keep old `operations` rows of this kind, so decode tolerance stays.
     case memoryArchive, memoryIndex, missionTick
@@ -14,6 +14,7 @@ public enum OperationKind: Codable, Hashable, Sendable {
         case "chat_turn": self = .chatTurn
         case "assistant_stream": self = .assistantStream
         case "jira_sync": self = .jiraSync
+        case "ticket_draft": self = .ticketDraft
         case "github_sync": self = .githubSync
         case "monday_sync": self = .mondaySync
         case "monday_write": self = .mondayWrite
@@ -29,6 +30,7 @@ public enum OperationKind: Codable, Hashable, Sendable {
         case .chatTurn: return "chat_turn"
         case .assistantStream: return "assistant_stream"
         case .jiraSync: return "jira_sync"
+        case .ticketDraft: return "ticket_draft"
         case .githubSync: return "github_sync"
         case .mondaySync: return "monday_sync"
         case .mondayWrite: return "monday_write"
@@ -45,6 +47,7 @@ public enum OperationKind: Codable, Hashable, Sendable {
         case .chatTurn: return "Chat turn"
         case .assistantStream: return "Assistant"
         case .jiraSync: return "Jira sync"
+        case .ticketDraft: return "Ticket draft"
         case .githubSync: return "GitHub sync"
         case .mondaySync: return "Monday sync"
         case .mondayWrite: return "Monday write"

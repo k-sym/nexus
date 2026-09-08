@@ -75,9 +75,15 @@ final class ChatViewModel {
     /// Any background activity — the in-flight handoff POST or a running run.
     var isBackgroundActive: Bool { isBackgroundRunning || isStartingBackgroundRun }
 
-    init(endpoint: ChatEndpoint, title: String) {
+    /// A first turn queued by the opener (ticket to session, #432). Consumed
+    /// exactly once, after history loads, so it never re-fires on foreground
+    /// reconciliation.
+    private var pendingSeed: ChatSeed?
+
+    init(endpoint: ChatEndpoint, title: String, seed: ChatSeed? = nil) {
         self.endpoint = endpoint
         self.title = title
+        self.pendingSeed = seed
     }
 
     /// A cheap value that changes whenever the transcript grows, for auto-scroll.
@@ -339,6 +345,15 @@ final class ChatViewModel {
     }
 
     private func maybeAutosend() {
+        if let seed = pendingSeed {
+            pendingSeed = nil
+            if let key = seed.modelKey { selectedModelKey = key }
+            if input.isEmpty {
+                input = seed.text
+                send()
+                return
+            }
+        }
         #if DEBUG
         if input.isEmpty, let text = ProcessInfo.processInfo.environment["NEXUS_DEV_AUTOSEND"], !text.isEmpty {
             input = text

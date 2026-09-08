@@ -50,6 +50,21 @@ public struct Endpoint: Sendable {
     /// Jira mirror rows → `[Ticket]`.
     public static let tickets = Endpoint(path: "/api/tickets")
 
+    /// Cleaned ticket body → `TicketDescription`. `refresh` re-fetches from Jira.
+    public static func ticketDescription(_ key: String, refresh: Bool = false) -> Endpoint {
+        Endpoint(path: "/api/tickets/\(key)/description\(refresh ? "?refresh=1" : "")")
+    }
+
+    /// Sonnet drafts the problem, project and branch (#432) → `TicketDraft`.
+    public static func ticketDraft(_ key: String) -> Endpoint {
+        Endpoint(path: "/api/tickets/\(key)/draft", method: "POST")
+    }
+
+    /// Open a ticket-stamped thread (#432) → `TicketSessionResult`.
+    public static func createTicketSession(_ key: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/tickets/\(key)/session", method: "POST", body: body)
+    }
+
     /// Long-running operations → `ActivityResponse`.
     public static let activity = Endpoint(path: "/api/activity")
 

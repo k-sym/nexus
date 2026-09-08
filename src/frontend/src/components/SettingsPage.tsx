@@ -448,6 +448,18 @@ export default function SettingsPage() {
                 className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
             </Field>
+            <Field label="Draft model">
+              <input
+                type="text"
+                value={(config.jira.draft_model ?? '') as string}
+                onChange={(e) => update(['jira', 'draft_model'], e.target.value)}
+                placeholder="claude-code/claude-sonnet-5"
+                className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary font-mono"
+              />
+              <p className="text-[10px] text-faint mt-1">
+                Drafts the problem statement from a ticket. Must be a <span className="font-mono text-muted">claude-code/</span> model: drafting runs through the Claude engine.
+              </p>
+            </Field>
             <Field label="Content strip rules">
               <div className="space-y-2">
                 {((config.jira.content_rules ?? []) as string[]).map((rule: string, i: number) => (

@@ -12,14 +12,14 @@ struct StreamingChatView: View {
     @State private var showFileImporter = false
     @Environment(\.scenePhase) private var scenePhase
 
-    /// Backend-agnostic entry point.
-    init(endpoint: ChatEndpoint, title: String) {
-        _vm = State(initialValue: ChatViewModel(endpoint: endpoint, title: title))
+    /// Backend-agnostic entry point. `seed` is sent once after history loads.
+    init(endpoint: ChatEndpoint, title: String, seed: ChatSeed? = nil) {
+        _vm = State(initialValue: ChatViewModel(endpoint: endpoint, title: title, seed: seed))
     }
 
     /// Convenience for project-thread chat.
-    init(api: APIClient, threadId: String, title: String) {
-        self.init(endpoint: ThreadChatEndpoint(api: api, threadId: threadId), title: title)
+    init(api: APIClient, threadId: String, title: String, seed: ChatSeed? = nil) {
+        self.init(endpoint: ThreadChatEndpoint(api: api, threadId: threadId), title: title, seed: seed)
     }
 
     var body: some View {

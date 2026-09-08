@@ -7,7 +7,7 @@ import TopBar from './components/TopBar';
 import CommandPalette, { Command } from './components/CommandPalette';
 import Sidebar, { SubView, ThreadMeta, type SidebarSession, type SessionActivity } from './components/Sidebar';
 import MissionControl from './components/MissionControl';
-import TicketsView from './components/TicketsView';
+import TicketsView, { type TicketGoInput } from './components/TicketsView';
 import IdeasView from './components/IdeasView';
 import DaemonToasts from './components/DaemonToasts';
 import NotificationToasts from './components/NotificationToasts';
@@ -570,16 +570,20 @@ export default function App() {
     if (activeProjectId) await loadTasks(activeProjectId);
   };
 
-  const handleCreateTaskFromTicket = async (projectId: string, ticket: Ticket) => {
-    const p = (ticket.priority || '').toLowerCase();
-    const priority = ['low', 'medium', 'high', 'urgent'].includes(p) ? p : 'medium';
-    await api.projects.createTask(projectId, {
-      title: `[${ticket.key}] ${ticket.summary}`,
-      description: `From Jira ${ticket.key}${ticket.url ? ` (${ticket.url})` : ''}\n\n${ticket.summary}`,
-      status: 'triage',
-      priority,
+  /**
+   * Ticket to session (#432): open a ticket-stamped thread, seed its first turn
+   * with the server-composed prompt (edited problem + branch trailer) and the
+   * picked model, then navigate into it.
+   */
+  const handleTicketGo = async (ticket: Ticket, input: TicketGoInput) => {
+    const { thread, firstTurn } = await api.tickets.createSession(ticket.key, {
+      projectId: input.projectId,
+      problem: input.problem,
+      branchName: input.branchName,
     });
-    if (projectId === activeProjectId) await loadTasks(projectId);
+    await loadThreads(input.projectId);
+    setTaskSeed({ threadId: thread.id, prompt: firstTurn, modelKey: input.modelKey });
+    selectThread(input.projectId, thread.id);
   };
 
   // --- navigation helpers ---------------------------------------------------
@@ -735,7 +739,7 @@ export default function App() {
         />
       );
     if (globalView === 'tickets')
-      return <TicketsView projects={projects} onCreateTask={handleCreateTaskFromTicket} />;
+      return <TicketsView projects={projects} onGo={handleTicketGo} onOpenSession={selectThread} />;
     if (globalView === 'ideas')
       return <IdeasView projects={projects} />;
     if (globalView === 'assistant')

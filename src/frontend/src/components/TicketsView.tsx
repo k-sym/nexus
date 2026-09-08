@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Ticket as TicketIcon, ArrowClockwise, Eye } from '@phosphor-icons/react';
 import { Project, Ticket, TicketDescription } from '@nexus/shared';
 import { api } from '../api';
-import TriageToProject from './TriageToProject';
+import TicketSessionPanel, { type TicketGoInput } from './TicketSessionPanel';
 
 const STATUS_ORDER = ['Waiting for support', 'In Progress', 'Waiting for customer'];
 
@@ -33,10 +33,14 @@ function groupByStatus(tickets: Ticket[]): [string, Ticket[]][] {
 
 interface TicketsViewProps {
   projects: Project[];
-  onCreateTask: (projectId: string, ticket: Ticket) => Promise<void>;
+  /** Go: open a session in the project with the edited prompt as turn one (#432). */
+  onGo: (ticket: Ticket, input: TicketGoInput) => Promise<void>;
+  onOpenSession: (projectId: string, threadId: string) => void;
 }
 
-export default function TicketsView({ projects, onCreateTask }: TicketsViewProps) {
+export type { TicketGoInput };
+
+export default function TicketsView({ projects, onGo, onOpenSession }: TicketsViewProps) {
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<Ticket | null>(null);
@@ -105,7 +109,7 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
           <div className="flex-1 overflow-y-auto px-6 py-4 space-y-5">
             {tickets.length === 0 && (
               <div className="text-sm text-zinc-600 text-center py-10">
-                No tickets synced yet. They arrive from the Jira-sync cron (POST /api/jira/sync).
+                No tickets synced yet. Enable the Jira poll in Settings, or push them to POST /api/jira/sync.
               </div>
             )}
             {groups.map(([statusName, group]) => (
@@ -125,6 +129,9 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-mono accent-text shrink-0">{t.key}</span>
                         <span className="text-sm text-zinc-200 truncate flex-1">{t.summary}</span>
+                        {t.session && (
+                          <span className="shrink-0 text-[10px] uppercase tracking-wider accent-text border border-zinc-800 rounded-sm px-1.5 py-0.5" title="Has a session">session</span>
+                        )}
                         <span className={`shrink-0 ${priorityClass(t.priority)}`}>{t.priority}</span>
                       </div>
                     </button>
@@ -165,15 +172,17 @@ export default function TicketsView({ projects, onCreateTask }: TicketsViewProps
                 </a>
               )}
 
-              <TriageToProject
+              <TicketSessionPanel
+                key={selected.key}
+                ticket={selected}
                 projects={projects}
-                resetKey={selected.key}
-                onCreate={(projectId) => onCreateTask(projectId, selected)}
+                onGo={onGo}
+                onOpenSession={onOpenSession}
               />
             </div>
           ) : (
             <div className="flex-1 flex items-center justify-center p-6">
-              <p className="text-sm text-zinc-600 text-center">Select a ticket to view details and triage it into a project.</p>
+              <p className="text-sm text-zinc-600 text-center">Select a ticket to read it, draft the problem, and start a session.</p>
             </div>
           )}
         </div>

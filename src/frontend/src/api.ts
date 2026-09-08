@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, GitDiffState, ReviewActionRequest, ReviewActionResult, Idea, IdeaState, CreateIdeaInput, UpdateIdeaInput, IdeaIssueDraft, MondayItem, MondayItemWithLinks, TaskMondayLink, MondayProjectConfig } from '@nexus/shared';
+import { Project, Task, ChatThread, Ticket, TicketDescription, TicketDraft, TicketSessionRequest, TicketSessionResult, GitDiffState, ReviewActionRequest, ReviewActionResult, Idea, IdeaState, CreateIdeaInput, UpdateIdeaInput, IdeaIssueDraft, MondayItem, MondayItemWithLinks, TaskMondayLink, MondayProjectConfig } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -888,6 +888,12 @@ export const api = {
     list: () => fetchJson<Ticket[]>(`/api/tickets`),
     description: (key: string, refresh = false) =>
       fetchJson<TicketDescription>(`/api/tickets/${encodeURIComponent(key)}/description${refresh ? '?refresh=1' : ''}`),
+    /** Sonnet distils the real problem, a project and a branch (#432). */
+    draft: (key: string) =>
+      fetchJson<TicketDraft>(`/api/tickets/${encodeURIComponent(key)}/draft`, { method: 'POST' }),
+    /** Open a ticket-stamped thread; send `firstTurn` through the chat stream. */
+    createSession: (key: string, body: TicketSessionRequest) =>
+      fetchJson<TicketSessionResult>(`/api/tickets/${encodeURIComponent(key)}/session`, { method: 'POST', body: JSON.stringify(body) }),
   },
   ideas: {
     /** Non-terminal ideas by default; `all` includes graduated/discarded. */
