@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatThread, Project } from '@nexus/shared';
@@ -31,10 +31,14 @@ const mockApi = vi.hoisted(() => ({
 }));
 
 vi.mock('./api', () => ({ api: mockApi }));
+// Captures the most recent ChatPanel props so a test can invoke a callback
+// exactly as a since-unmounted panel instance would (a stale closure).
+const chatPanelProps = vi.hoisted(() => ({ current: null as null | { projectId: string; threadId: string | null; onThreadsChanged?: () => void } }));
 vi.mock('./components/ChatPanel', () => ({
-  default: ({ projectId, threadId }: { projectId: string; threadId: string | null }) => (
-    <div data-testid="chat-panel-props">{projectId}:{threadId ?? 'none'}</div>
-  ),
+  default: (props: { projectId: string; threadId: string | null; onThreadsChanged?: () => void }) => {
+    chatPanelProps.current = props;
+    return <div data-testid="chat-panel-props">{props.projectId}:{props.threadId ?? 'none'}</div>;
+  },
 }));
 vi.mock('./components/AssistantView', () => ({
   default: () => <div data-testid="assistant-view">Assistant</div>,
@@ -88,6 +92,15 @@ const alphaThread: ChatThread = {
   id: 'thread-alpha',
   project_id: 'project-a',
   title: 'Alpha session',
+  created_at: '2026-06-26T00:00:00.000Z',
+  updated_at: '2026-06-26T00:00:00.000Z',
+  archived_at: null,
+};
+
+const betaThread: ChatThread = {
+  id: 'thread-beta',
+  project_id: 'project-b',
+  title: 'Beta session',
   created_at: '2026-06-26T00:00:00.000Z',
   updated_at: '2026-06-26T00:00:00.000Z',
   archived_at: null,
@@ -157,6 +170,43 @@ describe('App project navigation', () => {
     const section = await screen.findByLabelText('Active sessions');
     expect(section).toHaveTextContent('Beta session');
     expect(section).toHaveTextContent('RUN');
+  });
+
+
+  // Regression: a stream started in project A keeps its transport open after
+  // the user switches to project B (ChatPanel is keyed on the project, so the
+  // A instance unmounts, but the backend run — and the fetch reading it — carry
+  // on). When that run finished, the dead instance's `onThreadsChanged` reloaded
+  // A's thread list into App while B was active; the ghost-thread guard then saw
+  // B's open thread missing from "the" list and deselected it, blanking the
+  // composer and whatever had been typed into it.
+  it('ignores a thread-list reload for a project that is no longer active', async () => {
+    mockApi.chat.threads.mockImplementation(async (projectId: string) => (
+      projectId === 'project-a' ? [alphaThread] : projectId === 'project-b' ? [betaThread] : []
+    ));
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText('Switch to Alpha'));
+    await user.click(await screen.findByText('Alpha session'));
+    expect(await screen.findByTestId('chat-panel-props')).toHaveTextContent('project-a:thread-alpha');
+    const staleOnThreadsChanged = chatPanelProps.current?.onThreadsChanged;
+    expect(staleOnThreadsChanged).toBeTypeOf('function');
+
+    await user.click(screen.getByLabelText('Switch to Beta'));
+    await user.click(await screen.findByText('Beta session'));
+    expect(await screen.findByTestId('chat-panel-props')).toHaveTextContent('project-b:thread-beta');
+
+    // The run in Alpha completes: the unmounted panel's closure fires.
+    await act(async () => { staleOnThreadsChanged?.(); });
+    await waitFor(() => expect(mockApi.chat.threads).toHaveBeenCalledWith('project-a'));
+
+    // Beta's thread stays selected and Beta's tree still lists Beta's sessions.
+    await waitFor(() => {
+      expect(screen.getByTestId('chat-panel-props')).toHaveTextContent('project-b:thread-beta');
+    });
+    expect(screen.getByText('Beta session')).toBeInTheDocument();
+    expect(screen.queryByText('Alpha session')).not.toBeInTheDocument();
   });
 
   it('clears the selected thread when switching to a different project', async () => {

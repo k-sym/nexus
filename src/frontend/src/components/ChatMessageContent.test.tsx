@@ -198,4 +198,55 @@ describe('ChatMessageContent', () => {
     expect(screen.getByText('just a normal message')).toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
+  // Regression: the react-markdown `components` map used to be rebuilt inline
+  // on every render. Each entry was a fresh function, which React treats as a
+  // new element type, so every paragraph/list/heading/link was unmounted and
+  // remounted on each render. The chat re-renders on a 2 s poll, so any text
+  // selection inside an assistant message was wiped within seconds (unable to
+  // copy from a session). The DOM nodes must survive a re-render.
+  it('keeps the same DOM nodes across a re-render so a text selection survives polling', () => {
+    const text = [
+      'Copy **this** sentence and [a link](https://example.com) too.',
+      '',
+      '- item one with `src/app.ts` in it',
+      '- item two',
+      '',
+      '## Heading',
+    ].join('\n');
+    const { container, rerender } = render(<ChatMessageContent text={text} onOpenPath={vi.fn()} />);
+    const before = {
+      p: container.querySelector('p'),
+      strong: container.querySelector('strong'),
+      a: container.querySelector('a'),
+      li: container.querySelector('li'),
+      h2: container.querySelector('h2'),
+      code: container.querySelector('code, button'),
+    };
+    expect(before.p).not.toBeNull();
+    expect(before.strong).not.toBeNull();
+    expect(before.li).not.toBeNull();
+
+    // Same text, a different handler identity: what a parent re-render looks like.
+    rerender(<ChatMessageContent text={text} onOpenPath={vi.fn()} />);
+
+    expect(container.querySelector('p')).toBe(before.p);
+    expect(container.querySelector('strong')).toBe(before.strong);
+    expect(container.querySelector('a')).toBe(before.a);
+    expect(container.querySelector('li')).toBe(before.li);
+    expect(container.querySelector('h2')).toBe(before.h2);
+    expect(container.querySelector('code, button')).toBe(before.code);
+  });
+
+  it('routes path clicks to the latest onOpenPath handler after a re-render', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const text = 'See `/Users/k-sym/notes.md` for details.';
+    const { rerender } = render(<ChatMessageContent text={text} onOpenPath={first} />);
+    rerender(<ChatMessageContent text={text} onOpenPath={second} />);
+
+    screen.getByRole('button', { name: /Preview notes\.md/ }).click();
+
+    expect(first).not.toHaveBeenCalled();
+    expect(second).toHaveBeenCalledWith('/Users/k-sym/notes.md');
+  });
 });

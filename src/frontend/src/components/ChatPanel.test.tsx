@@ -1564,4 +1564,105 @@ describe('ChatPanel', () => {
     expect(streamBodies[0]).toMatchObject({ content: 'plan this', thinkingLevel: 'high' });
     await waitFor(() => expect(screen.getByTestId('thinking-selector')).toBeDisabled());
   });
+  // Regression: ChatPanel is keyed on the project, so switching projects
+  // unmounts it while the stream transport (deliberately) keeps reading until
+  // run_end. The post-stream continuation of `submit` then ran for the dead
+  // instance and fired `onThreadsChanged` — whose closure reloads the *old*
+  // project's thread list into App, deselecting whatever the user had open in
+  // the new project and wiping their draft. A dead instance must go quiet.
+  it('does not report thread changes once the panel is unmounted mid-run', async () => {
+    const encoder = new TextEncoder();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const onThreadsChanged = vi.fn();
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
+      if (url === '/api/threads/t1/messages/stream') {
+        return { ok: true, status: 200, body: new ReadableStream({ start(c) { streamController = c; } }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    const { unmount } = render(
+      <ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} onThreadsChanged={onThreadsChanged} backendActiveThreadIds={new Set()} />,
+    );
+    await waitFor(() => expect(screen.getByTestId('chat-input')).not.toBeDisabled());
+    await userEvent.type(screen.getByTestId('chat-input'), 'start something');
+    await userEvent.click(screen.getByTestId('send-button'));
+    await waitFor(() => expect(streamController).toBeDefined());
+    await act(async () => {
+      streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_start', run: { runId: 'run-1', threadId: 't1', startedAt: 1 } })}\n`));
+    });
+
+    // User switches project: this instance is gone, the transport is not.
+    unmount();
+
+    await act(async () => {
+      streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: 'thread_title', title: 'Auto title' })}\n`));
+      streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_end', run: { runId: 'run-1', threadId: 't1', status: 'completed', completedAt: 2 } })}\n`));
+      streamController.close();
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+
+    expect(onThreadsChanged).not.toHaveBeenCalled();
+  }, 15000);
+
+  // Same class of bug within one project: the turn that finishes belongs to the
+  // thread it was started on, not to whichever thread the panel shows now.
+  it('does not overwrite the visible thread with another thread\'s finished turn', async () => {
+    const encoder = new TextEncoder();
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const t1Completed = {
+      thread: { id: 't1', last_model_key: 'anthropic/sonnet' },
+      messages: [
+        { id: 'u1', role: 'user', content: 'first thread prompt', timestamp: 1 },
+        { id: 'a1', role: 'assistant', content: 'first thread answer', timestamp: 2, run: { runId: 'run-1', threadId: 't1', status: 'completed', phase: 'finalizing', startedAt: 1, lastEventAt: 2, completedAt: 2, tools: [] } },
+      ],
+    };
+    const t2History = {
+      thread: { id: 't2', last_model_key: 'anthropic/sonnet' },
+      messages: [
+        { id: 'u2', role: 'user', content: 'second thread history', timestamp: 1 },
+      ],
+    };
+    let t1Done = false;
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/models') return { ok: true, json: async () => ({ models: [{ id: 'sonnet', name: 'Sonnet', provider: 'anthropic', configured: true }] }) } as Response;
+      if (url.startsWith('/api/projects/p1/model-status')) return { ok: true, json: async () => ({ busy: false }) } as Response;
+      if (url === '/api/threads/t1') return { ok: true, json: async () => (t1Done ? t1Completed : { thread: { id: 't1', last_model_key: 'anthropic/sonnet' }, messages: [] }) } as Response;
+      if (url === '/api/threads/t2') return { ok: true, json: async () => t2History } as Response;
+      if (url === '/api/threads/t1/messages/stream') {
+        return { ok: true, status: 200, body: new ReadableStream({ start(c) { streamController = c; } }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    const { rerender } = render(
+      <ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} backendActiveThreadIds={new Set()} />,
+    );
+    await waitFor(() => expect(screen.getByTestId('chat-input')).not.toBeDisabled());
+    await userEvent.type(screen.getByTestId('chat-input'), 'first thread prompt');
+    await userEvent.click(screen.getByTestId('send-button'));
+    await waitFor(() => expect(streamController).toBeDefined());
+    await act(async () => {
+      streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_start', run: { runId: 'run-1', threadId: 't1', startedAt: 1 } })}\n`));
+    });
+
+    // Switch to another thread in the same project while t1 is still running.
+    rerender(<ChatPanel projectId="p1" threadId="t2" onBusyConflict={noop} backendActiveThreadIds={new Set()} />);
+    await screen.findByText('second thread history');
+
+    t1Done = true;
+    await act(async () => {
+      streamController.enqueue(encoder.encode(`${JSON.stringify({ kind: 'run_end', run: { runId: 'run-1', threadId: 't1', status: 'completed', completedAt: 2 } })}\n`));
+      streamController.close();
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+
+    expect(screen.getByText('second thread history')).toBeInTheDocument();
+    expect(screen.queryByText('first thread answer')).not.toBeInTheDocument();
+  }, 15000);
 });
