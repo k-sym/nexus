@@ -107,7 +107,9 @@ export async function scheduleRollupForItem(
     const opts: MondayClientOptions = { token, apiVersion: cfg.api_version };
     const operationId = crypto.randomUUID();
     const startedAt = Date.now();
-    emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday roll-up', projectId, taskId });
+    // diagnostics.itemId is what POST /api/activity/:id/retry needs to re-run
+    // this write: the unlink and delete sites have no task to look it up from.
+    emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday roll-up', projectId, taskId, diagnostics: { itemId } });
 
     try {
       const result = await writeRollup(db, opts, projectCfg, itemId, deps);
@@ -182,7 +184,7 @@ export async function scheduleStatusSyncForItem(
     const opts: MondayClientOptions = { token, apiVersion: cfg.api_version };
     const operationId = crypto.randomUUID();
     const startedAt = Date.now();
-    emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday status', projectId, taskId });
+    emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday status', projectId, taskId, diagnostics: { itemId } });
 
     try {
       const result = await writeStatus(db, opts, projectCfg, itemId, deps, { allowAdvanceFromUnmanaged });

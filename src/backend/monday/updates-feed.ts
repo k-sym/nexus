@@ -173,7 +173,7 @@ async function postBatch(
   const operationId = crypto.randomUUID();
   const startedAt = Date.now();
   const taskId = events.find((e): e is Extract<FeedEvent, { kind: 'moved' }> => e.kind === 'moved')?.task_id ?? null;
-  emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId });
+  emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId, diagnostics: { itemId } });
   try {
     await deps.postUpdate(opts, itemId, formatFeedUpdate(events));
     writeRow(db, itemId, projectId, new Date(now).toISOString(), []);
@@ -249,6 +249,24 @@ export async function flushDueFeedUpdates(
     if ((await postBatch(db, opts, row.item_id, row.project_id, pending, now, deps, emit)) === 'posted') posted++;
   }
   return posted;
+}
+
+/**
+ * Post one item's queue now, ignoring the window — the Activity Console's
+ * Retry for a failed update. Returns 'nothing' when there is no queue.
+ */
+export async function flushFeedForItem(
+  db: Database.Database,
+  opts: MondayClientOptions,
+  itemId: string,
+  now: number = Date.now(),
+  deps: FeedDeps = DEFAULT_DEPS,
+  emit?: Emit,
+): Promise<'posted' | 'failed' | 'nothing'> {
+  const row = readRow(db, itemId);
+  const pending = parsePending(row);
+  if (!row || pending.length === 0) return 'nothing';
+  return postBatch(db, opts, itemId, row.project_id, pending, now, deps, emit);
 }
 
 /** Start the trailing-flush timer. Returns a stop function. */

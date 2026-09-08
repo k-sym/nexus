@@ -13,7 +13,8 @@ import type { FastifyInstance } from 'fastify';
 import type { MondayProjectConfig, MondayItemWithLinks, Project, Task, TaskStatus } from '@nexus/shared';
 import { KANBAN_COLUMNS } from '@nexus/shared';
 import { loadConfig } from '../config.js';
-import { resolveMondayToken } from '../monday/poll.js';
+import { resolveMondayToken, runMondayRefreshOnce } from '../monday/poll.js';
+import { flushFeedForItem } from '../monday/updates-feed.js';
 import { syncScope } from '../monday/sync.js';
 import {
   fetchBoardItems, fetchItemsByIds, fetchBoards, fetchBoardMeta, MondayError, type MondayClientOptions,
@@ -143,6 +144,42 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
   // failure rather than degrading to an empty list, same as /items and
   // /search below: a user must never read "you have no boards" when their
   // token expired.
+
+  // The two retry targets the Activity Console reaches through
+  // POST /api/activity/:id/retry — one per Monday operation kind.
+
+  /** monday_sync: run the linked-item refresh now, outside the poll's clock
+   *  and work-hours window. */
+  fastify.post('/api/monday/refresh', async (_request, reply) => {
+    const cfg = loadConfig().monday;
+    const token = resolveMondayToken();
+    if (!cfg.enabled || !token) {
+      return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled', retryable: false });
+    }
+    const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
+    const refreshed = await runMondayRefreshOnce(db, cfg, token, undefined, emit);
+    if (refreshed === null) return reply.code(502).send({ error: 'Monday refresh failed; see the Activity Console', retryable: true });
+    return { ok: true, refreshed };
+  });
+
+  /** monday_write: re-run every Nexus→Monday write for one item — roll-up,
+   *  status sync, and any update notes still queued for it (posted now,
+   *  ignoring the throttle window). Each write is its own Activity operation,
+   *  so a fault shows up exactly where the original did. */
+  fastify.post('/api/monday/items/:itemId/retry-writes', async (request, reply) => {
+    const { itemId } = request.params as { itemId: string };
+    const body = (request.body ?? {}) as { project_id?: string };
+    if (!body.project_id) return reply.code(400).send({ error: 'project_id is required' });
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(body.project_id) as Project | undefined;
+    if (!project) return reply.code(404).send({ error: 'project not found' });
+    const opts = clientOptions();
+    if (!opts) return reply.code(409).send({ error: 'Monday is disabled or MONDAY_TOKEN is not set', code: 'monday_disabled', retryable: false });
+    const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
+    await scheduleRollupForItem(db, itemId, project.id, null, emit);
+    await scheduleStatusSyncForItem(db, itemId, project.id, null, false, emit);
+    const feed = await flushFeedForItem(db, opts, itemId, Date.now(), undefined, emit);
+    return { ok: true, feed };
+  });
 
   fastify.get('/api/monday/boards', async (_request, reply) => {
     const opts = clientOptions();
