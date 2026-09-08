@@ -110,6 +110,7 @@ function defaultConfig(): NexusConfig {
       project: 'SUP',
       poll_minutes: 15,
       content_rules: [],
+      draft_model: 'claude-code/claude-sonnet-5',
     },
     github: {
       // Default true so the existing sync behaviour is preserved for configs

@@ -187,6 +187,49 @@ export interface Ticket {
   url: string | null;
   source: string | null;
   synced_at: string;
+  /** The latest open session started from this ticket (#432), or null. Derived
+   *  by join on `chat_threads.ticket_key`, so it survives the ticket being
+   *  re-mirrored or dropped by the poll. */
+  session?: TicketSessionRef | null;
+}
+
+export interface TicketSessionRef {
+  thread_id: string;
+  project_id: string;
+}
+
+/** What Sonnet drafts from a ticket (#432): the real problem in one or a few
+ *  sentences, a suggested project, and a branch in SSUK's convention. Every
+ *  field is editable on the client before Go. */
+export interface TicketDraft {
+  key: string;
+  /** The distilled problem statement; becomes the editable prompt. */
+  problem: string;
+  /** A known project id, or null when the model could not pick one. */
+  projectId: string | null;
+  branchType: TicketBranchType;
+  /** `fix/SUP123-scoring-last-score-missing` form. */
+  branchName: string;
+  /** `provider/id` of the model that produced the draft. */
+  model: string;
+}
+
+export const TICKET_BRANCH_TYPES = ['fix', 'hotfix', 'feature'] as const;
+export type TicketBranchType = (typeof TICKET_BRANCH_TYPES)[number];
+
+/** Body of `POST /api/tickets/:key/session`. */
+export interface TicketSessionRequest {
+  projectId: string;
+  problem: string;
+  branchName: string;
+}
+
+/** Result of `POST /api/tickets/:key/session`: the new thread and the exact
+ *  text the client sends as its first turn (composed server-side so web, iOS
+ *  and the backend never hold three copies of the trailer). */
+export interface TicketSessionResult {
+  thread: ChatThread;
+  firstTurn: string;
 }
 
 /** Cleaned, display-ready body of a Jira ticket, fetched lazily on selection. */
@@ -267,6 +310,8 @@ export interface ChatThread {
   created_at: string;
   updated_at: string;
   archived_at: string | null;
+  /** Jira key when the thread was started from a ticket (#432). */
+  ticket_key?: string | null;
 }
 
 export interface SignalFilterFlags {
@@ -466,6 +511,10 @@ export interface NexusConfig {
     /** User-maintained chunks stripped from every ticket body during cleaning.
      *  Whitespace/case-tolerant literal match; three asterisks match any text. */
     content_rules: string[];
+    /** `provider/id` of the model that drafts the problem statement from a
+     *  ticket (#432). Must be a `claude-code/*` key: drafting runs through the
+     *  Claude Agent SDK harness. Default `claude-code/claude-sonnet-5`. */
+    draft_model: string;
   };
   github: {
     /** When false the GitHub issue sync no-ops. Defaults to true so existing
@@ -734,6 +783,7 @@ export const OPERATION_KINDS = [
   'chat_turn',
   'assistant_stream',
   'jira_sync',
+  'ticket_draft',
   'github_sync',
   'monday_sync',
   'monday_write',

@@ -68,7 +68,9 @@ function runMigrations(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS chat_threads (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      agent_id TEXT NOT NULL,
+      -- Personas are gone (Phase 5); the column stays for old rows and old
+      -- tests, but a fresh DB must accept the persona-less insert in routes/chat.ts.
+      agent_id TEXT NOT NULL DEFAULT '',
       title TEXT NOT NULL DEFAULT 'New Session',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
@@ -504,6 +506,13 @@ function runMigrations(db: Database.Database) {
   if (!threadCols.some((c) => c.name === 'last_model_key')) {
     db.exec('ALTER TABLE chat_threads ADD COLUMN last_model_key TEXT');
   }
+  // Ticket to session (#432): a thread started from a Jira ticket carries the
+  // key so the Tickets list can show and link the session even after the poll
+  // has dropped the ticket row.
+  if (!threadCols.some((c) => c.name === 'ticket_key')) {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN ticket_key TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_chat_threads_ticket_key ON chat_threads(ticket_key)');
 
   // Missions were removed (#353). Existing DBs keep their `missions` /
   // `mission_runs` tables and rows (the audit ledger) untouched — soft path,
