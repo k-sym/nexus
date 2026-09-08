@@ -15,6 +15,7 @@ import { KANBAN_COLUMNS } from '@nexus/shared';
 import { loadConfig } from '../config.js';
 import { resolveMondayToken, runMondayRefreshOnce } from '../monday/poll.js';
 import { flushFeedForItem } from '../monday/updates-feed.js';
+import { buildStaleReport, listScopedProjects } from '../monday/stale.js';
 import { syncScope } from '../monday/sync.js';
 import {
   fetchBoardItems, fetchItemsByIds, fetchBoards, fetchBoardMeta, MondayError, type MondayClientOptions,
@@ -150,6 +151,55 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
   fastify.post('/api/monday/mirror/clear', async () => {
     const cleared = clearMirror(db);
     return { ok: true, cleared, links_kept: (db.prepare('SELECT COUNT(*) AS n FROM task_monday_links').get() as { n: number }).n };
+  });
+
+  /**
+   * Items with no movement for `days` (default 7) across every scoped
+   * project — the read behind the partner's daily stale-item nudge
+   * (baker-internal #59). Movement = the latest of the item's own updated_at,
+   * its newest update-thread entry, and its linked tasks' updated_at.
+   *
+   * `refresh=1` re-syncs a project's scope first when its mirror is older
+   * than `poll_minutes` (the background poll only refreshes LINKED items, so
+   * an unlinked item's clock is only as fresh as the last view open). A
+   * refresh that cannot run — Monday off, no token, a Monday failure — never
+   * fails the read: the report is still built from the mirror and says so.
+   * `exclude_labels=Done,Stuck` drops items by status label.
+   */
+  fastify.get('/api/monday/stale', async (request, reply) => {
+    const query = request.query as { days?: string; refresh?: string; exclude_labels?: string };
+    const days = Number(query.days ?? 7);
+    if (!Number.isFinite(days) || days < 0) return reply.code(400).send({ error: 'days must be a non-negative number' });
+    const excludeLabels = (query.exclude_labels ?? '').split(',').map((l) => l.trim()).filter(Boolean);
+
+    const warnings: string[] = [];
+    let refreshed: string[] = [];
+    if (query.refresh === '1') {
+      const opts = clientOptions();
+      if (!opts) {
+        warnings.push('refresh skipped: Monday is disabled or MONDAY_TOKEN is not set');
+      } else {
+        const maxAgeMs = Math.max(1, loadConfig().monday.poll_minutes) * 60_000;
+        const nowMs = Date.now();
+        for (const { project, cfg } of listScopedProjects(db)) {
+          const newest = db.prepare(
+            cfg.group_id
+              ? 'SELECT MAX(synced_at) AS s FROM monday_items WHERE board_id = ? AND group_id = ?'
+              : 'SELECT MAX(synced_at) AS s FROM monday_items WHERE board_id = ?',
+          ).get(...(cfg.group_id ? [cfg.board_id, cfg.group_id] : [cfg.board_id])) as { s: string | null };
+          const age = newest.s ? nowMs - Date.parse(newest.s) : Number.POSITIVE_INFINITY;
+          if (age < maxAgeMs) continue;
+          try {
+            await syncScope(db, opts, cfg.board_id, cfg.group_id ?? null, new Date().toISOString());
+            refreshed.push(project.id);
+          } catch (err) {
+            warnings.push(`refresh failed for ${project.name}: ${(err as MondayError).message}`);
+          }
+        }
+      }
+    }
+
+    return { ...buildStaleReport(db, days, new Date(), excludeLabels), refreshed, warnings };
   });
 
   // The two retry targets the Activity Console reaches through
