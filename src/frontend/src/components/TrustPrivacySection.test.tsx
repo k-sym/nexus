@@ -10,6 +10,7 @@ vi.mock('../api', () => ({
       get: vi.fn(),
       rebuildMemory: vi.fn(),
       clearNexusMemory: vi.fn(),
+      clearMondayMirror: vi.fn(),
     },
   },
 }));
@@ -37,6 +38,7 @@ const trust = api.trust as {
   get: ReturnType<typeof vi.fn>;
   rebuildMemory: ReturnType<typeof vi.fn>;
   clearNexusMemory: ReturnType<typeof vi.fn>;
+  clearMondayMirror: ReturnType<typeof vi.fn>;
 };
 
 describe('TrustPrivacySection', () => {
@@ -147,5 +149,23 @@ describe('TrustPrivacySection', () => {
 
     expect(rebuild).toBeDisabled();
     expect(clear).toBeDisabled();
+  });
+
+  it('clears the Monday mirror after a confirm and reports what was kept', async () => {
+    const user = userEvent.setup();
+    trust.clearMondayMirror.mockResolvedValue({ ok: true, cleared: 59, links_kept: 2 });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    render(<TrustPrivacySection />);
+    await user.click(await screen.findByRole('button', { name: 'Clear Monday mirror' }));
+    expect(trust.clearMondayMirror).toHaveBeenCalledOnce();
+    expect(await screen.findByRole('status')).toHaveTextContent('59 items removed, 2 links kept');
+  });
+
+  it('does nothing when the mirror-clear confirm is declined', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(window, 'confirm').mockReturnValue(false);
+    render(<TrustPrivacySection />);
+    await user.click(await screen.findByRole('button', { name: 'Clear Monday mirror' }));
+    expect(trust.clearMondayMirror).not.toHaveBeenCalled();
   });
 });

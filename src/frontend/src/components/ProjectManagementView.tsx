@@ -222,6 +222,33 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   // Create a Triage task from an item and link it in one click, then reload so
   // the new link (and, when status sync is on, the "Planned" push it triggers)
   // is reflected. The two existing endpoints are reused — no bespoke backend.
+  // The other half of "linking is reachable from both ends": attach a task
+  // that already exists. Only tasks with no link are offered — one item per
+  // task, and re-pointing a task silently from here would hide the move.
+  const [attachingItemIds, setAttachingItemIds] = useState<Set<string>>(new Set());
+  const linkedTaskIds = new Set((items ?? []).flatMap((i) => i.task_ids));
+  const unlinkedTasks = [...tasksById.values()]
+    .filter((t) => !linkedTaskIds.has(t.id))
+    .sort((a, b) => a.title.localeCompare(b.title));
+
+  const handleAttachTask = useCallback(async (item: MondayItemWithLinks, taskId: string) => {
+    if (!taskId) return;
+    setAttachingItemIds(prev => new Set([...prev, item.item_id]));
+    setCreateError(null);
+    try {
+      await linkTaskToMondayItem(projectId, taskId, item.item_id);
+      await load(false);
+    } catch (err) {
+      setCreateError((err as Error).message);
+    } finally {
+      setAttachingItemIds(prev => {
+        const next = new Set(prev);
+        next.delete(item.item_id);
+        return next;
+      });
+    }
+  }, [projectId, load]);
+
   const handleCreateTask = useCallback(async (item: MondayItemWithLinks) => {
     setCreatingItemIds(prev => new Set([...prev, item.item_id]));
     setCreateError(null);
@@ -408,12 +435,26 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
                       {degradedLabel(item.state) ? (
                         <span className="text-amber-300">{degradedLabel(item.state)}</span>
                       ) : null}
+                      <select
+                        value=""
+                        aria-label={`Attach a task to ${item.name}`}
+                        disabled={attachingItemIds.has(item.item_id) || item.state !== 'active' || unlinkedTasks.length === 0}
+                        onChange={(e) => void handleAttachTask(item, e.target.value)}
+                        className="ml-auto shrink-0 max-w-[14rem] bg-transparent border border-zinc-800 rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:text-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <option value="">
+                          {attachingItemIds.has(item.item_id) ? 'Attaching…' : unlinkedTasks.length === 0 ? 'No unlinked tasks' : 'Attach existing task…'}
+                        </option>
+                        {unlinkedTasks.map((t) => (
+                          <option key={t.id} value={t.id}>{t.title}</option>
+                        ))}
+                      </select>
                       <button
                         type="button"
                         disabled={creatingItemIds.has(item.item_id) || item.state !== 'active'}
                         onClick={() => void handleCreateTask(item)}
                         aria-label={`Create a Triage task from ${item.name}`}
-                        className="ml-auto shrink-0 text-zinc-400 hover:text-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                        className="shrink-0 text-zinc-400 hover:text-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {creatingItemIds.has(item.item_id) ? 'Creating…' : '＋ Create task in Triage'}
                       </button>

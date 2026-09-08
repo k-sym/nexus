@@ -22,7 +22,7 @@ import {
 import { mapItem } from '../monday/map.js';
 import {
   listItemsForBoard, listLinksForProject, linkTask, unlinkTask, getLinkForTask, listLinkedTaskStatuses,
-  getItem, upsertItems,
+  getItem, upsertItems, clearMirror,
 } from '../monday/store.js';
 import { computeRollup, formatRollupText } from '../monday/rollup.js';
 import {
@@ -144,6 +144,13 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
   // failure rather than degrading to an empty list, same as /items and
   // /search below: a user must never read "you have no boards" when their
   // token expired.
+
+  /** Clear the disposable item mirror; links survive. A local write, so it
+   *  needs no Monday access — it works precisely when Monday is broken. */
+  fastify.post('/api/monday/mirror/clear', async () => {
+    const cleared = clearMirror(db);
+    return { ok: true, cleared, links_kept: (db.prepare('SELECT COUNT(*) AS n FROM task_monday_links').get() as { n: number }).n };
+  });
 
   // The two retry targets the Activity Console reaches through
   // POST /api/activity/:id/retry — one per Monday operation kind.

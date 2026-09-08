@@ -808,6 +808,8 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ confirmation }),
     }),
+    /** Wipe the disposable Monday item mirror; task↔item links survive. */
+    clearMondayMirror: () => fetchJson<{ ok: boolean; cleared: number; links_kept: number }>('/api/monday/mirror/clear', { method: 'POST' }),
   },
   agentBridge: {
     status: () => fetchJson<AgentBridgeStatus>('/api/agent-bridge/status'),

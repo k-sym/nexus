@@ -445,4 +445,39 @@ describe('ProjectManagementView', () => {
     expect(await screen.findByText('Ship the thing')).toBeTruthy();
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
+
+  // --- attach an existing task from the item row ---------------------------
+
+  it('attaches an existing unlinked task to an item from its row and refreshes', async () => {
+    vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([
+      { id: 't1', title: 'Already linked', status: 'review' },
+      { id: 't9', title: 'Loose task', status: 'todo' },
+    ] as never);
+    const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
+    fetchSpy.mockResolvedValueOnce([ITEM] as never);
+    fetchSpy.mockResolvedValueOnce([{ ...ITEM, task_ids: ['t1', 't9'] }] as never);
+    const link = vi.spyOn(api, 'linkTaskToMondayItem').mockResolvedValue(undefined as never);
+
+    render(<ProjectManagementView projectId="p1" />);
+    const select = await screen.findByLabelText('Attach a task to Ship the thing');
+    // Only the unlinked task is offered.
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Loose task' })).toBeTruthy());
+    expect(screen.queryByRole('option', { name: 'Already linked' })).toBeNull();
+
+    fireEvent.change(select, { target: { value: 't9' } });
+    await waitFor(() => expect(link).toHaveBeenCalledWith('p1', 't9', '1'));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/2 linked tasks/)).toBeTruthy();
+  });
+
+  it('surfaces an inline error when attaching fails', async () => {
+    vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([{ id: 't9', title: 'Loose task', status: 'todo' }] as never);
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    vi.spyOn(api, 'linkTaskToMondayItem').mockRejectedValue(new Error('Link failed'));
+    render(<ProjectManagementView projectId="p1" />);
+    const select = await screen.findByLabelText('Attach a task to Ship the thing');
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Loose task' })).toBeTruthy());
+    fireEvent.change(select, { target: { value: 't9' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent('Link failed');
+  });
 });

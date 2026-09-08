@@ -471,3 +471,17 @@ test('GET search 502s (not an empty-success shape) when the live Monday fetch fa
     db.close();
   }
 });
+
+test('POST /api/monday/mirror/clear wipes monday_items but keeps every link', async () => {
+  const db = getDb(':memory:');
+  seed(db);
+  db.prepare("INSERT INTO task_monday_links (task_id, item_id, project_id, created_at) VALUES ('t1','1','p1','now')").run();
+  const app = await buildApp(db);
+  const res = await app.inject({ method: 'POST', url: '/api/monday/mirror/clear' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { ok: true, cleared: 1, links_kept: 1 });
+  assert.equal(getItem(db, '1'), undefined);
+  assert.ok(getLinkForTask(db, 't1'));
+  await app.close();
+  db.close();
+});
