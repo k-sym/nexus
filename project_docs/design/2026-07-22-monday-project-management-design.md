@@ -1,8 +1,8 @@
 # Monday.com integration — "Project Management" (design)
 
 **Date:** 2026-07-22
-**Status:** Design approved, not yet implemented
-**Follow-on (separate spec):** standing session preamble that makes every agent aware of memory, Kanban, and Monday
+**Status:** Built and live (PRs #255, #256, #321, #425–#430). See *Amendment: status sync* and *As built* at the end.
+**Follow-on (separate spec):** standing session preamble that makes every agent aware of memory, Kanban, and Monday (shipped as #278)
 
 ---
 
@@ -321,3 +321,102 @@ Two hazards from past work, handled up front:
   and indexes for the new tables are created after the tables. The backend runs
   under `tsx watch` and re-runs migrations on the live DB, so a bad migration takes
   it down.
+
+---
+
+## Amendment: status sync (2026-07-29, PR #321)
+
+The write invariant above ("Nexus never writes the status column") was reversed
+deliberately, as an **opt-in, per-project, guard-railed** fourth write path. The
+status column is the one field a human on the board relies on, so the guardrails
+are what make the reversal safe rather than a footnote:
+
+- Config: `monday.status_sync: { enabled, column_id, forward_only, mapping }`
+  in `projects.config_json`; default off; rejected without a `column_id`.
+- Writes only labels the per-Kanban-column `mapping` assigns, so a human inbox
+  label such as "Wants attention" is never a target.
+- Never overwrites a *hold* (a label outside the mapping that a human set),
+  except on the link-create handoff (`allowAdvanceFromUnmanaged`).
+- `forward_only` (default true) blocks regressions; no-op if unchanged, using
+  the same self-healing `lastWritten`/`synced_at` baseline as the roll-up.
+- The item's status is the **aggregate** of its linked tasks
+  (`deriveItemStage`), not one card.
+- A label the column no longer has self-disables status sync for that project
+  after one notification (`disableStatusSyncForProject`).
+
+Module: `src/backend/monday/status-sync.ts`; fires from the same four trigger
+sites as the roll-up (`monday/trigger.ts`).
+
+## As built (2026-09-08)
+
+The first build (#255, #256) shipped the mirror, links, roll-up, read tools,
+context injection, scope settings, Kanban badge, and a read-only iOS list. A
+design-versus-code audit on 2026-09-08 found the updates feed, retries, and two
+UI leftovers unbuilt; six PRs closed the gaps. What differs from the design:
+
+**Updates feed (#427, closes #260).** Built as `src/backend/monday/updates-feed.ts`,
+not inside `writes.ts`. Only two transitions post — a linked task moving **into
+Review** or **into Deploy** — because the audience is colleagues on the board,
+for whom "summary written" and "agent run finished" are noise. Each post lists
+task titles, linked to the task's **GitHub issue** when it came from one (a Nexus
+deep link is tailnet-only, so it is never used); a task with no issue is listed
+by title alone. The per-item throttle is leading-edge with a trailing flush, as
+designed, but its state lives in a new table `monday_update_feed`
+(`last_posted_at`, `pending_json`) rather than memory, so a restart neither
+loses a queued note nor forgets the window; a 60 s timer flushes due queues. A
+failed post keeps its events queued and restarts the window (throttled retry,
+visible as a failed `monday_write`). `monday_post_update` routes through the same
+path and tells the model whether its note was posted or queued.
+
+**Work-hours poll (#425).** New global key `monday.work_hours`
+`{ enabled, days, start, end }` (default Mon–Fri 08:00–18:00, server-local)
+gates the background linked-item refresh only; manual syncs, the view-open
+scope sync, and the picker are never gated. A disabled or malformed window
+means always-on.
+
+**Unconfigured is not an error (#426, closes #259).** `/items` and `/search`
+return `200 { configured: false, items: [] }` for a project with no scope, and
+`{ configured: true, items }` otherwise. `monday_disabled` stays a 409 but
+carries `retryable: false`.
+
+**Retries (#428).** The client retries a 429 or `ComplexityException` once,
+after Monday's own hint (default 5 s, never more than 60 s); nothing else, and
+never a loop. `monday_write` operations record `diagnostics.itemId`, and the
+Activity Console's Retry re-runs roll-up, status sync, and queued notes for that
+item via `POST /api/monday/items/:itemId/retry-writes`; `monday_sync` retries via
+`POST /api/monday/refresh`. The design's "complexity budget tracked on every
+response with proactive back-off" was **not** built; the reactive retry has been
+sufficient at this board size.
+
+**Stale items (#429).** `GET /api/monday/stale?days=N&refresh=1&exclude_labels=…`
+reports items with no movement across every scoped project, where movement is
+the latest of the item's `updated_at`, its newest update-thread entry, and its
+linked tasks' `updated_at`. Built for the partner's daily stale-item nudge
+(baker-internal #59) so it never needs its own Monday client. Note the MyWise
+board's done label is "Complete", not "Done".
+
+**UI leftovers (#430).** Item rows can attach an *existing* unlinked task
+(the design's "pick tasks to attach"); "Clear Monday mirror" lives in Trust &
+Privacy beside the memory-index rebuild (`POST /api/monday/mirror/clear`, links
+kept).
+
+**Not built, by decision.** Webhooks, item creation, and a global portfolio
+view remain non-goals. The iOS view stays read-only. Rows do not expand/collapse;
+linked-task chips render inline.
+
+**Config and routes added since the design**
+
+| Where | Key / route | Default |
+|---|---|---|
+| `~/.nexus/config.yaml` | `monday.work_hours` | `{ enabled: true, days: [1..5], start: '08:00', end: '18:00' }` |
+| project `monday` block | `status_sync` | off |
+| project `monday` block | `updates.min_interval_minutes` | 30, floor 5 — now enforced |
+| table | `monday_update_feed` | throttle state, persisted |
+| route | `GET /api/monday/stale` | |
+| route | `POST /api/monday/refresh` | |
+| route | `POST /api/monday/items/:itemId/retry-writes` | |
+| route | `POST /api/monday/mirror/clear` | |
+
+Verified live on 2026-09-08 against the MyWise Pro board with a scratch item
+(created, posted to on a Review move, second move queued inside the window,
+then deleted): the update read "Nexus · 1 task moved • … → Review".
