@@ -1,5 +1,5 @@
 # Intent: Ticket to session
-Author: Keith. Status: accepted. Source: conversation (interview, 2026-09-08). Issue: #TBD.
+Author: Keith. Status: accepted. Source: conversation (interview, 2026-09-08). Issue: #432.
 
 ## Problem
 The Jira ticket list and status sync in Tickets work well. Everything after the
