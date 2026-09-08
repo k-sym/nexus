@@ -47,7 +47,7 @@ export default function TaskModal({ columnLabel, task, projectId, onClose, onSub
     try {
       const items = await fetchMondayItems(projectId);
       if (loadGenerationRef.current !== generation) return; // superseded
-      setMondayItem(items.find((item) => item.task_ids.includes(taskId)) ?? null);
+      setMondayItem(items?.find((item) => item.task_ids.includes(taskId)) ?? null);
     } catch {
       if (loadGenerationRef.current === generation) setMondayItem(null);
     }

@@ -504,28 +504,40 @@ test('PUT project config defaults status_sync.forward_only to true when omitted'
   db.close();
 });
 
-// --- Distinguishing "unconfigured" from "disabled/tokenless" on the
-// existing items/search 409s (the ambiguity the frontend setup panel needs
-// resolved) --------------------------------------------------------------
+// --- Distinguishing "unconfigured" (a normal state, 200 with a
+// discriminator, #259) from "disabled/tokenless" (a real fault the client
+// cannot fix by picking a board, 409 retryable:false) ---------------------
 
-test('GET items 409s with code "unconfigured" when the project has no Monday scope', async () => {
+test('GET items returns 200 { configured: false } when the project has no Monday scope', async () => {
   const db = getDb(':memory:');
   seedProjectWithoutMonday(db);
   const app = await buildApp(db);
   const res = await app.inject({ method: 'GET', url: '/api/monday/projects/p1/items' });
-  assert.equal(res.statusCode, 409);
-  assert.equal(res.json().code, 'unconfigured');
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { configured: false, items: [] });
   await app.close();
   db.close();
 });
 
-test('GET items 409s with code "monday_disabled" (not "unconfigured") when scope exists but Monday is disabled/tokenless', async () => {
+test('GET search returns 200 { configured: false } when the project has no Monday scope', async () => {
+  const db = getDb(':memory:');
+  seedProjectWithoutMonday(db);
+  const app = await buildApp(db);
+  const res = await app.inject({ method: 'GET', url: '/api/monday/projects/p1/search?q=x' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), { configured: false, items: [] });
+  await app.close();
+  db.close();
+});
+
+test('GET items 409s with code "monday_disabled" and retryable:false when scope exists but Monday is disabled/tokenless', async () => {
   const db = getDb(':memory:');
   seedProjectWithMonday(db);
   const app = await buildApp(db);
   const res = await app.inject({ method: 'GET', url: '/api/monday/projects/p1/items?refresh=1' });
   assert.equal(res.statusCode, 409);
   assert.equal(res.json().code, 'monday_disabled');
+  assert.equal(res.json().retryable, false);
   await app.close();
   db.close();
 });

@@ -99,7 +99,7 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   // raw UUID. Best-effort: a chip falls back to the id if this hasn't loaded.
   const [tasksById, setTasksById] = useState<Map<string, Task>>(new Map());
 
-  // Not-yet-configured (backend 409 `code: 'unconfigured'`) and "reopened via
+  // Not-yet-configured (backend `200 { configured: false }`) and "reopened via
   // the header's Configure control" both render the same setup panel, keyed
   // off the config it should pre-fill from: null for the former (there is
   // nothing to pre-fill), the fetched MondayProjectConfig for the latter.
@@ -126,18 +126,18 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
     try {
       const result = await fetchMondayItems(projectId, refresh);
       if (generationRef.current !== generation) return; // superseded
+      // "No scope configured yet" is a normal state, not a failure: the
+      // backend reports it as 200 { configured: false } and the client maps
+      // that to null, so the setup panel — not the error screen — is the
+      // response to the one case that's actually fixable here (#259).
+      if (result === null) {
+        setConfigPanel({ current: null });
+        return;
+      }
       setItems(result);
     } catch (err) {
       if (generationRef.current !== generation) return; // superseded
       const e = err as FetchJsonError;
-      // The backend distinguishes "no scope configured yet" from every other
-      // failure (disabled Monday, expired token, rate limit, ...) via this
-      // code, specifically so the setup panel — not the error screen — is
-      // the response to the one case that's actually fixable here.
-      if (e.code === 'unconfigured') {
-        setConfigPanel({ current: null });
-        return;
-      }
       setError({ message: e.message, code: e.code, retryable: e.retryable });
     } finally {
       if (generationRef.current === generation) setRefreshing(false);
@@ -243,7 +243,7 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   // Rendered both for a genuinely unconfigured project (no already-loaded
   // view exists, so no Cancel) and for a reopened Configure (items !== null,
   // so Cancel returns to it) — checked before the error/loading branches
-  // below so an unconfigured 409 never reaches the error screen.
+  // below so an unconfigured project never reaches the error screen.
   if (configPanel) {
     return (
       <div className="p-6">

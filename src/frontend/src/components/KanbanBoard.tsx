@@ -51,7 +51,8 @@ export default function KanbanBoard({ tasks, columns, columnLabels, projectId, m
         const items = await fetchMondayItems(projectId);
         if (cancelled) return;
         const byTask = new Map<string, MondayItemWithLinks>();
-        for (const item of items) {
+        // null = no Monday scope on this project yet: no badges, no error.
+        for (const item of items ?? []) {
           for (const taskId of item.task_ids) byTask.set(taskId, item);
         }
         setMondayItems(byTask);
