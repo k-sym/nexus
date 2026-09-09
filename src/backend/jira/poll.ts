@@ -12,6 +12,7 @@ import { syncTickets, type IncomingTicket, type SyncResult } from '../tickets/sy
 import { insertNotification } from '../notifications/index.js';
 import { ActivityEvent } from '../activity/events.js';
 import { ActivityManager } from '../activity/manager.js';
+import { withinWorkHours, describeWorkHours } from '../work-hours.js';
 
 type JiraConfig = NexusConfig['jira'];
 type FetchTickets = (cfg: JiraQueryConfig, token: string) => Promise<IncomingTicket[]>;
@@ -81,13 +82,22 @@ export async function runJiraSyncOnce(
   }
 }
 
+export interface StartJiraSyncDeps {
+  /** Test seam: the clock the work-hours gate reads. */
+  now?: () => Date;
+  /** Test seam: replaces the Jira REST fetch. */
+  fetchTickets?: FetchTickets;
+}
+
 /**
  * Start the poll. Reads config + JIRA_TOKEN once; if dormant, logs a single line
- * and does nothing. Otherwise runs immediately, then every poll_minutes.
+ * and does nothing. Otherwise ticks immediately, then every poll_minutes; a tick
+ * outside `jira.work_hours` is skipped (logged once per transition, not per tick).
  */
-export function startJiraSync(db: Database.Database, activity?: ActivityManager): { stop: () => void } {
+export function startJiraSync(db: Database.Database, activity?: ActivityManager, deps: StartJiraSyncDeps = {}): { stop: () => void } {
   const jira = loadConfig().jira;
   const token = process.env.JIRA_TOKEN;
+  const now = deps.now ?? (() => new Date());
 
   if (!jira.enabled) {
     console.log('[jira] disabled in settings — poll dormant');
@@ -100,8 +110,23 @@ export function startJiraSync(db: Database.Database, activity?: ActivityManager)
 
   const everyMs = Math.max(1, jira.poll_minutes) * 60_000;
   const emit = activity?.bus.emit.bind(activity.bus);
-  console.log(`[jira] poll started — ${jira.project} every ${jira.poll_minutes}m`);
-  void runJiraSyncOnce(db, jira, token, undefined, emit);
-  const timer = setInterval(() => void runJiraSyncOnce(db, jira, token, undefined, emit), everyMs);
+  let quiet = false;
+  const tick = () => {
+    if (!withinWorkHours(jira.work_hours, now())) {
+      if (!quiet) {
+        quiet = true;
+        console.log(`[jira] outside work hours (${describeWorkHours(jira.work_hours)}) — poll paused`);
+      }
+      return;
+    }
+    if (quiet) {
+      quiet = false;
+      console.log('[jira] inside work hours — poll resumed');
+    }
+    void runJiraSyncOnce(db, jira, token, deps.fetchTickets, emit);
+  };
+  console.log(`[jira] poll started — ${jira.project} every ${jira.poll_minutes}m, work hours ${describeWorkHours(jira.work_hours)}`);
+  tick();
+  const timer = setInterval(tick, everyMs);
   return { stop: () => clearInterval(timer) };
 }

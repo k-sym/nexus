@@ -463,6 +463,12 @@ export default function SettingsPage() {
                 className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
             </Field>
+            <WorkHoursField
+              scope="Jira"
+              hours={config.jira.work_hours}
+              onChange={(path, value) => update(['jira', 'work_hours', ...path], value)}
+              note="Applies to the background ticket poll only, on the server's local clock. Drafting and the description refresh work at any time."
+            />
             <Field label="Draft model">
               <input
                 type="text"
@@ -570,53 +576,12 @@ export default function SettingsPage() {
                 className="w-full surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
               />
             </Field>
-            <Field label="Work hours">
-              <div className="space-y-2">
-                <button
-                  onClick={() => update(['monday', 'work_hours', 'enabled'], !(config.monday?.work_hours?.enabled ?? true))}
-                  className={`px-3 py-1 text-xs rounded-sm transition-colors ${(config.monday?.work_hours?.enabled ?? true) ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
-                >
-                  {(config.monday?.work_hours?.enabled ?? true) ? 'Poll only during work hours' : 'Poll around the clock'}
-                </button>
-                {(config.monday?.work_hours?.enabled ?? true) && (
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    {WEEKDAYS.map(({ day, label }) => {
-                      const days: number[] = config.monday?.work_hours?.days ?? [1, 2, 3, 4, 5];
-                      const on = days.includes(day);
-                      return (
-                        <button
-                          key={day}
-                          aria-pressed={on}
-                          onClick={() => update(['monday', 'work_hours', 'days'], on ? days.filter((d) => d !== day) : [...days, day].sort())}
-                          className={`px-2 py-0.5 rounded-sm ${on ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
-                        >
-                          {label}
-                        </button>
-                      );
-                    })}
-                    <input
-                      type="time"
-                      aria-label="Work hours start"
-                      value={config.monday?.work_hours?.start ?? '08:00'}
-                      onChange={(e) => update(['monday', 'work_hours', 'start'], e.target.value)}
-                      className="surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
-                    />
-                    <span className="text-faint">to</span>
-                    <input
-                      type="time"
-                      aria-label="Work hours end"
-                      value={config.monday?.work_hours?.end ?? '18:00'}
-                      onChange={(e) => update(['monday', 'work_hours', 'end'], e.target.value)}
-                      className="surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
-                    />
-                  </div>
-                )}
-                <p className="text-[10px] text-faint">
-                  Applies to the background refresh of linked items only, on the server&apos;s local clock. Opening the
-                  Project Management view or pressing Refresh always syncs.
-                </p>
-              </div>
-            </Field>
+            <WorkHoursField
+              scope="Monday"
+              hours={config.monday?.work_hours}
+              onChange={(path, value) => update(['monday', 'work_hours', ...path], value)}
+              note="Applies to the background refresh of linked items only, on the server's local clock. Opening the Project Management view or pressing Refresh always syncs."
+            />
             <p className="text-xs text-faint">
               The API token is read from the <span className="font-mono text-muted">MONDAY_TOKEN</span> environment
               variable, never stored here. Changes apply on the next backend restart.
@@ -834,6 +799,65 @@ function Section({ title, children }: { title: string; children: React.ReactNode
       <h2 className="text-xs font-semibold text-muted uppercase tracking-wider mb-3">{title}</h2>
       <div className="space-y-3">{children}</div>
     </div>
+  );
+}
+
+/** Shared work-hours editor for the background polls (Monday, Jira): an
+ *  on/off toggle, weekday chips and a start/end clock. `hours` may be absent on
+ *  a config written before the key existed; the defaults mirror the server's. */
+function WorkHoursField({ scope, hours, onChange, note }: {
+  /** Names the group for assistive tech and tests, e.g. "Monday" → "Monday work days". */
+  scope: string;
+  hours: { enabled?: boolean; days?: number[]; start?: string; end?: string } | undefined;
+  onChange: (path: string[], value: unknown) => void;
+  note: string;
+}) {
+  const enabled = hours?.enabled ?? true;
+  const days: number[] = hours?.days ?? [1, 2, 3, 4, 5];
+  return (
+    <Field label="Work hours">
+      <div className="space-y-2">
+        <button
+          onClick={() => onChange(['enabled'], !enabled)}
+          className={`px-3 py-1 text-xs rounded-sm transition-colors ${enabled ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+        >
+          {enabled ? 'Poll only during work hours' : 'Poll around the clock'}
+        </button>
+        {enabled && (
+          <div role="group" aria-label={`${scope} work days`} className="flex flex-wrap items-center gap-2 text-xs">
+            {WEEKDAYS.map(({ day, label }) => {
+              const on = days.includes(day);
+              return (
+                <button
+                  key={day}
+                  aria-pressed={on}
+                  onClick={() => onChange(['days'], on ? days.filter((d) => d !== day) : [...days, day].sort())}
+                  className={`px-2 py-0.5 rounded-sm ${on ? 'bg-green-500/20 text-green-400' : 'surface-elevated text-faint'}`}
+                >
+                  {label}
+                </button>
+              );
+            })}
+            <input
+              type="time"
+              aria-label={`${scope} work hours start`}
+              value={hours?.start ?? '08:00'}
+              onChange={(e) => onChange(['start'], e.target.value)}
+              className="surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
+            />
+            <span className="text-faint">to</span>
+            <input
+              type="time"
+              aria-label={`${scope} work hours end`}
+              value={hours?.end ?? '18:00'}
+              onChange={(e) => onChange(['end'], e.target.value)}
+              className="surface-panel border border-subtle rounded-sm px-2 py-1 text-sm text-primary"
+            />
+          </div>
+        )}
+        <p className="text-[10px] text-faint">{note}</p>
+      </div>
+    </Field>
   );
 }
 

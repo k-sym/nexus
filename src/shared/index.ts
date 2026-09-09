@@ -514,6 +514,10 @@ export interface NexusConfig {
     project: string;
     /** Poll cadence in minutes while Nexus is running. */
     poll_minutes: number;
+    /** Working window for the background poll (server-local clock). Outside
+     *  it the tick is skipped; `POST /api/jira/sync` and the description
+     *  refresh are unaffected. Default Mon–Fri 08:00–18:00, enabled. */
+    work_hours: MondayWorkHours;
     /** User-maintained chunks stripped from every ticket body during cleaning.
      *  Whitespace/case-tolerant literal match; three asterisks match any text. */
     content_rules: string[];

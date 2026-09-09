@@ -7,7 +7,8 @@
  * syncs are lazy and driven by the Project Management view instead.
  */
 import type Database from 'better-sqlite3';
-import type { NexusConfig, MondayWorkHours } from '@nexus/shared';
+import type { NexusConfig } from '@nexus/shared';
+import { withinWorkHours, describeWorkHours } from '../work-hours.js';
 import { loadConfig } from '../config.js';
 import { refreshLinkedItems } from './sync.js';
 import type { MondayClientOptions } from './client.js';
@@ -83,40 +84,7 @@ export async function runMondayRefreshOnce(
   }
 }
 
-/** Parse `HH:MM` into minutes since midnight; null when malformed. */
-function parseClock(value: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(value?.trim() ?? '');
-  if (!m) return null;
-  const h = Number(m[1]);
-  const min = Number(m[2]);
-  if (h > 24 || min > 59) return null;
-  return h * 60 + min;
-}
-
-/**
- * Pure: is `now` inside the configured working window? The window is
- * [start, end) on each listed weekday, evaluated on the server's local clock.
- * A disabled or malformed window means "always on" — a typo in config must
- * not silently switch the poll off for good.
- */
-export function withinWorkHours(hours: MondayWorkHours | undefined, now: Date = new Date()): boolean {
-  if (!hours || !hours.enabled) return true;
-  const start = parseClock(hours.start);
-  const end = parseClock(hours.end);
-  if (start === null || end === null || start >= end) return true;
-  if (!Array.isArray(hours.days) || hours.days.length === 0) return true;
-  if (!hours.days.includes(now.getDay())) return false;
-  const minutes = now.getHours() * 60 + now.getMinutes();
-  return minutes >= start && minutes < end;
-}
-
-/** Human summary for the startup log line, e.g. "Mon–Fri 08:00–18:00". */
-export function describeWorkHours(hours: MondayWorkHours | undefined): string {
-  if (!hours?.enabled) return 'always';
-  const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-  const days = [...new Set(hours.days)].filter((d) => d >= 0 && d <= 6).sort((a, b) => a - b);
-  return `${days.map((d) => names[d]).join(',')} ${hours.start}–${hours.end}`;
-}
+export { withinWorkHours, describeWorkHours };
 
 /** Start the interval loop. Returns a stop function. */
 export function startMondayPoll(
