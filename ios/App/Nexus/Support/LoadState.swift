@@ -31,7 +31,7 @@ extension LoadState {
 enum PollingCadence {
     static let missionControl: Duration = .seconds(15)
     static let activity: Duration = .seconds(15)
-    static let tasks: Duration = .seconds(5)
+    static let board: Duration = .seconds(5)
     static let sessions: Duration = .seconds(5)
     static let projects: Duration = .seconds(30)
 }

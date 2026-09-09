@@ -1,6 +1,6 @@
 # NEXUS
 
-A personal agent orchestration platform. NEXUS lets you define projects, break them into tasks on a Kanban board, and work those tasks interactively in chat threads powered by any model you can reach — Claude Code, Codex, OpenCode, OpenRouter, local servers, or any OpenAI-compatible endpoint. Memory persists across sessions via a local memory daemon synced to an Obsidian vault.
+A personal agent orchestration platform. NEXUS lets you define projects, start sessions from GitHub issues, Monday items and Jira tickets on a session-first board, and work them interactively in chat threads powered by any model you can reach — Claude Code, Codex, OpenCode, OpenRouter, local servers, or any OpenAI-compatible endpoint. Memory persists across sessions via a local memory daemon synced to an Obsidian vault.
 
 > NEXUS is not another bloated Agent OS. It's the control layer that makes your existing tools (Claude Code, Codex, OpenCode, OpenRouter, local models) work together the way you want.
 
@@ -17,7 +17,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 - [Configuration](#configuration)
 - [Concepts](#concepts)
   - [Projects](#projects)
-  - [Tasks & Kanban](#tasks--kanban)
+  - [Board](#board)
   - [Models & Curation](#models--curation)
   - [Orchestrator](#orchestrator)
   - [Memory](#memory)
@@ -41,8 +41,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | Capability | Description |
 |---|---|
 | **Projects** | Link existing local git repos. NEXUS scaffolds a `project_docs/` structure (`specs`, `plans`, `design`, `uploads`) and, when the repo has none, a starter `AGENTS.md` — so a new project starts agent-aware. Existing agent-instruction files are never overwritten. |
-| **Kanban** | 5-column board (Triage → To Do → In Progress → Review → Deploy) with drag-and-drop. |
-| **Interactive task chat** | Moving a task into **In Progress** opens an interactive chat thread bound to a model you pick — the old headless dispatch loop is gone. The agent works the task in the conversation while you steer it. |
+| **Board** | A session-first board per project: cards are chat sessions with their origin (GitHub issue, Monday item, Jira ticket, or plain chat), lanes are derived from live state (Inbox · Running · Needs you · Idle · Done) and never dragged. The Inbox lists open GitHub issues and Monday items with no session yet; one click drafts the problem with Sonnet and Go opens a session stamped with the origin. |
 | **Models & curation** | A model registry (the Pi runtime) knows every model reachable from your configured auth — API keys (OpenRouter, local servers) and OAuth (Anthropic, OpenAI/Codex, GitHub Copilot). You curate which models show up in the picker; per-thread model selection with image/document attachments. No more YAML "personas". |
 | **Multi-provider chat** | One runtime drives Claude Code, Codex, OpenCode, OpenRouter, local OpenAI-compatible servers (omlx, LM Studio, llama.cpp), and remote Hermes-style endpoints — each reached through the Pi SDK's provider bridges. |
 | **Assistant** | A separate, project-less Hermes Assistant surface with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs that can be reconciled after restart. |
@@ -56,7 +55,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 | **Browser** | Agents can drive a headless Chromium-family browser to verify front-end work — navigate, read the rendered page as text or an accessibility tree, interact with it, and read console/network output. The current page is mirrored back into the chat session as a live preview, so you can watch what the agent's browser is doing (and see it at all, in thin-client mode, where the browser runs on the server). Localhost-only by default; ephemeral profile, never your real one. Off by default; the tools only appear when a browser is installed. |
 | **Tool approvals** | A per-tool approval policy decides — before each tool call runs — whether it's allowed, confirmed, or denied. Side-effectful categories (e.g. starting containers) default to *confirm*; pending gates are answerable from the Nexus UI or the glasses. Read live, so a change lands mid-session. |
 | **Tickets** | A disposable mirror of Jira tickets assigned to you (Jira stays canonical). Nexus pulls them natively on a poll loop while the app is running (configured in Settings; token via `JIRA_TOKEN`), and a push endpoint stays for external sync agents. |
-| **GitHub triage** | Open issues on a project's GitHub remote are mirrored into the Triage column on Kanban open (token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. |
+| **GitHub Inbox** | Open issues on a project's GitHub remote appear in the board's Inbox (read live through a 3-minute cache; token via `GITHUB_TOKEN` or `gh auth token`); can be disabled in Settings. Nexus never writes to the issue. |
 | **Notifications** | In-app toasts for events that happen while you're using Nexus — e.g. a Jira/GitHub sync that changed tickets, a sync failure, or a task summary being written. Backed by a `notifications` table the frontend polls. |
 | **Mission Control** | The landing dashboard: memory-daemon health, your curated model list with per-provider auth health, and usage stats (Claude/Codex/OpenRouter session windows). |
 | **Trust & Privacy** | A read-only trust snapshot surfaced in Settings — services, storage, secret sources, outbound destinations, and maintenance controls (rebuild index, clear Nexus memory). |
@@ -71,7 +70,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 │                    Tauri (Rust core)                    │
 │  ┌────────────────────────────────────────────────────┐ │
 │  │               React Dashboard (Vite)                │ │
-│  │  Mission Control | Kanban | Sessions | Tickets |    │ │
+│  │  Mission Control | Board  | Sessions | Tickets |    │ │
 │  │  Ideas | Assistant | Activity | Memory | Usage      │ │
 │  └─────────────────────────────┬──────────────────────┘ │
 │                        │ HTTP (localhost:4173)           │
@@ -97,7 +96,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, break t
 └─────────────────────────────────────────────────────────┘
 ```
 
-The backend runs the Fastify HTTP API and the Jira polling loop in a single Node process. **Model execution is driven by the [Pi runtime](https://github.com/earendil-works/pi-coding-agent)** (`@earendil-works/pi-coding-agent`): one `PiRuntime` per backend owns an `AuthStorage` (credentials in `~/.nexus/auth.json`) and a `ModelRegistry` (every model reachable from that auth), and creates one `AgentSession` per chat thread. The old headless orchestrator dispatch loop has been removed — task work now happens interactively in chat threads. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/tasks/sessions/tickets/ideas; memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Tauri app for production. The desktop shell is **Tauri v2** (a small Rust core using the OS WebView) — it supervises the daemon/backend services and hosts the UI; it replaced the previous Electron shell (~15× smaller, ~177 MB less idle RAM).
+The backend runs the Fastify HTTP API and the Jira polling loop in a single Node process. **Model execution is driven by the [Pi runtime](https://github.com/earendil-works/pi-coding-agent)** (`@earendil-works/pi-coding-agent`): one `PiRuntime` per backend owns an `AuthStorage` (credentials in `~/.nexus/auth.json`) and a `ModelRegistry` (every model reachable from that auth), and creates one `AgentSession` per chat thread. The old headless orchestrator dispatch loop has been removed — task work now happens interactively in chat threads. **Memory is a separate concern**: a standalone `@nexus/memory-daemon` (its own process, port 4100) owns the canonical Obsidian vault, its file watcher, and the rebuildable SQLite index — the Nexus backend talks to it over HTTP (and external CLI agents reach it over MCP). The daemon in turn calls a **local model stack of three independent llama-server processes** (generation 4001, embeddings 4002, reranking 4003). Nexus's own `nexus.db` holds projects/sessions/tickets/ideas (plus the legacy `tasks` table as an audit ledger); memory lives in the daemon's index, not `nexus.db`. The frontend is a React SPA served by Vite in dev and bundled into the Tauri app for production. The desktop shell is **Tauri v2** (a small Rust core using the OS WebView) — it supervises the daemon/backend services and hosts the UI; it replaced the previous Electron shell (~15× smaller, ~177 MB less idle RAM).
 
 ### Packages
 
@@ -123,7 +122,7 @@ Nexus has no application analytics or telemetry integration. Its backend and mem
 | Memory daemon | `127.0.0.1:4100` | Local vault/index owner; backend and MCP clients call it over HTTP |
 | Frontend dev server | `127.0.0.1:5173` | Development only; production assets are bundled into the Tauri app |
 | Local generation / embedding / reranking | `127.0.0.1:4001` / `:4002` / `:4003` | Optional local model services used by memory retrieval/indexing |
-| Projects, tasks, hot sessions, mirrored tickets | `~/.nexus/nexus.db` | Local application state |
+| Projects, sessions, mirrored tickets, Monday links | `~/.nexus/nexus.db` | Local application state |
 | Memories and archived-session summaries | configured Obsidian vault (default `~/Obsidian/Nexus/`) | Canonical Markdown |
 | Memory search, vectors, and knowledge graph | `<vault>/.index/nexus-memory.db` | Disposable index, rebuildable from canonical Markdown |
 | Nexus configuration | `~/.nexus/config.yaml` | Non-secret settings, environment references, and any literal model/assistant keys entered in Settings |
@@ -558,7 +557,7 @@ All config lives under `~/.nexus/`:
 │   └── <repo-slug>/<threadId>.jsonl
 ├── workspaces/            # Per-project agent output logs (legacy)
 │   └── <project-slug>/outputs/<task-id>.log
-├── nexus.db               # SQLite database (projects/tasks/threads/tickets/ideas)
+├── nexus.db               # SQLite database (projects/threads/tickets/ideas; legacy tasks)
 └── logs/                  # Application logs
 ```
 
@@ -642,7 +641,7 @@ jira:                            # native Jira ticket poll (Settings -> Jira). T
   content_rules: []              # optional content rules
 
 github:                          # GitHub issue triage (Settings -> GitHub). Token via GITHUB_TOKEN or `gh auth token`.
-  enabled: true                  # mirrors open issues into Triage on Kanban open
+  enabled: true                  # open issues feed the board's Inbox
 
 docker:                          # let agents run a project's local Docker Compose services
   enabled: false                 # off by default; the docker_service tool is also omitted entirely
@@ -710,17 +709,21 @@ A project links to an **existing local directory** (typically under `~/Projects/
 └── uploads/    # files dragged into chat for agent review
 ```
 
-### Tasks & Kanban
+### Board
 
-Tasks flow through five columns:
+The board is a view over a project's sessions, not a separate task list (#439). Every card is a chat thread; every lane is derived from live state on each read, so there is nothing to drag and nothing to go stale:
 
 ```
-Triage → To Do → In Progress → Review → Deploy
+Inbox → Running → Needs you → Idle → Done
 ```
 
-There is no "Done" column — once a task reaches **Deploy** it's considered complete. Each task has a title, description, priority (low/medium/high/urgent), optional assigned agent, and tags.
+- **Inbox** — the project's open GitHub issues and active Monday items that have no card on the board. Click one: **Draft with Sonnet** distils the problem, suggests a project and a branch (`feat|fix|hotfix/<slug>`, the repo convention), you edit, pick a model, press **Go**, and land in a new session whose first turn is the edited prompt plus a fixed trailer (work on the branch, push it, do not open a PR, do not touch the issue or item). The thread is stamped with its origin — `chat_threads.github_issue`, or a `thread_monday_links` row — so the issue or item leaves the Inbox while its card is on the board.
+- **Running** — a thread with an active run. **Needs you** — a running thread waiting on a question or a tool approval.
+- **Idle** — a live thread with no run. **Done** — threads archived in the last 30 days; after that an origin still open upstream returns to the Inbox.
 
-Moving a task into **In Progress** triggers the orchestrator.
+Cards show the origin (Jira key, `#N`, Monday item, or nothing for a plain chat), the last model, the last activity, and the linked Monday item. The **+** on the board files an idea in Idea Watcher rather than parking a card: graduated ideas arrive in the Inbox as issues on their own.
+
+Monday roll-up, status write-back and the updates feed follow the linked session: a run ending reads as *in review*, an archive as *done* (the lanes are projected onto the same five statuses the Monday mapping has always used). The legacy `tasks` and `task_monday_links` tables remain in `nexus.db` as an audit ledger.
 
 ### Models & Curation
 
@@ -782,14 +785,7 @@ engines:
 
 There is no longer a headless dispatch loop. The orchestrator module was removed when task work moved into interactive chat threads (the backend's `index.ts` notes: *"the old headless orchestrator dispatch loop has been removed"*).
 
-What remains is the **task → chat** flow:
-
-1. A task sits in **Triage** or **To Do** with no thread attached.
-2. You drag it into **In Progress**. If it has no chat thread yet, the **model picker** opens (`TaskModelPicker`) — pick any model from your curated set.
-3. NEXUS creates a chat thread titled after the task, links it (`tasks.thread_id` + `tasks.model_key`), flips the card to **In Progress**, and seeds the first turn with a task prompt so the agent starts working immediately.
-4. You steer the agent in the conversation. When the work is done, advance the card to **Review** or **Deploy** — on that transition the thread is summarized into project memory (best-effort, fire-and-forget) and a notification is raised.
-
-Reopening a linked card reopens its chat. Dragging a card back to **Triage**/**To Do** clears the thread link (the Pi session is already closed) so the bubble doesn't dangle.
+What remains is the **origin → session** flow on the board (see [Board](#board)): an Inbox item is drafted with Sonnet, you pick a model, and Go opens a thread seeded with the prompt. Ticket sessions (#432) work the same way from the Tickets view.
 
 The `agent_runs` table still records task-scoped runs surfaced by `GET /api/agents/status` and `/api/agents/runs/:taskId`.
 
@@ -927,15 +923,19 @@ Base URL: `http://127.0.0.1:4173`
 | GET | `/api/projects/:id/files/preview` | Inline preview of a project file (`?path=`) — text/image/PDF |
 | GET | `/api/projects/:id/files/raw` | Raw file bytes (`?path=`) |
 | GET | `/api/projects/:id/git/diff` | Current working-tree diff (hunks for the Diff Review panel) |
-| POST | `/api/projects/:id/review-actions` | Spawn a task / assign a reviewer / attach a hunk to chat from a diff hunk |
-| POST | `/api/projects/:id/github/sync` | Mirror open GitHub issues into Triage (no-op when GitHub is disabled) |
+| POST | `/api/projects/:id/review-actions` | `attach_to_chat`: seed a session (`thread_id`) with a diff hunk. The task-creating actions were removed with the task board (#439). |
+| GET | `/api/projects/:id/board` | The session-first board: cards (sessions with derived lane and origin) and the Inbox (open GitHub issues + active Monday items with no card). `?refresh=1` bypasses the GitHub cache. |
+| POST | `/api/projects/:id/board/draft` | `{ kind: 'github'\|'monday', id }` → Sonnet drafts the problem, project, branch type and branch name (`jira.draft_model`) |
+| POST | `/api/projects/:id/board/session` | `{ kind, id, projectId?, problem, branchName }` → a thread stamped with the origin (`github_issue` or a `thread_monday_links` row) and the composed first turn |
 
-### Tasks
+### Tasks (legacy)
+The task board was replaced by the session-first board in #439. These routes stay one release as plain CRUD for stale clients, with every Monday and summarise side effect removed; nothing in web or iOS calls them.
+
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/projects/:id/tasks` | List tasks in a project |
-| POST | `/api/projects/:id/tasks` | Create a task |
-| PUT | `/api/tasks/:id` | Update (status, priority, `assigned_agent`, `model_key`, `thread_id`). Moving to **In Progress** is now handled client-side by creating a thread + seeding chat; the `review`/`deploy` transition summarizes the linked thread into memory. |
+| GET | `/api/projects/:id/tasks` | List legacy tasks in a project |
+| POST | `/api/projects/:id/tasks` | Create a legacy task |
+| PUT | `/api/tasks/:id` | Update fields |
 | DELETE | `/api/tasks/:id` | Delete |
 
 ### Models & Curation
@@ -1184,7 +1184,8 @@ nexus/
 │   │   ├── db.ts                # SQLite schema + guarded migrations
 │   │   ├── codexbar.ts          # Claude/Codex/OpenRouter usage-window sampler (Mission Control stats)
 │   │   ├── routes/
-│   │   │   ├── projects.ts      # projects + tasks + files/preview + git/diff + review-actions + github/sync + order
+│   │   │   ├── projects.ts      # projects + files/preview + git/diff + review-actions + order (+ legacy tasks)
+│   │   │   ├── board.ts         # session-first board: lanes, Inbox, origin draft + session (#439)
 │   │   │   ├── chat.ts          # threads + NDJSON streaming + concurrency claims + archive
 │   │   │   ├── assistant.ts     # project-less Assistant view (streaming)
 │   │   │   ├── orchestrator.ts  # /agents/status + /agents/runs (read-only)
@@ -1330,7 +1331,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 | OAuth flow stuck | **Settings → Auth** polls the flow; if a provider needs a manual callback, the flow UI accepts the value via `/api/auth/oauth/:flowId/respond`. Cancel with `/api/auth/cancel-oauth` and retry. |
 | Hermes-style remote endpoint fails | Ensure `HERMES_API_KEY` is exported in the backend's environment before launching (or the endpoint's auth is otherwise configured); the key is never stored in git. |
 | Jira tickets don't appear | Check, in order: (1) **Settings → Jira** is *Enabled* and you **restarted the backend** afterwards (config is read once at startup — `npm run restart:backend` if it runs as a service); (2) `JIRA_TOKEN` is exported in the shell that launched the backend; (3) the **account email** is the one that owns the token — a wrong email returns an empty result, not an error, so it looks like "no tickets". The instance host accepts a bare host or a full `https://…` URL. |
-| GitHub issues don't mirror into Triage | Run `gh auth login` or set `GITHUB_TOKEN`; confirm **Settings → GitHub** is enabled; ensure the project's repo has a detected remote (`git_remote` on the project). Sync runs on Kanban open. |
+| GitHub issues don't show in the board's Inbox | Run `gh auth login` or set `GITHUB_TOKEN`; confirm **Settings → GitHub** is enabled; ensure the project's repo has a detected remote (`git_remote` on the project). The Inbox reads through a 3-minute cache; `GET /api/projects/:id/board?refresh=1` bypasses it, and a feed error is shown on the board itself. |
 
 ---
 

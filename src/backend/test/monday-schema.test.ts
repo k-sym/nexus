@@ -56,6 +56,21 @@ test('monday_items and task_monday_links tables exist with expected columns', ()
   db.close();
 });
 
+test('thread_monday_links exists beside the task tombstone, keyed by thread (#439 D5)', () => {
+  const db = tempDb();
+  const linkCols = (db.pragma('table_info(thread_monday_links)') as { name: string }[]).map((c) => c.name);
+  assert.deepEqual(linkCols.sort(), ['created_at', 'item_id', 'project_id', 'thread_id']);
+  db.prepare('INSERT INTO thread_monday_links (thread_id, item_id, project_id, created_at) VALUES (?, ?, ?, ?)')
+    .run('th-1', 'item-1', 'proj-1', '2026-09-08T00:00:00.000Z');
+  assert.throws(
+    () => db.prepare('INSERT INTO thread_monday_links (thread_id, item_id, project_id, created_at) VALUES (?, ?, ?, ?)')
+      .run('th-1', 'item-2', 'proj-1', '2026-09-08T00:00:00.000Z'),
+    /UNIQUE constraint failed/,
+    'one item per thread',
+  );
+  db.close();
+});
+
 test('task_monday_links enforces one item per task', () => {
   const db = tempDb();
   db.prepare('INSERT INTO task_monday_links (task_id, item_id, project_id, created_at) VALUES (?, ?, ?, ?)')

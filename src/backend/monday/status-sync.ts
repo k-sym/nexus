@@ -1,6 +1,6 @@
 /**
- * Opt-in status write-back: reflect where a Monday item's linked Nexus tasks
- * are in their lifecycle onto the item's status column.
+ * Opt-in status write-back: reflect where a Monday item's linked Nexus
+ * sessions are in their lifecycle onto the item's status column.
  *
  * This is the one write path that touches a column a human also owns, so it is
  * off by default and hemmed in by four guardrails, all enforced in writeStatus:
@@ -15,22 +15,24 @@
  *  - no-op-if-unchanged — skip the write, and the shared board's activity-log
  *    entry, when the column already shows the target.
  *
- * The item's stage is the AGGREGATE of all its linked tasks (an item is only
- * "done" when every linked task is), reusing the same buckets as the roll-up —
- * so a 1:1 item behaves exactly as a single card's column would.
+ * The item's stage is the AGGREGATE of all its linked sessions (an item is
+ * only "done" when every linked session is archived), reusing the same buckets
+ * as the roll-up — so a 1:1 item behaves exactly as a single card's lane would.
+ * Sessions reach here as `TaskStatus` values via store.ts's lane projection
+ * (#439, D6), which is what keeps the mapping keyed by Kanban column intact.
  */
 import type Database from 'better-sqlite3';
 import { KANBAN_COLUMNS, type MondayProjectConfig, type TaskStatus } from '@nexus/shared';
 import { setStatusColumnValue, type MondayClientOptions } from './client.js';
 import { computeRollup, type RollupCounts } from './rollup.js';
-import { listLinkedTaskStatuses, getItem } from './store.js';
+import { listLinkedThreadStatuses, getItem } from './store.js';
 import { mirrorColumnText } from './writes.js';
 
 /**
  * The representative Kanban column an item's aggregate progress maps to, or
- * null when it has no linked tasks (nothing to say). Mirrors the roll-up's
+ * null when it has no linked sessions (nothing to say). Mirrors the roll-up's
  * "Deploy is the only done state" rule: an item is Complete only once every
- * linked task has reached Deploy.
+ * linked session has reached Deploy (is archived).
  */
 export function deriveItemStage(counts: RollupCounts): TaskStatus | null {
   if (counts.total === 0) return null;
@@ -96,7 +98,7 @@ export function __resetStatusSyncState(): void {
 }
 
 /**
- * Write one item's status from its linked tasks' aggregate stage. Returns
+ * Write one item's status from its linked sessions' aggregate stage. Returns
  * 'skipped' when status sync is off / unconfigured / the stage is unmapped /
  * held / would regress, 'unchanged' when the column already shows the target,
  * 'written' otherwise.
@@ -125,8 +127,8 @@ export async function writeStatus(
   const item = getItem(db, itemId);
   if (!item) return 'skipped';
 
-  const stage = deriveItemStage(computeRollup(listLinkedTaskStatuses(db, itemId)));
-  if (!stage) return 'skipped'; // no linked tasks → nothing to drive the status
+  const stage = deriveItemStage(computeRollup(listLinkedThreadStatuses(db, itemId)));
+  if (!stage) return 'skipped'; // no linked sessions → nothing to drive the status
 
   const targetLabel = labelForStage(sync.mapping, stage);
   if (!targetLabel) return 'skipped'; // this stage has no mapped label

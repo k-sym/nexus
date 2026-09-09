@@ -192,3 +192,43 @@ test('migrates legacy assistant_messages into one assistant session once', () =>
   assert.equal(sessionCount, 1);
   assert.equal(messageCount, 2);
 });
+
+test('chat_threads has github_issue and a fresh DB has thread_monday_links (#439)', () => {
+  const base = join(tmpdir(), `nexus-dbtest-board-${process.pid}-${Date.now()}.db`);
+  const db = getDb(base);
+  const cols = (db.pragma('table_info(chat_threads)') as { name: string }[]).map((c) => c.name);
+  const linkCols = (db.pragma('table_info(thread_monday_links)') as { name: string }[]).map((c) => c.name);
+  const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as { name: string }[]).map((r) => r.name);
+  db.close();
+  for (const ext of ['', '-wal', '-shm']) fs.rmSync(base + ext, { force: true });
+  assert.ok(cols.includes('github_issue'));
+  assert.deepEqual(linkCols, ['thread_id', 'item_id', 'project_id', 'created_at']);
+  assert.ok(indexes.includes('idx_chat_threads_github_issue'));
+  assert.ok(indexes.includes('idx_thread_monday_links_item'));
+});
+
+test('thread_monday_links is backfilled once from task links whose task had a session (#439)', () => {
+  const base = join(tmpdir(), `nexus-dbtest-backfill-${process.pid}-${Date.now()}.db`);
+  // First boot on a DB that has task links but no thread link table yet.
+  let db = getDb(base);
+  db.exec('DROP TABLE thread_monday_links');
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','','','{}',0,'','now','now')`).run();
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES ('th1','p1','T','now','now')`).run();
+  db.prepare(`INSERT INTO tasks (id, project_id, title, status, priority, thread_id, created_at, updated_at) VALUES ('t1','p1','linked','in_progress','medium','th1','now','now')`).run();
+  db.prepare(`INSERT INTO tasks (id, project_id, title, status, priority, created_at, updated_at) VALUES ('t2','p1','unstarted','triage','medium','now','now')`).run();
+  db.prepare(`INSERT INTO task_monday_links (task_id, item_id, project_id, created_at) VALUES ('t1','item-1','p1','then'), ('t2','item-2','p1','then')`).run();
+  db.close();
+
+  db = getDb(base);
+  let rows = db.prepare('SELECT thread_id, item_id, project_id, created_at FROM thread_monday_links ORDER BY thread_id').all();
+  assert.deepEqual(rows, [{ thread_id: 'th1', item_id: 'item-1', project_id: 'p1', created_at: 'then' }]);
+  // A later unlink must survive a restart: the backfill runs only when the table is created.
+  db.prepare('DELETE FROM thread_monday_links').run();
+  db.close();
+  db = getDb(base);
+  rows = db.prepare('SELECT * FROM thread_monday_links').all();
+  db.close();
+  for (const ext of ['', '-wal', '-shm']) fs.rmSync(base + ext, { force: true });
+  assert.equal(rows.length, 0);
+});

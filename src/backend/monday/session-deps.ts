@@ -1,7 +1,7 @@
 /**
  * Turns a chat thread into the Monday context and tools its session should get.
  *
- * A thread only gets any of this when its task has a link, so the vast
+ * A thread only gets any of this when it has a Monday link, so the vast
  * majority of sessions pay nothing: no injected block, no registered tools.
  * That is the same contract memory_recall follows — never advertise a tool
  * that cannot run.
@@ -10,7 +10,7 @@ import type Database from 'better-sqlite3';
 import type { MondayItem, MondayProjectConfig, Project, TaskStatus } from '@nexus/shared';
 import { loadConfig } from '../config.js';
 import { resolveMondayToken } from './poll.js';
-import { getItem, listLinkedTaskStatuses } from './store.js';
+import { getItem, listLinkedThreadStatuses, threadTaskStatus } from './store.js';
 import { fetchBoardItems, type MondayClientOptions } from './client.js';
 import { mapItem } from './map.js';
 import { scheduleFeedNote, updatesFeedEmitter } from './updates-feed.js';
@@ -22,7 +22,7 @@ interface ResolvedThread {
   item: MondayItem;
   projectId: string;
   cfg: MondayProjectConfig;
-  taskId: string;
+  threadId: string;
 }
 
 function projectMondayConfig(project: Project | undefined): MondayProjectConfig | null {
@@ -35,14 +35,15 @@ function projectMondayConfig(project: Project | undefined): MondayProjectConfig 
   }
 }
 
-/** thread → task → link → item. Null when any hop is missing. */
+/** thread → link → item. Null when any hop is missing. The join to
+ *  chat_threads means a link whose thread was deleted resolves to nothing. */
 export function resolveThreadItem(db: Database.Database, threadId: string): ResolvedThread | null {
   const row = db.prepare(`
-    SELECT t.id AS task_id, t.project_id AS project_id, l.item_id AS item_id
-    FROM tasks t
-    JOIN task_monday_links l ON l.task_id = t.id
-    WHERE t.thread_id = ?
-  `).get(threadId) as { task_id: string; project_id: string; item_id: string } | undefined;
+    SELECT t.id AS thread_id, t.project_id AS project_id, l.item_id AS item_id
+    FROM thread_monday_links l
+    JOIN chat_threads t ON t.id = l.thread_id
+    WHERE l.thread_id = ?
+  `).get(threadId) as { thread_id: string; project_id: string; item_id: string } | undefined;
   if (!row) return null;
 
   const item = getItem(db, row.item_id);
@@ -52,7 +53,7 @@ export function resolveThreadItem(db: Database.Database, threadId: string): Reso
   const cfg = projectMondayConfig(project);
   if (!cfg) return null;
 
-  return { item, projectId: row.project_id, cfg, taskId: row.task_id };
+  return { item, projectId: row.project_id, cfg, threadId: row.thread_id };
 }
 
 /**
@@ -129,7 +130,7 @@ export function buildMondayContext(db: Database.Database, threadId: string): Mon
     if (!mondayReady()) return null;
     const resolved = resolveThreadItem(db, threadId);
     if (!resolved) return null;
-    const counts = computeRollup(listLinkedTaskStatuses(db, resolved.item.item_id));
+    const counts = computeRollup(listLinkedThreadStatuses(db, resolved.item.item_id));
     return {
       item: resolved.item,
       rollupText: formatRollupText(counts),
@@ -178,12 +179,15 @@ export function buildMondayToolDeps(db: Database.Database, threadId: string): Mo
       async getItem(itemId): Promise<MondayItemDetail | null> {
         const item = getItem(db, itemId);
         if (!item) return null;
-        const linkedTasks = db.prepare(`
-          SELECT t.id AS id, t.title AS title, t.status AS status
-          FROM task_monday_links l JOIN tasks t ON t.id = l.task_id
+        // Status is derived the same way the roll-up derives it (store.ts),
+        // so the model reads the lane the board would show for each session.
+        const linkedSessions = (db.prepare(`
+          SELECT t.id AS id, t.title AS title, t.archived_at AS archived_at
+          FROM thread_monday_links l JOIN chat_threads t ON t.id = l.thread_id
           WHERE l.item_id = ?
-        `).all(itemId) as { id: string; title: string; status: TaskStatus }[];
-        return { item, updates: recentUpdates(item), linked_tasks: linkedTasks };
+        `).all(itemId) as { id: string; title: string; archived_at: string | null }[])
+          .map((t): { id: string; title: string; status: TaskStatus } => ({ id: t.id, title: t.title, status: threadTaskStatus(t) }));
+        return { item, updates: recentUpdates(item), linked_sessions: linkedSessions };
       },
     };
 
@@ -200,8 +204,8 @@ export function buildMondayToolDeps(db: Database.Database, threadId: string): Mo
     // (MINOR 4). `?.enabled` without `?? false` reads correctly either way:
     // undefined is falsy, so a missing block still means "not opted in".
     if (resolved.cfg.updates?.enabled) {
-      const task = db.prepare('SELECT title FROM tasks WHERE id = ?').get(resolved.taskId) as { title: string } | undefined;
-      const provenance = `Nexus task "${task?.title ?? resolved.taskId}" (thread ${threadId})`;
+      const thread = db.prepare('SELECT title FROM chat_threads WHERE id = ?').get(resolved.threadId) as { title: string } | undefined;
+      const provenance = `Nexus session "${thread?.title ?? resolved.threadId}" (thread ${threadId})`;
       // Routed through the updates feed, not straight to the API: the same
       // per-item throttle and monday_write Activity operation the automated
       // Review/Deploy notes use, so an agent cannot out-run the project's

@@ -93,8 +93,8 @@ function renderSidebar({
       sessions={sessions}
       archivingThreadIds={archivingThreadIds}
       projectCounts={{
-        [project.id]: { tasks: 3, sessions: threads.length },
-        [secondProject.id]: { tasks: 10, sessions: 2 },
+        [project.id]: { sessions: threads.length },
+        [secondProject.id]: { sessions: 2 },
       }}
       onSelectProject={noop}
       onSelectSubView={noop}
@@ -182,9 +182,10 @@ describe('Sidebar', () => {
   it('shows active project counts with a new session action in the workspace', () => {
     renderSidebar({ threads: [{ thread }, { thread: { ...thread, id: 'thread-2', title: 'Second session' } }] });
 
-    expect(screen.getByText('3 tasks')).toBeInTheDocument();
+    // The board is session-first (#439): no task count anywhere.
+    expect(screen.queryByText(/tasks?$/)).not.toBeInTheDocument();
     expect(screen.getByText('2 sessions')).toBeInTheDocument();
-    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'New Session' })).toBeInTheDocument();
   });
 
@@ -204,7 +205,7 @@ describe('Sidebar', () => {
     const summary = screen.getByLabelText('Active project: nexus');
     expect(summary).toHaveTextContent('nexus');
     expect(summary).toHaveTextContent('/repo/nexus');
-    expect(summary).toHaveTextContent('3 tasks');
+    expect(summary).not.toHaveTextContent(/task/);
     expect(summary).toHaveTextContent('1 session');
   });
 

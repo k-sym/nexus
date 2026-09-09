@@ -7,13 +7,13 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { MondayProjectConfig, Task } from '@nexus/shared';
+import type { MondayProjectConfig } from '@nexus/shared';
 import { getDb } from '../db';
 import { loadConfig, saveConfig } from '../config';
-import { upsertItems, linkTask } from '../monday/store';
+import { upsertItems, linkThread } from '../monday/store';
 import {
-  formatFeedUpdate, feedWindowMs, taskIssueUrl, recordFeedEvent, flushDueFeedUpdates,
-  scheduleFeedMove, scheduleFeedNote, flushFeedForItem, type FeedEvent, type FeedDeps,
+  formatFeedUpdate, feedWindowMs, recordFeedEvent, flushDueFeedUpdates,
+  scheduleFeedMove, scheduleFeedNote, flushFeedForItem, type FeedEvent, type FeedDeps, type FeedMoveSubject,
 } from '../monday/updates-feed';
 import type { ActivityEvent } from '../activity/events';
 
@@ -36,8 +36,8 @@ function cfg(over: Partial<MondayProjectConfig> = {}): MondayProjectConfig {
   };
 }
 
-function moved(taskId: string, title: string, status: 'review' | 'deploy', url: string | null = null): FeedEvent {
-  return { kind: 'moved', task_id: taskId, title, status, url, at: new Date(T0).toISOString() };
+function moved(threadId: string, title: string, status: 'review' | 'deploy', url: string | null = null): FeedEvent {
+  return { kind: 'moved', thread_id: threadId, title, status, url, at: new Date(T0).toISOString() };
 }
 
 function seed(db: ReturnType<typeof getDb>, config: MondayProjectConfig | null = cfg(), gitRemote = 'git@github.com:k-sym/nexus.git') {
@@ -51,12 +51,13 @@ function seed(db: ReturnType<typeof getDb>, config: MondayProjectConfig | null =
   }]);
 }
 
-function seedTask(db: ReturnType<typeof getDb>, id: string, title: string, status: string, external?: { source: string; id: string }): Task {
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, external_source, external_id, created_at, updated_at)
-              VALUES (?, 'p1', ?, '', ?, 'medium', ?, ?, 'now', 'now')`)
-    .run(id, title, status, external?.source ?? null, external?.id ?? null);
-  linkTask(db, { task_id: id, item_id: 'i1', project_id: 'p1', created_at: 'now' });
-  return db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task;
+/** A linked session and the move subject the thread hooks would build for it. */
+function seedSession(db: ReturnType<typeof getDb>, id: string, title: string, status: 'review' | 'deploy', url: string | null = null): FeedMoveSubject {
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES (?, 'p1', ?, 'now', 'now', ?)`)
+    .run(id, title, status === 'deploy' ? 'now' : null);
+  linkThread(db, { thread_id: id, item_id: 'i1', project_id: 'p1', created_at: 'now' });
+  return { id, title, status, url };
 }
 
 function fakePoster(fail = false): { deps: FeedDeps; posts: { itemId: string; body: string }[] } {
@@ -94,14 +95,14 @@ test('feedWindowMs reads min_interval_minutes, floors it to 5, defaults to 30', 
   assert.equal(feedWindowMs(null), 30 * MINUTE);
 });
 
-test('formatFeedUpdate lists moves one per task with the GitHub link and the latest state per task', () => {
+test('formatFeedUpdate lists moves one per session with the origin link and the latest state per session', () => {
   const body = formatFeedUpdate([
     moved('t1', 'Fix login <redirect>', 'review', 'https://github.com/k-sym/nexus/issues/12'),
     moved('t2', 'Add stale endpoint', 'review'),
     moved('t1', 'Fix login <redirect>', 'deploy', 'https://github.com/k-sym/nexus/issues/12'),
   ]);
   assert.equal(body, [
-    '<b>Nexus</b> · 2 tasks moved',
+    '<b>Nexus</b> · 2 sessions moved',
     '• <a href="https://github.com/k-sym/nexus/issues/12">Fix login &lt;redirect&gt;</a> → Done',
     '• Add stale endpoint → Review',
   ].join('<br>'));
@@ -110,32 +111,15 @@ test('formatFeedUpdate lists moves one per task with the GitHub link and the lat
 test('formatFeedUpdate escapes agent notes and appends the provenance line', () => {
   const body = formatFeedUpdate([
     moved('t1', 'A', 'review'),
-    { kind: 'note', body: 'Shipped <b>v2</b>\nsee PR', provenance: 'Nexus task "A" (thread th1)', at: 'now' },
+    { kind: 'note', body: 'Shipped <b>v2</b>\nsee PR', provenance: 'Nexus session "A" (thread th1)', at: 'now' },
   ]);
   assert.equal(body, [
-    '<b>Nexus</b> · 1 task moved',
+    '<b>Nexus</b> · 1 session moved',
     '• A → Review',
     '',
     'Shipped &lt;b&gt;v2&lt;/b&gt;<br>see PR',
-    '— posted by Nexus on behalf of Nexus task &quot;A&quot; (thread th1)',
+    '— posted by Nexus on behalf of Nexus session &quot;A&quot; (thread th1)',
   ].join('<br>'));
-});
-
-test('taskIssueUrl links a GitHub-sourced task to its issue and nothing else', () => {
-  const db = getDb(':memory:');
-  seed(db);
-  assert.equal(taskIssueUrl(db, { project_id: 'p1', external_source: 'github', external_id: '12' }), 'https://github.com/k-sym/nexus/issues/12');
-  assert.equal(taskIssueUrl(db, { project_id: 'p1', external_source: null, external_id: null }), null);
-  assert.equal(taskIssueUrl(db, { project_id: 'p1', external_source: 'jira', external_id: 'SUP-1' }), null);
-  assert.equal(taskIssueUrl(db, { project_id: 'p1', external_source: 'github', external_id: 'abc' }), null);
-  db.close();
-});
-
-test('taskIssueUrl returns null when the project has no parseable GitHub remote', () => {
-  const db = getDb(':memory:');
-  seed(db, cfg(), 'https://gitlab.com/x/y.git');
-  assert.equal(taskIssueUrl(db, { project_id: 'p1', external_source: 'github', external_id: '12' }), null);
-  db.close();
 });
 
 // --- throttle (DB-backed) ----------------------------------------------
@@ -155,7 +139,7 @@ test('an isolated event posts immediately, then events inside the window queue a
     assert.equal(await flushDueFeedUpdates(db, T0 + 30 * MINUTE, deps), 1, 'due at window end');
   });
   assert.equal(posts.length, 2);
-  assert.match(posts[1].body, /2 tasks moved/);
+  assert.match(posts[1].body, /2 sessions moved/);
   assert.match(posts[1].body, /B → Review/);
   assert.match(posts[1].body, /C → Done/);
   db.close();
@@ -249,31 +233,44 @@ test('flush is dormant when Monday is disabled or there is no token', async () =
 
 // --- triggers -------------------------------------------------------------
 
-test('scheduleFeedMove posts a colleague-readable note with the GitHub link for a move into Review', async () => {
+test('scheduleFeedMove posts a colleague-readable note with the origin link for a session reaching Review', async () => {
   const db = getDb(':memory:');
   seed(db);
-  const task = seedTask(db, 't1', 'Fix login redirect', 'review', { source: 'github', id: '12' });
+  const subject = seedSession(db, 'th1', 'Fix login redirect', 'review', 'https://github.com/k-sym/nexus/issues/12');
   const { deps, posts } = fakePoster();
   const events: ActivityEvent[] = [];
   await withMondayEnabled(async () => {
-    assert.equal(await scheduleFeedMove(db, task, (e) => events.push(e), deps, T0), 'posted');
+    assert.equal(await scheduleFeedMove(db, subject, (e) => events.push(e), deps, T0), 'posted');
   });
   assert.equal(posts.length, 1);
   assert.equal(posts[0].itemId, 'i1');
-  assert.equal(posts[0].body, '<b>Nexus</b> · 1 task moved<br>• <a href="https://github.com/k-sym/nexus/issues/12">Fix login redirect</a> → Review');
+  assert.equal(posts[0].body, '<b>Nexus</b> · 1 session moved<br>• <a href="https://github.com/k-sym/nexus/issues/12">Fix login redirect</a> → Review');
   assert.equal(events[0].kind, 'monday_write');
-  assert.equal(events[0].taskId, 't1');
+  assert.equal(events[0].taskId, 'th1', 'the thread id rides in the legacy taskId slot');
+  assert.equal(events[0].threadId, 'th1');
   db.close();
 });
 
-test('scheduleFeedMove is a silent no-op for other statuses, unlinked tasks, and projects that have not opted in', async () => {
+test('scheduleFeedMove renders a session with no origin URL as plain text', async () => {
+  const db = getDb(':memory:');
+  seed(db);
+  const subject = seedSession(db, 'th1', 'Plain chat', 'deploy');
+  const { deps, posts } = fakePoster();
+  await withMondayEnabled(async () => {
+    assert.equal(await scheduleFeedMove(db, { id: subject.id, title: subject.title, status: 'deploy' }, undefined, deps, T0), 'posted');
+  });
+  assert.equal(posts[0].body, '<b>Nexus</b> · 1 session moved<br>• Plain chat → Done');
+  db.close();
+});
+
+test('scheduleFeedMove is a silent no-op for other statuses, unlinked threads, and projects that have not opted in', async () => {
   const db = getDb(':memory:');
   seed(db, cfg({ updates: { enabled: false, min_interval_minutes: 30 } }));
-  const linked = seedTask(db, 't1', 'A', 'review');
+  const linked = seedSession(db, 'th1', 'A', 'review');
   const { deps, posts } = fakePoster();
   await withMondayEnabled(async () => {
     assert.equal(await scheduleFeedMove(db, linked, undefined, deps, T0), 'skipped', 'not opted in');
-    assert.equal(await scheduleFeedMove(db, { ...linked, status: 'in_progress' }, undefined, deps, T0), 'skipped', 'not a Review/Deploy move');
+    assert.equal(await scheduleFeedMove(db, { ...linked, status: 'in_progress' as never }, undefined, deps, T0), 'skipped', 'not a Review/Deploy move');
     db.prepare('UPDATE projects SET config_json = ? WHERE id = ?').run(JSON.stringify({ monday: cfg() }), 'p1');
     assert.equal(await scheduleFeedMove(db, { ...linked, id: 'nope' }, undefined, deps, T0), 'skipped', 'unlinked');
   });
@@ -285,18 +282,18 @@ test('scheduleFeedMove is a silent no-op for other statuses, unlinked tasks, and
 test('scheduleFeedNote (the agent path) shares the item window with automated moves and reports queued honestly', async () => {
   const db = getDb(':memory:');
   seed(db);
-  const task = seedTask(db, 't1', 'A', 'review');
+  const subject = seedSession(db, 'th1', 'A', 'review');
   const { deps, posts } = fakePoster();
   await withMondayEnabled(async () => {
-    await scheduleFeedMove(db, task, undefined, deps, T0);
+    await scheduleFeedMove(db, subject, undefined, deps, T0);
   });
-  const outcome = await scheduleFeedNote(db, OPTS, 'p1', cfg(), 'i1', 'Halfway there', 'Nexus task "A" (thread th1)', undefined, deps, T0 + 2 * MINUTE);
+  const outcome = await scheduleFeedNote(db, OPTS, 'p1', cfg(), 'i1', 'Halfway there', 'Nexus session "A" (thread th1)', undefined, deps, T0 + 2 * MINUTE);
   assert.equal(outcome, 'queued');
   assert.equal(posts.length, 1);
   await withMondayEnabled(async () => {
     assert.equal(await flushDueFeedUpdates(db, T0 + 30 * MINUTE, deps), 1);
   });
-  assert.match(posts[1].body, /Halfway there<br>— posted by Nexus on behalf of Nexus task &quot;A&quot; \(thread th1\)/);
+  assert.match(posts[1].body, /Halfway there<br>— posted by Nexus on behalf of Nexus session &quot;A&quot; \(thread th1\)/);
   db.close();
 });
 

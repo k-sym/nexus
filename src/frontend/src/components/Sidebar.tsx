@@ -4,15 +4,15 @@ import { Kanban, Brain, ChatCircle, Plus, PencilSimple, Trash, ArchiveBoxIcon, C
 import { confirmDialog } from '../lib/confirm';
 
 /** 'projectManagement' is the Monday.com initiative-level view (Task 12) —
- *  Monday items are high-level initiatives that several Kanban tasks link to. */
+ *  Monday items are high-level initiatives that several sessions link to. */
 export type SubView = 'kanban' | 'memory' | 'chat' | 'projectManagement';
 
 export interface ThreadMeta {
   thread: ChatThread;
 }
 
+/** The board is session-first (#439): a project's one count is its sessions. */
 export interface SidebarProjectCounts {
-  tasks: number;
   sessions: number;
 }
 
@@ -197,7 +197,7 @@ export default function Sidebar({
   };
 
   const activeProject = projects.find((project) => project.id === activeProjectId) ?? null;
-  const activeProjectCounts = activeProject ? projectCounts[activeProject.id] ?? { tasks: 0, sessions: 0 } : null;
+  const activeProjectCounts = activeProject ? projectCounts[activeProject.id] ?? { sessions: 0 } : null;
 
   const handleProjectDragStart = (ev: React.DragEvent<HTMLButtonElement>, projectId: string) => {
     ev.dataTransfer.setData('application/x-nexus-project-id', projectId);
@@ -357,9 +357,6 @@ export default function Sidebar({
               </div>
               <div className="mt-2 flex flex-wrap gap-1.5">
                 <span className="rounded-full border border-subtle px-2 py-0.5 text-[10px] font-semibold text-muted">
-                  {pluralize(activeProjectCounts.tasks, 'task')}
-                </span>
-                <span className="rounded-full border border-subtle px-2 py-0.5 text-[10px] font-semibold text-muted">
                   {pluralize(activeProjectCounts.sessions, 'session')}
                 </span>
               </div>
@@ -375,7 +372,7 @@ export default function Sidebar({
                 depth={0}
                 onClick={() => onSelectSubView(activeProject.id, 'kanban')}
                 icon={<Kanban size={15} />}
-                trailing={<CountBadge>{activeProjectCounts.tasks}</CountBadge>}
+                trailing={<CountBadge>{activeProjectCounts.sessions}</CountBadge>}
               >
                 Kanban
               </Row>

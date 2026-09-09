@@ -5,7 +5,7 @@
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, Task, ChatThread, Ticket, TicketDescription, TicketDraft, TicketSessionRequest, TicketSessionResult, GitDiffState, ReviewActionRequest, ReviewActionResult, Idea, IdeaState, CreateIdeaInput, UpdateIdeaInput, IdeaIssueDraft, MondayItem, MondayItemWithLinks, TaskMondayLink, MondayProjectConfig } from '@nexus/shared';
+import { Project, ChatThread, Ticket, TicketDescription, TicketDraft, TicketSessionRequest, TicketSessionResult, GitDiffState, ReviewActionRequest, ReviewActionResult, Idea, IdeaState, CreateIdeaInput, UpdateIdeaInput, IdeaIssueDraft, MondayItem, MondayItemWithLinks, ThreadMondayLink, MondayProjectConfig, BoardResponse, OriginRef, OriginDraft, OriginSessionRequest, OriginSessionResult } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -314,20 +314,21 @@ export async function searchMondayItems(projectId: string, query: string): Promi
   return data.configured === false ? [] : data.items;
 }
 
-export async function fetchMondayLinks(projectId: string): Promise<TaskMondayLink[]> {
-  const data = await fetchJson<{ links: TaskMondayLink[] }>(`/api/monday/projects/${projectId}/links`);
+export async function fetchMondayLinks(projectId: string): Promise<ThreadMondayLink[]> {
+  const data = await fetchJson<{ links: ThreadMondayLink[] }>(`/api/monday/projects/${projectId}/links`);
   return data.links;
 }
 
-export async function linkTaskToMondayItem(projectId: string, taskId: string, itemId: string): Promise<void> {
+/** Link a session to a Monday item (#439). One item per thread; user intent, survives a mirror wipe. */
+export async function linkThreadToMondayItem(projectId: string, threadId: string, itemId: string): Promise<void> {
   await fetchJson(`/api/monday/links`, {
     method: 'POST',
-    body: JSON.stringify({ project_id: projectId, task_id: taskId, item_id: itemId }),
+    body: JSON.stringify({ project_id: projectId, thread_id: threadId, item_id: itemId }),
   });
 }
 
-export async function unlinkTaskFromMondayItem(taskId: string): Promise<void> {
-  await fetchJson(`/api/monday/links/${taskId}`, { method: 'DELETE' });
+export async function unlinkThreadFromMondayItem(threadId: string): Promise<void> {
+  await fetchJson(`/api/monday/links/${encodeURIComponent(threadId)}`, { method: 'DELETE' });
 }
 
 // Task 15 — per-project Monday scope configuration. Free-standing exports
@@ -728,11 +729,15 @@ export const api = {
     reorder: (projectIds: string[]) =>
       fetchJson<Project[]>(`/api/projects/order`, { method: 'PUT', body: JSON.stringify({ project_ids: projectIds }) }),
     delete: (id: string) => fetchJson<void>(`/api/projects/${id}`, { method: 'DELETE' }),
-    tasks: (id: string) => fetchJson<Task[]>(`/api/projects/${id}/tasks`),
-    createTask: (id: string, data: { title: string; description?: string; status?: string; priority?: string; assigned_agent?: string }) =>
-      fetchJson<Task>(`/api/projects/${id}/tasks`, { method: 'POST', body: JSON.stringify(data) }),
-    githubSync: (id: string) =>
-      fetchJson<{ created: number; total: number }>(`/api/projects/${id}/github/sync`, { method: 'POST' }),
+    /** Session-first board (#439): cards, Inbox and per-feed errors, computed on read. */
+    board: (id: string, refresh = false) =>
+      fetchJson<BoardResponse>(`/api/projects/${id}/board${refresh ? '?refresh=1' : ''}`),
+    /** Sonnet distils an Inbox item into problem, project, branch (#439). */
+    boardDraft: (id: string, origin: OriginRef) =>
+      fetchJson<OriginDraft>(`/api/projects/${id}/board/draft`, { method: 'POST', body: JSON.stringify(origin) }),
+    /** Open an origin-stamped thread; send `firstTurn` through the chat stream. */
+    boardSession: (id: string, body: OriginSessionRequest) =>
+      fetchJson<OriginSessionResult>(`/api/projects/${id}/board/session`, { method: 'POST', body: JSON.stringify(body) }),
     gitDiff: (id: string) => fetchJson<GitDiffState>(`/api/projects/${id}/git/diff`),
     previewFile: (id: string, path: string) =>
       fetchJson<FilePreview>(`/api/projects/${id}/files/preview?path=${encodeURIComponent(path)}`),
@@ -741,11 +746,6 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
-  },
-  tasks: {
-    update: (id: string, data: Partial<Pick<Task, 'title' | 'description' | 'status' | 'priority' | 'assigned_agent' | 'due_date' | 'model_key' | 'thread_id'>>) =>
-      fetchJson<Task>(`/api/tasks/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
-    delete: (id: string) => fetchJson<void>(`/api/tasks/${id}`, { method: 'DELETE' }),
   },
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`/api/projects/${projectId}/threads`),
@@ -808,7 +808,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ confirmation }),
     }),
-    /** Wipe the disposable Monday item mirror; task↔item links survive. */
+    /** Wipe the disposable Monday item mirror; session↔item links survive. */
     clearMondayMirror: () => fetchJson<{ ok: boolean; cleared: number; links_kept: number }>('/api/monday/mirror/clear', { method: 'POST' }),
   },
   agentBridge: {

@@ -1,4 +1,4 @@
-/** Single chip on a Kanban card showing the task's linked Monday initiative. */
+/** Single chip on a board card showing the session's linked Monday initiative (#439: cards are sessions). */
 import type { MondayItem } from '@nexus/shared';
 
 interface Props {

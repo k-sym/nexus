@@ -19,7 +19,7 @@ import type Database from 'better-sqlite3';
 import type { MondayItem, MondayProjectConfig } from '@nexus/shared';
 import { setSimpleColumnValue, createUpdate, type MondayClientOptions } from './client.js';
 import { computeRollup, formatRollupText, formatRollupPercent } from './rollup.js';
-import { listLinkedTaskStatuses, getItem } from './store.js';
+import { listLinkedThreadStatuses, getItem } from './store.js';
 
 export interface RollupWriteDeps {
   setColumn: typeof setSimpleColumnValue;
@@ -67,7 +67,7 @@ export function mirrorColumnText(item: MondayItem, columnId: string): string | n
  * and the mirror row's stored column text plus its `synced_at`. The mirror is
  * only refreshed periodically, so immediately after Nexus writes it still
  * holds the OLD value — comparing against it naively would rewrite on every
- * trigger (e.g. every Kanban drag), which is the trap. So: as long as the
+ * trigger (e.g. every run ending), which is the trap. So: as long as the
  * mirror snapshot in hand is the SAME one that was already stale when Nexus
  * last wrote (same `synced_at`), trust Nexus's own memory of what it wrote.
  * Only once the mirror has actually refreshed to a new snapshot is its stored
@@ -91,7 +91,7 @@ export async function writeRollup(
   const item = getItem(db, itemId);
   if (!item) return 'skipped';
 
-  const counts = computeRollup(listLinkedTaskStatuses(db, itemId));
+  const counts = computeRollup(listLinkedThreadStatuses(db, itemId));
   const value = cfg.rollup.column_type === 'numeric'
     ? String(formatRollupPercent(counts))
     : formatRollupText(counts);
@@ -125,8 +125,8 @@ function escapeHtml(s: string): string {
 }
 
 /**
- * Post to an item's updates feed. `provenance` names the Nexus task and thread
- * for agent-authored updates so a human reading Monday never has to guess who
+ * Post to an item's updates feed. `provenance` names the Nexus session and
+ * thread for agent-authored updates so a human reading Monday never has to guess who
  * wrote it; pass null for Nexus's own automated notes.
  *
  * `body` is agent-authored and is HTML-escaped before use: Monday renders

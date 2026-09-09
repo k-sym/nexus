@@ -8,7 +8,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getDb } from '../db';
 import { registerMondayRoutes } from '../routes/monday';
-import { upsertItems, getLinkForTask, getItem } from '../monday/store';
+import { upsertItems, getLinkForThread, getItem } from '../monday/store';
 import { loadConfig, saveConfig } from '../config';
 import type { ActivityEvent } from '../activity/events';
 
@@ -30,8 +30,9 @@ function seed(db: ReturnType<typeof getDb>) {
         updates: { enabled: false, min_interval_minutes: 30 },
       },
     }));
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-              VALUES ('t1','p1','A','','deploy','medium','now','now')`).run();
+  // An archived thread derives to 'deploy' (#439 D6), so the roll-up reads 1/1 done.
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('t1','p1','A','now','now','now')`).run();
   upsertItems(db, [{
     item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
     name: 'Initiative', state: 'active', status_label: 'Working on it', status_color: null,
@@ -146,18 +147,18 @@ function stubMondayItemFetch(itemId: string, name: string): () => void {
   return () => { globalThis.fetch = original; };
 }
 
-test('GET items returns mirrored items with roll-up and linked task ids', async () => {
+test('GET items returns mirrored items with roll-up and linked thread ids', async () => {
   const db = getDb(':memory:');
   seed(db);
   const app = await buildApp(db);
-  await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+  await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p1' } });
 
   const res = await app.inject({ method: 'GET', url: '/api/monday/projects/p1/items' });
   assert.equal(res.statusCode, 200);
-  const body = res.json() as { items: { item_id: string; rollup_text: string; task_ids: string[] }[] };
+  const body = res.json() as { items: { item_id: string; rollup_text: string; thread_ids: string[] }[] };
   assert.equal(body.items.length, 1);
   assert.equal(body.items[0].rollup_text, '1/1 done');
-  assert.deepEqual(body.items[0].task_ids, ['t1']);
+  assert.deepEqual(body.items[0].thread_ids, ['t1']);
   await app.close();
   db.close();
 });
@@ -167,19 +168,19 @@ test('POST links creates a link and replaces an existing one', async () => {
   seed(db);
   const app = await buildApp(db);
 
-  const first = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+  const first = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p1' } });
   assert.equal(first.statusCode, 200);
-  assert.equal(getLinkForTask(db, 't1')!.item_id, '1');
+  assert.equal(getLinkForThread(db, 't1')!.item_id, '1');
 
-  // Re-POST the SAME task_id with a DIFFERENT item_id. task_id is the
-  // primary key and linkTask upserts on it, so this must replace the row,
+  // Re-POST the SAME thread_id with a DIFFERENT item_id. thread_id is the
+  // primary key and linkThread upserts on it, so this must replace the row,
   // not append a second one.
-  const second = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '2', project_id: 'p1' } });
+  const second = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '2', project_id: 'p1' } });
   assert.equal(second.statusCode, 200);
-  assert.equal(getLinkForTask(db, 't1')!.item_id, '2');
+  assert.equal(getLinkForThread(db, 't1')!.item_id, '2');
 
   // Prove there is no duplicate row left behind by the first link.
-  const { c } = db.prepare('SELECT COUNT(*) AS c FROM task_monday_links WHERE task_id = ?').get('t1') as { c: number };
+  const { c } = db.prepare('SELECT COUNT(*) AS c FROM thread_monday_links WHERE thread_id = ?').get('t1') as { c: number };
   assert.equal(c, 1);
 
   await app.close();
@@ -191,7 +192,7 @@ test('POST links mirrors an item the picker found live but that has no mirror ro
   // never been through a scope sync — no row in monday_items. Before this
   // fix, writeRollup's getItem(db, itemId) found nothing and silently
   // returned 'skipped': no roll-up write, no badge, no agent context, until
-  // some unrelated task on the same item happened to move.
+  // some unrelated session on the same item happened to finish a run.
   const db = getDb(':memory:');
   seed(db);
   const app = await buildApp(db);
@@ -199,10 +200,10 @@ test('POST links mirrors an item the picker found live but that has no mirror ro
   const unstub = stubMondayItemFetch('5', 'Fresh from Monday');
   try {
     await withMondayEnabled(async () => {
-      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '5', project_id: 'p1' } });
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '5', project_id: 'p1' } });
       assert.equal(res.statusCode, 200);
     });
-    assert.equal(getLinkForTask(db, 't1')!.item_id, '5');
+    assert.equal(getLinkForThread(db, 't1')!.item_id, '5');
     assert.equal(
       getItem(db, '5')?.name, 'Fresh from Monday',
       'the item must be mirrored by the time the link exists, so the roll-up write and badge do not silently no-op',
@@ -221,7 +222,7 @@ test('POST links surfaces a Monday mirror-fetch failure and creates no link (no 
   const unstub = stubMondayAuthFailure();
   try {
     await withMondayEnabled(async () => {
-      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '5', project_id: 'p1' } });
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '5', project_id: 'p1' } });
       assert.equal(res.statusCode, 502);
       const body = res.json() as { error?: string; code?: string; retryable?: boolean };
       assert.match(body.error ?? '', /Not Authenticated/);
@@ -230,7 +231,7 @@ test('POST links surfaces a Monday mirror-fetch failure and creates no link (no 
     // Keep the handler's existing failure behaviour: a Monday error must
     // surface (asserted above) and must not leave a half-created state —
     // no link row for a fetch that never completed.
-    assert.equal(getLinkForTask(db, 't1'), undefined, 'a failed mirror fetch must not leave a half-created link');
+    assert.equal(getLinkForThread(db, 't1'), undefined, 'a failed mirror fetch must not leave a half-created link');
     assert.equal(getItem(db, '5'), undefined);
   } finally {
     unstub();
@@ -250,10 +251,10 @@ test('POST links skips the mirror fetch (and still links) when an item is alread
   const unstub = stubMondayAuthFailure();
   try {
     await withMondayEnabled(async () => {
-      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p1' } });
       assert.equal(res.statusCode, 200);
     });
-    assert.equal(getLinkForTask(db, 't1')!.item_id, '1');
+    assert.equal(getLinkForThread(db, 't1')!.item_id, '1');
   } finally {
     unstub();
     await app.close();
@@ -265,19 +266,19 @@ test('POST links rejects a missing field', async () => {
   const db = getDb(':memory:');
   seed(db);
   const app = await buildApp(db);
-  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1' } });
+  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1' } });
   assert.equal(res.statusCode, 400);
   await app.close();
   db.close();
 });
 
-test('POST links 404s when task_id does not exist', async () => {
+test('POST links 404s when thread_id does not exist', async () => {
   const db = getDb(':memory:');
   seed(db);
   const app = await buildApp(db);
-  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 'nope', item_id: '1', project_id: 'p1' } });
+  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 'nope', item_id: '1', project_id: 'p1' } });
   assert.equal(res.statusCode, 404);
-  assert.equal(getLinkForTask(db, 'nope'), undefined);
+  assert.equal(getLinkForThread(db, 'nope'), undefined);
   await app.close();
   db.close();
 });
@@ -286,32 +287,31 @@ test('POST links 404s when project_id does not exist', async () => {
   const db = getDb(':memory:');
   seed(db);
   const app = await buildApp(db);
-  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'nope' } });
+  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'nope' } });
   assert.equal(res.statusCode, 404);
-  assert.equal(getLinkForTask(db, 't1'), undefined);
+  assert.equal(getLinkForThread(db, 't1'), undefined);
   await app.close();
   db.close();
 });
 
-test('POST links 400s when the task belongs to a different project than supplied', async () => {
+test('POST links 400s when the thread belongs to a different project than supplied', async () => {
   const db = getDb(':memory:');
   seed(db);
   // A second, real project that t1 does NOT belong to.
   db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
               VALUES ('p2','p2','P2','P2','','', '{}', 0, '', 'now','now')`).run();
   const app = await buildApp(db);
-  // t1 belongs to p1 (seeded above), but the caller claims it links into p2.
-  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p2' } });
+  // thread t1 belongs to p1 (seeded above), but the caller claims it links into p2.
+  const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p2' } });
   assert.equal(res.statusCode, 400);
-  assert.equal(getLinkForTask(db, 't1'), undefined);
+  assert.equal(getLinkForThread(db, 't1'), undefined);
   await app.close();
   db.close();
 });
 
-test('POST links emits a monday_write activity operation, not just Kanban moves', async () => {
-  // Before this fix, link/unlink/task-delete called scheduleRollup /
-  // scheduleRollupForItem WITHOUT an emit argument — only the Kanban
-  // status-change path in routes/projects.ts produced a monday_write
+test('POST links emits a monday_write activity operation, not just lifecycle hooks', async () => {
+  // Before this fix, link/unlink called scheduleRollup / scheduleRollupForItem
+  // WITHOUT an emit argument — only the lifecycle path produced a monday_write
   // operation, so these writes were invisible in the Activity Console.
   const db = getDb(':memory:');
   seed(db);
@@ -319,7 +319,7 @@ test('POST links emits a monday_write activity operation, not just Kanban moves'
   const unstub = stubMondayItemFetch('1', 'Initiative');
   try {
     await withMondayEnabled(async () => {
-      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+      const res = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p1' } });
       assert.equal(res.statusCode, 200);
       await waitForEvents(events, 2);
     });
@@ -338,7 +338,7 @@ test('DELETE links emits a monday_write activity operation', async () => {
   const unstub = stubMondayItemFetch('1', 'Initiative');
   try {
     await withMondayEnabled(async () => {
-      const link = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+      const link = await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p1' } });
       assert.equal(link.statusCode, 200);
       await waitForEvents(events, 2);
       events.length = 0; // isolate the unlink's own events from the link's
@@ -359,10 +359,10 @@ test('DELETE links removes the link', async () => {
   const db = getDb(':memory:');
   seed(db);
   const app = await buildApp(db);
-  await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+  await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p1' } });
   const res = await app.inject({ method: 'DELETE', url: '/api/monday/links/t1' });
   assert.equal(res.statusCode, 200);
-  assert.equal(getLinkForTask(db, 't1'), undefined);
+  assert.equal(getLinkForThread(db, 't1'), undefined);
   await app.close();
   db.close();
 });
@@ -371,7 +371,7 @@ test('GET links returns a project\'s links', async () => {
   const db = getDb(':memory:');
   seed(db);
   const app = await buildApp(db);
-  await app.inject({ method: 'POST', url: '/api/monday/links', payload: { task_id: 't1', item_id: '1', project_id: 'p1' } });
+  await app.inject({ method: 'POST', url: '/api/monday/links', payload: { thread_id: 't1', item_id: '1', project_id: 'p1' } });
   const res = await app.inject({ method: 'GET', url: '/api/monday/projects/p1/links' });
   assert.equal(res.statusCode, 200);
   assert.equal(res.json().links.length, 1);
@@ -475,13 +475,13 @@ test('GET search 502s (not an empty-success shape) when the live Monday fetch fa
 test('POST /api/monday/mirror/clear wipes monday_items but keeps every link', async () => {
   const db = getDb(':memory:');
   seed(db);
-  db.prepare("INSERT INTO task_monday_links (task_id, item_id, project_id, created_at) VALUES ('t1','1','p1','now')").run();
+  db.prepare("INSERT INTO thread_monday_links (thread_id, item_id, project_id, created_at) VALUES ('t1','1','p1','now')").run();
   const app = await buildApp(db);
   const res = await app.inject({ method: 'POST', url: '/api/monday/mirror/clear' });
   assert.equal(res.statusCode, 200);
   assert.deepEqual(res.json(), { ok: true, cleared: 1, links_kept: 1 });
   assert.equal(getItem(db, '1'), undefined);
-  assert.ok(getLinkForTask(db, 't1'));
+  assert.ok(getLinkForThread(db, 't1'));
   await app.close();
   db.close();
 });

@@ -8,7 +8,9 @@ interface ActivityConsoleProps {
   operations: ActivityResponse | null;
   loading: boolean;
   projects: Project[];
-  tasks: Task[];
+  /** Legacy task rows for the operation detail's "Task" field. The board no
+   *  longer has tasks (#439), so callers may omit this. */
+  tasks?: Task[];
   threads: ThreadMeta[];
   filters?: ActivityFilters;
   onFiltersChange?: (filters: ActivityFilters) => void;
@@ -82,7 +84,7 @@ export default function ActivityConsole({
   operations,
   loading,
   projects,
-  tasks,
+  tasks = [],
   threads,
   filters,
   onFiltersChange,

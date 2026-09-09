@@ -17,6 +17,8 @@ import { loadConfig, getDbPath, getNexusDir, resolveOpenRouterKey, resolveEnvVar
 import { startGateway } from './gateway/server.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerChatRoutes } from './routes/chat.js';
+import { registerBoardRoutes } from './routes/board.js';
+import { registerMondayThreadHooks } from './monday/thread-hooks.js';
 import { registerAssistantRoutes } from './routes/assistant.js';
 import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerMemoryRoutes } from './routes/memory.js';
@@ -277,9 +279,13 @@ async function main() {
   app.decorate('approvalAudit', approvalAudit);
   app.decorate('apns', apns);
   app.decorate('agentBridge', agentBridge);
+  // Session-first board (#439): Monday learns about run end from the run
+  // registry instead of the old task PUT.
+  registerMondayThreadHooks(db, (event) => activityManager.bus.emit(event));
 
   app.register(registerProjectRoutes);
   app.register(registerChatRoutes);
+  app.register(registerBoardRoutes);
   app.register(registerAssistantRoutes);
   app.register(registerNextMessageRoutes);
   app.register(registerOrchestratorRoutes);

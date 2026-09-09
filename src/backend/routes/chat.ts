@@ -28,6 +28,8 @@ import type { EngineSession } from '../engines/types.js';
 import { EngineRegistry } from '../engines/registry.js';
 import { PiEngine } from '../engines/pi-engine.js';
 import { archiveThreadToMemory, ArchiveThreadError } from '../sessions/archive.js';
+import { markRunning, markStopped } from '../chat/run-registry.js';
+import { onThreadArchived } from '../monday/thread-hooks.js';
 import { autoTitleSession, NEW_THREAD_TITLE } from '../sessions/auto-title.js';
 import { loadConfig } from '../config.js';
 import { resolveSignalFilterConfig } from '../signal-filters/config.js';
@@ -238,15 +240,20 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     };
   };
 
+  // Every claim is mirrored into the run registry so the board's lanes and the
+  // Monday roll-up can read "is this thread running?" without this closure.
   const claimThreadRun = (threadId: string, title: string, modelKey: string): symbol | undefined => {
     if (threadRunClaims.has(threadId)) return undefined;
     const owner = Symbol(threadId);
     threadRunClaims.set(threadId, { owner, title, modelKey });
+    markRunning(threadId, { title, modelKey });
     return owner;
   };
 
   const releaseThreadRun = (threadId: string, owner: symbol): void => {
-    if (threadRunClaims.get(threadId)?.owner === owner) threadRunClaims.delete(threadId);
+    if (threadRunClaims.get(threadId)?.owner !== owner) return;
+    threadRunClaims.delete(threadId);
+    markStopped(threadId);
   };
 
   fastify.get('/api/chat/active-runs', async () => {
@@ -948,6 +955,9 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         status: 'succeeded',
         diagnostics: { memoryId: result.memoryId, elided: result.elided },
       });
+      // Session-first board (#439): Done is the archive, so a linked Monday
+      // item learns "deploy" here. Fire-and-forget inside the hook.
+      onThreadArchived(db, threadId, fastify.activity?.bus.emit.bind(fastify.activity.bus));
       return result;
     } catch (err: any) {
       const message = err instanceof ArchiveThreadError ? err.message : (err?.message || 'Archive failed');

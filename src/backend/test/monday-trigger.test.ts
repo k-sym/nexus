@@ -13,10 +13,11 @@ import {
 } from '../monday/trigger';
 import { __resetWriteState } from '../monday/writes';
 import { __resetStatusSyncState } from '../monday/status-sync';
-import { upsertItems, linkTask } from '../monday/store';
+import { upsertItems, linkThread } from '../monday/store';
 import { MondayError } from '../monday/client';
 import { loadConfig, saveConfig } from '../config';
 import type { ActivityEvent } from '../activity/events';
+import { markRunning, __resetRunRegistry } from '../chat/run-registry';
 
 // withMondayEnabled below calls saveConfig(), which writes config.yaml for
 // real. Relocate the whole ~/.nexus tree to a scratch dir first: config.ts
@@ -26,7 +27,7 @@ const NEXUS_HOME = mkdtempSync(join(tmpdir(), 'nexus-monday-trigger-home-'));
 process.env.NEXUS_HOME = NEXUS_HOME;
 after(() => rmSync(NEXUS_HOME, { recursive: true, force: true }));
 
-beforeEach(() => { __resetWriteState(); __resetStatusSyncState(); });
+beforeEach(() => { __resetWriteState(); __resetStatusSyncState(); __resetRunRegistry(); });
 
 /**
  * scheduleRollup reads `loadConfig().monday.enabled` as its global kill
@@ -59,14 +60,15 @@ function seed(db: ReturnType<typeof getDb>) {
         updates: { enabled: false, min_interval_minutes: 30 },
       },
     }));
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-              VALUES ('t1','p1','A','','deploy','medium','now','now')`).run();
+  // An archived thread derives to 'deploy' (#439 D6).
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('t1','p1','A','now','now','now')`).run();
   upsertItems(db, [{
     item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
     name: 'Initiative', state: 'active', status_label: null, status_color: null,
     owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
   }]);
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
   process.env.MONDAY_TOKEN = 'tok';
 }
 
@@ -88,14 +90,14 @@ test('a rollup write emits a monday_write operation', async () => {
   db.close();
 });
 
-test('scheduleRollup is a no-op for an unlinked task and never throws', async () => {
+test('scheduleRollup is a no-op for an unlinked thread and never throws', async () => {
   const db = getDb(':memory:');
   seed(db);
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-              VALUES ('t9','p1','B','','todo','medium','now','now')`).run();
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('t9','p1','B','now','now',NULL)`).run();
   const events: ActivityEvent[] = [];
   // Wrapped like its siblings: with Monday genuinely enabled and tokened, the
-  // ONLY thing that can explain zero events is the unlinked-task check itself
+  // ONLY thing that can explain zero events is the unlinked-thread check itself
   // — not the disabled-by-default kill switch, which would produce the same
   // "zero events" outcome for an unrelated reason and mask a broken guard.
   await withMondayEnabled(() => scheduleRollup(db, 't9', null, (e) => events.push(e)));
@@ -121,9 +123,9 @@ test('a failed write does not throw — the caller must not be blocked', async (
 });
 
 test('scheduleRollup resolves rather than rejects when the DB predates the Monday tables', async () => {
-  // A schema with no task_monday_links table at all — the exact case the
+  // A schema with no thread_monday_links table at all — the exact case the
   // docblock's outer try/catch calls out: "a caller whose schema predates the
-  // Monday tables". getLinkForTask's very first query throws before any
+  // Monday tables". getLinkForThread's very first query throws before any
   // Monday-specific guard (enabled, token, project config) ever runs.
   //
   // scheduleRollup is declared `async`, so even with the try/catch DELETED
@@ -161,7 +163,7 @@ test('disableRollupForProject is idempotent — calling it twice notifies exactl
   // the sequential double-call test above passes because scheduleRollupForItem
   // gates on `projectCfg.rollup.enabled` before ever reaching this function
   // again — it never proves disableRollupForProject itself is idempotent.
-  // Two task moves racing against the same project's configuration error
+  // Two run-end hooks racing against the same project's configuration error
   // could both reach this function before either write has landed, which is
   // exactly what a direct double-call simulates.
   const db = getDb(':memory:');
@@ -192,14 +194,14 @@ test('scheduleRollup degrades to a no-op, not a throw, on a project config with 
   db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
               VALUES ('p1','p','P','P','','', ?, 0, '', 'now','now')`)
     .run(JSON.stringify({ monday: { board_id: 'b1', group_id: null } }));
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-              VALUES ('t1','p1','A','','deploy','medium','now','now')`).run();
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('t1','p1','A','now','now','now')`).run();
   upsertItems(db, [{
     item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
     name: 'Initiative', state: 'active', status_label: null, status_color: null,
     owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
   }]);
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
   process.env.MONDAY_TOKEN = 'tok';
 
   // A bare `!projectCfg.rollup.enabled` throw and a guarded early `return`
@@ -246,14 +248,16 @@ function seedStatus(db: ReturnType<typeof getDb>) {
         },
       },
     }));
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-              VALUES ('t1','p1','A','','in_progress','medium','now','now')`).run();
+  // A running thread derives to 'in_progress' (#439 D6).
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('t1','p1','A','now','now',NULL)`).run();
+  markRunning('t1', { title: 'A', modelKey: 'm' });
   upsertItems(db, [{
     item_id: '1', board_id: 'b1', board_name: '', group_id: null, group_title: null,
     name: 'Initiative', state: 'active', status_label: null, status_color: null,
     owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
   }]);
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
   process.env.MONDAY_TOKEN = 'tok';
 }
 

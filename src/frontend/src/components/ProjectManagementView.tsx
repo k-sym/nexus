@@ -1,25 +1,25 @@
 /**
  * The initiative level. Monday items for the project's configured scope,
  * grouped the way Monday groups them, each showing the roll-up computed from
- * its linked Nexus tasks.
+ * its linked Nexus sessions (#439: links moved from tasks to threads).
  *
  * A load failure renders as an error, never as an empty board — "Monday
  * rejected our token" and "this board has no items" must not look alike.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { MondayItemWithLinks, MondayProjectConfig, Task } from '@nexus/shared';
+import type { ChatThread, MondayItemWithLinks, MondayProjectConfig } from '@nexus/shared';
 import {
-  api, fetchMondayItems, fetchMondayProjectConfig, linkTaskToMondayItem, unlinkTaskFromMondayItem,
+  api, fetchMondayItems, fetchMondayProjectConfig, linkThreadToMondayItem, unlinkThreadFromMondayItem,
   type FetchJsonError,
 } from '../api';
 import { MondayScopeSettings } from './MondayScopeSettings';
 
 interface Props {
   projectId: string;
-  /** Jump to this project's Kanban board — used by the linked-task chips so a
-   *  task can be found where it lives. Optional so the component still renders
+  /** Open a linked session — used by the chips so a session can be reached
+   *  from the initiative it serves. Optional so the component still renders
    *  standalone (e.g. in tests); the chip is a plain label without it. */
-  onNavigateToKanban?: () => void;
+  onOpenThread?: (threadId: string) => void;
 }
 
 /** The Monday board's own URL, derived from any mirrored item's `url` (which
@@ -35,11 +35,11 @@ function deriveBoardUrl(items: MondayItemWithLinks[]): string | null {
   }
 }
 
-/** A friendly chip label: the task title, or a shortened id when the title
+/** A friendly chip label: the session title, or a shortened id when the title
  *  isn't loaded yet (short ids like test fixtures are left intact). */
-function chipLabel(taskId: string, task: Task | undefined): string {
-  if (task?.title) return task.title;
-  return taskId.length > 12 ? `${taskId.slice(0, 8)}…` : taskId;
+function chipLabel(threadId: string, thread: ChatThread | undefined): string {
+  if (thread?.title) return thread.title;
+  return threadId.length > 12 ? `${threadId.slice(0, 8)}…` : threadId;
 }
 
 /** Any non-'active' state means the initiative should not read as healthy in
@@ -63,7 +63,7 @@ interface LoadError {
   retryable?: boolean;
 }
 
-export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) {
+export function ProjectManagementView({ projectId, onOpenThread }: Props) {
   const [items, setItems] = useState<MondayItemWithLinks[] | null>(null);
   const [error, setError] = useState<LoadError | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -82,22 +82,20 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   // fire a full Monday sync each time. 0 = "never auto-synced yet".
   const lastAutoSyncRef = useRef(0);
 
-  // Task-scoped, separate from the row-level `error` above: unlinking one
-  // task must not be confused with (or clobber) a full load/refresh failure.
+  // Session-scoped, separate from the row-level `error` above: unlinking one
+  // session must not be confused with (or clobber) a full load/refresh failure.
   // Use a Set to track multiple concurrent unlinks; a single scalar would break
   // when two unlinks are in flight at once (the first's finally would reset the
   // state while the second is still pending).
-  const [unlinkingTaskIds, setUnlinkingTaskIds] = useState<Set<string>>(new Set());
+  const [unlinkingThreadIds, setUnlinkingThreadIds] = useState<Set<string>>(new Set());
   const [unlinkError, setUnlinkError] = useState<string | null>(null);
 
-  // Item-scoped, same shape as the unlink state: a Set so two concurrent
-  // "create task in Triage" clicks on different rows don't clobber each other.
-  const [creatingItemIds, setCreatingItemIds] = useState<Set<string>>(new Set());
-  const [createError, setCreateError] = useState<string | null>(null);
+  // Attach-scoped, same shape as the unlink state.
+  const [attachError, setAttachError] = useState<string | null>(null);
 
-  // Linked-task id → task, so a chip can show the task's title instead of its
-  // raw UUID. Best-effort: a chip falls back to the id if this hasn't loaded.
-  const [tasksById, setTasksById] = useState<Map<string, Task>>(new Map());
+  // Linked thread id → thread, so a chip can show the session's title instead
+  // of its raw UUID. Best-effort: a chip falls back to the id if this hasn't loaded.
+  const [threadsById, setThreadsById] = useState<Map<string, ChatThread>>(new Map());
 
   // Not-yet-configured (backend `200 { configured: false }`) and "reopened via
   // the header's Configure control" both render the same setup panel, keyed
@@ -106,20 +104,20 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   const [configPanel, setConfigPanel] = useState<{ current: MondayProjectConfig | null } | null>(null);
   const [configOpenError, setConfigOpenError] = useState<string | null>(null);
 
-  // Best-effort task-title lookup for the linked-task chips. Kept separate from
-  // the item load: a titles failure must never blank the item list, so it
-  // swallows its error and simply leaves the chips on their id fallback.
-  const loadTasks = useCallback(async () => {
+  // Best-effort session-title lookup for the chips and the attach picker. Kept
+  // separate from the item load: a titles failure must never blank the item
+  // list, so it swallows its error and simply leaves the chips on their id fallback.
+  const loadThreads = useCallback(async () => {
     try {
-      const tasks = await api.projects.tasks(projectId);
-      setTasksById(new Map(tasks.map((t) => [t.id, t])));
+      const threads = await api.chat.threads(projectId);
+      setThreadsById(new Map(threads.map((t) => [t.id, t])));
     } catch {
       // Ignore — chips fall back to the raw id.
     }
   }, [projectId]);
 
   const load = useCallback(async (refresh: boolean) => {
-    void loadTasks();
+    void loadThreads();
     const generation = ++generationRef.current;
     setError(null);
     if (refresh) setRefreshing(true);
@@ -142,7 +140,7 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
     } finally {
       if (generationRef.current === generation) setRefreshing(false);
     }
-  }, [projectId, loadTasks]);
+  }, [projectId, loadThreads]);
 
   // Fetches the project's current Monday scope and opens the setup panel
   // pre-filled with it — the header's Configure control. A failure here
@@ -177,8 +175,8 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
   //    throttled to once per 10s so rapid focus toggles don't hammer the API;
   //    this is what picks up a status you edited directly in Monday.
   //  - a slow interval while the tab is visible → the cheap mirror-read
-  //    (load(false)), which still recomputes the roll-up from current task
-  //    statuses, so a card moved on the Kanban is reflected here on its own.
+  //    (load(false)), which still recomputes the roll-up from the linked
+  //    sessions' derived states, so a run finishing is reflected here on its own.
   useEffect(() => {
     if (configPanel) return;
     const syncFromMonday = () => {
@@ -200,66 +198,46 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
     };
   }, [configPanel, load]);
 
-  // Unlink a task from an item row, then refresh so the roll-up (and this
-  // row's task_ids) reflects the change — no stale state left on screen.
-  const handleUnlink = useCallback(async (taskId: string) => {
-    setUnlinkingTaskIds(prev => new Set([...prev, taskId]));
+  // Unlink a session from an item row, then refresh so the roll-up (and this
+  // row's thread_ids) reflects the change — no stale state left on screen.
+  const handleUnlink = useCallback(async (threadId: string) => {
+    setUnlinkingThreadIds(prev => new Set([...prev, threadId]));
     setUnlinkError(null);
     try {
-      await unlinkTaskFromMondayItem(taskId);
+      await unlinkThreadFromMondayItem(threadId);
       await load(false);
     } catch (err) {
       setUnlinkError((err as Error).message);
     } finally {
-      setUnlinkingTaskIds(prev => {
+      setUnlinkingThreadIds(prev => {
         const next = new Set(prev);
-        next.delete(taskId);
+        next.delete(threadId);
         return next;
       });
     }
   }, [load]);
 
-  // Create a Triage task from an item and link it in one click, then reload so
-  // the new link (and, when status sync is on, the "Planned" push it triggers)
-  // is reflected. The two existing endpoints are reused — no bespoke backend.
-  // The other half of "linking is reachable from both ends": attach a task
-  // that already exists. Only tasks with no link are offered — one item per
-  // task, and re-pointing a task silently from here would hide the move.
+  // Attach a session that already exists. Only sessions with no link are
+  // offered — one item per thread, and re-pointing a thread silently from here
+  // would hide the move. Starting a NEW session from an item happens on the
+  // board's Inbox (#439), not here.
   const [attachingItemIds, setAttachingItemIds] = useState<Set<string>>(new Set());
-  const linkedTaskIds = new Set((items ?? []).flatMap((i) => i.task_ids));
-  const unlinkedTasks = [...tasksById.values()]
-    .filter((t) => !linkedTaskIds.has(t.id))
+  const linkedThreadIds = new Set((items ?? []).flatMap((i) => i.thread_ids));
+  const unlinkedThreads = [...threadsById.values()]
+    .filter((t) => !linkedThreadIds.has(t.id) && !t.archived_at)
     .sort((a, b) => a.title.localeCompare(b.title));
 
-  const handleAttachTask = useCallback(async (item: MondayItemWithLinks, taskId: string) => {
-    if (!taskId) return;
+  const handleAttachThread = useCallback(async (item: MondayItemWithLinks, threadId: string) => {
+    if (!threadId) return;
     setAttachingItemIds(prev => new Set([...prev, item.item_id]));
-    setCreateError(null);
+    setAttachError(null);
     try {
-      await linkTaskToMondayItem(projectId, taskId, item.item_id);
+      await linkThreadToMondayItem(projectId, threadId, item.item_id);
       await load(false);
     } catch (err) {
-      setCreateError((err as Error).message);
+      setAttachError((err as Error).message);
     } finally {
       setAttachingItemIds(prev => {
-        const next = new Set(prev);
-        next.delete(item.item_id);
-        return next;
-      });
-    }
-  }, [projectId, load]);
-
-  const handleCreateTask = useCallback(async (item: MondayItemWithLinks) => {
-    setCreatingItemIds(prev => new Set([...prev, item.item_id]));
-    setCreateError(null);
-    try {
-      const task = await api.projects.createTask(projectId, { title: item.name, status: 'triage' });
-      await linkTaskToMondayItem(projectId, task.id, item.item_id);
-      await load(false);
-    } catch (err) {
-      setCreateError((err as Error).message);
-    } finally {
-      setCreatingItemIds(prev => {
         const next = new Set(prev);
         next.delete(item.item_id);
         return next;
@@ -324,7 +302,7 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
       <header className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
         <div>
           <h1 className="text-xl font-semibold">Project Management</h1>
-          <p className="text-xs text-zinc-500">Monday.com initiatives in this project&apos;s scope, with roll-up from linked tasks.</p>
+          <p className="text-xs text-zinc-500">Monday.com initiatives in this project&apos;s scope, with roll-up from linked sessions.</p>
         </div>
         <div className="flex items-center gap-2">
           {boardUrl ? (
@@ -400,13 +378,13 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
         </div>
       ) : null}
 
-      {createError ? (
+      {attachError ? (
         <div role="alert" className="mx-6 mt-3 flex items-center justify-between gap-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
-          <span>{createError}</span>
+          <span>{attachError}</span>
           <button
             type="button"
             className="text-xs text-red-300 underline shrink-0"
-            onClick={() => setCreateError(null)}
+            onClick={() => setAttachError(null)}
           >
             Dismiss
           </button>
@@ -431,48 +409,39 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
                     </div>
                     <div className="mt-1 flex items-center gap-3 text-xs text-zinc-500">
                       {item.status_label ? <span>{item.status_label}</span> : null}
-                      <span>{item.task_ids.length} linked task{item.task_ids.length === 1 ? '' : 's'}</span>
+                      <span>{item.thread_ids.length} linked session{item.thread_ids.length === 1 ? '' : 's'}</span>
                       {degradedLabel(item.state) ? (
                         <span className="text-amber-300">{degradedLabel(item.state)}</span>
                       ) : null}
                       <select
                         value=""
-                        aria-label={`Attach a task to ${item.name}`}
-                        disabled={attachingItemIds.has(item.item_id) || item.state !== 'active' || unlinkedTasks.length === 0}
-                        onChange={(e) => void handleAttachTask(item, e.target.value)}
+                        aria-label={`Attach a session to ${item.name}`}
+                        disabled={attachingItemIds.has(item.item_id) || item.state !== 'active' || unlinkedThreads.length === 0}
+                        onChange={(e) => void handleAttachThread(item, e.target.value)}
                         className="ml-auto shrink-0 max-w-[14rem] bg-transparent border border-zinc-800 rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:text-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         <option value="">
-                          {attachingItemIds.has(item.item_id) ? 'Attaching…' : unlinkedTasks.length === 0 ? 'No unlinked tasks' : 'Attach existing task…'}
+                          {attachingItemIds.has(item.item_id) ? 'Attaching…' : unlinkedThreads.length === 0 ? 'No unlinked sessions' : 'Attach existing session…'}
                         </option>
-                        {unlinkedTasks.map((t) => (
+                        {unlinkedThreads.map((t) => (
                           <option key={t.id} value={t.id}>{t.title}</option>
                         ))}
                       </select>
-                      <button
-                        type="button"
-                        disabled={creatingItemIds.has(item.item_id) || item.state !== 'active'}
-                        onClick={() => void handleCreateTask(item)}
-                        aria-label={`Create a Triage task from ${item.name}`}
-                        className="shrink-0 text-zinc-400 hover:text-zinc-100 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {creatingItemIds.has(item.item_id) ? 'Creating…' : '＋ Create task in Triage'}
-                      </button>
                     </div>
-                    {item.task_ids.length > 0 ? (
+                    {item.thread_ids.length > 0 ? (
                       <ul className="mt-2 flex flex-wrap gap-1.5">
-                        {item.task_ids.map((taskId) => {
-                          const label = chipLabel(taskId, tasksById.get(taskId));
+                        {item.thread_ids.map((threadId) => {
+                          const label = chipLabel(threadId, threadsById.get(threadId));
                           return (
                             <li
-                              key={taskId}
+                              key={threadId}
                               className="inline-flex items-center gap-1.5 rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-300"
                             >
-                              {onNavigateToKanban ? (
+                              {onOpenThread ? (
                                 <button
                                   type="button"
-                                  onClick={onNavigateToKanban}
-                                  title="Open on the Kanban board"
+                                  onClick={() => onOpenThread(threadId)}
+                                  title="Open session"
                                   className="max-w-[16rem] truncate text-left hover:text-zinc-100"
                                 >
                                   {label}
@@ -482,12 +451,12 @@ export function ProjectManagementView({ projectId, onNavigateToKanban }: Props) 
                               )}
                               <button
                                 type="button"
-                                disabled={unlinkingTaskIds.has(taskId)}
-                                onClick={() => void handleUnlink(taskId)}
-                                aria-label={`Unlink task ${taskId} from ${item.name}`}
+                                disabled={unlinkingThreadIds.has(threadId)}
+                                onClick={() => void handleUnlink(threadId)}
+                                aria-label={`Unlink session ${threadId} from ${item.name}`}
                                 className="text-zinc-500 hover:text-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                {unlinkingTaskIds.has(taskId) ? '…' : '✕'}
+                                {unlinkingThreadIds.has(threadId) ? '…' : '✕'}
                               </button>
                             </li>
                           );

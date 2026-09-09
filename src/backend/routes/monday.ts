@@ -10,7 +10,7 @@
  * `db` at app-boot in index.ts, not a bespoke `{ db }` deps argument.
  */
 import type { FastifyInstance } from 'fastify';
-import type { MondayProjectConfig, MondayItemWithLinks, Project, Task, TaskStatus } from '@nexus/shared';
+import type { ChatThread, MondayProjectConfig, MondayItemWithLinks, Project, TaskStatus } from '@nexus/shared';
 import { KANBAN_COLUMNS } from '@nexus/shared';
 import { loadConfig } from '../config.js';
 import { resolveMondayToken, runMondayRefreshOnce } from '../monday/poll.js';
@@ -22,13 +22,12 @@ import {
 } from '../monday/client.js';
 import { mapItem } from '../monday/map.js';
 import {
-  listItemsForBoard, listLinksForProject, linkTask, unlinkTask, getLinkForTask, listLinkedTaskStatuses,
+  listItemsForBoard, listLinksForProject, linkThread, unlinkThread, getLinkForThread, listLinkedThreadStatuses,
   getItem, upsertItems, clearMirror,
 } from '../monday/store.js';
 import { computeRollup, formatRollupText } from '../monday/rollup.js';
-import {
-  scheduleRollup, scheduleRollupForItem, scheduleStatusSync, scheduleStatusSyncForItem,
-} from '../monday/trigger.js';
+import { scheduleRollupForItem, scheduleStatusSyncForItem } from '../monday/trigger.js';
+import { onThreadLinked } from '../monday/thread-hooks.js';
 
 function projectMondayConfig(project: Project): MondayProjectConfig | null {
   try {
@@ -150,14 +149,14 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
    *  needs no Monday access — it works precisely when Monday is broken. */
   fastify.post('/api/monday/mirror/clear', async () => {
     const cleared = clearMirror(db);
-    return { ok: true, cleared, links_kept: (db.prepare('SELECT COUNT(*) AS n FROM task_monday_links').get() as { n: number }).n };
+    return { ok: true, cleared, links_kept: (db.prepare('SELECT COUNT(*) AS n FROM thread_monday_links').get() as { n: number }).n };
   });
 
   /**
    * Items with no movement for `days` (default 7) across every scoped
    * project — the read behind the partner's daily stale-item nudge
    * (baker-internal #59). Movement = the latest of the item's own updated_at,
-   * its newest update-thread entry, and its linked tasks' updated_at.
+   * its newest update-thread entry, and its linked sessions' updated_at.
    *
    * `refresh=1` re-syncs a project's scope first when its mirror is older
    * than `poll_minutes` (the background poll only refreshes LINKED items, so
@@ -346,13 +345,13 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     const links = listLinksForProject(db, project.id);
     const byItem = new Map<string, string[]>();
     for (const link of links) {
-      byItem.set(link.item_id, [...(byItem.get(link.item_id) ?? []), link.task_id]);
+      byItem.set(link.item_id, [...(byItem.get(link.item_id) ?? []), link.thread_id]);
     }
 
     const items: MondayItemWithLinks[] = listItemsForBoard(db, cfg.board_id, cfg.group_id ?? null)
       .map((item) => {
-        const counts = computeRollup(listLinkedTaskStatuses(db, item.item_id));
-        return { ...item, rollup: counts, rollup_text: formatRollupText(counts), task_ids: byItem.get(item.item_id) ?? [] };
+        const counts = computeRollup(listLinkedThreadStatuses(db, item.item_id));
+        return { ...item, rollup: counts, rollup_text: formatRollupText(counts), thread_ids: byItem.get(item.item_id) ?? [] };
       });
     return { configured: true, items };
   });
@@ -391,25 +390,25 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/api/monday/links', async (request, reply) => {
-    const body = request.body as { task_id?: string; item_id?: string; project_id?: string };
-    const { task_id: taskId, item_id: itemId, project_id: projectId } = body ?? {};
-    if (!taskId || !itemId || !projectId) {
-      return reply.code(400).send({ error: 'task_id, item_id and project_id are required' });
+    const body = request.body as { thread_id?: string; item_id?: string; project_id?: string };
+    const { thread_id: threadId, item_id: itemId, project_id: projectId } = body ?? {};
+    if (!threadId || !itemId || !projectId) {
+      return reply.code(400).send({ error: 'thread_id, item_id and project_id are required' });
     }
 
     // The table has no FK constraints, so without these checks a caller can
-    // link a task_id that doesn't exist (an orphan `/links` surfaces forever)
-    // or attach a task from project A to project B's link list, silently
+    // link a thread_id that doesn't exist (an orphan `/links` surfaces forever)
+    // or attach a session from project A to project B's link list, silently
     // polluting B's roll-up. 404 for unknown ids matches the "project not
     // found" convention already used by GET /items and /search; 400 for a
     // well-formed-but-inconsistent combination matches the 400 this same
     // handler already returns for missing fields.
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as Task | undefined;
-    if (!task) return reply.code(404).send({ error: 'task not found' });
+    const thread = db.prepare('SELECT * FROM chat_threads WHERE id = ?').get(threadId) as ChatThread | undefined;
+    if (!thread) return reply.code(404).send({ error: 'thread not found' });
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as Project | undefined;
     if (!project) return reply.code(404).send({ error: 'project not found' });
-    if (task.project_id !== projectId) {
-      return reply.code(400).send({ error: 'task does not belong to that project' });
+    if (thread.project_id !== projectId) {
+      return reply.code(400).send({ error: 'thread does not belong to that project' });
     }
 
     // The picker searches Monday LIVE (see the module docblock), so it can
@@ -420,8 +419,8 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
     // NEXT background poll, which does not itself re-trigger the roll-up
     // (poll.ts only refreshes; it never calls scheduleRollup). Mirror the
     // item now, before the link is created, so a fresh link reflects
-    // immediately rather than staying stale until some other task on the
-    // same item happens to move.
+    // immediately rather than staying stale until some other session on the
+    // same item happens to finish a run.
     if (!getItem(db, itemId)) {
       const opts = clientOptions();
       if (opts) {
@@ -439,27 +438,25 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
       }
     }
 
-    const link = { task_id: taskId, item_id: itemId, project_id: projectId, created_at: new Date().toISOString() };
-    linkTask(db, link);
-    // Same `fastify.activity?.bus.emit` seam the Kanban status-change path in
-    // routes/projects.ts already reaches the ActivityManager through — without
-    // it this write was invisible in the Activity Console (only Kanban moves
-    // produced a monday_write operation).
+    const link = { thread_id: threadId, item_id: itemId, project_id: projectId, created_at: new Date().toISOString() };
+    linkThread(db, link);
+    // Same `fastify.activity?.bus.emit` seam the run-end hook reaches the
+    // ActivityManager through — without it this write was invisible in the
+    // Activity Console. onThreadLinked is the ownership handoff: it lets this
+    // first status sync advance the item off the human-owned inbox label
+    // (e.g. "Wants attention" → "Planned"), the one trigger allowed to.
     const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
-    void scheduleRollup(db, taskId, 'task linked', emit);
-    // Link is the ownership handoff: `true` lets this first sync advance the
-    // item off the human-owned inbox label (e.g. "Wants attention" → "Planned").
-    void scheduleStatusSync(db, taskId, 'task linked', true, emit);
+    onThreadLinked(db, threadId, emit);
     return { link };
   });
 
-  fastify.delete('/api/monday/links/:taskId', async (request) => {
-    const { taskId } = request.params as { taskId: string };
-    const existing = getLinkForTask(db, taskId);
-    unlinkTask(db, taskId);
+  fastify.delete('/api/monday/links/:threadId', async (request) => {
+    const { threadId } = request.params as { threadId: string };
+    const existing = getLinkForThread(db, threadId);
+    unlinkThread(db, threadId);
     if (existing) {
       // Recompute the item we just detached from, or it keeps a count that
-      // still includes this task. Same emitter seam as the link handler above.
+      // still includes this session. Same emitter seam as the link handler above.
       const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
       void scheduleRollupForItem(db, existing.item_id, existing.project_id, null, emit);
       // Re-derive status from the remaining links. `false`: an unlink must never
