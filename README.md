@@ -879,7 +879,9 @@ project and a model from the curated list, edit the prompt and branch, and press
 thread in that project stamped with the ticket key and sends the edited prompt as its first turn, with a
 fixed trailer telling the agent to work on that branch, push it when done, and never touch Jira. Tickets
 with a session show a badge and open it. The drafting model is `jira.draft_model` (default
-`claude-code/claude-sonnet-5`; must be a `claude-code/*` key). The session replaces the old
+`claude-code/claude-sonnet-5`; must be a `claude-code/*` key). If a draft comes back 502 "nothing
+usable", the raw model reply is in the backend log under `[ticket-draft]` and a snippet sits in the
+failed `ticket_draft` operation's diagnostics. The session replaces the old
 "create a Kanban task" action. Nexus still never writes to Jira; close the ticket there yourself.
 
 ### Mission Control

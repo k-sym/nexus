@@ -102,16 +102,54 @@ export function extractJsonObject(text: string): Record<string, unknown> | null 
     else if (ch === '}') {
       depth--;
       if (depth === 0) {
-        try {
-          const parsed = JSON.parse(stripped.slice(start, i + 1));
-          return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
-        } catch {
-          return null;
-        }
+        const candidate = stripped.slice(start, i + 1);
+        const parsed = parseLenient(candidate);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
       }
     }
   }
   return null;
+}
+
+/** Strict parse first; on failure retry with trailing commas before `}` / `]`
+ *  removed. Models sometimes emit `"k": "v",\n}` (seen on SUP-1317, #432). */
+function parseLenient(candidate: string): unknown {
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    try {
+      return JSON.parse(stripTrailingCommas(candidate));
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Remove `,` that is followed (after whitespace) by `}` or `]`, outside strings. */
+export function stripTrailingCommas(text: string): string {
+  let out = '';
+  let inString = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      out += ch;
+      if (ch === '\\' && i + 1 < text.length) out += text[++i];
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === ',') {
+      let j = i + 1;
+      while (j < text.length && /\s/.test(text[j])) j++;
+      if (text[j] === '}' || text[j] === ']') continue;
+    }
+    out += ch;
+  }
+  return out;
 }
 
 /** Map the model's project pick (id or name, any case) to a known project id. */
@@ -152,14 +190,30 @@ export interface DraftTicketDeps {
   model: string;
 }
 
+export interface DraftTicketResult {
+  /** Null when the model returned nothing usable. */
+  draft: TicketDraft | null;
+  /** The raw model reply, kept so a null draft can be diagnosed (#432). */
+  text: string;
+}
+
+/** Draft plus the raw reply; throws on transport failure. */
+export async function draftTicketRaw(
+  input: DraftTicketInput,
+  projects: DraftProject[],
+  deps: DraftTicketDeps,
+): Promise<DraftTicketResult> {
+  const text = await deps.generate(DRAFT_SYSTEM_PROMPT, buildDraftPrompt(input, projects));
+  return { draft: parseDraft(text, input, projects, deps.model), text };
+}
+
 /** Null when the model returned nothing usable; throws on transport failure. */
 export async function draftTicket(
   input: DraftTicketInput,
   projects: DraftProject[],
   deps: DraftTicketDeps,
 ): Promise<TicketDraft | null> {
-  const text = await deps.generate(DRAFT_SYSTEM_PROMPT, buildDraftPrompt(input, projects));
-  return parseDraft(text, input, projects, deps.model);
+  return (await draftTicketRaw(input, projects, deps)).draft;
 }
 
 export interface FirstTurnInput {

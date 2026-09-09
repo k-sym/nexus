@@ -206,3 +206,26 @@ architecture section landed as written, with these notes:
   not by hand against baker-pro: the backend is token-gated and driving the
   dev frontend would have meant pasting the server token into a browser
   session log.
+
+## As built (2026-09-08, fix/ticket-draft-trailing-comma)
+
+- **Fault.** Reproducing SUP-1317 four times, one reply came back as a
+  ```` ```json ```` fence with a trailing comma before the closing brace
+  (`"branchDescription": "tbt-download-export",\n}`). `JSON.parse` rejected
+  it, `extractJsonObject` returned null, and the route answered 502 "nothing
+  usable" with no trace of the model text anywhere.
+- **Parser.** `extractJsonObject` keeps the balanced-brace scan; when the
+  strict parse throws it retries once after stripping trailing commas before
+  `}` / `]` outside strings (`stripTrailingCommas`, exported for tests).
+  Prose, refusals and truncated objects still yield null.
+- **Diagnostics.** `draftTicketRaw` returns `{ draft, text }`; `draftTicket`
+  wraps it and keeps its `TicketDraft | null` shape. On a null draft the
+  route writes `[ticket-draft] <key> (<model>) unusable reply, N chars:` plus
+  the first 2 KB of the reply to stderr (so `~/Library/Logs/nexus-backend.log`)
+  and puts `{ rawLength, rawSnippet }` (300 chars) in the `ticket_draft` stop
+  event's `diagnostics`, visible in the operations ledger.
+- **Tests.** `ticket-draft.test.ts`: the exact fenced sample, a trailing comma
+  inside a nested array with a `, }` inside a string, and the raw-text
+  return. `tickets-session-routes.test.ts`: the 502 path now asserts the
+  stderr line and the stop-event diagnostics. Backend suite 1148 pass / 0
+  fail; typecheck clean; backend `dist/` built.

@@ -17,12 +17,15 @@ import { syncTickets, type IncomingTicket } from '../tickets/sync.js';
 import { cleanAdf, type AdfNode } from '../tickets/cleanAdf.js';
 import { fetchJiraIssueDescription } from '../jira/client.js';
 import { loadConfig } from '../config.js';
-import { buildFirstTurn, draftTicket, DRAFT_SYSTEM_PROMPT, type DraftProject } from '../tickets/draft.js';
+import { buildFirstTurn, draftTicketRaw, DRAFT_SYSTEM_PROMPT, type DraftProject } from '../tickets/draft.js';
 import { runClaudeOneShot } from '../engines/claude/one-shot.js';
 import { CLAUDE_CODE_PROVIDER, findClaudeModel } from '../engines/claude/models.js';
 import type { ActivityEvent } from '../activity/events.js';
 
 const NEW_THREAD_TITLE = 'New Session';
+/** Raw model text kept when a draft parses to nothing (#432): stderr gets ~2 KB, the operations ledger a short snippet. */
+const RAW_LOG_LIMIT = 2048;
+const RAW_SNIPPET_LIMIT = 300;
 
 export interface TicketRouteOptions {
   /** Test seam: replaces the Claude one-shot call behind the draft route. */
@@ -161,13 +164,21 @@ export async function registerTicketRoutes(fastify: FastifyInstance, opts: Ticke
     const started = Date.now();
     emit({ type: 'start', operationId, kind: 'ticket_draft', title: `Draft ${key}`, provider, model: modelId });
     try {
-      const draft = await draftTicket(
+      const { draft, text } = await draftTicketRaw(
         { key: row.key, summary: row.summary, url: row.url, body: description.body },
         projects,
         { generate, model: modelKey },
       );
       if (!draft) {
-        emit({ type: 'stop', operationId, kind: 'ticket_draft', title: `Draft ${key}`, status: 'failed', durationMs: Date.now() - started, error: 'Model returned nothing usable' });
+        // #432: the raw reply is the only way to tell a refusal from a parse
+        // slip (e.g. a trailing comma), so keep it in the log and the ledger.
+        const raw = typeof text === 'string' ? text : String(text ?? '');
+        console.error(`[ticket-draft] ${key} (${modelKey}) unusable reply, ${raw.length} chars:\n${raw.slice(0, RAW_LOG_LIMIT)}${raw.length > RAW_LOG_LIMIT ? '\n…[truncated]' : ''}`);
+        emit({
+          type: 'stop', operationId, kind: 'ticket_draft', title: `Draft ${key}`, status: 'failed', durationMs: Date.now() - started,
+          error: 'Model returned nothing usable',
+          diagnostics: { rawLength: raw.length, rawSnippet: raw.slice(0, RAW_SNIPPET_LIMIT) },
+        });
         reply.status(502);
         return { error: 'The model returned nothing usable; try again' };
       }
