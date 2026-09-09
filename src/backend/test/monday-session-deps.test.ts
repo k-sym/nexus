@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { getDb } from '../db';
 import { buildMondayContext, buildMondayToolDeps, resolveThreadItem } from '../monday/session-deps';
 import { buildMondayContextBlock } from '../pi/monday-context';
-import { upsertItems, linkTask } from '../monday/store';
+import { upsertItems, linkThread } from '../monday/store';
 import { loadConfig, saveConfig } from '../config';
 
 // withMondayEnabled below calls saveConfig(), which writes config.yaml for
@@ -52,30 +52,39 @@ function seed(db: ReturnType<typeof getDb>, updatesEnabled: boolean) {
         updates: { enabled: updatesEnabled, min_interval_minutes: 30 },
       },
     }));
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at, thread_id)
-              VALUES ('t1','p1','Migrate DB','','review','medium','now','now','thread-1')`).run();
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-              VALUES ('t2','p1','Sibling','','deploy','medium','now','now')`).run();
+  // thread-1 is idle (derives to 'review'); the sibling is archived ('deploy').
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('thread-1','p1','Migrate DB','now','now',NULL)`).run();
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('thread-2','p1','Sibling','now','now','now')`).run();
   upsertItems(db, [{
     item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
     name: 'Ship the thing', state: 'active', status_label: 'Working on it', status_color: null,
     owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
   }]);
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
-  linkTask(db, { task_id: 't2', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'thread-1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'thread-2', item_id: '1', project_id: 'p1', created_at: 'now' });
 }
 
-test('resolveThreadItem finds the item via thread → task → link', () => {
+test('resolveThreadItem finds the item via thread → link', () => {
   const db = getDb(':memory:');
   seed(db, false);
   const resolved = resolveThreadItem(db, 'thread-1')!;
   assert.equal(resolved.item.name, 'Ship the thing');
-  assert.equal(resolved.taskId, 't1');
+  assert.equal(resolved.threadId, 'thread-1');
   assert.equal(resolved.projectId, 'p1');
   db.close();
 });
 
-test('resolveThreadItem returns null for a thread with no linked task', () => {
+test('resolveThreadItem returns null for a link whose thread row is gone', () => {
+  const db = getDb(':memory:');
+  seed(db, false);
+  linkThread(db, { thread_id: 'thread-ghost', item_id: '1', project_id: 'p1', created_at: 'now' });
+  assert.equal(resolveThreadItem(db, 'thread-ghost'), null);
+  db.close();
+});
+
+test('resolveThreadItem returns null for a thread with no link', () => {
   const db = getDb(':memory:');
   seed(db, false);
   assert.equal(resolveThreadItem(db, 'thread-unknown'), null);
@@ -182,15 +191,18 @@ test('tool deps are null without a token, so no tool is advertised', async () =>
   db.close();
 });
 
-test('getItem dep reports the linked Nexus tasks', async () => {
+test('getItem dep reports the linked Nexus sessions with their derived statuses', async () => {
   const db = getDb(':memory:');
   seed(db, false);
   process.env.MONDAY_TOKEN = 'tok';
   await withMondayEnabled(async () => {
     const deps = buildMondayToolDeps(db, 'thread-1')!;
     const detail = await deps.getItem('1');
-    assert.equal(detail!.linked_tasks.length, 2);
-    assert.ok(detail!.linked_tasks.some((t) => t.title === 'Migrate DB'));
+    assert.equal(detail!.linked_sessions.length, 2);
+    assert.deepEqual(
+      detail!.linked_sessions.map((t) => [t.id, t.title, t.status]).sort(),
+      [['thread-1', 'Migrate DB', 'review'], ['thread-2', 'Sibling', 'deploy']],
+    );
   });
   delete process.env.MONDAY_TOKEN;
   db.close();
@@ -261,14 +273,14 @@ function seedMissingUpdatesBlock(db: ReturnType<typeof getDb>) {
         // `updates` deliberately omitted — a partial/legacy config.
       },
     }));
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at, thread_id)
-              VALUES ('t1','p1','Migrate DB','','review','medium','now','now','thread-1')`).run();
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('thread-1','p1','Migrate DB','now','now',NULL)`).run();
   upsertItems(db, [{
     item_id: '1', board_id: 'b1', board_name: 'Portfolio', group_id: null, group_title: null,
     name: 'Ship the thing', state: 'active', status_label: 'Working on it', status_color: null,
     owners_json: '[]', url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'now',
   }]);
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'thread-1', item_id: '1', project_id: 'p1', created_at: 'now' });
 }
 
 test('tool deps still include search/getItem when cfg.updates is missing entirely, only postUpdate is affected', async () => {
@@ -415,7 +427,7 @@ test('a long real update thread is dropped down to fit, keeping the head and the
     assert.ok(block.length <= 600, `block must respect the cap, got ${block.length}`);
     // The head and the tail are what must survive the squeeze.
     assert.match(block, /Initiative: Ship the thing/);
-    assert.match(block, /Nexus tasks under this initiative/);
+    assert.match(block, /Nexus sessions under this initiative/);
     assert.match(block, /Call monday_get_item for current state/);
     // Something had to go: not every update can fit in 600 chars.
     const kept = block.split('\n').filter((l) => l.startsWith('- '));

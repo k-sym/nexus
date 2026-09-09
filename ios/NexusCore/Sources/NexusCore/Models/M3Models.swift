@@ -18,30 +18,7 @@ public struct MemoryRecord: Decodable, Identifiable, Hashable, Sendable {
 //
 // Encoded with a plain JSONEncoder. Property names double as the wire keys, so
 // only fields with snake_case keys need explicit CodingKeys (none needed here —
-// M3 avoids those fields).
-
-/// A partial write to `PUT /api/tasks/:id`. Every field is optional and nil
-/// fields are omitted from the body, which is exactly what the backend's
-/// `COALESCE(?, col)` expects: an absent field leaves the column alone.
-///
-/// The corollary matters for `description`: an empty string is a real value,
-/// not an absence, so `description: ""` clears the description rather than
-/// leaving it — which is what the edit sheet wants when the field is emptied.
-public struct UpdateTaskRequest: Encodable, Sendable {
-    public var status: String?
-    public var title: String?
-    public var description: String?
-    public var priority: String?
-    public init(
-        status: String? = nil, title: String? = nil,
-        description: String? = nil, priority: String? = nil
-    ) {
-        self.status = status
-        self.title = title
-        self.description = description
-        self.priority = priority
-    }
-}
+// M3 avoids those fields). The task patch DTO left with the task board (#439).
 
 public struct CreateMemoryRequest: Encodable, Sendable {
     public let content: String

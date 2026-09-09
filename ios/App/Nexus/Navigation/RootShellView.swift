@@ -82,7 +82,7 @@ struct RootShellView: View {
         case "chat": StreamingChatView(api: api, threadId: arg, title: "Chat")
         case "assistant": AssistantView(api: api)
         case "achat": StreamingChatView(endpoint: AssistantChatEndpoint(api: api, sessionId: arg), title: "Assistant")
-        case "board": KanbanBoardView(api: api, projectId: arg).navigationTitle("Board").navigationBarTitleDisplayMode(.inline)
+        case "board": BoardView(api: api, projectId: arg).navigationTitle("Board").navigationBarTitleDisplayMode(.inline)
         case "memory": MemoryView(api: api, projectId: arg).navigationTitle("Memory").navigationBarTitleDisplayMode(.inline)
         case "ideas": IdeasView(api: api)
         case "approvals": ApprovalsView()

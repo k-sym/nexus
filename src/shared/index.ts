@@ -143,10 +143,12 @@ export type GitDiffState =
       git_remote?: string;
     };
 
-export type ReviewAction = 'ask_reviewer' | 'explain_change' | 'spawn_fix_task' | 'assign_reviewer' | 'attach_to_chat';
+/** Session-first board (#439): the diff panel's one remaining action seeds the
+ *  card's own session with the hunk. The task-creating actions went with tasks. */
+export type ReviewAction = 'attach_to_chat';
 
 export interface ReviewActionRequest {
-  task_id?: string;
+  thread_id?: string;
   action: ReviewAction;
   hunk_id?: string;
   note?: string;
@@ -312,6 +314,10 @@ export interface ChatThread {
   archived_at: string | null;
   /** Jira key when the thread was started from a ticket (#432). */
   ticket_key?: string | null;
+  /** GitHub issue number when the thread was started from the board's Inbox (#439). */
+  github_issue?: number | null;
+  /** `provider/id` of the model last used on this thread; restored by the picker. */
+  last_model_key?: string | null;
 }
 
 export interface SignalFilterFlags {
@@ -704,12 +710,22 @@ export interface MondayItem {
 export interface MondayItemWithLinks extends MondayItem {
   rollup: { total: number; open: number; inProgress: number; inReview: number; done: number };
   rollup_text: string;
-  task_ids: string[];
+  /** Sessions linked to this item (#439). */
+  thread_ids: string[];
 }
 
-/** A task→item link. NOT disposable: user intent, survives a mirror wipe. */
+/** Legacy task→item link (tombstone table `task_monday_links`, pre-#439). */
 export interface TaskMondayLink {
   task_id: string;
+  item_id: string;
+  project_id: string;
+  created_at: string;
+}
+
+/** A session→item link. NOT disposable: user intent, survives a mirror wipe.
+ *  One item per thread; a thread started from a Monday Inbox item gets one on Go. */
+export interface ThreadMondayLink {
+  thread_id: string;
   item_id: string;
   project_id: string;
   created_at: string;
@@ -769,6 +785,9 @@ export interface ProjectConfig {
   monday?: MondayProjectConfig;
 }
 
+/** Legacy task columns. The board no longer uses them (#439): they remain the
+ *  vocabulary of the Monday roll-up buckets and status mapping, which derived
+ *  board lanes are projected onto (see `laneToTaskStatus` in the backend). */
 export const KANBAN_COLUMNS: TaskStatus[] = ['triage', 'todo', 'in_progress', 'review', 'deploy'];
 
 export const KANBAN_COLUMN_LABELS: Record<TaskStatus, string> = {
@@ -778,6 +797,97 @@ export const KANBAN_COLUMN_LABELS: Record<TaskStatus, string> = {
   review: 'Review',
   deploy: 'Deploy',
 };
+
+
+// ---------------------------------------------------------------------------
+// Session-first board (#439)
+// ---------------------------------------------------------------------------
+
+/** Lanes are derived from live state on every read; nothing is stored per lane. */
+export const BOARD_LANES = ['inbox', 'running', 'needs_you', 'idle', 'done'] as const;
+export type BoardLane = (typeof BOARD_LANES)[number];
+/** A card's lane: every lane except Inbox, which holds origins without a session. */
+export type BoardCardLane = Exclude<BoardLane, 'inbox'>;
+
+export const BOARD_LANE_LABELS: Record<BoardLane, string> = {
+  inbox: 'Inbox',
+  running: 'Running',
+  needs_you: 'Needs you',
+  idle: 'Idle',
+  done: 'Done',
+};
+
+/** Where a session came from. Precedence when a thread carries more than one: ticket → github → monday → chat. */
+export type BoardOrigin =
+  | { kind: 'ticket'; key: string; url: string | null }
+  | { kind: 'github'; number: number; url: string }
+  | { kind: 'monday'; item_id: string; name: string; url: string | null }
+  | { kind: 'chat' };
+
+export interface BoardCard {
+  thread: ChatThread;
+  lane: BoardCardLane;
+  origin: BoardOrigin;
+  running: boolean;
+  pending_questions: number;
+  pending_approvals: number;
+  /** Linked Monday item, whatever the origin. Null when unlinked. */
+  monday_item_id: string | null;
+}
+
+/** An open GitHub issue or active Monday item in the project's scope with no card on the board. */
+export interface BoardInboxItem {
+  kind: 'github' | 'monday';
+  /** Issue number as text, or the Monday item id. */
+  id: string;
+  title: string;
+  url: string | null;
+  labels: string[];
+  status_label: string | null;
+  updated: string | null;
+}
+
+export interface BoardResponse {
+  cards: BoardCard[];
+  inbox: BoardInboxItem[];
+  /** A feed that failed to load. The board itself never fails on a feed. */
+  inbox_errors: { github?: string; monday?: string };
+}
+
+/** Board origins follow the repo convention (`feat/<slug>`), not SSUK's ticket form. */
+export const BOARD_BRANCH_TYPES = ['feat', 'fix', 'hotfix'] as const;
+export type BoardBranchType = (typeof BOARD_BRANCH_TYPES)[number];
+
+export interface OriginRef {
+  kind: 'github' | 'monday';
+  id: string;
+}
+
+/** What Sonnet distilled out of an Inbox item. Every field is editable before Go. */
+export interface OriginDraft {
+  origin: OriginRef;
+  problem: string;
+  projectId: string | null;
+  branchType: BoardBranchType;
+  /** `fix/<slug>` form. */
+  branchName: string;
+  /** `provider/id` of the model that produced the draft. */
+  model: string;
+}
+
+export interface OriginSessionRequest {
+  kind: 'github' | 'monday';
+  id: string;
+  /** Defaults to the board's project. */
+  projectId?: string;
+  problem: string;
+  branchName: string;
+}
+
+export interface OriginSessionResult {
+  thread: ChatThread;
+  firstTurn: string;
+}
 
 /** Kinds of long-running operation the activity bus tracks.
  *

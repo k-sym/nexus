@@ -1,20 +1,20 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatThread, Project } from '@nexus/shared';
+import type { BoardResponse, ChatThread, Project } from '@nexus/shared';
 
 const mockApi = vi.hoisted(() => ({
   missionControl: { get: vi.fn() },
   activity: { list: vi.fn() },
   projects: {
     list: vi.fn(),
-    tasks: vi.fn(),
-    githubSync: vi.fn(),
+    board: vi.fn(),
+    boardDraft: vi.fn(),
+    boardSession: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
     reorder: vi.fn(),
-    createTask: vi.fn(),
     gitDiff: vi.fn(),
     reviewAction: vi.fn(),
   },
@@ -27,10 +27,16 @@ const mockApi = vi.hoisted(() => ({
     archiveThread: vi.fn(),
     deleteThread: vi.fn(),
   },
-  tasks: { update: vi.fn(), delete: vi.fn() },
 }));
 
-vi.mock('./api', () => ({ api: mockApi }));
+vi.mock('./api', () => ({ api: mockApi, fetchMondayItems: vi.fn().mockResolvedValue(null) }));
+vi.mock('./hooks/useModels', () => ({
+  modelKey: (provider: string, id: string) => `${provider}/${id}`,
+  useModels: () => ({
+    models: [{ provider: 'claude-code', id: 'claude-sonnet-5', name: 'Claude Sonnet 5' }],
+    activeModelId: 'claude-code/claude-sonnet-5',
+  }),
+}));
 // Captures the most recent ChatPanel props so a test can invoke a callback
 // exactly as a since-unmounted panel instance would (a stale closure).
 const chatPanelProps = vi.hoisted(() => ({ current: null as null | { projectId: string; threadId: string | null; onThreadsChanged?: () => void } }));
@@ -106,14 +112,32 @@ const betaThread: ChatThread = {
   archived_at: null,
 };
 
+const emptyBoard: BoardResponse = { cards: [], inbox: [], inbox_errors: {} };
+
+const alphaBoard: BoardResponse = {
+  cards: [{
+    thread: alphaThread,
+    lane: 'idle',
+    origin: { kind: 'chat' },
+    running: false,
+    pending_questions: 0,
+    pending_approvals: 0,
+    monday_item_id: null,
+  }],
+  inbox: [{
+    kind: 'github', id: '439', title: 'Session-first Kanban',
+    url: 'https://github.com/k-sym/nexus/issues/439', labels: [], status_label: null, updated: null,
+  }],
+  inbox_errors: {},
+};
+
 describe('App project navigation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockApi.missionControl.get.mockResolvedValue({ memory: { ok: true }, models: [] });
     mockApi.activity.list.mockResolvedValue({ running: [], recent: [], counts: {} });
     mockApi.projects.list.mockResolvedValue(projects);
-    mockApi.projects.tasks.mockResolvedValue([]);
-    mockApi.projects.githubSync.mockResolvedValue({ created: 0, total: 0 });
+    mockApi.projects.board.mockResolvedValue(emptyBoard);
     mockApi.chat.activeRuns.mockResolvedValue({ activeThreadIds: [], runs: [] });
     mockApi.chat.sessions.mockResolvedValue({ sessions: [] });
     mockApi.chat.threads.mockImplementation(async (projectId: string) => (
@@ -274,5 +298,77 @@ describe('App project navigation', () => {
 
     expect(await screen.findByTestId('ideas-view')).toBeInTheDocument();
     expect(screen.queryByLabelText('Navigation sidebar')).not.toBeInTheDocument();
+  });
+});
+
+describe('App session-first board (#439)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    mockApi.missionControl.get.mockResolvedValue({ memory: { ok: true }, models: [] });
+    mockApi.activity.list.mockResolvedValue({ running: [], recent: [], counts: {} });
+    mockApi.projects.list.mockResolvedValue(projects);
+    mockApi.projects.board.mockImplementation(async (projectId: string) => (projectId === 'project-a' ? alphaBoard : emptyBoard));
+    mockApi.chat.activeRuns.mockResolvedValue({ activeThreadIds: [], runs: [] });
+    mockApi.chat.sessions.mockResolvedValue({ sessions: [] });
+    mockApi.chat.threads.mockImplementation(async (projectId: string) => (projectId === 'project-a' ? [alphaThread] : []));
+  });
+
+  it('loads the board projection on the Kanban view and opens a card as its session', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText('Switch to Alpha'));
+    await user.click(await screen.findByRole('button', { name: /^Kanban/ }));
+
+    await waitFor(() => expect(mockApi.projects.board).toHaveBeenCalledWith('project-a'));
+    const card = (await screen.findAllByText('Alpha session')).find((el) => el.closest('[data-kanban-card]'))!;
+    expect(card).toBeTruthy();
+    expect(screen.getByText('GH #439')).toBeInTheDocument();
+    // No task routes anywhere on the way in.
+    expect((mockApi.projects as Record<string, unknown>).tasks).toBeUndefined();
+
+    await user.click(card);
+    expect(await screen.findByTestId('chat-panel-props')).toHaveTextContent('project-a:thread-alpha');
+  });
+
+  it('opens the origin panel for an Inbox item and Go opens the new session seeded with the first turn', async () => {
+    const newThread: ChatThread = { ...alphaThread, id: 'thread-439', title: '#439 Session-first Kanban', github_issue: 439 };
+    mockApi.projects.boardSession.mockResolvedValue({ thread: newThread, firstTurn: 'Composed first turn' });
+    mockApi.chat.threads.mockImplementation(async (projectId: string) => (projectId === 'project-a' ? [alphaThread, newThread] : []));
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText('Switch to Alpha'));
+    await user.click(await screen.findByRole('button', { name: /^Kanban/ }));
+    await user.click(await screen.findByText('Session-first Kanban'));
+
+    const panel = await screen.findByTestId('origin-session-panel');
+    expect(panel).toHaveTextContent('GitHub issue #439');
+    expect((within(panel).getByLabelText('Project') as HTMLSelectElement).value).toBe('project-a');
+
+    await user.type(within(panel).getByLabelText('Prompt'), 'Make cards sessions');
+    await user.type(within(panel).getByLabelText('Branch name'), 'feat/session-first-kanban');
+    await user.click(within(panel).getByRole('button', { name: /^go$/i }));
+
+    await waitFor(() => expect(mockApi.projects.boardSession).toHaveBeenCalledWith('project-a', {
+      kind: 'github',
+      id: '439',
+      projectId: 'project-a',
+      problem: 'Make cards sessions',
+      branchName: 'feat/session-first-kanban',
+    }));
+    expect(await screen.findByTestId('chat-panel-props')).toHaveTextContent('project-a:thread-439');
+    expect(screen.queryByTestId('origin-session-panel')).toBeNull();
+  });
+
+  it('the board "+" and the palette "New idea" both jump to the Ideas view', async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(await screen.findByLabelText('Switch to Alpha'));
+    await user.click(await screen.findByRole('button', { name: /^Kanban/ }));
+    await user.click(await screen.findByRole('button', { name: 'New idea' }));
+    expect(await screen.findByTestId('ideas-view')).toBeInTheDocument();
   });
 });

@@ -1,34 +1,22 @@
+/**
+ * Diff review as a session action (#439 D12). Opens from an Idle or Running
+ * card and offers one thing per hunk: attach the hunk to the card's own session,
+ * which seeds that thread with the hunk prompt. The task-creating actions went
+ * with the task board.
+ */
 import { useEffect, useState } from 'react';
-import { GitDiffState, ReviewAction, ReviewActionRequest, ReviewActionResult, Task } from '@nexus/shared';
+import { GitDiffState, ReviewActionResult } from '@nexus/shared';
 import { api } from '../api';
-
-const ACTIONS: Array<{ action: ReviewAction; label: string; caption: string }> = [
-  { action: 'ask_reviewer', label: 'Ask reviewer', caption: 'Create a Review task for Codex-style review.' },
-  { action: 'explain_change', label: 'Explain change', caption: 'Create a Review task to explain the hunk.' },
-  { action: 'spawn_fix_task', label: 'Spawn fix task', caption: 'Create a To Do task for a fix pass.' },
-  { action: 'assign_reviewer', label: 'Assign reviewer', caption: 'Assign the source task to the Reviewer persona.' },
-  { action: 'attach_to_chat', label: 'Attach to chat', caption: 'Open a chat seeded with the hunk context.' },
-];
 
 interface DiffReviewPanelProps {
   projectId: string;
-  task: Pick<Task, 'id' | 'title'> | null;
+  /** The session the hunks attach to. Null renders the diff read-only. */
+  thread: { id: string; title: string } | null;
   onClose: () => void;
-  onTaskCreated: (task: ReviewActionResult['task']) => void;
-  onTaskAssigned: (task: ReviewActionResult['task']) => void;
   onChatSeed: (seed: NonNullable<ReviewActionResult['seed']>) => void;
 }
 
-function ActionButton({ action, disabled, onRun }: { action: (typeof ACTIONS)[number]; disabled: boolean; onRun: () => void }) {
-  return (
-    <button type="button" onClick={onRun} disabled={disabled} aria-label={action.label} className="text-left surface-glass border border-subtle rounded-lg p-3 hover:border-[var(--border-strong)] disabled:opacity-40 disabled:cursor-not-allowed">
-      <div className="text-sm font-medium text-primary">{action.label}</div>
-      <div className="text-[11px] text-muted mt-1">{action.caption}</div>
-    </button>
-  );
-}
-
-export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreated, onTaskAssigned, onChatSeed }: DiffReviewPanelProps) {
+export default function DiffReviewPanel({ projectId, thread, onClose, onChatSeed }: DiffReviewPanelProps) {
   const [state, setState] = useState<GitDiffState | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -59,16 +47,13 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const runAction = async (action: ReviewActionRequest['action'], hunkId: string) => {
-    if (!task) return;
-    setRunning(`${action}:${hunkId}`);
+  const attach = async (hunkId: string) => {
+    if (!thread) return;
+    setRunning(hunkId);
     try {
       const note = notes[hunkId]?.trim() || undefined;
-      const result = await api.projects.reviewAction(projectId, { action, task_id: task.id, hunk_id: hunkId, note });
-      if (result.task && action === 'assign_reviewer') onTaskAssigned(result.task);
-      else if (result.task) onTaskCreated(result.task);
+      const result = await api.projects.reviewAction(projectId, { action: 'attach_to_chat', thread_id: thread.id, hunk_id: hunkId, note });
       if (result.seed) onChatSeed(result.seed);
-      await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -82,7 +67,7 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
         <header className="flex items-center justify-between gap-4 px-5 py-4 border-b border-subtle">
           <div>
             <h2 className="text-lg font-semibold">Diff review</h2>
-            <p className="text-xs text-faint">{task ? `Source task: ${task.title}` : 'Select a Review or Deploy task to attach actions.'}</p>
+            <p className="text-xs text-faint">{thread ? `Session: ${thread.title}` : 'Open from an Idle or Running card to attach hunks to its session.'}</p>
           </div>
           <button type="button" onClick={onClose} className="text-faint hover:text-[var(--text-primary)]">Close</button>
         </header>
@@ -115,21 +100,21 @@ export default function DiffReviewPanel({ projectId, task, onClose, onTaskCreate
                       <textarea
                         value={notes[hunk.id] ?? ''}
                         onChange={(e) => setNotes((current) => ({ ...current, [hunk.id]: e.target.value }))}
-                        placeholder="Optional note for the follow-up task or chat (e.g. what to focus on)…"
+                        placeholder="Optional note for the session (e.g. what to focus on)…"
                         rows={2}
                         aria-label={`Note for ${hunk.file}`}
                         className="w-full surface-glass border border-subtle rounded-lg p-2 text-[11px] text-primary placeholder:text-faint resize-y"
                       />
-                      <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-2">
-                        {ACTIONS.map((action) => (
-                          <ActionButton
-                            key={action.action}
-                            action={action}
-                            disabled={Boolean(running) || !task}
-                            onRun={() => void runAction(action.action, hunk.id)}
-                          />
-                        ))}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void attach(hunk.id)}
+                        disabled={Boolean(running) || !thread}
+                        aria-label="Attach to this session"
+                        className="text-left surface-glass border border-subtle rounded-lg p-3 hover:border-[var(--border-strong)] disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <div className="text-sm font-medium text-primary">{running === hunk.id ? 'Attaching…' : 'Attach to this session'}</div>
+                        <div className="text-[11px] text-muted mt-1">Seed the session with this hunk and your note.</div>
+                      </button>
                     </div>
                   </section>
                 ))}

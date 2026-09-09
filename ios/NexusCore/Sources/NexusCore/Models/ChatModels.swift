@@ -14,6 +14,10 @@ public struct ChatThread: Decodable, Identifiable, Hashable, Sendable {
     public let archivedAt: String?
     /// `provider/id` of the model last used on this thread; seeds the picker.
     public let lastModelKey: String?
+    /// Jira origin (#432): the ticket this session was started from.
+    public let ticketKey: String?
+    /// GitHub origin (#439): the issue number this session was started from.
+    public let githubIssue: Int?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -24,6 +28,8 @@ public struct ChatThread: Decodable, Identifiable, Hashable, Sendable {
         case updatedAt = "updated_at"
         case archivedAt = "archived_at"
         case lastModelKey = "last_model_key"
+        case ticketKey = "ticket_key"
+        case githubIssue = "github_issue"
     }
 }
 

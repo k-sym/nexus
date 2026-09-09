@@ -7,19 +7,20 @@
  * something: Monday's own `updated_at` on the item (a column edit, a status
  * change), the newest entry in the item's update thread (a comment is
  * movement even when no column changed), and the newest `updated_at` of any
- * Nexus task linked to it (a Kanban move is movement Monday cannot see until
- * the roll-up or status sync writes it back).
+ * Nexus session linked to it (a session turn or archive is movement Monday
+ * cannot see until the roll-up or status sync writes it back).
  *
  * Pure over the mirror: it reads what the last sync stored and never calls
  * Monday itself. The route decides whether to refresh first.
  */
 import type Database from 'better-sqlite3';
 import type { MondayItem, MondayProjectConfig, Project, TaskStatus } from '@nexus/shared';
-import { listItemsForBoard } from './store.js';
+import { listItemsForBoard, threadTaskStatus } from './store.js';
 
-export interface StaleLinkedTask {
+export interface StaleLinkedSession {
   id: string;
   title: string;
+  /** Derived lane projected onto the legacy statuses (#439, D6). */
   status: TaskStatus;
   updated_at: string;
 }
@@ -36,7 +37,7 @@ export interface StaleItem {
   last_movement: string | null;
   /** Whole days since last_movement at `now`; null when last_movement is null. */
   days_idle: number | null;
-  linked_tasks: StaleLinkedTask[];
+  linked_sessions: StaleLinkedSession[];
 }
 
 export interface StaleProject {
@@ -122,9 +123,9 @@ export function buildStaleReport(
 ): StaleReport {
   const threshold = now.getTime() - days * 86_400_000;
   const excluded = new Set(excludeLabels.map((l) => l.trim().toLowerCase()).filter(Boolean));
-  const linkedTasksStmt = db.prepare(`
-    SELECT t.id, t.title, t.status, t.updated_at
-    FROM task_monday_links l JOIN tasks t ON t.id = l.task_id
+  const linkedSessionsStmt = db.prepare(`
+    SELECT t.id, t.title, t.archived_at, t.updated_at
+    FROM thread_monday_links l JOIN chat_threads t ON t.id = l.thread_id
     WHERE l.item_id = ?
     ORDER BY t.updated_at DESC
   `);
@@ -139,7 +140,9 @@ export function buildStaleReport(
       if (item.state !== 'active') continue;
       if (item.status_label && excluded.has(item.status_label.trim().toLowerCase())) continue;
 
-      const linked = linkedTasksStmt.all(item.item_id) as StaleLinkedTask[];
+      const linked: StaleLinkedSession[] = (linkedSessionsStmt.all(item.item_id) as
+        { id: string; title: string; archived_at: string | null; updated_at: string }[])
+        .map((t) => ({ id: t.id, title: t.title, status: threadTaskStatus(t), updated_at: t.updated_at }));
       const clocks = [
         parseIso(item.monday_updated_at),
         newestUpdateAt(item),
@@ -157,7 +160,7 @@ export function buildStaleReport(
         owners: owners(item),
         last_movement: last === null ? null : new Date(last).toISOString(),
         days_idle: last === null ? null : Math.floor((now.getTime() - last) / 86_400_000),
-        linked_tasks: linked,
+        linked_sessions: linked,
       });
     }
     // Longest idle first; undated items (never seen moving) at the top.

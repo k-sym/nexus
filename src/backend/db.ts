@@ -7,7 +7,8 @@
  * chat_threads, chat_messages, agent_runs, tickets (a disposable mirror of
  * Jira tickets assigned to the user; Jira stays canonical), monday_items
  * (a disposable mirror of Monday.com items; Monday stays canonical) and
- * task_monday_links (the durable task→item link, one item per task).
+ * task_monday_links (legacy task→item link, tombstone since #439),
+ * thread_monday_links (the durable session→item link, one item per thread).
  * (Memory lives in the standalone @nexus/memory-daemon, not here.)
  *
  * Note: the legacy `personas` and `providers` tables are still referenced
@@ -513,6 +514,42 @@ function runMigrations(db: Database.Database) {
     db.exec('ALTER TABLE chat_threads ADD COLUMN ticket_key TEXT');
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_chat_threads_ticket_key ON chat_threads(ticket_key)');
+
+  // Session-first board (#439): a thread started from a GitHub issue in the
+  // board's Inbox carries the number, so the Inbox can drop the issue while a
+  // card for it is on the board and the card can show its origin.
+  if (!threadCols.some((c) => c.name === 'github_issue')) {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN github_issue INTEGER');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_chat_threads_github_issue ON chat_threads(project_id, github_issue)');
+
+  // Session-first board (#439): Monday links move from tasks to threads, table
+  // for table. `task_monday_links` stays as a tombstone (audit ledger). The
+  // backfill copies every task link whose task had a session, exactly once:
+  // the table's absence is the marker, so an existing DB that already has it
+  // never re-copies (a later unlink must stay unlinked).
+  const hadThreadLinks = !!db.prepare(
+    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thread_monday_links'",
+  ).get();
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS thread_monday_links (
+      thread_id  TEXT PRIMARY KEY,
+      item_id    TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_thread_monday_links_item ON thread_monday_links(item_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_monday_links_project ON thread_monday_links(project_id);
+  `);
+  if (!hadThreadLinks) {
+    db.exec(`
+      INSERT OR IGNORE INTO thread_monday_links (thread_id, item_id, project_id, created_at)
+      SELECT t.thread_id, l.item_id, l.project_id, l.created_at
+      FROM task_monday_links l
+      JOIN tasks t ON t.id = l.task_id
+      WHERE t.thread_id IS NOT NULL
+    `);
+  }
 
   // Missions were removed (#353). Existing DBs keep their `missions` /
   // `mission_runs` tables and rows (the audit ledger) untouched — soft path,

@@ -1,7 +1,7 @@
 /**
  * The agent's window onto Monday.
  *
- * Read-biased on purpose. An agent can read the initiative a task serves and
+ * Read-biased on purpose. An agent can read the initiative a session serves and
  * look wider when it needs to, but it cannot create items, set status, or edit
  * columns — it narrates to your portfolio, it does not restructure it.
  *
@@ -16,7 +16,10 @@ import type { MondayItem, TaskStatus } from '@nexus/shared';
 export interface MondayItemDetail {
   item: MondayItem;
   updates: string[];
-  linked_tasks: { id: string; title: string; status: TaskStatus }[];
+  /** Sessions linked to the item, each with its derived lane projected onto
+   *  the legacy statuses (#439, D6): in_progress = running, review = idle,
+   *  deploy = archived. */
+  linked_sessions: { id: string; title: string; status: TaskStatus }[];
 }
 
 export interface MondayToolDeps {
@@ -51,7 +54,7 @@ function formatItemLine(item: MondayItem): string {
 }
 
 function formatDetail(detail: MondayItemDetail): string {
-  const { item, updates, linked_tasks: linkedTasks } = detail;
+  const { item, updates, linked_sessions: linkedSessions } = detail;
 
   // Guard against malformed owners_json: parse defensively and degrade gracefully
   let owners = 'none';
@@ -94,9 +97,9 @@ function formatDetail(detail: MondayItemDetail): string {
     `Owners: ${owners}`,
   );
   if (item.url) lines.push(`URL: ${item.url}`);
-  if (linkedTasks.length > 0) {
-    lines.push('', 'Linked Nexus tasks:');
-    for (const task of linkedTasks) lines.push(`- ${task.title} (${task.status})`);
+  if (linkedSessions.length > 0) {
+    lines.push('', 'Linked Nexus sessions:');
+    for (const session of linkedSessions) lines.push(`- ${session.title} (${session.status})`);
   }
   if (updates.length > 0) {
     lines.push('', 'Recent updates:');
@@ -146,7 +149,7 @@ export function createMondayExtension(deps: MondayToolDeps): ExtensionFactory {
       name: 'monday_get_item',
       label: 'Read Monday item',
       description:
-        'Read a Monday.com item in full: status, owners, recent updates, and the Nexus tasks linked to it. '
+        'Read a Monday.com item in full: status, owners, recent updates, and the Nexus sessions linked to it. '
         + 'Use it when the snapshot in your context may be stale, or to read an item you found via monday_search. '
         + 'Skip it for items already in context — their details are already available to you.',
       promptSnippet: 'monday_get_item: read a Monday.com initiative in full, including current status',

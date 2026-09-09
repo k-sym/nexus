@@ -188,8 +188,24 @@ public actor APIClient {
         try await request(.missionControl)
     }
 
-    public func tasks(projectId: String) async throws -> [ProjectTask] {
-        try await request(.projectTasks(projectId))
+    // MARK: Session-first board (#439)
+
+    /// The project's board: cards (threads with derived lanes) and the Inbox.
+    /// Plain decoder — the embedded `ChatThread`s carry explicit snake_case keys.
+    public func board(projectId: String) async throws -> BoardResponse {
+        try await request(.projectBoard(projectId), decoder: plainDecoder)
+    }
+
+    /// One-shot Sonnet draft for an Inbox item. Slow (seconds).
+    public func boardDraft(projectId: String, kind: BoardInboxKind, id: String) async throws -> OriginDraft {
+        let body = try JSONEncoder().encode(OriginRef(kind: kind, id: id))
+        return try await request(.boardDraft(projectId, body: body), decoder: plainDecoder)
+    }
+
+    /// Opens the origin-stamped thread; send `firstTurn` through the stream.
+    public func createBoardSession(projectId: String, _ req: OriginSessionRequest) async throws -> OriginSessionResult {
+        let body = try JSONEncoder().encode(req)
+        return try await request(.createBoardSession(projectId, body: body), decoder: plainDecoder)
     }
 
     // MARK: Chat (M2)
@@ -254,21 +270,6 @@ public actor APIClient {
     }
 
     // MARK: Writes (M3)
-
-    /// Patch a task. Fields left nil on `patch` are omitted from the body and
-    /// the backend leaves those columns untouched, so this is safe to call
-    /// with only the fields the user actually changed.
-    @discardableResult
-    public func updateTask(id: String, patch: UpdateTaskRequest) async throws -> ProjectTask {
-        let body = try JSONEncoder().encode(patch)
-        return try await request(.updateTask(id, body: body))
-    }
-
-    /// Status-only convenience — the Kanban drag/move path.
-    @discardableResult
-    public func updateTask(id: String, status: String) async throws -> ProjectTask {
-        try await updateTask(id: id, patch: UpdateTaskRequest(status: status))
-    }
 
     public func memories(projectId: String, query: String? = nil) async throws -> [MemoryRecord] {
         try await request(.projectMemories(projectId, query: query))

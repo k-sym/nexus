@@ -79,8 +79,8 @@ struct ProjectRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(project.name).font(.body)
-                if let count = project.taskCount {
-                    Text("\(count) task\(count == 1 ? "" : "s")")
+                if let count = project.chatSessionCount {
+                    Text("\(count) session\(count == 1 ? "" : "s")")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

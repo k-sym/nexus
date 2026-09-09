@@ -25,7 +25,7 @@ export function computeRollup(statuses: TaskStatus[]): RollupCounts {
 }
 
 export function formatRollupText(counts: RollupCounts): string {
-  if (counts.total === 0) return 'no linked tasks';
+  if (counts.total === 0) return 'no linked sessions';
   const parts = [`${counts.done}/${counts.total} done`];
   if (counts.inReview > 0) parts.push(`${counts.inReview} in review`);
   if (counts.inProgress > 0) parts.push(`${counts.inProgress} in progress`);

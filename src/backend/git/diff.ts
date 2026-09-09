@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { GitDiffFile, GitDiffHunk, GitDiffState, GitDiffSummary, Project, ReviewAction, ReviewActionResult, Task } from '@nexus/shared';
+import type { GitDiffFile, GitDiffHunk, GitDiffState, GitDiffSummary, Project } from '@nexus/shared';
 
 const execFileAsync = promisify(execFile);
 
@@ -265,39 +265,19 @@ export async function getProjectGitDiff(project: Pick<Project, 'id' | 'repo_path
   };
 }
 
-function actionTitle(action: ReviewAction, hunk: GitDiffHunk) {
-  if (action === 'ask_reviewer') return `Review hunk in ${hunk.file}`;
-  if (action === 'explain_change') return `Explain hunk in ${hunk.file}`;
-  if (action === 'spawn_fix_task') return `Fix hunk in ${hunk.file}`;
-  if (action === 'assign_reviewer') return `Assign reviewer for ${hunk.file}`;
-  return `Discuss hunk in ${hunk.file}`;
-}
-
-function actionDescription(project: Project, task: Task | null, action: ReviewAction, hunk: GitDiffHunk, note?: string) {
+/**
+ * The prompt that seeds a session from a diff hunk (#439: the one remaining
+ * review action). `sessionTitle` names the session it lands in.
+ */
+export function buildReviewActionPrompt(project: Project, sessionTitle: string | null, hunk: GitDiffHunk, note?: string) {
   const parts = [
-    `Suggested persona/provider: ${action === 'spawn_fix_task' ? 'Developer / Claude Code' : 'Reviewer / Codex'}`,
-    `Source task: ${task ? `${task.title} (${task.id})` : 'none'}`,
+    `Review this change in the context of the current session${sessionTitle ? ` "${sessionTitle}"` : ''}.`,
     `Project: ${project.name} (${project.id})`,
     `File: ${hunk.file}`,
     `Hunk: ${hunk.header}`,
     '',
     hunk.prompt,
   ];
-
   if (note?.trim()) parts.push('', `User note: ${note.trim()}`);
   return parts.join('\n');
-}
-
-export function buildReviewActionPrompt(project: Project, task: Task | null, action: ReviewAction, hunk: GitDiffHunk, note?: string) {
-  return actionDescription(project, task, action, hunk, note);
-}
-
-export function reviewActionPlan(action: ReviewAction): { status: Task['status']; assigned_agent: string | null; model_key: string | null; createsTask: boolean } {
-  if (action === 'spawn_fix_task') return { status: 'todo', assigned_agent: 'Developer', model_key: null, createsTask: true };
-  if (action === 'assign_reviewer') return { status: 'review', assigned_agent: 'Reviewer', model_key: null, createsTask: false };
-  return { status: 'review', assigned_agent: 'Reviewer', model_key: null, createsTask: true };
-}
-
-export function buildReviewActionTitle(action: ReviewAction, hunk: GitDiffHunk) {
-  return actionTitle(action, hunk);
 }

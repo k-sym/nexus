@@ -1,8 +1,9 @@
 /**
  * The item updates feed: Nexus's own notes on a Monday item's update thread.
  *
- * Two producers, one path. A linked task moving into Review or Deploy posts a
- * colleague-readable note (task titles, GitHub issue links); an agent calling
+ * Two producers, one path. A linked session reaching Review (its run ended)
+ * or Deploy (archived) posts a colleague-readable note (session titles, the
+ * origin's URL when there is one); an agent calling
  * monday_post_update posts its own words with a provenance line. Both go
  * through the same per-item throttle and the same `monday_write` Activity
  * operation, so an agent cannot out-run the rate limit the automated path
@@ -19,12 +20,11 @@
  * module exists.
  */
 import type Database from 'better-sqlite3';
-import type { MondayProjectConfig, Project, Task } from '@nexus/shared';
+import type { MondayProjectConfig, Project } from '@nexus/shared';
 import { loadConfig } from '../config.js';
 import { resolveMondayToken } from './poll.js';
-import { getLinkForTask } from './store.js';
+import { getLinkForThread } from './store.js';
 import { createUpdate, type MondayClientOptions, type MondayError } from './client.js';
-import { parseGitHubRepo } from '../github/repo.js';
 import type { ActivityEvent } from '../activity/events.js';
 
 /** Floor for the coalescing window. Mirrors the validator in routes/monday.ts. */
@@ -34,8 +34,21 @@ const DEFAULT_INTERVAL_MINUTES = 30;
 const FLUSH_TICK_MS = 60_000;
 
 export type FeedEvent =
-  | { kind: 'moved'; task_id: string; title: string; status: 'review' | 'deploy'; url: string | null; at: string }
+  | { kind: 'moved'; thread_id: string; title: string; status: 'review' | 'deploy'; url: string | null; at: string }
   | { kind: 'note'; body: string; provenance: string; at: string };
+
+/**
+ * What a move is about: a session, its title, the stage it reached, and an
+ * optional URL colleagues can open from Monday (the session's origin — a
+ * GitHub issue, say — since a Nexus deep link is not reachable off the
+ * tailnet). The caller resolves the URL; this module only renders it.
+ */
+export interface FeedMoveSubject {
+  id: string;
+  title: string;
+  status: 'review' | 'deploy';
+  url?: string | null;
+}
 
 export interface FeedDeps {
   postUpdate: typeof createUpdate;
@@ -69,19 +82,6 @@ export function feedWindowMs(cfg: MondayProjectConfig | null | undefined): numbe
   return minutes * 60_000;
 }
 
-/**
- * The GitHub issue a task came from, when it came from one. Colleagues read
- * the Monday post in their own tools, so the link must be reachable outside
- * the tailnet — the GitHub issue is, a Nexus deep link is not.
- */
-export function taskIssueUrl(db: Database.Database, task: Pick<Task, 'project_id' | 'external_source' | 'external_id'>): string | null {
-  if (task.external_source !== 'github' || !task.external_id || !/^\d+$/.test(task.external_id)) return null;
-  const project = db.prepare('SELECT git_remote FROM projects WHERE id = ?').get(task.project_id) as { git_remote: string | null } | undefined;
-  const ref = parseGitHubRepo(project?.git_remote ?? '');
-  if (!ref) return null;
-  return `https://github.com/${ref.owner}/${ref.repo}/issues/${task.external_id}`;
-}
-
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, '&amp;')
@@ -94,8 +94,8 @@ function escapeHtml(s: string): string {
 /**
  * Pure: render a batch of events as one Monday update body (HTML).
  *
- * Moves are listed one task per line, latest state per task when a task moved
- * twice inside the window, with the GitHub issue linked when there is one.
+ * Moves are listed one session per line, latest state per session when one
+ * moved twice inside the window, with the origin linked when there is one.
  * Agent notes follow, escaped, each with its provenance line — the same
  * "never let agent text render as markup" rule postItemUpdate enforces.
  */
@@ -103,14 +103,14 @@ export function formatFeedUpdate(events: FeedEvent[]): string {
   const latestMove = new Map<string, Extract<FeedEvent, { kind: 'moved' }>>();
   const notes: Extract<FeedEvent, { kind: 'note' }>[] = [];
   for (const e of events) {
-    if (e.kind === 'moved') latestMove.set(e.task_id, e);
+    if (e.kind === 'moved') latestMove.set(e.thread_id, e);
     else notes.push(e);
   }
 
   const lines: string[] = [];
   if (latestMove.size > 0) {
     const n = latestMove.size;
-    lines.push(`<b>Nexus</b> · ${n} task${n === 1 ? '' : 's'} moved`);
+    lines.push(`<b>Nexus</b> · ${n} session${n === 1 ? '' : 's'} moved`);
     for (const m of latestMove.values()) {
       const title = escapeHtml(m.title);
       const label = m.url ? `<a href="${escapeHtml(m.url)}">${title}</a>` : title;
@@ -172,13 +172,16 @@ async function postBatch(
 ): Promise<'posted' | 'failed'> {
   const operationId = crypto.randomUUID();
   const startedAt = Date.now();
-  const taskId = events.find((e): e is Extract<FeedEvent, { kind: 'moved' }> => e.kind === 'moved')?.task_id ?? null;
-  emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId, diagnostics: { itemId } });
+  // The subject rides in the event's `taskId` slot (the ActivityEvent shape
+  // predates the session-first board) and in `threadId` for deep-linking.
+  const threadId = events.find((e): e is Extract<FeedEvent, { kind: 'moved' }> => e.kind === 'moved')?.thread_id ?? null;
+  const taskId = threadId;
+  emit?.({ type: 'start', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId, threadId, diagnostics: { itemId } });
   try {
     await deps.postUpdate(opts, itemId, formatFeedUpdate(events));
     writeRow(db, itemId, projectId, new Date(now).toISOString(), []);
     emit?.({
-      type: 'stop', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId,
+      type: 'stop', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId, threadId,
       status: 'succeeded', durationMs: Date.now() - startedAt, lastEvent: `${events.length} event(s) posted`,
     });
     return 'posted';
@@ -186,7 +189,7 @@ async function postBatch(
     const monday = err as MondayError;
     writeRow(db, itemId, projectId, new Date(now).toISOString(), events);
     emit?.({
-      type: 'stop', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId,
+      type: 'stop', operationId, kind: 'monday_write', title: 'Monday update', projectId, taskId, threadId,
       status: 'failed', durationMs: Date.now() - startedAt, error: monday.message,
     });
     return 'failed';
@@ -281,31 +284,31 @@ export function startUpdatesFeedFlush(db: Database.Database, emit?: Emit): () =>
 }
 
 /**
- * Trigger for a Kanban move into Review or Deploy. Fire-and-forget, the same
- * contract as scheduleRollup: the move already committed, so nothing here may
- * propagate. Silent no-op when the task is unlinked, the project has not
- * opted in, or Monday is off.
+ * Trigger for a session reaching Review (run ended) or Deploy (archived).
+ * Fire-and-forget, the same contract as scheduleRollup: the lifecycle change
+ * already happened, so nothing here may propagate. Silent no-op when the
+ * thread is unlinked, the project has not opted in, or Monday is off.
  */
 export async function scheduleFeedMove(
   db: Database.Database,
-  task: Task,
+  subject: FeedMoveSubject,
   emit?: Emit,
   deps: FeedDeps = DEFAULT_DEPS,
   now: number = Date.now(),
 ): Promise<'posted' | 'queued' | 'failed' | 'skipped'> {
   try {
-    if (task.status !== 'review' && task.status !== 'deploy') return 'skipped';
+    if (subject.status !== 'review' && subject.status !== 'deploy') return 'skipped';
     const global = loadConfig().monday;
     const token = resolveMondayToken();
     if (!global.enabled || !token) return 'skipped';
-    const link = getLinkForTask(db, task.id);
+    const link = getLinkForThread(db, subject.id);
     if (!link) return 'skipped';
     const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(link.project_id) as Project | undefined;
     const cfg = projectMondayConfig(project);
     if (!cfg?.updates?.enabled) return 'skipped';
     const event: FeedEvent = {
-      kind: 'moved', task_id: task.id, title: task.title, status: task.status,
-      url: taskIssueUrl(db, task), at: new Date(now).toISOString(),
+      kind: 'moved', thread_id: subject.id, title: subject.title, status: subject.status,
+      url: subject.url ?? null, at: new Date(now).toISOString(),
     };
     return await recordFeedEvent(
       db, { token, apiVersion: global.api_version }, link.project_id, cfg, link.item_id, event, now, deps, emit,

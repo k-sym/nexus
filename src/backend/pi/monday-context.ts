@@ -16,7 +16,7 @@ export interface MondayContextInput {
   item: MondayItem;
   /** Pre-formatted roll-up, e.g. "1 of 5 done". */
   rollupText: string;
-  /** How many Nexus tasks share this item. */
+  /** How many Nexus sessions share this item. */
   siblingCount: number;
   updates: string[];
 }
@@ -46,7 +46,7 @@ function buildHeadText(
   rollupText: string,
   siblingCount: number,
 ): string {
-  const head: string[] = ['## Monday.com initiative for this task', ''];
+  const head: string[] = ['## Monday.com initiative for this session', ''];
   const warning = stateWarning(item);
   if (warning) {
     head.push(warning, '');
@@ -56,7 +56,7 @@ function buildHeadText(
   if (item.status_label) head.push(`Status: ${item.status_label}`);
   if (owners) head.push(`Owners: ${owners}`);
   if (item.url) head.push(`URL: ${item.url}`);
-  head.push(`Nexus tasks under this initiative: ${siblingCount} (${rollupText})`);
+  head.push(`Nexus sessions under this initiative: ${siblingCount} (${rollupText})`);
   return head.join('\n');
 }
 

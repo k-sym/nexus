@@ -28,18 +28,6 @@ final class ModelDecodingTests: XCTestCase {
         XCTAssertEqual(projects[1].gitRemote, "")
     }
 
-    func testTaskStatusRoundTripAndUnknownFallback() {
-        XCTAssertEqual(TaskStatus(rawValue: "in_progress"), .inProgress)
-        XCTAssertEqual(TaskStatus.inProgress.rawValue, "in_progress")
-        XCTAssertEqual(TaskStatus(rawValue: "brand_new_column"), .unknown("brand_new_column"))
-        XCTAssertEqual(TaskStatus.allCases.count, 5)
-    }
-
-    func testTaskPriorityUnknownFallback() {
-        XCTAssertEqual(TaskPriority(rawValue: "urgent"), .urgent)
-        XCTAssertEqual(TaskPriority(rawValue: "cosmic"), .unknown("cosmic"))
-    }
-
     func testBusyInfoDecodesCamelCaseBody() throws {
         let json = Data("""
         { "kind": "model_busy", "activeThreadId": "t_123", "activeTitle": "Refactor auth", "modelKey": "anthropic/claude-opus-4-8" }

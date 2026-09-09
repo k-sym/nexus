@@ -144,7 +144,8 @@ function makeRouteApp(repoPath: string) {
       title TEXT NOT NULL DEFAULT 'New Session',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      archived_at TEXT
+      archived_at TEXT,
+      last_model_key TEXT
     );
     CREATE TABLE notifications (
       id TEXT PRIMARY KEY,
@@ -157,7 +158,7 @@ function makeRouteApp(repoPath: string) {
   `);
   const now = new Date().toISOString();
   db.prepare('INSERT INTO projects (id, slug, name, repo_path, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('project-a', 'alpha', 'Alpha', repoPath, 0, now, now);
-  db.prepare('INSERT INTO tasks (id, project_id, title, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('task-a', 'project-a', 'Review ambient diff', 'review', 'medium', now, now);
+  db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('thread-a', 'project-a', 'Review ambient diff', now, now);
   const app = Fastify({ logger: false });
   app.decorate('db', db);
   app.register(registerProjectRoutes);
@@ -179,85 +180,7 @@ test('GET /api/projects/:id/git/diff returns not_git_repo for project paths outs
   }
 });
 
-test('POST /api/projects/:id/review-actions creates a provenance-rich review task', async () => {
-  const repo = mkdtempSync(join(tmpdir(), 'nexus-route-git-'));
-  try {
-    runGit(repo, ['init']);
-    runGit(repo, ['config', 'user.email', 'a@example.com']);
-    runGit(repo, ['config', 'user.name', 'A Person']);
-    mkdirSync(join(repo, 'src'), { recursive: true });
-    writeFileSync(join(repo, 'src/a.ts'), 'const a = 1;\nconst c = 3;\n');
-    runGit(repo, ['add', 'src/a.ts']);
-    runGit(repo, ['commit', '-m', 'initial']);
-    writeFileSync(join(repo, 'src/a.ts'), 'const a = 1;\nconst b = 2;\nconst c = 3;\n');
-    runGit(repo, ['add', 'src/a.ts']);
-
-    const { app, db, dir } = makeRouteApp(repo);
-    try {
-      const diff = await app.inject({ method: 'GET', url: '/api/projects/project-a/git/diff' });
-      const hunkId = (diff.json() as any).hunks[0].id;
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/projects/project-a/review-actions',
-        payload: { task_id: 'task-a', action: 'ask_reviewer', hunk_id: hunkId, note: 'check edge cases' },
-      });
-      assert.equal(res.statusCode, 200);
-      const body = res.json() as any;
-      assert.equal(body.ok, true);
-      assert.equal(body.task.status, 'review');
-      assert.equal(body.task.assigned_agent, 'Reviewer');
-      const task = db.prepare('SELECT title, description, status, assigned_agent FROM tasks WHERE id = ?').get(body.task.id) as any;
-      assert.equal(task.status, 'review');
-      assert.equal(task.assigned_agent, 'Reviewer');
-      assert.match(task.description, /Source task: Review ambient diff \(task-a\)/);
-      assert.match(task.description, /File: src\/a\.ts/);
-      assert.match(task.description, /User note: check edge cases/);
-    } finally {
-      await app.close();
-      db.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
-});
-
-test('POST /api/projects/:id/review-actions assigns reviewer to source task', async () => {
-  const repo = mkdtempSync(join(tmpdir(), 'nexus-route-assign-'));
-  try {
-    runGit(repo, ['init']);
-    runGit(repo, ['config', 'user.email', 'a@example.com']);
-    runGit(repo, ['config', 'user.name', 'A Person']);
-    writeFileSync(join(repo, 'a.txt'), 'old\n');
-    runGit(repo, ['add', 'a.txt']);
-    runGit(repo, ['commit', '-m', 'initial']);
-    writeFileSync(join(repo, 'a.txt'), 'new\n');
-
-    const { app, db, dir } = makeRouteApp(repo);
-    try {
-      const diff = await app.inject({ method: 'GET', url: '/api/projects/project-a/git/diff' });
-      const hunkId = (diff.json() as any).hunks[0].id;
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/projects/project-a/review-actions',
-        payload: { task_id: 'task-a', action: 'assign_reviewer', hunk_id: hunkId },
-      });
-      assert.equal(res.statusCode, 200);
-      assert.equal((res.json() as any).task.assigned_agent, 'Reviewer');
-      const task = db.prepare('SELECT status, assigned_agent FROM tasks WHERE id = ?').get('task-a') as any;
-      assert.equal(task.status, 'review');
-      assert.equal(task.assigned_agent, 'Reviewer');
-    } finally {
-      await app.close();
-      db.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
-});
-
-test('POST /api/projects/:id/review-actions creates a chat seed for attach_to_chat', async () => {
+test('POST /api/projects/:id/review-actions attach_to_chat seeds the named session with the hunk (#439)', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'nexus-route-chat-'));
   try {
     runGit(repo, ['init']);
@@ -270,21 +193,28 @@ test('POST /api/projects/:id/review-actions creates a chat seed for attach_to_ch
 
     const { app, db, dir } = makeRouteApp(repo);
     try {
+      db.prepare("UPDATE chat_threads SET last_model_key = 'claude-code/claude-sonnet-5' WHERE id = 'thread-a'").run();
+      const before = (db.prepare('SELECT updated_at FROM chat_threads WHERE id = ?').get('thread-a') as any).updated_at;
       const diff = await app.inject({ method: 'GET', url: '/api/projects/project-a/git/diff' });
       const hunkId = (diff.json() as any).hunks[0].id;
       const res = await app.inject({
         method: 'POST',
         url: '/api/projects/project-a/review-actions',
-        payload: { task_id: 'task-a', action: 'attach_to_chat', hunk_id: hunkId },
+        payload: { thread_id: 'thread-a', action: 'attach_to_chat', hunk_id: hunkId, note: 'focus on the rename' },
       });
-      assert.equal(res.statusCode, 200);
+      assert.equal(res.statusCode, 200, res.body);
       const body = res.json() as any;
       assert.equal(body.ok, true);
-      assert.equal(body.thread.project_id, 'project-a');
-      assert.equal(body.seed.threadId, body.thread.id);
-      assert.match(body.seed.prompt, /Source task: Review ambient diff \(task-a\)/);
-      const thread = db.prepare('SELECT id, project_id, title FROM chat_threads WHERE id = ?').get(body.thread.id) as any;
-      assert.equal(thread.project_id, 'project-a');
+      assert.deepEqual(body.thread, { id: 'thread-a', project_id: 'project-a', title: 'Review ambient diff' });
+      assert.equal(body.seed.threadId, 'thread-a');
+      assert.equal(body.seed.modelKey, 'claude-code/claude-sonnet-5');
+      assert.match(body.seed.prompt, /current session "Review ambient diff"/);
+      assert.match(body.seed.prompt, /File: a\.txt/);
+      assert.match(body.seed.prompt, /User note: focus on the rename/);
+      // No new thread, no task row: the session itself is the target.
+      assert.equal((db.prepare('SELECT COUNT(*) AS n FROM chat_threads').get() as any).n, 1);
+      assert.equal((db.prepare('SELECT COUNT(*) AS n FROM tasks').get() as any).n, 0);
+      assert.notEqual((db.prepare('SELECT updated_at FROM chat_threads WHERE id = ?').get('thread-a') as any).updated_at, before);
     } finally {
       await app.close();
       db.close();
@@ -295,33 +225,20 @@ test('POST /api/projects/:id/review-actions creates a chat seed for attach_to_ch
   }
 });
 
-test('POST /api/projects/:id/review-actions keeps the source task status when assigning a reviewer', async () => {
-  const repo = mkdtempSync(join(tmpdir(), 'nexus-route-assign-keep-'));
+test('POST /api/projects/:id/review-actions rejects the retired task actions and unknown threads', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'nexus-route-reject-'));
   try {
     runGit(repo, ['init']);
-    runGit(repo, ['config', 'user.email', 'a@example.com']);
-    runGit(repo, ['config', 'user.name', 'A Person']);
-    writeFileSync(join(repo, 'a.txt'), 'old\n');
-    runGit(repo, ['add', 'a.txt']);
-    runGit(repo, ['commit', '-m', 'initial']);
-    writeFileSync(join(repo, 'a.txt'), 'new\n');
-
     const { app, db, dir } = makeRouteApp(repo);
     try {
-      const now = new Date().toISOString();
-      db.prepare('INSERT INTO tasks (id, project_id, title, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run('task-deploy', 'project-a', 'Deploy me', 'deploy', 'medium', now, now);
-      const diff = await app.inject({ method: 'GET', url: '/api/projects/project-a/git/diff' });
-      const hunkId = (diff.json() as any).hunks[0].id;
-      const res = await app.inject({
-        method: 'POST',
-        url: '/api/projects/project-a/review-actions',
-        payload: { task_id: 'task-deploy', action: 'assign_reviewer', hunk_id: hunkId },
-      });
-      assert.equal(res.statusCode, 200);
-      assert.equal((res.json() as any).task.assigned_agent, 'Reviewer');
-      const task = db.prepare('SELECT status, assigned_agent FROM tasks WHERE id = ?').get('task-deploy') as any;
-      assert.equal(task.status, 'deploy');
-      assert.equal(task.assigned_agent, 'Reviewer');
+      for (const action of ['ask_reviewer', 'explain_change', 'spawn_fix_task', 'assign_reviewer']) {
+        const res = await app.inject({ method: 'POST', url: '/api/projects/project-a/review-actions', payload: { thread_id: 'thread-a', action, hunk_id: 'x' } });
+        assert.equal(res.statusCode, 400, action);
+      }
+      const noThread = await app.inject({ method: 'POST', url: '/api/projects/project-a/review-actions', payload: { action: 'attach_to_chat', hunk_id: 'x' } });
+      assert.equal(noThread.statusCode, 400);
+      const unknown = await app.inject({ method: 'POST', url: '/api/projects/project-a/review-actions', payload: { thread_id: 'nope', action: 'attach_to_chat', hunk_id: 'x' } });
+      assert.equal(unknown.statusCode, 404);
     } finally {
       await app.close();
       db.close();
@@ -331,35 +248,3 @@ test('POST /api/projects/:id/review-actions keeps the source task status when as
     rmSync(repo, { recursive: true, force: true });
   }
 });
-
-test('POST /api/projects/:id/review-actions reuses an open chat thread for repeated attach_to_chat', async () => {
-  const repo = mkdtempSync(join(tmpdir(), 'nexus-route-chat-dedupe-'));
-  try {
-    runGit(repo, ['init']);
-    runGit(repo, ['config', 'user.email', 'a@example.com']);
-    runGit(repo, ['config', 'user.name', 'A Person']);
-    writeFileSync(join(repo, 'a.txt'), 'old\n');
-    runGit(repo, ['add', 'a.txt']);
-    runGit(repo, ['commit', '-m', 'initial']);
-    writeFileSync(join(repo, 'a.txt'), 'new\n');
-
-    const { app, db, dir } = makeRouteApp(repo);
-    try {
-      const diff = await app.inject({ method: 'GET', url: '/api/projects/project-a/git/diff' });
-      const hunkId = (diff.json() as any).hunks[0].id;
-      const payload = { task_id: 'task-a', action: 'attach_to_chat', hunk_id: hunkId };
-      const first = await app.inject({ method: 'POST', url: '/api/projects/project-a/review-actions', payload });
-      const second = await app.inject({ method: 'POST', url: '/api/projects/project-a/review-actions', payload });
-      assert.equal((first.json() as any).thread.id, (second.json() as any).thread.id);
-      const count = db.prepare('SELECT COUNT(*) AS n FROM chat_threads WHERE project_id = ?').get('project-a') as any;
-      assert.equal(count.n, 1);
-    } finally {
-      await app.close();
-      db.close();
-      rmSync(dir, { recursive: true, force: true });
-    }
-  } finally {
-    rmSync(repo, { recursive: true, force: true });
-  }
-});
-

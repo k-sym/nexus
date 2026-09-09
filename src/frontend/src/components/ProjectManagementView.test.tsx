@@ -10,8 +10,13 @@ const ITEM = {
   monday_updated_at: null, synced_at: 'now',
   rollup: { total: 3, open: 1, inProgress: 0, inReview: 1, done: 1 },
   rollup_text: '1/3 done · 1 in review',
-  task_ids: ['t1', 't2', 't3'],
+  thread_ids: ['t1', 't2', 't3'],
 };
+
+/** A minimal ChatThread for the chip/attach fixtures. */
+const thread = (id: string, title: string, archived_at: string | null = null) => ({
+  id, project_id: 'p1', title, created_at: 'now', updated_at: 'now', archived_at,
+});
 
 const OTHER_ITEM = { ...ITEM, item_id: '2', name: 'Other project item', group_title: 'Q4' };
 
@@ -26,10 +31,11 @@ function deferred<T>() {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  // The view now loads project tasks to title the linked-task chips. Default it
-  // to empty so existing tests keep their raw-id chip fallback; specific tests
-  // override it. Without this, every render would hit a real (unmocked) fetch.
-  vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([] as never);
+  // The view loads the project's sessions to title the chips and fill the
+  // attach picker. Default it to empty so existing tests keep their raw-id chip
+  // fallback; specific tests override it. Without this, every render would hit
+  // a real (unmocked) fetch.
+  vi.spyOn(api.api.chat, 'threads').mockResolvedValue([] as never);
 });
 
 describe('ProjectManagementView', () => {
@@ -192,22 +198,22 @@ describe('ProjectManagementView', () => {
     expect(screen.getByText('Ship the thing')).toBeTruthy();
   });
 
-  it('unlinks a task from an item row and refreshes so the roll-up updates', async () => {
+  it('unlinks a session from an item row and refreshes so the roll-up updates', async () => {
     const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
     fetchSpy.mockResolvedValueOnce([ITEM] as never);
-    const unlink = vi.spyOn(api, 'unlinkTaskFromMondayItem').mockResolvedValue(undefined as never);
+    const unlink = vi.spyOn(api, 'unlinkThreadFromMondayItem').mockResolvedValue(undefined as never);
 
     render(<ProjectManagementView projectId="p1" />);
     expect(await screen.findByText('Ship the thing')).toBeTruthy();
     expect(screen.getByText('t1')).toBeTruthy();
 
     // After the unlink, the refetch reports the item with one fewer linked
-    // task and an updated roll-up.
+    // session and an updated roll-up.
     fetchSpy.mockResolvedValueOnce([
-      { ...ITEM, task_ids: ['t2', 't3'], rollup: { total: 2, open: 1, inProgress: 0, inReview: 1, done: 0 }, rollup_text: '0/2 done · 1 in review' },
+      { ...ITEM, thread_ids: ['t2', 't3'], rollup: { total: 2, open: 1, inProgress: 0, inReview: 1, done: 0 }, rollup_text: '0/2 done · 1 in review' },
     ] as never);
 
-    fireEvent.click(screen.getByRole('button', { name: /unlink task t1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /unlink session t1/i }));
 
     await waitFor(() => expect(unlink).toHaveBeenCalledWith('t1'));
     // The view refetched (not just spliced local state) — the new roll-up text
@@ -219,34 +225,34 @@ describe('ProjectManagementView', () => {
 
   it('surfaces an inline error, without discarding the row, when unlinking fails', async () => {
     vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
-    vi.spyOn(api, 'unlinkTaskFromMondayItem').mockRejectedValue(new Error('Unlink failed'));
+    vi.spyOn(api, 'unlinkThreadFromMondayItem').mockRejectedValue(new Error('Unlink failed'));
 
     render(<ProjectManagementView projectId="p1" />);
     expect(await screen.findByText('Ship the thing')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: /unlink task t1/i }));
+    fireEvent.click(screen.getByRole('button', { name: /unlink session t1/i }));
 
     await waitFor(() => expect(screen.getByText('Unlink failed')).toBeTruthy());
     // The row itself must still be there — a failed unlink must not silently
-    // vanish the task from view.
+    // vanish the session from view.
     expect(screen.getByText('t1')).toBeTruthy();
   });
 
   it('does not enable t2\'s button mid-flight when t1\'s unlink settles first (concurrent unlink test)', async () => {
-    // Start with three tasks: we'll unlink t1 and t2, leaving t3.
-    // This keeps the item (and its task badges) visible after the first load,
+    // Start with three sessions: we'll unlink t1 and t2, leaving t3.
+    // This keeps the item (and its chips) visible after the first load,
     // so we can verify t2's button stays disabled while t2 is still pending.
-    const initialItem = { ...ITEM, task_ids: ['t1', 't2', 't3'] };
+    const initialItem = { ...ITEM, thread_ids: ['t1', 't2', 't3'] };
     const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
     fetchSpy.mockResolvedValueOnce([initialItem] as never);
 
     // Control the unlink timing: t1 unlink resolves first, t2 unlink second
     const t1Unlink = deferred<void>();
     const t2Unlink = deferred<void>();
-    vi.spyOn(api, 'unlinkTaskFromMondayItem').mockImplementation(async (taskId: string) => {
-      if (taskId === 't1') return t1Unlink.promise;
-      if (taskId === 't2') return t2Unlink.promise;
-      throw new Error(`Unexpected task id: ${taskId}`);
+    vi.spyOn(api, 'unlinkThreadFromMondayItem').mockImplementation(async (threadId: string) => {
+      if (threadId === 't1') return t1Unlink.promise;
+      if (threadId === 't2') return t2Unlink.promise;
+      throw new Error(`Unexpected thread id: ${threadId}`);
     });
 
     render(<ProjectManagementView projectId="p1" />);
@@ -256,9 +262,9 @@ describe('ProjectManagementView', () => {
     expect(screen.getByText('t3')).toBeTruthy();
 
     // Get initial button state
-    let t1Button = screen.getByRole('button', { name: /unlink task t1/i });
-    let t2Button = screen.getByRole('button', { name: /unlink task t2/i });
-    let t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+    let t1Button = screen.getByRole('button', { name: /unlink session t1/i });
+    let t2Button = screen.getByRole('button', { name: /unlink session t2/i });
+    let t3Button = screen.getByRole('button', { name: /unlink session t3/i });
     expect(t1Button).not.toBeDisabled();
     expect(t2Button).not.toBeDisabled();
     expect(t3Button).not.toBeDisabled();
@@ -268,9 +274,9 @@ describe('ProjectManagementView', () => {
     fireEvent.click(t2Button);
 
     // Both t1 and t2 buttons should now be disabled because their unlinks are pending
-    t1Button = screen.getByRole('button', { name: /unlink task t1/i });
-    t2Button = screen.getByRole('button', { name: /unlink task t2/i });
-    t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+    t1Button = screen.getByRole('button', { name: /unlink session t1/i });
+    t2Button = screen.getByRole('button', { name: /unlink session t2/i });
+    t3Button = screen.getByRole('button', { name: /unlink session t3/i });
     await waitFor(() => {
       expect(t1Button).toBeDisabled();
       expect(t2Button).toBeDisabled();
@@ -279,37 +285,37 @@ describe('ProjectManagementView', () => {
     expect(t3Button).not.toBeDisabled();
 
     // Mock the refresh response after t1 unlink: remove only t1, keep t2 and t3
-    fetchSpy.mockResolvedValueOnce([{ ...ITEM, task_ids: ['t2', 't3'] }] as never);
+    fetchSpy.mockResolvedValueOnce([{ ...ITEM, thread_ids: ['t2', 't3'] }] as never);
 
     // Resolve t1's unlink first; this should NOT re-enable t2's button
     t1Unlink.resolve();
 
-    // After load() completes, t1's button disappears (since t1 is no longer in task_ids)
+    // After load() completes, t1's button disappears (since t1 is no longer in thread_ids)
     // and t2 should still have its button and still be disabled (because t2 unlink is pending)
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /unlink task t1/i })).toBeNull();
-      t2Button = screen.getByRole('button', { name: /unlink task t2/i });
+      expect(screen.queryByRole('button', { name: /unlink session t1/i })).toBeNull();
+      t2Button = screen.getByRole('button', { name: /unlink session t2/i });
       expect(t2Button).toBeDisabled();
     });
     // t3 should still be there and not disabled
-    t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+    t3Button = screen.getByRole('button', { name: /unlink session t3/i });
     expect(t3Button).not.toBeDisabled();
 
     // Mock the second load for t2's unlink completion
-    fetchSpy.mockResolvedValueOnce([{ ...ITEM, task_ids: ['t3'] }] as never);
+    fetchSpy.mockResolvedValueOnce([{ ...ITEM, thread_ids: ['t3'] }] as never);
 
     // Resolve t2's unlink
     t2Unlink.resolve();
 
     // After load() completes, t2's button should disappear and t3 remains
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: /unlink task t2/i })).toBeNull();
-      t3Button = screen.getByRole('button', { name: /unlink task t3/i });
+      expect(screen.queryByRole('button', { name: /unlink session t2/i })).toBeNull();
+      t3Button = screen.getByRole('button', { name: /unlink session t3/i });
       expect(t3Button).not.toBeDisabled();
     });
   });
 
-  // --- board link + friendly linked-task chips ----------------------------
+  // --- board link + friendly session chips ----------------------------------
 
   it('links out to the Monday board, derived from an item url', async () => {
     vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
@@ -319,19 +325,25 @@ describe('ProjectManagementView', () => {
     expect(link.getAttribute('target')).toBe('_blank');
   });
 
-  it('shows a linked task by its title and jumps to the Kanban when the chip is clicked', async () => {
-    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([{ ...ITEM, task_ids: ['t1'] }] as never);
-    vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([
-      { id: 't1', project_id: 'p1', title: 'Fix the login bug', description: '', status: 'in_progress', priority: 'medium', created_at: 'now', updated_at: 'now' },
-    ] as never);
-    const onNavigateToKanban = vi.fn();
-    render(<ProjectManagementView projectId="p1" onNavigateToKanban={onNavigateToKanban} />);
+  it('shows a linked session by its title and opens it when the chip is clicked', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([{ ...ITEM, thread_ids: ['t1'] }] as never);
+    vi.spyOn(api.api.chat, 'threads').mockResolvedValue([thread('t1', 'Fix the login bug')] as never);
+    const onOpenThread = vi.fn();
+    render(<ProjectManagementView projectId="p1" onOpenThread={onOpenThread} />);
 
     const chip = await screen.findByRole('button', { name: 'Fix the login bug' });
     fireEvent.click(chip);
-    expect(onNavigateToKanban).toHaveBeenCalled();
+    expect(onOpenThread).toHaveBeenCalledWith('t1');
     // The raw UUID is no longer surfaced once the title is known.
     expect(screen.queryByText('t1')).toBeNull();
+  });
+
+  it('no longer offers to create a task from an item (#439: new sessions start from the board Inbox)', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
+    render(<ProjectManagementView projectId="p1" />);
+    await screen.findByText('Ship the thing');
+    expect(screen.queryByRole('button', { name: /create.*task/i })).toBeNull();
+    expect(screen.queryByText(/create task in triage/i)).toBeNull();
   });
 
   it('auto-refreshes from Monday when the window regains focus', async () => {
@@ -446,37 +458,39 @@ describe('ProjectManagementView', () => {
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
 
-  // --- attach an existing task from the item row ---------------------------
+  // --- attach an existing session from the item row ------------------------
 
-  it('attaches an existing unlinked task to an item from its row and refreshes', async () => {
-    vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([
-      { id: 't1', title: 'Already linked', status: 'review' },
-      { id: 't9', title: 'Loose task', status: 'todo' },
+  it('attaches an existing unlinked session to an item from its row and refreshes', async () => {
+    vi.spyOn(api.api.chat, 'threads').mockResolvedValue([
+      thread('t1', 'Already linked'),
+      thread('t9', 'Loose session'),
+      thread('t8', 'Archived session', '2026-09-01T00:00:00.000Z'),
     ] as never);
     const fetchSpy = vi.spyOn(api, 'fetchMondayItems');
     fetchSpy.mockResolvedValueOnce([ITEM] as never);
-    fetchSpy.mockResolvedValueOnce([{ ...ITEM, task_ids: ['t1', 't9'] }] as never);
-    const link = vi.spyOn(api, 'linkTaskToMondayItem').mockResolvedValue(undefined as never);
+    fetchSpy.mockResolvedValueOnce([{ ...ITEM, thread_ids: ['t1', 't9'] }] as never);
+    const link = vi.spyOn(api, 'linkThreadToMondayItem').mockResolvedValue(undefined as never);
 
     render(<ProjectManagementView projectId="p1" />);
-    const select = await screen.findByLabelText('Attach a task to Ship the thing');
-    // Only the unlinked task is offered.
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Loose task' })).toBeTruthy());
+    const select = await screen.findByLabelText('Attach a session to Ship the thing');
+    // Only the unlinked, live session is offered.
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Loose session' })).toBeTruthy());
     expect(screen.queryByRole('option', { name: 'Already linked' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Archived session' })).toBeNull();
 
     fireEvent.change(select, { target: { value: 't9' } });
     await waitFor(() => expect(link).toHaveBeenCalledWith('p1', 't9', '1'));
     await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/2 linked tasks/)).toBeTruthy();
+    expect(await screen.findByText(/2 linked sessions/)).toBeTruthy();
   });
 
   it('surfaces an inline error when attaching fails', async () => {
-    vi.spyOn(api.api.projects, 'tasks').mockResolvedValue([{ id: 't9', title: 'Loose task', status: 'todo' }] as never);
+    vi.spyOn(api.api.chat, 'threads').mockResolvedValue([thread('t9', 'Loose session')] as never);
     vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([ITEM] as never);
-    vi.spyOn(api, 'linkTaskToMondayItem').mockRejectedValue(new Error('Link failed'));
+    vi.spyOn(api, 'linkThreadToMondayItem').mockRejectedValue(new Error('Link failed'));
     render(<ProjectManagementView projectId="p1" />);
-    const select = await screen.findByLabelText('Attach a task to Ship the thing');
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Loose task' })).toBeTruthy());
+    const select = await screen.findByLabelText('Attach a session to Ship the thing');
+    await waitFor(() => expect(screen.getByRole('option', { name: 'Loose session' })).toBeTruthy());
     fireEvent.change(select, { target: { value: 't9' } });
     expect(await screen.findByRole('alert')).toHaveTextContent('Link failed');
   });

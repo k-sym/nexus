@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { getDb } from '../db';
 import { registerMondayRoutes } from '../routes/monday';
-import { upsertItems, linkTask } from '../monday/store';
+import { upsertItems, linkThread } from '../monday/store';
 import { buildStaleReport, listScopedProjects } from '../monday/stale';
 
 const NOW = new Date('2026-09-08T12:00:00.000Z');
@@ -42,16 +42,16 @@ function seed(db: ReturnType<typeof getDb>) {
     item({ item_id: 'fresh', name: 'Moved yesterday', monday_updated_at: daysAgo(1) }),
     item({ item_id: 'stale', name: 'Quiet for ten days', monday_updated_at: daysAgo(10) }),
     item({ item_id: 'commented', name: 'Old column, recent comment', monday_updated_at: daysAgo(20), updates_json: JSON.stringify([{ text: 'ping', created_at: daysAgo(2) }]) }),
-    item({ item_id: 'kanban', name: 'Old on Monday, task moved in Nexus', monday_updated_at: daysAgo(30) }),
+    item({ item_id: 'kanban', name: 'Old on Monday, session active in Nexus', monday_updated_at: daysAgo(30) }),
     item({ item_id: 'undated', name: 'Never dated' }),
     item({ item_id: 'done', name: 'Finished ages ago', monday_updated_at: daysAgo(40), status_label: 'Done' }),
     item({ item_id: 'gone', name: 'Archived', monday_updated_at: daysAgo(40), state: 'archived' }),
     item({ item_id: 'other-board', board_id: 'b2', group_id: 'g9', board_name: 'Second', name: 'On the other board', monday_updated_at: daysAgo(9), synced_at: daysAgo(3) }),
     item({ item_id: 'other-group', board_id: 'b2', group_id: 'g1', board_name: 'Second', name: 'Outside the scoped group', monday_updated_at: daysAgo(9) }),
   ]);
-  db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-              VALUES ('t1','p1','Fix it','','in_progress','medium','now', ?)`).run(daysAgo(1));
-  linkTask(db, { task_id: 't1', item_id: 'kanban', project_id: 'p1', created_at: 'now' });
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES ('th1','p1','Fix it','now', ?, NULL)`).run(daysAgo(1));
+  linkThread(db, { thread_id: 'th1', item_id: 'kanban', project_id: 'p1', created_at: 'now' });
 }
 
 test('listScopedProjects returns only projects with a Monday scope, in sort order', () => {
@@ -61,7 +61,7 @@ test('listScopedProjects returns only projects with a Monday scope, in sort orde
   db.close();
 });
 
-test('buildStaleReport uses the latest of Monday updated_at, newest update, and linked-task movement', () => {
+test('buildStaleReport uses the latest of Monday updated_at, newest update, and linked-session movement', () => {
   const db = getDb(':memory:');
   seed(db);
   const report = buildStaleReport(db, 7, NOW);
@@ -97,15 +97,16 @@ test('buildStaleReport respects each project\'s board and group scope and report
   db.close();
 });
 
-test('a linked task that moved recently counts as movement, with the task listed', () => {
+test('a linked session that moved recently counts as movement, with the session listed', () => {
   const db = getDb(':memory:');
   seed(db);
   const p1 = buildStaleReport(db, 7, NOW).projects.find((p) => p.project_id === 'p1')!;
   assert.equal(p1.items.some((i) => i.item_id === 'kanban'), false);
   const wide = buildStaleReport(db, 0, NOW).projects.find((p) => p.project_id === 'p1')!;
   const kanban = wide.items.find((i) => i.item_id === 'kanban')!;
-  assert.equal(kanban.linked_tasks.length, 1);
-  assert.equal(kanban.linked_tasks[0].title, 'Fix it');
+  assert.equal(kanban.linked_sessions.length, 1);
+  assert.equal(kanban.linked_sessions[0].title, 'Fix it');
+  assert.equal(kanban.linked_sessions[0].status, 'review', 'an idle session derives to review (#439 D6)');
   assert.equal(kanban.days_idle, 1);
   db.close();
 });

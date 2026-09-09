@@ -1,12 +1,15 @@
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { MondayItem } from '@nexus/shared';
 import { getDb } from '../db';
 import {
   upsertItems, pruneScope, getItem, listItemsForBoard,
-  linkTask, unlinkTask, getLinkForTask, listLinkedItemIds, listLinkedTaskStatuses,
+  linkThread, unlinkThread, getLinkForThread, listLinkedItemIds, listLinkedThreadStatuses,
   markItemsMissing,
 } from '../monday/store';
+import { markRunning, __resetRunRegistry } from '../chat/run-registry';
+
+beforeEach(() => __resetRunRegistry());
 
 function item(id: string, over: Partial<MondayItem> = {}): MondayItem {
   return {
@@ -41,7 +44,7 @@ test('pruneScope deletes unlinked rows that vanished from the board', () => {
 test('pruneScope NEVER deletes a linked row — it marks it missing', () => {
   const db = getDb(':memory:');
   upsertItems(db, [item('1'), item('2')]);
-  linkTask(db, { task_id: 't1', item_id: '2', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'th1', item_id: '2', project_id: 'p1', created_at: 'now' });
   pruneScope(db, 'b1', null, ['1'], '2026-07-22T01:00:00.000Z');
   const row = getItem(db, '2');
   assert.ok(row, 'linked row must survive the prune');
@@ -66,42 +69,57 @@ test('pruneScope with a group set only touches that group', () => {
   db.close();
 });
 
-test('linking replaces any prior link for the task', () => {
+test('linking replaces any prior link for the thread', () => {
   const db = getDb(':memory:');
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
-  linkTask(db, { task_id: 't1', item_id: '2', project_id: 'p1', created_at: 'later' });
-  assert.equal(getLinkForTask(db, 't1')!.item_id, '2');
+  linkThread(db, { thread_id: 'th1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'th1', item_id: '2', project_id: 'p1', created_at: 'later' });
+  assert.equal(getLinkForThread(db, 'th1')!.item_id, '2');
   db.close();
 });
 
-test('unlinkTask removes the link', () => {
+test('unlinkThread removes the link', () => {
   const db = getDb(':memory:');
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
-  unlinkTask(db, 't1');
-  assert.equal(getLinkForTask(db, 't1'), undefined);
+  linkThread(db, { thread_id: 'th1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  unlinkThread(db, 'th1');
+  assert.equal(getLinkForThread(db, 'th1'), undefined);
   db.close();
 });
 
 test('listLinkedItemIds is distinct across projects', () => {
   const db = getDb(':memory:');
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
-  linkTask(db, { task_id: 't2', item_id: '1', project_id: 'p2', created_at: 'now' });
-  linkTask(db, { task_id: 't3', item_id: '2', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'th1', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'th2', item_id: '1', project_id: 'p2', created_at: 'now' });
+  linkThread(db, { thread_id: 'th3', item_id: '2', project_id: 'p1', created_at: 'now' });
   assert.deepEqual(listLinkedItemIds(db).sort(), ['1', '2']);
   db.close();
 });
 
-test('listLinkedTaskStatuses joins through to the tasks table', () => {
+function seedThread(db: ReturnType<typeof getDb>, id: string, title: string, archivedAt: string | null = null) {
+  db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+              VALUES (?, 'p1', ?, 'now', 'now', ?)`).run(id, title, archivedAt);
+}
+
+test('listLinkedThreadStatuses derives each linked session\'s status from archive state and the run registry (#439 D6)', () => {
   const db = getDb(':memory:');
   db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
               VALUES ('p1','p','P','P','', '', '{}', 0, '', 'now', 'now')`).run();
-  const insertTask = db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-                                 VALUES (?, 'p1', ?, '', ?, 'medium', 'now', 'now')`);
-  insertTask.run('t1', 'A', 'deploy');
-  insertTask.run('t2', 'B', 'review');
-  linkTask(db, { task_id: 't1', item_id: '1', project_id: 'p1', created_at: 'now' });
-  linkTask(db, { task_id: 't2', item_id: '1', project_id: 'p1', created_at: 'now' });
-  assert.deepEqual(listLinkedTaskStatuses(db, '1').sort(), ['deploy', 'review']);
+  seedThread(db, 'done', 'Archived', '2026-09-08T00:00:00.000Z');
+  seedThread(db, 'busy', 'Running');
+  seedThread(db, 'idle', 'Idle');
+  markRunning('busy', { title: 'Running', modelKey: 'm' });
+  for (const id of ['done', 'busy', 'idle']) linkThread(db, { thread_id: id, item_id: '1', project_id: 'p1', created_at: 'now' });
+  assert.deepEqual(listLinkedThreadStatuses(db, '1').sort(), ['deploy', 'in_progress', 'review']);
+  db.close();
+});
+
+test('listLinkedThreadStatuses ignores a link whose thread row is gone', () => {
+  const db = getDb(':memory:');
+  db.prepare(`INSERT INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
+              VALUES ('p1','p','P','P','', '', '{}', 0, '', 'now', 'now')`).run();
+  seedThread(db, 'idle', 'Idle');
+  linkThread(db, { thread_id: 'idle', item_id: '1', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'ghost', item_id: '1', project_id: 'p1', created_at: 'now' });
+  assert.deepEqual(listLinkedThreadStatuses(db, '1'), ['review']);
   db.close();
 });
 
@@ -192,25 +210,25 @@ test('markItemsMissing does nothing for an empty list', () => {
   db.close();
 });
 
-test('pruneScope marks linked row missing when multiple tasks link to same item', () => {
+test('pruneScope marks linked row missing when multiple threads link to same item', () => {
   const db = getDb(':memory:');
   // Insert two items
   upsertItems(db, [item('1'), item('2')]);
-  // Link two different tasks to the SAME item
-  linkTask(db, { task_id: 't1', item_id: '2', project_id: 'p1', created_at: 'now' });
-  linkTask(db, { task_id: 't2', item_id: '2', project_id: 'p2', created_at: 'now' });
+  // Link two different threads to the SAME item
+  linkThread(db, { thread_id: 'th1', item_id: '2', project_id: 'p1', created_at: 'now' });
+  linkThread(db, { thread_id: 'th2', item_id: '2', project_id: 'p2', created_at: 'now' });
   // Run prune with keep list that excludes item '2'
   pruneScope(db, 'b1', null, ['1'], '2026-07-22T01:00:00.000Z');
   // Assert the linked item still exists and is marked missing
   const row = getItem(db, '2');
-  assert.ok(row, 'linked item must survive prune even with multiple task links');
+  assert.ok(row, 'linked item must survive prune even with multiple thread links');
   assert.equal(row!.state, 'missing', 'linked item must be marked missing');
   // Assert both links still exist
-  const link1 = getLinkForTask(db, 't1');
-  const link2 = getLinkForTask(db, 't2');
-  assert.ok(link1, 'first task link must survive');
+  const link1 = getLinkForThread(db, 'th1');
+  const link2 = getLinkForThread(db, 'th2');
+  assert.ok(link1, 'first thread link must survive');
   assert.equal(link1!.item_id, '2', 'first link should still point to item 2');
-  assert.ok(link2, 'second task link must survive');
+  assert.ok(link2, 'second thread link must survive');
   assert.equal(link2!.item_id, '2', 'second link should still point to item 2');
   db.close();
 });

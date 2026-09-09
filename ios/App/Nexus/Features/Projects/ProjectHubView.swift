@@ -24,7 +24,7 @@ struct ProjectHubView: View {
         List {
             Section {
                 row(.chat) { ThreadsListView(api: api, project: project) }
-                row(.board) { KanbanBoardView(api: api, projectId: project.id) }
+                row(.board) { BoardView(api: api, projectId: project.id) }
                 row(.diff) { DiffView(api: api, projectId: project.id) }
                 row(.memory) { MemoryView(api: api, projectId: project.id) }
                 row(.monday) { MondayView(api: api, projectId: project.id) }
@@ -71,8 +71,8 @@ struct ProjectHubView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
         case .board:
-            if let count = project.taskCount {
-                Text("\(count) task\(count == 1 ? "" : "s")")
+            if let count = project.chatSessionCount {
+                Text("\(count) session\(count == 1 ? "" : "s")")
                     .font(.caption).foregroundStyle(.secondary)
             }
         case .diff:
@@ -152,42 +152,5 @@ final class ProjectHubSummary {
             diff = DiffStat(added: d.summary.added, deleted: d.summary.deleted)
         }
         memoryCount = (try? await memories)?.count
-    }
-}
-
-// MARK: - Display helpers (app-side, over NexusCore enums)
-
-extension TaskStatus {
-    var label: String {
-        switch self {
-        case .triage: return "Triage"
-        case .todo: return "To do"
-        case .inProgress: return "In progress"
-        case .review: return "Review"
-        case .deploy: return "Deploy"
-        case .unknown(let raw): return raw.capitalized
-        }
-    }
-}
-
-extension TaskPriority {
-    var label: String {
-        switch self {
-        case .low: return "Low"
-        case .medium: return "Medium"
-        case .high: return "High"
-        case .urgent: return "Urgent"
-        case .unknown(let raw): return raw.capitalized
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .urgent: return .red
-        case .high: return .orange
-        case .medium: return .yellow
-        case .low: return .secondary
-        case .unknown: return .secondary
-        }
     }
 }

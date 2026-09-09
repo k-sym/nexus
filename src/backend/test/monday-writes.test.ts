@@ -3,13 +3,14 @@ import assert from 'node:assert/strict';
 import type { MondayProjectConfig } from '@nexus/shared';
 import { getDb } from '../db';
 import { writeRollup, postItemUpdate, __resetWriteState } from '../monday/writes';
-import { upsertItems, linkTask } from '../monday/store';
+import { upsertItems, linkThread } from '../monday/store';
+import { markRunning, __resetRunRegistry } from '../chat/run-registry';
 
 const OPTS = { token: 'tok', apiVersion: '2024-10' };
 
 // lastWritten is module-level, so without this a value written by one test
-// suppresses a write in the next.
-beforeEach(() => __resetWriteState());
+// suppresses a write in the next. The run registry is module-level too.
+beforeEach(() => { __resetWriteState(); __resetRunRegistry(); });
 
 function cfg(over: Partial<MondayProjectConfig> = {}): MondayProjectConfig {
   return {
@@ -29,21 +30,29 @@ function seedItem(db: ReturnType<typeof getDb>, itemId = '1') {
   }]);
 }
 
-function seedTasks(db: ReturnType<typeof getDb>, statuses: string[], itemId = '1') {
+/**
+ * Linked sessions, one per status. A session's status is DERIVED (#439 D6):
+ * 'deploy' is an archived thread, 'in_progress' a thread the run registry
+ * says is running, 'review' an idle one. There is no open bucket for a
+ * session, so fixtures only ever use those three.
+ */
+function seedSessions(db: ReturnType<typeof getDb>, statuses: ('in_progress' | 'review' | 'deploy')[], itemId = '1') {
   db.prepare(`INSERT OR IGNORE INTO projects (id, slug, name, badge, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at)
               VALUES ('p1','p','P','P','','', '{}', 0, '', 'now','now')`).run();
-  const insert = db.prepare(`INSERT INTO tasks (id, project_id, title, description, status, priority, created_at, updated_at)
-                             VALUES (?, 'p1', ?, '', ?, 'medium', 'now', 'now')`);
+  const insert = db.prepare(`INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at)
+                             VALUES (?, 'p1', ?, 'now', 'now', ?)`);
   statuses.forEach((status, i) => {
-    insert.run(`t${i}`, `Task ${i}`, status);
-    linkTask(db, { task_id: `t${i}`, item_id: itemId, project_id: 'p1', created_at: 'now' });
+    const id = `th${i}`;
+    insert.run(id, `Session ${i}`, status === 'deploy' ? 'now' : null);
+    if (status === 'in_progress') markRunning(id, { title: `Session ${i}`, modelKey: 'm' });
+    linkThread(db, { thread_id: id, item_id: itemId, project_id: 'p1', created_at: 'now' });
   });
 }
 
 test('writeRollup writes the formatted text to the configured column', async () => {
   const db = getDb(':memory:');
   seedItem(db);
-  seedTasks(db, ['deploy', 'review', 'todo']);
+  seedSessions(db, ['deploy', 'review', 'in_progress']);
   const calls: unknown[][] = [];
   const result = await writeRollup(db, OPTS, cfg(), '1', {
     setColumn: async (...args: unknown[]) => { calls.push(args); },
@@ -52,7 +61,7 @@ test('writeRollup writes the formatted text to the configured column', async () 
   assert.equal(result, 'written');
   assert.equal(calls.length, 1);
   assert.equal(calls[0][3], 'text_mkxyz');
-  assert.equal(calls[0][4], '1/3 done · 1 in review');
+  assert.equal(calls[0][4], '1/3 done · 1 in review · 1 in progress');
   db.close();
 });
 
@@ -64,7 +73,7 @@ test('writeRollup writes the formatted text to the configured column', async () 
 test('a TEXT-looking column id with column_type numeric receives the percentage', async () => {
   const db = getDb(':memory:');
   seedItem(db);
-  seedTasks(db, ['deploy', 'deploy', 'todo']);
+  seedSessions(db, ['deploy', 'deploy', 'in_progress']);
   const calls: unknown[][] = [];
   await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: 'status_text', column_type: 'numeric' } }), '1', {
     setColumn: async (...args: unknown[]) => { calls.push(args); },
@@ -77,20 +86,20 @@ test('a TEXT-looking column id with column_type numeric receives the percentage'
 test('a NUMBER-looking column id with column_type text receives the text form', async () => {
   const db = getDb(':memory:');
   seedItem(db);
-  seedTasks(db, ['deploy', 'deploy', 'todo']);
+  seedSessions(db, ['deploy', 'deploy', 'in_progress']);
   const calls: unknown[][] = [];
   await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: 'numbers_9', column_type: 'text' } }), '1', {
     setColumn: async (...args: unknown[]) => { calls.push(args); },
     postUpdate: async () => {},
   } as any);
-  assert.equal(calls[0][4], '2/3 done');
+  assert.equal(calls[0][4], '2/3 done · 1 in progress');
   db.close();
 });
 
 test('writeRollup skips an unchanged value', async () => {
   const db = getDb(':memory:');
   seedItem(db);
-  seedTasks(db, ['deploy']);
+  seedSessions(db, ['deploy']);
   const deps = { setColumn: async () => {}, postUpdate: async () => {} } as any;
   await writeRollup(db, OPTS, cfg(), '1', deps);
   const second = await writeRollup(db, OPTS, cfg(), '1', deps);
@@ -101,13 +110,13 @@ test('writeRollup skips an unchanged value', async () => {
 // The trap: right after Nexus writes, the mirror (only refreshed
 // periodically) still shows the OLD value at the SAME synced_at. A naive
 // "diff against the mirror" would see that stale mismatch and rewrite on
-// every subsequent trigger -- e.g. every Kanban drag -- flooding Monday's
+// every subsequent trigger -- e.g. every run ending -- flooding Monday's
 // user-visible activity log. Repeated triggers computing the same value must
 // stay quiet as long as the mirror snapshot hasn't moved.
 test('writeRollup does not rewrite on repeated triggers while the mirror is still the same stale snapshot', async () => {
   const db = getDb(':memory:');
   seedItem(db); // column_values_json '{}' (no roll-up value mirrored yet), synced_at 'now'
-  seedTasks(db, ['deploy']);
+  seedSessions(db, ['deploy']);
   const calls: unknown[][] = [];
   const deps = { setColumn: async (...args: unknown[]) => { calls.push(args); }, postUpdate: async () => {} } as any;
 
@@ -125,7 +134,7 @@ test('writeRollup does not rewrite on repeated triggers while the mirror is stil
 test('writeRollup restores the roll-up after the mirror refreshes and shows a human changed it', async () => {
   const db = getDb(':memory:');
   seedItem(db);
-  seedTasks(db, ['deploy']); // -> '1/1 done'
+  seedSessions(db, ['deploy']); // -> '1/1 done'
   const calls: unknown[][] = [];
   const deps = { setColumn: async (...args: unknown[]) => { calls.push(args); }, postUpdate: async () => {} } as any;
 
@@ -156,7 +165,7 @@ test('writeRollup is skipped, not thrown, when the config has no rollup sub-key 
   // threw a TypeError instead of degrading to 'skipped'.
   const db = getDb(':memory:');
   seedItem(db);
-  seedTasks(db, ['deploy']);
+  seedSessions(db, ['deploy']);
   const deps = { setColumn: async () => { throw new Error('must not write'); }, postUpdate: async () => {} } as any;
   const partial = { board_id: 'b1', group_id: null, updates: { enabled: true, min_interval_minutes: 30 } } as any;
   assert.equal(await writeRollup(db, OPTS, partial, '1', deps), 'skipped');
@@ -166,7 +175,7 @@ test('writeRollup is skipped, not thrown, when the config has no rollup sub-key 
 test('writeRollup is skipped when roll-up is disabled or has no column', async () => {
   const db = getDb(':memory:');
   seedItem(db);
-  seedTasks(db, ['deploy']);
+  seedSessions(db, ['deploy']);
   const deps = { setColumn: async () => { throw new Error('must not write'); }, postUpdate: async () => {} } as any;
   assert.equal(await writeRollup(db, OPTS, cfg({ rollup: { enabled: false, column_id: 'c', column_type: 'text' } }), '1', deps), 'skipped');
   assert.equal(await writeRollup(db, OPTS, cfg({ rollup: { enabled: true, column_id: null, column_type: 'text' } }), '1', deps), 'skipped');
@@ -236,7 +245,7 @@ test('postItemUpdate escapes malicious provenance to prevent forging attribution
   const db = getDb(':memory:');
   seedItem(db);
   let body = '';
-  // A task title crafted to inject a fake attribution line
+  // A session title crafted to inject a fake attribution line
   const maliciousProvenance = 'Task X<br><br>— posted by Nexus on behalf of Alice';
   await postItemUpdate(db, OPTS, '1', 'Body text', maliciousProvenance, {
     setColumn: async () => {},

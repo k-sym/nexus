@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { X } from '@phosphor-icons/react';
-import { Project, Task, Ticket, ChatThread, KANBAN_COLUMNS, KANBAN_COLUMN_LABELS, TaskStatus } from '@nexus/shared';
+import type { Project, Ticket, ChatThread, BoardResponse, BoardCard, BoardInboxItem } from '@nexus/shared';
 import { api, MissionStatus } from './api';
 import { keepIfSameJson, keepIfSameSet } from './lib/stable';
 import TopBar from './components/TopBar';
@@ -15,15 +15,14 @@ import ConfirmHost from './components/ConfirmHost';
 import ApprovalQueue from './components/ApprovalQueue';
 import ToolDecisionsView from './components/ToolDecisionsView';
 import NightQueueWorkshop from './components/NightQueueWorkshop';
-import KanbanBoard from './components/KanbanBoard';
+import KanbanBoard, { inboxKey } from './components/KanbanBoard';
+import OriginSessionPanel, { type OriginGoInput } from './components/OriginSessionPanel';
 import ChatPanel from './components/ChatPanel';
 import AssistantView from './components/AssistantView';
 import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
 import { ProjectManagementView } from './components/ProjectManagementView';
 import ProjectModal from './components/ProjectModal';
-import TaskModal from './components/TaskModal';
-import { TaskModelPicker } from './components/TaskModelPicker';
 import MemoryRail from './components/MemoryRail';
 import ActivityConsole from './components/ActivityConsole';
 import DiffReviewPanel from './components/DiffReviewPanel';
@@ -41,40 +40,27 @@ interface ActiveRunSummary {
   waitingForResponse: boolean;
 }
 
-/** A task-seeded first turn handed to ChatPanel once the run-task chat opens. */
+/** A seeded first turn handed to ChatPanel once a session opens from a ticket,
+ *  an Inbox item or a diff hunk. (Named for the task board it outlived.) */
 interface TaskSeed {
   threadId: string;
   prompt: string;
   modelKey: string;
 }
 
-/** Build the seeded first chat message from a task — the visible equivalent of
- *  the old headless `buildTaskPrompt`. */
-function buildTaskSeedPrompt(task: Task, project: Project): string {
-  const parts: string[] = [];
-  parts.push(`You are working on a task in the **${project.name}** project.`);
-  if (project.repo_path) parts.push(`Working directory: ${project.repo_path}`);
-  parts.push(`Priority: ${task.priority}`);
-  parts.push('');
-  parts.push(`## Task: ${task.title}`);
-  if (task.description) parts.push(task.description);
-  parts.push('');
-  parts.push('Work through this task here. I can steer you as you go.');
-  return parts.join('\n');
-}
+/** How often the board re-reads its projection while it is on screen. */
+const BOARD_POLL_MS = 5000;
 
 export default function App() {
   const [projects, setProjects] = useState<Project[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  // Session-first board (#439): the projection the backend computes on read,
+  // and the Inbox row whose origin panel is open beside it.
+  const [board, setBoard] = useState<BoardResponse | null>(null);
+  const [boardLoading, setBoardLoading] = useState(false);
+  const [selectedInbox, setSelectedInbox] = useState<BoardInboxItem | null>(null);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
-  const [taskModalColumn, setTaskModalColumn] = useState<TaskStatus | null>(null);
-  const [editingTask, setEditingTask] = useState<Task | null>(null);
-  // Bumped whenever TaskModal reports a Monday link/unlink, so the Kanban
-  // board (which loads its own badge map once per projectId) refetches and
-  // stops showing a stale link after the modal closes.
-  const [mondayRefreshKey, setMondayRefreshKey] = useState(0);
-  const [diffReviewTask, setDiffReviewTask] = useState<Task | null>(null);
+  const [diffReviewThread, setDiffReviewThread] = useState<{ threadId: string; title: string } | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [status, setStatus] = useState<MissionStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(false);
@@ -85,7 +71,6 @@ export default function App() {
     status: '',
   });
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [taskPicker, setTaskPicker] = useState<{ taskId: string; title: string } | null>(null);
   const [taskSeed, setTaskSeed] = useState<TaskSeed | null>(null);
 
   // --- navigation state -----------------------------------------------------
@@ -167,12 +152,17 @@ export default function App() {
     }
   }, []);
 
-  const loadTasks = useCallback(async (projectId: string) => {
+  const loadBoard = useCallback(async (projectId: string) => {
+    setBoardLoading(true);
     try {
-      const data = await api.projects.tasks(projectId);
-      setTasks(data);
+      const data = await api.projects.board(projectId);
+      // A slow response can land after the user switched projects.
+      if (activeProjectIdRef.current !== projectId) return;
+      setBoard((prev) => keepIfSameJson(prev, data));
     } catch (err) {
-      console.error('Failed to load tasks:', err);
+      console.error('Failed to load board:', err);
+    } finally {
+      setBoardLoading(false);
     }
   }, []);
 
@@ -221,27 +211,28 @@ export default function App() {
     if (activeProjectId) {
       const proj = projects.find((p) => p.id === activeProjectId);
       setActiveProject(proj || null);
-      setTasks([]);
-      loadTasks(activeProjectId);
     } else {
       setActiveProject(null);
-      setTasks([]);
     }
-  }, [activeProjectId, projects, loadTasks]);
+  }, [activeProjectId, projects]);
+
+  // The board is a projection, so it is re-read rather than kept in sync:
+  // on entering the Kanban view, every 5 s while it is on screen and the tab
+  // is visible, and whenever the run feed changes (below). Switching project
+  // drops the old board and the open Inbox panel with it.
+  useEffect(() => {
+    setBoard(null);
+    setSelectedInbox(null);
+  }, [activeProjectId]);
 
   useEffect(() => {
     if (!activeProjectId || subView !== 'kanban') return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const { created } = await api.projects.githubSync(activeProjectId);
-        if (!cancelled && created > 0) await loadTasks(activeProjectId);
-      } catch (err) {
-        console.error('GitHub sync failed:', err);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [activeProjectId, subView, loadTasks]);
+    void loadBoard(activeProjectId);
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') void loadBoard(activeProjectId);
+    }, BOARD_POLL_MS);
+    return () => clearInterval(interval);
+  }, [activeProjectId, subView, loadBoard]);
 
   useEffect(() => {
     setThreads([]);
@@ -275,6 +266,18 @@ export default function App() {
     const interval = setInterval(refreshActiveChatRuns, 2000);
     return () => clearInterval(interval);
   }, [refreshActiveChatRuns]);
+
+  // A run starting or stopping moves a card between lanes; refetch the board
+  // as soon as the run feed says so rather than waiting for the next tick.
+  // `runningThreadIds` only changes identity when its contents change
+  // (keepIfSameSet), so this fires once per real transition. The mount render
+  // is skipped: the view effect above already loads on entry.
+  const runningThreadIdsRef = useRef(runningThreadIds);
+  useEffect(() => {
+    if (runningThreadIdsRef.current === runningThreadIds) return;
+    runningThreadIdsRef.current = runningThreadIds;
+    if (activeProjectId && subView === 'kanban') void loadBoard(activeProjectId);
+  }, [runningThreadIds, activeProjectId, subView, loadBoard]);
 
   // The set of live sessions changes only on create/rename/delete/archive, so it
   // polls far more slowly than the run feed; those handlers refresh it directly.
@@ -378,14 +381,6 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refreshAssistantActive]);
 
-  useEffect(() => {
-    if (!activeProjectId) return;
-    const interval = setInterval(() => {
-      if (activeProjectId) loadTasks(activeProjectId);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [activeProjectId, loadTasks]);
-
   // The sidebar consumes a flat ThreadMeta list; the new chat model has
   // no persona icon/color to surface.
   const threadMetas: ThreadMeta[] = useMemo(
@@ -395,21 +390,15 @@ export default function App() {
 
   const sidebarProjectCounts = useMemo(() => {
     const counts = Object.fromEntries(
-      projects.map((project) => [
-        project.id,
-        {
-          tasks: project.task_count ?? 0,
-          sessions: project.chat_session_count ?? 0,
-        },
-      ]),
+      projects.map((project) => [project.id, { sessions: project.chat_session_count ?? 0 }]),
     );
 
     if (activeProjectId) {
-      counts[activeProjectId] = { tasks: tasks.length, sessions: threads.length };
+      counts[activeProjectId] = { sessions: threads.length };
     }
 
     return counts;
-  }, [projects, activeProjectId, tasks.length, threads.length]);
+  }, [projects, activeProjectId, threads.length]);
 
   const handleCreateProject = async (data: { name: string; badge: string; repo_path: string }) => {
     const created = await api.projects.create(data);
@@ -446,7 +435,6 @@ export default function App() {
       setActiveProjectId(null);
       setActiveProject(null);
       setActiveThreadId(null);
-      setTasks([]);
       setThreads([]);
       setGlobalView('dashboard');
     }
@@ -470,104 +458,16 @@ export default function App() {
     }
   };
 
-  const handleCreateTask = async (data: { title: string; description: string; priority: string }) => {
-    if (!activeProjectId || !taskModalColumn) return;
-    await api.projects.createTask(activeProjectId, { ...data, status: taskModalColumn });
-    setTaskModalColumn(null);
-    await loadTasks(activeProjectId);
-  };
-
-  const handleEditTask = async (data: { title: string; description: string; priority: string }) => {
-    if (!editingTask) return;
-    await api.tasks.update(editingTask.id, { ...data, priority: data.priority as Task['priority'] });
-    setEditingTask(null);
-    if (activeProjectId) await loadTasks(activeProjectId);
-  };
-
-  /**
-   * Moving a task to "in_progress" opens an interactive chat. A task already
-   * linked to a thread reopens that chat directly; an unlinked task shows the
-   * model picker first (which then creates the thread). Other moves are a
-   * plain status update.
-   */
-  const handleMoveTask = async (taskId: string, newStatus: TaskStatus) => {
-    if (newStatus === 'in_progress') {
-      const task = tasks.find((t) => t.id === taskId);
-      if (task?.thread_id && activeProjectId) {
-        selectThread(activeProjectId, task.thread_id);
-        return;
-      }
-      if (task) {
-        setTaskPicker({ taskId, title: task.title });
-        return;
-      }
-    }
-    await api.tasks.update(taskId, { status: newStatus });
-    if (activeProjectId) await loadTasks(activeProjectId);
-  };
-
-  /** Click a card: linked → reopen its chat; unlinked → edit. */
-  const handleOpenTask = (task: Task) => {
-    if (task.thread_id && activeProjectId) {
-      selectThread(activeProjectId, task.thread_id);
-    } else {
-      setEditingTask(task);
-    }
-  };
-
-  const handleOpenDiffReview = (task: Task) => {
-    setDiffReviewTask(task);
-  };
-
-  const handleDiffTaskCreated = async (created: ReviewActionResult['task']) => {
-    if (created && activeProjectId) await loadTasks(activeProjectId);
-  };
-
-  const handleDiffTaskAssigned = async (updated: ReviewActionResult['task']) => {
-    if (!updated || !activeProjectId) return;
-    setTasks((current) => current.map((task) => (task.id === updated.id ? { ...task, assigned_agent: updated.assigned_agent } : task)));
+  /** Diff review (#439 D12): opens against the card's own session. */
+  const handleOpenDiffReview = (card: BoardCard) => {
+    setDiffReviewThread({ threadId: card.thread.id, title: card.thread.title });
   };
 
   const handleDiffChatSeed = (seed: NonNullable<ReviewActionResult['seed']>) => {
     if (!activeProjectId || !seed.threadId) return;
+    setDiffReviewThread(null);
     setTaskSeed({ threadId: seed.threadId, prompt: seed.prompt, modelKey: seed.modelKey ?? '' });
     selectThread(activeProjectId, seed.threadId);
-  };
-
-  /**
-   * "Run task" from the picker: create a chat thread titled after the task,
-   * link it (thread_id + model_key) and flip the card to in_progress, then
-   * navigate to the chat and seed its first turn so the agent starts working.
-   */
-  const handleRunTask = async (modelKey: string) => {
-    if (!taskPicker || !activeProjectId) return;
-    const { taskId } = taskPicker;
-    setTaskPicker(null);
-    const task = tasks.find((t) => t.id === taskId);
-    const project = projects.find((p) => p.id === activeProjectId);
-    if (!task || !project) return;
-
-    // Reopen if it somehow already has a thread (avoid duplicates).
-    if (task.thread_id) {
-      selectThread(activeProjectId, task.thread_id);
-      return;
-    }
-
-    try {
-      const thread = await api.chat.createThread(activeProjectId, task.title);
-      await api.tasks.update(taskId, { status: 'in_progress', thread_id: thread.id, model_key: modelKey });
-      await loadThreads(activeProjectId);
-      await loadTasks(activeProjectId);
-      setTaskSeed({ threadId: thread.id, prompt: buildTaskSeedPrompt(task, project), modelKey });
-      selectThread(activeProjectId, thread.id);
-    } catch (err) {
-      console.error('Failed to start task chat', err);
-    }
-  };
-
-  const handleDeleteTask = async (taskId: string) => {
-    await api.tasks.delete(taskId);
-    if (activeProjectId) await loadTasks(activeProjectId);
   };
 
   /**
@@ -584,6 +484,28 @@ export default function App() {
     await loadThreads(input.projectId);
     setTaskSeed({ threadId: thread.id, prompt: firstTurn, modelKey: input.modelKey });
     selectThread(input.projectId, thread.id);
+  };
+
+  /**
+   * Inbox item to session (#439): the board's counterpart of handleTicketGo.
+   * The origin (GitHub issue or Monday item) is stamped on the thread by the
+   * backend, so the item leaves the Inbox on the next board read.
+   */
+  const handleOriginGo = async (item: BoardInboxItem, input: OriginGoInput) => {
+    if (!activeProjectId) return;
+    const boardProjectId = activeProjectId;
+    const { thread, firstTurn } = await api.projects.boardSession(boardProjectId, {
+      kind: item.kind,
+      id: item.id,
+      projectId: input.projectId,
+      problem: input.problem,
+      branchName: input.branchName,
+    });
+    await loadThreads(input.projectId);
+    setTaskSeed({ threadId: thread.id, prompt: firstTurn, modelKey: input.modelKey });
+    setSelectedInbox(null);
+    selectThread(input.projectId, thread.id);
+    void loadBoard(boardProjectId);
   };
 
   // --- navigation helpers ---------------------------------------------------
@@ -708,7 +630,7 @@ export default function App() {
     });
     projects.forEach((p) => cmds.push({ id: `proj-${p.id}`, label: p.name, hint: 'Project', keywords: p.repo_path, run: () => focusProject(p.id) }));
     cmds.push({ id: 'act-new-project', label: 'New project…', hint: 'Action', run: openNewProjectModal });
-    if (activeProjectId) cmds.push({ id: 'act-new-task', label: 'New task (Triage)…', hint: 'Action', keywords: 'kanban', run: () => setTaskModalColumn('triage') });
+    cmds.push({ id: 'act-new-idea', label: 'New idea…', hint: 'Action', keywords: 'kanban board task triage capture', run: () => selectGlobal('ideas') });
     cmds.push({ id: 'act-settings', label: 'Settings', hint: 'Action', run: () => selectGlobal('settings') });
     cmds.push({ id: 'act-refresh', label: 'Refresh status', hint: 'Action', run: () => loadStatus() });
     return cmds;
@@ -726,7 +648,6 @@ export default function App() {
           operations={activity}
           loading={activityLoading}
           projects={projects}
-          tasks={tasks}
           threads={threadMetas}
           filters={activityFilters}
           onFiltersChange={setActivityFilters}
@@ -784,18 +705,31 @@ export default function App() {
 
         <div className="flex-1 overflow-hidden">
           {subView === 'kanban' ? (
-            <KanbanBoard
-              tasks={tasks}
-              columns={KANBAN_COLUMNS}
-              columnLabels={KANBAN_COLUMN_LABELS}
-              projectId={activeProject.id}
-              mondayRefreshKey={mondayRefreshKey}
-              onMoveTask={handleMoveTask}
-              onAddTask={(status) => setTaskModalColumn(status)}
-              onOpenTask={handleOpenTask}
-              onDeleteTask={handleDeleteTask}
-              onOpenDiffReview={handleOpenDiffReview}
-            />
+            <div className="flex h-full min-h-0">
+              <div className="flex-1 min-w-0 min-h-0">
+                <KanbanBoard
+                  board={board}
+                  loading={boardLoading}
+                  projectId={activeProject.id}
+                  selectedInboxKey={selectedInbox ? inboxKey(selectedInbox) : null}
+                  onOpenThread={(threadId) => selectThread(activeProject.id, threadId)}
+                  onOpenInboxItem={(item) => setSelectedInbox((current) => (
+                    current && inboxKey(current) === inboxKey(item) ? null : item
+                  ))}
+                  onNewIdea={() => selectGlobal('ideas')}
+                  onOpenDiffReview={handleOpenDiffReview}
+                />
+              </div>
+              {selectedInbox && (
+                <OriginSessionPanel
+                  projectId={activeProject.id}
+                  item={selectedInbox}
+                  projects={projects}
+                  onGo={handleOriginGo}
+                  onClose={() => setSelectedInbox(null)}
+                />
+              )}
+            </div>
           ) : subView === 'chat' ? (
             <div className="flex h-full min-h-0">
               <div className="flex-1 min-w-0">
@@ -822,7 +756,7 @@ export default function App() {
           ) : subView === 'projectManagement' ? (
             <ProjectManagementView
               projectId={activeProject.id}
-              onNavigateToKanban={() => selectSubView(activeProject.id, 'kanban')}
+              onOpenThread={(threadId) => selectThread(activeProject.id, threadId)}
             />
           ) : null}
         </div>
@@ -904,13 +838,11 @@ export default function App() {
       <ApprovalQueue />
       <ConfirmHost />
 
-      {diffReviewTask && activeProjectId && (
+      {diffReviewThread && activeProjectId && (
         <DiffReviewPanel
           projectId={activeProjectId}
-          task={{ id: diffReviewTask.id, title: diffReviewTask.title }}
-          onClose={() => setDiffReviewTask(null)}
-          onTaskCreated={(created) => void handleDiffTaskCreated(created)}
-          onTaskAssigned={(updated) => void handleDiffTaskAssigned(updated)}
+          thread={{ id: diffReviewThread.threadId, title: diffReviewThread.title }}
+          onClose={() => setDiffReviewThread(null)}
           onChatSeed={handleDiffChatSeed}
         />
       )}
@@ -923,34 +855,6 @@ export default function App() {
             setEditingProject(null);
           }}
           onSubmit={handleSaveProject}
-        />
-      )}
-
-      {taskModalColumn && (
-        <TaskModal
-          columnLabel={KANBAN_COLUMN_LABELS[taskModalColumn]}
-          projectId={activeProject?.id}
-          onClose={() => setTaskModalColumn(null)}
-          onSubmit={handleCreateTask}
-          onMondayLinkChanged={() => setMondayRefreshKey((k) => k + 1)}
-        />
-      )}
-
-      {editingTask && (
-        <TaskModal
-          task={editingTask}
-          projectId={activeProject?.id}
-          onClose={() => setEditingTask(null)}
-          onSubmit={handleEditTask}
-          onMondayLinkChanged={() => setMondayRefreshKey((k) => k + 1)}
-        />
-      )}
-
-      {taskPicker && (
-        <TaskModelPicker
-          open={true}
-          onPick={handleRunTask}
-          onClose={() => setTaskPicker(null)}
         />
       )}
     </div>

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { getDb } from '../db';
 import { syncScope, refreshLinkedItems } from '../monday/sync';
-import { getItem, linkTask, upsertItems } from '../monday/store';
+import { getItem, linkThread, upsertItems } from '../monday/store';
 import { MondayError } from '../monday/client';
 import type { MondayItem } from '@nexus/shared';
 
@@ -37,7 +37,7 @@ test('syncScope prunes rows the board no longer returns', async () => {
 test('syncScope never drops a linked item', async () => {
   const db = getDb(':memory:');
   await syncScope(db, OPTS, 'b1', null, NOW, async () => [raw('1'), raw('2')] as any);
-  linkTask(db, { task_id: 't1', item_id: '2', project_id: 'p1', created_at: NOW });
+  linkThread(db, { thread_id: 'th1', item_id: '2', project_id: 'p1', created_at: NOW });
   await syncScope(db, OPTS, 'b1', null, NOW, async () => [raw('1')] as any);
   assert.equal(getItem(db, '2')!.state, 'missing');
   db.close();
@@ -72,7 +72,7 @@ test('refreshLinkedItems queries only linked ids', async () => {
     url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'old',
   };
   upsertItems(db, [stale]);
-  linkTask(db, { task_id: 't1', item_id: '5', project_id: 'p1', created_at: NOW });
+  linkThread(db, { thread_id: 'th1', item_id: '5', project_id: 'p1', created_at: NOW });
 
   let askedFor: string[] = [];
   const count = await refreshLinkedItems(db, OPTS, NOW, async (_o, ids) => {
@@ -92,7 +92,7 @@ test('refreshLinkedItems marks a linked item Monday no longer returns as missing
     name: 'Gone', state: 'active', status_label: null, status_color: null, owners_json: '[]',
     url: null, column_values_json: '{}', monday_updated_at: null, synced_at: 'old',
   }]);
-  linkTask(db, { task_id: 't1', item_id: '7', project_id: 'p1', created_at: NOW });
+  linkThread(db, { thread_id: 'th1', item_id: '7', project_id: 'p1', created_at: NOW });
   await refreshLinkedItems(db, OPTS, NOW, async () => []);
   assert.equal(getItem(db, '7')!.state, 'missing');
   db.close();

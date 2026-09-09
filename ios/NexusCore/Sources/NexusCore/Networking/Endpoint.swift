@@ -71,9 +71,23 @@ public struct Endpoint: Sendable {
     /// Dashboard payload → `MissionStatus`.
     public static let missionControl = Endpoint(path: "/api/mission-control")
 
-    /// Tasks for one project → `[ProjectTask]`.
-    public static func projectTasks(_ projectId: String) -> Endpoint {
-        Endpoint(path: "/api/projects/\(projectId)/tasks")
+    // MARK: Session-first board (#439)
+
+    /// Cards + Inbox for one project → `BoardResponse`.
+    public static func projectBoard(_ projectId: String) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/board")
+    }
+
+    /// Sonnet drafts problem, project and branch for an Inbox item → `OriginDraft`.
+    /// Body is an `OriginRef`.
+    public static func boardDraft(_ projectId: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/board/draft", method: "POST", body: body)
+    }
+
+    /// Open an origin-stamped thread → `OriginSessionResult`. Body is an
+    /// `OriginSessionRequest`.
+    public static func createBoardSession(_ projectId: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/board/session", method: "POST", body: body)
     }
 
     // MARK: M2 chat
@@ -131,10 +145,6 @@ public struct Endpoint: Sendable {
     public static let models = Endpoint(path: "/api/models")
 
     // MARK: M3 writes
-
-    public static func updateTask(_ taskId: String, body: Data) -> Endpoint {
-        Endpoint(path: "/api/tasks/\(taskId)", method: "PUT", body: body)
-    }
 
     public static func projectMemories(_ projectId: String, query: String?) -> Endpoint {
         Endpoint(

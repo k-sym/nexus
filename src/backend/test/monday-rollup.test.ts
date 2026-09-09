@@ -26,7 +26,7 @@ test('formatRollupText appends review and progress only when non-zero', () => {
 });
 
 test('formatRollupText reports an empty link set distinctly', () => {
-  assert.equal(formatRollupText(computeRollup([])), 'no linked tasks');
+  assert.equal(formatRollupText(computeRollup([])), 'no linked sessions');
 });
 
 test('formatRollupPercent is done over total, rounded', () => {

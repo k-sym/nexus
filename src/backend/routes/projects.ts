@@ -4,20 +4,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { Project, Task, TaskStatus, normalizeProjectBadge, type ReviewActionRequest, type ReviewActionResult } from '@nexus/shared';
-import { buildReviewActionPrompt, buildReviewActionTitle, getProjectGitDiff, reviewActionPlan } from '../git/diff.js';
-import { summarizeTaskThread } from '../memory/summarize.js';
-import { insertNotification } from '../notifications/index.js';
+import { Project, Task, TaskStatus, normalizeProjectBadge, type ChatThread, type ReviewActionRequest, type ReviewActionResult } from '@nexus/shared';
+import { buildReviewActionPrompt, getProjectGitDiff } from '../git/diff.js';
 import { scaffoldProjectDocs } from '../projects/scaffold.js';
 import { detectGitRemote } from '../github/repo.js';
-import { syncGitHubIssues, ensureProjectGitRemote, noteSyncError, clearSyncError } from '../github/sync.js';
-import { GitHubError } from '../github/client.js';
-import { loadConfig } from '../config.js';
-import {
-  scheduleRollup, scheduleRollupForItem, scheduleStatusSync, scheduleStatusSyncForItem,
-} from '../monday/trigger.js';
-import { scheduleFeedMove } from '../monday/updates-feed.js';
-import { getLinkForTask, unlinkTask } from '../monday/store.js';
 
 /** Expand a leading ~ to the user's home dir; paths are stored absolute. */
 function expandHome(p: string): string {
@@ -245,6 +235,11 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     return await getProjectGitDiff(row);
   });
 
+  /**
+   * Diff review, session-first (#439): the one remaining action seeds the
+   * given session with the hunk prompt. The task-creating actions went with
+   * the task board; anything else is a 400.
+   */
   fastify.post('/api/projects/:id/review-actions', async (request) => {
     const { id: projectId } = request.params as { id: string };
     const body = request.body as ReviewActionRequest;
@@ -254,109 +249,47 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
       err.statusCode = 404;
       throw err;
     }
+    if (body.action !== 'attach_to_chat') {
+      const err = new Error(`Unsupported review action "${String(body.action)}"; only attach_to_chat remains`) as any;
+      err.statusCode = 400;
+      throw err;
+    }
+    if (!body.thread_id) {
+      const err = new Error('thread_id is required for attach_to_chat') as any;
+      err.statusCode = 400;
+      throw err;
+    }
+    const thread = db.prepare('SELECT id, project_id, title, last_model_key FROM chat_threads WHERE id = ? AND project_id = ?')
+      .get(body.thread_id, projectId) as (Pick<ChatThread, 'id' | 'project_id' | 'title'> & { last_model_key: string | null }) | undefined;
+    if (!thread) {
+      const err = new Error('Thread not found') as any;
+      err.statusCode = 404;
+      throw err;
+    }
 
     const diff = await getProjectGitDiff(project);
     if (!diff.ok) return diff;
 
-    const sourceTask = body.task_id
-      ? (db.prepare('SELECT * FROM tasks WHERE id = ? AND project_id = ?').get(body.task_id, projectId) as Task | undefined)
-      : null;
-    if (body.task_id && !sourceTask) {
-      const err = new Error('Task not found') as any;
-      err.statusCode = 404;
-      throw err;
-    }
-
     const hunk = body.hunk_id ? diff.hunks.find((item) => item.id === body.hunk_id) : null;
-    if (body.hunk_id && !hunk) {
-      const err = new Error('Hunk not found in current diff') as any;
+    if (!hunk) {
+      const err = new Error(body.hunk_id ? 'Hunk not found in current diff' : 'hunk_id is required') as any;
       err.statusCode = 404;
       throw err;
     }
 
-    const plan = reviewActionPlan(body.action);
     const now = new Date().toISOString();
-
-    if (body.action === 'assign_reviewer') {
-      if (!sourceTask) {
-        const err = new Error('task_id is required for assign_reviewer') as any;
-        err.statusCode = 400;
-        throw err;
-      }
-      if (!hunk) {
-        const err = new Error('hunk_id is required for assign_reviewer') as any;
-        err.statusCode = 400;
-        throw err;
-      }
-      // Assigning a reviewer routes the persona but leaves the card where it is
-      // (a Deploy card stays in Deploy); it does not pull the task back to Review.
-      db.prepare('UPDATE tasks SET assigned_agent = ?, updated_at = ? WHERE id = ?').run(plan.assigned_agent, now, sourceTask.id);
-      const updated = db.prepare('SELECT id, project_id, title, status, assigned_agent, model_key FROM tasks WHERE id = ?').get(sourceTask.id) as ReviewActionResult['task'];
-      return { ok: true, action: body.action, task: updated };
-    }
-
-    if (body.action === 'attach_to_chat') {
-      if (!sourceTask) {
-        const err = new Error('task_id is required for attach_to_chat') as any;
-        err.statusCode = 400;
-        throw err;
-      }
-      if (!hunk) {
-        const err = new Error('hunk_id is required for attach_to_chat') as any;
-        err.statusCode = 400;
-        throw err;
-      }
-      const title = `Diff review: ${hunk.file}`;
-      // Reuse an open thread for this file so repeated clicks reseed one thread
-      // instead of spawning a new one each time.
-      const existing = db.prepare('SELECT id, project_id, title FROM chat_threads WHERE project_id = ? AND title = ? AND archived_at IS NULL ORDER BY updated_at DESC LIMIT 1').get(projectId, title) as ReviewActionResult['thread'] | undefined;
-      let thread: NonNullable<ReviewActionResult['thread']>;
-      if (existing) {
-        db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(now, existing.id);
-        thread = existing;
-      } else {
-        thread = { id: uuid(), project_id: projectId, title };
-        db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at) VALUES (?, ?, ?, ?, ?, ?)').run(thread.id, thread.project_id, thread.title, now, now, null);
-      }
-      return {
-        ok: true,
-        action: body.action,
-        thread,
-        seed: {
-          threadId: thread.id,
-          prompt: buildReviewActionPrompt(project, sourceTask, body.action, hunk, body.note),
-          modelKey: sourceTask.model_key ?? null,
-        },
-      };
-    }
-
-    if (!hunk) {
-      const err = new Error('hunk_id is required') as any;
-      err.statusCode = 400;
-      throw err;
-    }
-
-    const title = buildReviewActionTitle(body.action, hunk);
-    const description = buildReviewActionPrompt(project, sourceTask ?? null, body.action, hunk, body.note);
-    const task = {
-      id: uuid(),
-      project_id: projectId,
-      title,
-      description,
-      status: plan.status,
-      priority: sourceTask?.priority ?? 'medium',
-      assigned_agent: plan.assigned_agent,
-      due_date: null,
-      created_at: now,
-      updated_at: now,
+    db.prepare('UPDATE chat_threads SET updated_at = ? WHERE id = ?').run(now, thread.id);
+    const result: ReviewActionResult = {
+      ok: true,
+      action: body.action,
+      thread: { id: thread.id, project_id: thread.project_id, title: thread.title },
+      seed: {
+        threadId: thread.id,
+        prompt: buildReviewActionPrompt(project, thread.title, hunk, body.note),
+        modelKey: thread.last_model_key ?? null,
+      },
     };
-
-    db.prepare('INSERT INTO tasks (id, project_id, title, description, status, priority, assigned_agent, due_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(task.id, task.project_id, task.title, task.description, task.status, task.priority, task.assigned_agent, task.due_date, task.created_at, task.updated_at);
-    db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, projectId);
-
-    const saved = db.prepare('SELECT id, project_id, title, status, assigned_agent, model_key FROM tasks WHERE id = ?').get(task.id) as ReviewActionResult['task'];
-    return { ok: true, action: body.action, task: saved };
+    return result;
   });
 
   fastify.post('/api/projects', async (request) => {
@@ -452,45 +385,13 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     return rows as Task[];
   });
 
-  fastify.post('/api/projects/:id/github/sync', async (request) => {
-    const { id } = request.params as { id: string };
-    const existing = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
-    if (!existing) {
-      const err = new Error('Project not found') as any;
-      err.statusCode = 404;
-      throw err;
-    }
-    // Honour the Settings toggle: when GitHub is disabled, sync is a no-op.
-    if (!loadConfig().github.enabled) {
-      return { created: 0, total: 0 };
-    }
-    // Self-heal projects created before remote-detection existed: an empty
-    // git_remote gets detected from repo_path and persisted before syncing.
-    const project = await ensureProjectGitRemote(db, existing);
-    try {
-      const { created, total } = await syncGitHubIssues(db, project, {
-        emit: fastify.activity?.bus.emit.bind(fastify.activity.bus),
-      });
-      clearSyncError(id);
-      return { created, total };
-    } catch (err) {
-      if (err instanceof GitHubError) {
-        // Only notify when this error differs from the last one we surfaced for
-        // this project — otherwise a private repo without a token would spam an
-        // identical toast on every Kanban open.
-        if (noteSyncError(id, err.message)) {
-          insertNotification(db, {
-            level: 'error',
-            title: 'GitHub sync failed',
-            message: `${project.name}: ${err.message}`,
-          });
-        }
-        return { created: 0, total: 0 };
-      }
-      throw err;
-    }
-  });
-
+  // ---------------------------------------------------------------------------
+  // Legacy task routes (#439). The board is session-first now and nothing in
+  // web or iOS calls these; they stay one release as plain CRUD for any stale
+  // client, with the Monday and summarise side effects removed — a tombstone
+  // must not write to an external system. `tasks` itself is kept as the audit
+  // ledger; see db.ts.
+  // ---------------------------------------------------------------------------
   fastify.post('/api/projects/:id/tasks', async (request) => {
     const { id: project_id } = request.params as { id: string };
     const body = request.body as { title: string; description?: string; status?: TaskStatus; priority?: string; assigned_agent?: string; due_date?: string };
@@ -567,78 +468,12 @@ export async function registerProjectRoutes(fastify: FastifyInstance) {
     db.prepare('UPDATE projects SET updated_at = ? WHERE id = ?').run(now, existing.project_id);
 
     const updated = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as Task;
-
-    // Recompute this task's Monday roll-up whenever a Kanban move actually
-    // changes its status. Fire-and-forget (void, no await): the Kanban move
-    // already committed above, and a slow or failing Monday call must never
-    // delay or fail it. Uses the same `fastify.activity?.bus.emit` seam the
-    // GitHub sync call above already reaches the ActivityManager through.
-    if (body.status != null && body.status !== existing.status) {
-      const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
-      void scheduleRollup(db, id, `task moved to ${body.status}`, emit);
-      // Same fire-and-forget seam: push the item's Monday status from the new
-      // aggregate stage. `false` — a plain move never advances an item off a
-      // label a human set outside the mapping (see status-sync.ts's hold rule).
-      void scheduleStatusSync(db, id, `task moved to ${body.status}`, false, emit);
-      // And the updates feed: a move into Review or Deploy is a note a
-      // colleague reading the Monday item can act on. scheduleFeedMove is a
-      // no-op for every other status and for projects that have not opted in.
-      void scheduleFeedMove(db, updated, emit);
-    }
-
-    // Summarize a completed task-chat into memory + Obsidian when its card is
-    // advanced into Review/Deploy. Fires only on the transition *into* a done
-    // state (so Review→Deploy doesn't re-summarize), and only for thread-linked
-    // tasks. Best-effort and fire-and-forget so the move stays responsive.
-    const DONE: TaskStatus[] = ['review', 'deploy'];
-    const crossedIntoDone =
-      body.status != null &&
-      DONE.includes(body.status) &&
-      !DONE.includes(existing.status) &&
-      !!updated.thread_id;
-    if (crossedIntoDone) {
-      void summarizeTaskThread(db, fastify.pi, updated)
-        .then((wrote) => {
-          if (wrote) {
-            insertNotification(db, {
-              level: 'info',
-              title: 'Task summarized',
-              message: `"${updated.title}" was summarized into project memory.`,
-            });
-          }
-        })
-        .catch((err) => console.error('[summarize] task summary failed:', err?.message));
-    }
-
     return updated;
   });
 
   fastify.delete('/api/tasks/:id', async (request) => {
     const { id } = request.params as { id: string };
-    // Capture the link BEFORE deleting the task: task_monday_links has no FK
-    // or cascade tying it to the task row, so once the task is gone there is
-    // no way back to the item id it was rolled up into. Same shape as the
-    // unlink handler in routes/monday.ts.
-    const existing = getLinkForTask(db, id);
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
-    if (existing) {
-      // The link row is just as orphan-prone as the task row was: remove it
-      // now, or it accumulates forever and keeps counting toward a roll-up
-      // for a task that no longer exists.
-      unlinkTask(db, id);
-      // Recompute the item this task was linked to, or its roll-up keeps a
-      // count that still includes the deleted task until some sibling task
-      // happens to move. Fire-and-forget (void, no await): the delete above
-      // already committed and a slow or failing Monday call must never delay
-      // or fail it. Same `fastify.activity?.bus.emit` seam the Kanban
-      // status-change path above uses, so this write shows up in the
-      // Activity Console too.
-      const emit = fastify.activity?.bus.emit.bind(fastify.activity.bus);
-      void scheduleRollupForItem(db, existing.item_id, existing.project_id, null, emit);
-      // Re-derive the item's status too — deleting a linked task can change the
-      // aggregate stage. `false`: never advance off a human-held label.
-      void scheduleStatusSyncForItem(db, existing.item_id, existing.project_id, null, false, emit);
-    }
     return { success: true };
   });
 }

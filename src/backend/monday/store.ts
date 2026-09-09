@@ -1,13 +1,19 @@
 /**
- * DB access for the Monday mirror and the task→item links.
+ * DB access for the Monday mirror and the thread→item links.
  *
  * The two tables have deliberately different contracts. `monday_items` is
- * disposable and rebuildable from the API. `task_monday_links` is user intent
- * and must survive a mirror wipe or a board reorganisation — which is why
- * pruning marks a linked row 'missing' instead of deleting it.
+ * disposable and rebuildable from the API. `thread_monday_links` is user
+ * intent and must survive a mirror wipe or a board reorganisation — which is
+ * why pruning marks a linked row 'missing' instead of deleting it.
+ *
+ * Links point at chat threads since the session-first board (#439, D5): the
+ * unit of work Nexus tracks is a session, so an item's roll-up is the state of
+ * the sessions linked to it. `task_monday_links` remains only as a tombstone.
  */
 import type Database from 'better-sqlite3';
-import type { MondayItem, TaskMondayLink, TaskStatus } from '@nexus/shared';
+import type { MondayItem, ThreadMondayLink, TaskStatus } from '@nexus/shared';
+import { deriveLane, laneToTaskStatus } from '../board/lanes.js';
+import { isRunning } from '../chat/run-registry.js';
 
 const ITEM_COLUMNS = `item_id, board_id, board_name, group_id, group_title, name, state,
   status_label, status_color, owners_json, url, column_values_json, updates_json, monday_updated_at, synced_at`;
@@ -87,7 +93,7 @@ export function pruneScope(
 
   const linked = new Set(
     (db.prepare(
-      `SELECT DISTINCT item_id FROM task_monday_links WHERE item_id IN (${stale.map(() => '?').join(',')})`,
+      `SELECT DISTINCT item_id FROM thread_monday_links WHERE item_id IN (${stale.map(() => '?').join(',')})`,
     ).all(...stale) as { item_id: string }[]).map((r) => r.item_id),
   );
 
@@ -109,7 +115,7 @@ export function pruneScope(
 /**
  * Wipe the mirror. The maintenance action the trust panel offers beside the
  * memory-index rebuild: monday_items is disposable (Monday stays canonical
- * and the next view open or poll rebuilds it), while task_monday_links is
+ * and the next view open or poll rebuilds it), while thread_monday_links is
  * user intent and is deliberately left alone — which is exactly why the two
  * are separate tables.
  */
@@ -133,44 +139,71 @@ export function listItemsForBoard(
   return db.prepare(sql).all(...params) as MondayItem[];
 }
 
-/** Upsert on task_id: linking a task that already has a link replaces it. */
-export function linkTask(db: Database.Database, link: TaskMondayLink): void {
+/** Upsert on thread_id: linking a thread that already has a link replaces it. */
+export function linkThread(db: Database.Database, link: ThreadMondayLink): void {
   db.prepare(`
-    INSERT INTO task_monday_links (task_id, item_id, project_id, created_at)
-    VALUES (@task_id, @item_id, @project_id, @created_at)
-    ON CONFLICT(task_id) DO UPDATE SET
+    INSERT INTO thread_monday_links (thread_id, item_id, project_id, created_at)
+    VALUES (@thread_id, @item_id, @project_id, @created_at)
+    ON CONFLICT(thread_id) DO UPDATE SET
       item_id = excluded.item_id,
       project_id = excluded.project_id,
       created_at = excluded.created_at
   `).run(link);
 }
 
-export function unlinkTask(db: Database.Database, taskId: string): void {
-  db.prepare('DELETE FROM task_monday_links WHERE task_id = ?').run(taskId);
+export function unlinkThread(db: Database.Database, threadId: string): void {
+  db.prepare('DELETE FROM thread_monday_links WHERE thread_id = ?').run(threadId);
 }
 
-export function getLinkForTask(db: Database.Database, taskId: string): TaskMondayLink | undefined {
-  return db.prepare('SELECT task_id, item_id, project_id, created_at FROM task_monday_links WHERE task_id = ?')
-    .get(taskId) as TaskMondayLink | undefined;
+export function getLinkForThread(db: Database.Database, threadId: string): ThreadMondayLink | undefined {
+  return db.prepare('SELECT thread_id, item_id, project_id, created_at FROM thread_monday_links WHERE thread_id = ?')
+    .get(threadId) as ThreadMondayLink | undefined;
 }
 
-export function listLinksForProject(db: Database.Database, projectId: string): TaskMondayLink[] {
-  return db.prepare('SELECT task_id, item_id, project_id, created_at FROM task_monday_links WHERE project_id = ?')
-    .all(projectId) as TaskMondayLink[];
+export function listLinksForProject(db: Database.Database, projectId: string): ThreadMondayLink[] {
+  return db.prepare('SELECT thread_id, item_id, project_id, created_at FROM thread_monday_links WHERE project_id = ?')
+    .all(projectId) as ThreadMondayLink[];
 }
 
 /** Every item id with at least one link, across all projects. Drives the poll. */
 export function listLinkedItemIds(db: Database.Database): string[] {
-  return (db.prepare('SELECT DISTINCT item_id FROM task_monday_links').all() as { item_id: string }[])
+  return (db.prepare('SELECT DISTINCT item_id FROM thread_monday_links').all() as { item_id: string }[])
     .map((r) => r.item_id);
 }
 
-/** Statuses of every task linked to an item — the roll-up's input. */
-export function listLinkedTaskStatuses(db: Database.Database, itemId: string): TaskStatus[] {
-  return (db.prepare(`
-    SELECT t.status AS status
-    FROM task_monday_links l
-    JOIN tasks t ON t.id = l.task_id
+/** A linked thread's archive state, the one fact the DB holds about its lane. */
+interface LinkedThreadRow {
+  id: string;
+  archived_at: string | null;
+}
+
+/**
+ * The legacy `TaskStatus` a thread projects onto (#439, D6): archived →
+ * `deploy`, running → `in_progress`, otherwise `review`. The roll-up does not
+ * distinguish Needs you from Running (both are "in progress" to Monday), so
+ * pending questions and approvals are passed as zero here.
+ */
+export function threadTaskStatus(thread: { id: string; archived_at: string | null }): TaskStatus {
+  return laneToTaskStatus(deriveLane({
+    archived_at: thread.archived_at,
+    running: isRunning(thread.id),
+    pending_questions: 0,
+    pending_approvals: 0,
+  }));
+}
+
+/**
+ * Statuses of every thread linked to an item — the roll-up's input. Derived
+ * on read from `chat_threads.archived_at` and the in-memory run registry, so
+ * the roll-up can never disagree with the board about a session's lane. A
+ * link whose thread row is gone contributes nothing (the inner join drops it).
+ */
+export function listLinkedThreadStatuses(db: Database.Database, itemId: string): TaskStatus[] {
+  const rows = db.prepare(`
+    SELECT t.id AS id, t.archived_at AS archived_at
+    FROM thread_monday_links l
+    JOIN chat_threads t ON t.id = l.thread_id
     WHERE l.item_id = ?
-  `).all(itemId) as { status: TaskStatus }[]).map((r) => r.status);
+  `).all(itemId) as LinkedThreadRow[];
+  return rows.map(threadTaskStatus);
 }
