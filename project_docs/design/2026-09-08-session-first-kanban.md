@@ -357,3 +357,66 @@ config key; the migration runs on first boot.
 5. Web: `KanbanBoard.test.tsx`, `OriginSessionPanel.test.tsx`,
    `ProjectManagementView.test.tsx`, `DiffReviewPanel.test.tsx`, `App.test.tsx`.
 6. iOS: `swift test` in `ios/NexusCore`, then the simulator build.
+
+## As built
+
+Built 2026-09-09 on `feat/session-first-kanban` (#439). The architecture landed as
+written, with these notes:
+
+- **Routes.** `GET /api/projects/:id/board` (`?refresh=1` bypasses the GitHub
+  cache), `POST /api/projects/:id/board/draft`, `POST /api/projects/:id/board/session`.
+  `POST /api/projects/:id/github/sync` is gone; `POST /api/projects/:id/review-actions`
+  accepts only `attach_to_chat` with `thread_id`. Task routes remain as plain
+  CRUD (D13). Monday: `POST /api/monday/links` takes `thread_id`;
+  `DELETE /api/monday/links/:threadId`; items carry `thread_ids`.
+- **Migration.** `chat_threads.github_issue` + index, `thread_monday_links` +
+  indexes, one-shot backfill keyed on the table's absence. On baker-pro the
+  backfill copied the one task link whose task had a session (MyWise Pro item
+  12597803377); the other link's task had never started and stays in the
+  tombstone table.
+- **Draft prompt.** D9 said the ticket system prompt would be imported; the
+  board has its own `BOARD_DRAFT_SYSTEM_PROMPT` because "forwarded email chain"
+  is wrong for an issue. Parsing, project mapping and `slugify` are imported
+  from `tickets/draft.ts`, which is byte-identical to `main` (the trailing-comma
+  tolerance from #442 arrived by rebase and applies to both flows).
+- **Run registry.** `chat/run-registry.ts` is written only from the existing
+  claim/release pair in `routes/chat.ts`. `monday/thread-hooks.ts` subscribes
+  to it; the archive route calls `onThreadArchived`; the link routes and the
+  Monday Go path call `onThreadLinked` (ownership handoff).
+- **Monday wording.** Roll-up text now reads "no linked sessions"; the agent
+  context block says "Monday.com initiative for this session"; the tool returns
+  `linked_sessions`. Config shape and guards are unchanged (D6).
+- **Web.** `KanbanBoard` rewritten (no drag), `OriginSessionPanel` beside it,
+  `DiffReviewPanel` takes a thread, `ProjectManagementView` attaches sessions.
+  `TaskModal`, `TaskModelPicker`, `MondayItemPicker` deleted. Sidebar counts
+  show sessions only. `ChatThread.last_model_key` was added to shared so the
+  card can show the model without a cast.
+- **iOS.** `BoardView` + `OriginDetailView` replace `KanbanBoardView` and
+  `TaskEditSheet`; NexusCore `Board.swift` models, endpoints and 11 decoding
+  tests; `ProjectTask` and the task endpoints removed. Simulator build green;
+  phone walkthrough is Keith's.
+- **Removed with tasks.** `github/sync.ts`, `memory/summarize.ts` (the
+  task-transition summary; archive already summarises a session), and their
+  tests.
+- **Verification.** Typecheck green; backend 1159 tests, frontend 511, NexusCore
+  127, all green with `JIRA_TOKEN` and `MONDAY_TOKEN` unset.
+- **Live on baker-pro (this commit deployed detached from the main checkout).**
+  The Nexus board opened with four open issues in the Inbox and no cards.
+  Clicking #221 opened the origin panel; Draft with Sonnet returned the
+  distilled problem, project Nexus and `feat/create-github-issue-from-triage`
+  in 3.1 s, recorded as a `ticket_draft` operation titled "Draft #221". Go
+  created thread `b772512b-…` titled "#221 Nexus Kanban - New Issue" with
+  `github_issue = 221`; the first user message matched the composed first turn
+  verbatim (problem, Source line with the issue URL, branch, push, no PR, do
+  not touch the issue). The run was aborted with `{"source":"user"}` after 11 s
+  (`run_end … status: cancelled, abortSource: user`); the agent had not created
+  a branch, and `git status` on the checkout was clean. The board then showed
+  the Inbox at three and the card in Idle with its `#221` badge and model. A
+  second short turn ("write three paragraphs on your approach, touch nothing")
+  put the card in Running with the live dot on the board and the RUN pill in
+  the sidebar; it finished on its own, again without touching the checkout.
+  Screenshots are in the build session transcript.
+- **Follow-ups, not this build.** The origin panel's model select does not
+  default to Sonnet when the composer has no active model (Tickets has the same
+  behaviour); the two hand-made tasks are still in the `tasks` table for Keith
+  to re-file as ideas; `iOS` phone walkthrough.
