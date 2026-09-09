@@ -229,3 +229,31 @@ architecture section landed as written, with these notes:
   return. `tickets-session-routes.test.ts`: the 502 path now asserts the
   stderr line and the stop-event diagnostics. Backend suite 1148 pass / 0
   fail; typecheck clean; backend `dist/` built.
+
+## As built (2026-09-09, fix/ticket-panel-pickers)
+
+- **Wrong project on Go.** SUP-1359 opened in MyWise Pro although its prompt
+  named the wise-codeigniter repo. Nothing recorded the pick: the operations
+  row for a `ticket_draft` had an empty `project_id` (the ledger only wrote it
+  from the start event, and a draft learns its project at stop), and the
+  session route logged nothing. The panel replaced whatever project was
+  selected with Sonnet's pick after every draft, so a pick made before
+  drafting was silently lost. Now a project picked by hand is sticky; the
+  draft's project is applied only when nothing was picked, otherwise shown as
+  "Sonnet suggested X · Use it". The ledger persists `projectId` from stop
+  events, and `POST /api/tickets/:key/session` logs
+  `[ticket-session] <key> → project <id> (<name>) thread <id> branch <name>`.
+- **Native selects.** Project, Model and Type were `<select>` elements, so
+  macOS drew its own white popup over the dark panel. They are now
+  `SelectMenu`, a small trigger-plus-portalled-listbox picker in the same
+  surface as the composer's model and thinking pickers (options carry a hint
+  line: repo path, provider · id). `TicketsView` tests drive it through
+  `role=button`/`role=option`.
+- **Tests.** `SelectMenu.test.tsx` (open, pick, Escape, placeholder);
+  `TicketsView.test.tsx` gains "keeps a project picked by hand";
+  `activity-manager.test.ts` covers project learnt at stop;
+  `tickets-session-routes.test.ts` asserts the log line. Backend 1149 pass,
+  frontend 497 pass, typecheck clean.
+- **Not verified by eye.** The dev frontend needs `NEXUS_DEV_TOKEN` to reach
+  the token-gated backend, so no screenshot from this session; Keith's
+  walkthrough covers the look.

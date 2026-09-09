@@ -102,6 +102,12 @@ export class ActivityManager {
       fields.push('diagnostics_json = ?');
       params.push(event.diagnostics ? JSON.stringify(event.diagnostics) : null);
     }
+    // An operation can learn its project after it started (a ticket draft
+    // picks one); keep the ledger's column in step so the pick is auditable.
+    if (event.projectId) {
+      fields.push('project_id = ?');
+      params.push(event.projectId);
+    }
     params.push(event.operationId);
 
     this.db.prepare(`UPDATE operations SET ${fields.join(', ')} WHERE id = ?`).run(...params);
