@@ -118,11 +118,14 @@ describe('TicketsView', () => {
 
     const prompt = await screen.findByLabelText('Prompt') as HTMLTextAreaElement;
     await waitFor(() => expect(prompt.value).toMatch(/8AOFI/));
-    expect((screen.getByLabelText('Project') as HTMLSelectElement).value).toBe('p-wse');
+    // No pick by hand yet, so the draft's project is applied.
+    expect(screen.getByRole('button', { name: 'Project' })).toHaveTextContent('WSE');
+    expect(screen.queryByText(/Sonnet suggested/)).toBeNull();
     expect((screen.getByLabelText('Branch name') as HTMLInputElement).value).toBe('fix/SUP1058-last-score-missing');
 
     await user.type(prompt, ' Look at audit_build.php.');
-    await user.selectOptions(screen.getByLabelText('Branch type'), 'hotfix');
+    await user.click(screen.getByRole('button', { name: 'Branch type' }));
+    await user.click(screen.getByRole('option', { name: 'hotfix' }));
     expect((screen.getByLabelText('Branch name') as HTMLInputElement).value).toBe('hotfix/SUP1058-last-score-missing');
 
     await user.click(screen.getByRole('button', { name: /^Go$/ }));
@@ -134,6 +137,45 @@ describe('TicketsView', () => {
       branchName: 'hotfix/SUP1058-last-score-missing',
       modelKey: 'claude-code/claude-sonnet-5',
     });
+  });
+
+  it('keeps a project picked by hand when the draft suggests another, and offers the suggestion', async () => {
+    vi.mocked(api.tickets.list).mockResolvedValue([ticket]);
+    vi.mocked(api.tickets.description).mockResolvedValue({ key: ticket.key, body: 'Ticket body', trimmed: [], fetchedAt: null, empty: false });
+    vi.mocked(api.tickets.draft).mockResolvedValue({
+      key: ticket.key,
+      problem: 'Restore the division on reports.',
+      projectId: 'p-wse',
+      branchType: 'fix',
+      branchName: 'fix/SUP1058-restore-division',
+      model: 'claude-code/claude-sonnet-5',
+    });
+    const onGo = vi.fn().mockResolvedValue(undefined);
+    const projects = [
+      { id: 'p-wse', name: 'WSE', slug: 'wse', badge: 'WS', description: '', repo_path: '/w', git_remote: '', sort_order: 0, created_at: '', updated_at: '' },
+      { id: 'p-ci', name: 'Wise CI', slug: 'wise-ci', badge: 'CI', description: '', repo_path: '/ci', git_remote: '', sort_order: 1, created_at: '', updated_at: '' },
+    ] as any;
+
+    const user = userEvent.setup();
+    render(<TicketsView projects={projects} onGo={onGo} onOpenSession={vi.fn()} />);
+    await user.click(await screen.findByRole('button', { name: /SUP-1058/ }));
+
+    // Pick Wise CI by hand, then draft: Sonnet's WSE must not replace it.
+    await user.click(screen.getByRole('button', { name: 'Project' }));
+    await user.click(screen.getByRole('option', { name: /Wise CI/ }));
+    await user.click(screen.getByRole('button', { name: /Draft with Sonnet/ }));
+    await waitFor(() => expect(api.tickets.draft).toHaveBeenCalledWith('SUP-1058'));
+    await screen.findByText(/Sonnet suggested WSE/);
+    expect(screen.getByRole('button', { name: 'Project' })).toHaveTextContent('Wise CI');
+
+    await user.click(screen.getByRole('button', { name: /^Go$/ }));
+    await waitFor(() => expect(onGo).toHaveBeenCalledTimes(1));
+    expect(onGo.mock.calls[0][1].projectId).toBe('p-ci');
+
+    // "Use it" adopts the suggestion and the hint goes away.
+    await user.click(screen.getByRole('button', { name: 'Use it' }));
+    expect(screen.getByRole('button', { name: 'Project' })).toHaveTextContent('WSE');
+    expect(screen.queryByText(/Sonnet suggested/)).toBeNull();
   });
 
   it('shows a session badge and an Open session button for a ticket that has one', async () => {

@@ -63,6 +63,22 @@ test('ActivityManager persists start/update/stop events', () => {
   }
 });
 
+test('ActivityManager records a project learnt at stop time', () => {
+  const { db, dir } = makeDb();
+  try {
+    const manager = new ActivityManager(db);
+    manager.startListening();
+    manager.bus.emit({ type: 'start', operationId: 'op-draft', kind: 'ticket_draft', title: 'Draft SUP-1', provider: 'claude-code', model: 'claude-sonnet-5' });
+    assert.equal((db.prepare('SELECT project_id FROM operations WHERE id = ?').get('op-draft') as any).project_id, null);
+    manager.bus.emit({ type: 'stop', operationId: 'op-draft', kind: 'ticket_draft', title: 'Draft SUP-1', status: 'succeeded', projectId: 'proj-9' });
+    const row = db.prepare('SELECT project_id, status FROM operations WHERE id = ?').get('op-draft') as any;
+    assert.deepEqual(row, { project_id: 'proj-9', status: 'succeeded' });
+  } finally {
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('ActivityManager sweeps stale running rows on startup', () => {
   const { db, dir } = makeDb();
   try {

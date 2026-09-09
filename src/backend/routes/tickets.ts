@@ -202,7 +202,7 @@ export async function registerTicketRoutes(fastify: FastifyInstance, opts: Ticke
     const branchName = typeof body.branchName === 'string' ? body.branchName.trim() : '';
     if (!problem) throw httpError(400, 'problem is required');
     if (!branchName) throw httpError(400, 'branchName is required');
-    const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId) as { id: string } | undefined;
+    const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId) as { id: string; name: string } | undefined;
     if (!project) throw httpError(404, 'Project not found');
 
     const now = new Date().toISOString();
@@ -219,6 +219,9 @@ export async function registerTicketRoutes(fastify: FastifyInstance, opts: Ticke
     db.prepare(
       'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at, ticket_key) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ).run(thread.id, thread.project_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at, thread.ticket_key);
+    // The only record of which project a ticket session was opened in, beside
+    // the thread row itself; the log line makes a wrong pick diagnosable later.
+    console.log(`[ticket-session] ${row.key} → project ${project.id} (${project.name}) thread ${thread.id} branch ${branchName}`);
 
     return {
       thread,

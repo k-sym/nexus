@@ -68,14 +68,23 @@ test('draft 404s an unknown ticket and 502s an unusable reply, keeping the raw t
   await app.close(); cleanup();
 });
 
-test('session creates a ticket-stamped thread and composes the first turn', async () => {
+test('session creates a ticket-stamped thread, composes the first turn, and logs the project it opened in', async () => {
   const { app, db, cleanup } = appWithDb();
-  const res = await app.inject({
-    method: 'POST', url: '/api/tickets/SUP-123/session',
-    payload: { projectId: 'p-wse', problem: 'Fix the missing last score on reports. Look in audit_build.php.', branchName: 'fix/SUP123-last-score' },
-  });
+  const logged: string[] = [];
+  const origLog = console.log;
+  console.log = (...args: unknown[]) => { logged.push(args.map(String).join(' ')); };
+  let res;
+  try {
+    res = await app.inject({
+      method: 'POST', url: '/api/tickets/SUP-123/session',
+      payload: { projectId: 'p-wse', problem: 'Fix the missing last score on reports. Look in audit_build.php.', branchName: 'fix/SUP123-last-score' },
+    });
+  } finally {
+    console.log = origLog;
+  }
   assert.equal(res.statusCode, 200, res.body);
   const { thread, firstTurn } = res.json();
+  assert.ok(logged.some((l) => l === `[ticket-session] SUP-123 → project p-wse (WSE) thread ${thread.id} branch fix/SUP123-last-score`), logged.join('\n'));
   assert.equal(thread.project_id, 'p-wse');
   assert.equal(thread.ticket_key, 'SUP-123');
   assert.equal(thread.title, 'SUP-123 Scoring wrong on reports');

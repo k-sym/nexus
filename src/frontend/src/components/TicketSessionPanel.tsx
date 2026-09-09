@@ -11,6 +11,7 @@ import { Sparkle, Play } from '@phosphor-icons/react';
 import { Project, Ticket, TicketDraft, TICKET_BRANCH_TYPES, TicketBranchType } from '@nexus/shared';
 import { api } from '../api';
 import { useModels, modelKey as makeModelKey } from '../hooks/useModels';
+import SelectMenu from './SelectMenu';
 
 export interface TicketGoInput {
   projectId: string;
@@ -38,6 +39,11 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draft, setDraft] = useState<TicketDraft | null>(null);
   const [projectId, setProjectId] = useState('');
+  // True once the user has picked a project by hand for this ticket. A draft
+  // then only *suggests* its project instead of replacing the pick: SUP-1359
+  // was opened in the wrong project after Sonnet's pick silently overrode one.
+  const [projectPicked, setProjectPicked] = useState(false);
+  const [suggestedProjectId, setSuggestedProjectId] = useState<string | null>(null);
   const [modelKey, setModelKey] = useState('');
   const [branchType, setBranchType] = useState<TicketBranchType>('fix');
   const [branchName, setBranchName] = useState('');
@@ -53,6 +59,8 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
     setProblem('');
     setBranchType('fix');
     setBranchName('');
+    setProjectPicked(false);
+    setSuggestedProjectId(null);
     setProjectId((prev) => prev || projects[0]?.id || '');
   }, [ticket.key, projects]);
 
@@ -69,13 +77,22 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
       setProblem(d.problem);
       setBranchType(d.branchType);
       setBranchName(d.branchName);
-      if (d.projectId) setProjectId(d.projectId);
+      setSuggestedProjectId(d.projectId);
+      if (d.projectId && !projectPicked) setProjectId(d.projectId);
     } catch (err) {
       setDraftError((err as Error).message || 'Draft failed');
     } finally {
       setDrafting(false);
     }
   };
+
+  const pickProject = (id: string) => {
+    setProjectId(id);
+    setProjectPicked(true);
+  };
+  const suggestedProject = suggestedProjectId && suggestedProjectId !== projectId
+    ? projects.find((p) => p.id === suggestedProjectId) ?? null
+    : null;
 
   const canGo = !going && projectId !== '' && modelKey !== '' && problem.trim() !== '' && branchName.trim() !== '';
 
@@ -119,41 +136,53 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
       </button>
       {draftError && <p className="text-xs text-red-400">{draftError}</p>}
 
-      <label className="block text-xs text-zinc-500">
+      <div className="text-xs text-zinc-500">
         Project
-        <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className={`${inputClass} mt-1`} aria-label="Project">
-          {projects.length === 0 && <option value="">No projects</option>}
-          {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-      </label>
+        <SelectMenu
+          label="Project"
+          className="mt-1"
+          value={projectId}
+          placeholder={projects.length === 0 ? 'No projects' : 'Pick a project'}
+          options={projects.map((p) => ({ value: p.id, label: p.name, hint: p.repo_path }))}
+          onChange={pickProject}
+        />
+        {suggestedProject && (
+          <p className="mt-1 text-[10px] text-faint">
+            Sonnet suggested {suggestedProject.name}.{' '}
+            <button type="button" onClick={() => pickProject(suggestedProject.id)} className="accent-text hover:underline">
+              Use it
+            </button>
+          </p>
+        )}
+      </div>
 
-      <label className="block text-xs text-zinc-500">
+      <div className="text-xs text-zinc-500">
         Model
-        <select value={modelKey} onChange={(e) => setModelKey(e.target.value)} className={`${inputClass} mt-1`} aria-label="Model">
-          {!modelKey && <option value="">Pick a model</option>}
-          {models.map((m) => {
-            const k = makeModelKey(m.provider, m.id);
-            return <option key={k} value={k}>{m.name}</option>;
-          })}
-        </select>
-      </label>
+        <SelectMenu
+          label="Model"
+          className="mt-1"
+          value={modelKey}
+          placeholder="Pick a model"
+          options={models.map((m) => ({ value: makeModelKey(m.provider, m.id), label: m.name, hint: `${m.provider} · ${m.id}` }))}
+          onChange={setModelKey}
+        />
+      </div>
 
       <div className="flex gap-2">
-        <label className="block text-xs text-zinc-500 w-28 shrink-0">
+        <div className="text-xs text-zinc-500 w-28 shrink-0">
           Type
-          <select
+          <SelectMenu
+            label="Branch type"
+            className="mt-1"
             value={branchType}
-            onChange={(e) => {
-              const t = e.target.value as TicketBranchType;
+            options={TICKET_BRANCH_TYPES.map((t) => ({ value: t, label: t }))}
+            onChange={(v) => {
+              const t = v as TicketBranchType;
               setBranchType(t);
               if (branchName) setBranchName(withBranchType(branchName, t));
             }}
-            className={`${inputClass} mt-1`}
-            aria-label="Branch type"
-          >
-            {TICKET_BRANCH_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        </label>
+          />
+        </div>
         <label className="block text-xs text-zinc-500 flex-1 min-w-0">
           Branch
           <input

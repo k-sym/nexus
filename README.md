@@ -875,7 +875,8 @@ it gets populated:
 a detail screen on iOS). **Draft with Sonnet** runs a one-shot Claude Agent SDK call (tools off, one turn,
 nothing persisted) that distils the real problem out of the forwarded-mail noise, suggests a project, and
 proposes a branch in SSUK's form `fix/SUP123-short-description` (`fix` / `hotfix` / `feature`). You pick the
-project and a model from the curated list, edit the prompt and branch, and press **Go**: Nexus opens a
+project and a model from the curated list, edit the prompt and branch, and press **Go** (a project you
+picked by hand is kept when the draft suggests another; the suggestion is offered beside it): Nexus opens a
 thread in that project stamped with the ticket key and sends the edited prompt as its first turn, with a
 fixed trailer telling the agent to work on that branch, push it when done, and never touch Jira. Tickets
 with a session show a badge and open it. The drafting model is `jira.draft_model` (default
