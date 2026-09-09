@@ -639,6 +639,11 @@ jira:                            # native Jira ticket poll (Settings -> Jira). T
   instance: ""                   # e.g. your-company.atlassian.net (https:// optional)
   project: "SUP"                 # project key to sync
   poll_minutes: 15               # cadence while Nexus is running
+  work_hours:                    # skip background ticks outside this window (server-local clock)
+    enabled: true
+    days: [1, 2, 3, 4, 5]        # 0 = Sunday … 6 = Saturday
+    start: "08:00"
+    end: "18:00"
   content_rules: []              # optional content rules
 
 github:                          # GitHub issue triage (Settings -> GitHub). Token via GITHUB_TOKEN or `gh auth token`.
@@ -857,8 +862,10 @@ it gets populated:
 
 - **Native poll (in-app).** When enabled in **Settings → Jira**, the backend fetches your open project
   tickets directly from the Jira REST API on an interval (`poll_minutes`, default 15) — but only while
-  Nexus is running. This is for things you act on *when you're in front of the app*; it deliberately
-  isn't a 24/7 cron. The poll is gated on `jira.enabled` **and** the `JIRA_TOKEN` env var; the
+  Nexus is running and, by default, only during work hours (`work_hours`, Mon–Fri 08:00–18:00 on the
+  server's clock; editable under **Settings → Jira**, or switch it off to poll around the clock).
+  Ticks outside the window are skipped and logged once per transition. This is for things you act on
+  *when you're in front of the app*; it deliberately isn't a 24/7 cron. The poll is gated on `jira.enabled` **and** the `JIRA_TOKEN` env var; the
   non-secret config (account email, instance host, project key, interval) lives in `config.yaml`. On a
   sync that changes tickets it raises an in-app notification (silent on a no-op, error toast on
   failure). Config is read once at startup, so **changes apply on the next backend restart**.

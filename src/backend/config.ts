@@ -110,6 +110,7 @@ function defaultConfig(): NexusConfig {
       instance: '',
       project: 'SUP',
       poll_minutes: 15,
+      work_hours: { enabled: true, days: [1, 2, 3, 4, 5], start: '08:00', end: '18:00' },
       content_rules: [],
       draft_model: 'claude-code/claude-sonnet-5',
     },
