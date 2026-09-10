@@ -11,6 +11,7 @@ vi.mock('../api', () => ({
       messages: vi.fn(),
       approve: vi.fn(),
       reject: vi.fn(),
+      sendReply: vi.fn(),
     },
   },
 }));
@@ -31,6 +32,7 @@ const pending = {
 
 describe('AgentBridgeInbox', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.mocked(api.agentBridge.status).mockResolvedValue({
       enabled: true,
       state: 'connected',
@@ -56,4 +58,18 @@ describe('AgentBridgeInbox', () => {
     await user.click(screen.getByRole('button', { name: 'Run in target thread' }));
     await waitFor(() => expect(api.agentBridge.approve).toHaveBeenCalledWith('message-1'));
   });
+  it('previews the exact completion reply and sends only on explicit confirmation', async () => {
+    const user = userEvent.setup();
+    const reply = { id: 'reply-1', message_id: pending.id, destination: 'nexus.bridge.v1.results.cmV2aWV3ZXI',
+      payload: JSON.stringify({ kind: 'result', content: 'Review complete' }), status: 'pending_approval' as const, error: null, sent_at: null };
+    vi.mocked(api.agentBridge.messages).mockResolvedValue({ messages: [{ ...pending, status: 'completed', reply }] });
+    vi.mocked(api.agentBridge.sendReply).mockResolvedValue({ ...reply, status: 'queued' });
+    render(<AgentBridgeInbox />);
+    expect(await screen.findByText(reply.payload)).toBeInTheDocument();
+    expect(screen.getByText(`Destination: ${reply.destination}`)).toBeInTheDocument();
+    expect(api.agentBridge.sendReply).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Send reply to Claude reviewer' }));
+    await waitFor(() => expect(api.agentBridge.sendReply).toHaveBeenCalledWith(pending.id));
+  });
+
 });

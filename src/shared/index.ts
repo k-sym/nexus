@@ -418,6 +418,8 @@ export interface AgentBridgeConfig {
 
 export interface NexusConfig {
   server: {
+    /** Pending question deadline; 1–1440 minutes, default 30. */
+    question_timeout_minutes?: number;
     /** Local port the backend binds (loopback). */
     port: number;
     /** Remote backend base URL for thin-client mode (e.g. the Tailscale host,
@@ -923,3 +925,28 @@ export type OperationStatus = (typeof OPERATION_STATUSES)[number];
 export * from './agent-run.js';
 export * from './engine-session.js';
 export * from './approval-decision.js';
+
+
+// Agent Bridge results are data-only; never accepted as executable inbox work.
+export interface AgentBridgeResultEnvelope {
+  version: 1;
+  kind: 'result';
+  id: string;
+  sentAt: string;
+  correlationId: string;
+  inReplyTo: string;
+  sender: { id: string };
+  target: { senderId: string };
+  status: 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  content: string;
+  error?: string;
+}
+export interface AgentBridgeReply {
+  id: string;
+  message_id: string;
+  destination: string;
+  payload: string;
+  status: 'pending_approval' | 'queued' | 'sent';
+  error: string | null;
+  sent_at: string | null;
+}

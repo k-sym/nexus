@@ -27,7 +27,7 @@ export function AgentBridgeInbox() {
 
   useEffect(() => { void load(); }, [load]);
 
-  const decide = async (id: string, decision: 'approve' | 'reject') => {
+  const decide = async (id: string, decision: 'approve' | 'reject' | 'sendReply') => {
     setBusyId(id);
     setError(null);
     try {
@@ -80,6 +80,21 @@ export function AgentBridgeInbox() {
             </div>
             <p className="text-xs text-primary whitespace-pre-wrap break-words leading-relaxed">{message.content}</p>
             {message.rejection_reason && <p className="text-[10px] text-red-400">{message.rejection_reason}</p>}
+            {message.reply && (
+              <div className="border-t border-subtle pt-2 space-y-2">
+                <p className="text-xs text-muted">Reply to {sender} · {message.reply.status === 'pending_approval' ? 'Awaiting your approval' : message.reply.status === 'queued' ? 'Queued for delivery' : 'Sent'}</p>
+                <p className="text-[10px] text-faint break-all">Destination: {message.reply.destination}</p>
+                <p className="text-xs whitespace-pre-wrap break-words max-h-64 overflow-y-auto">{replyPreview(message.reply.payload)}</p>
+                <details className="text-[10px] text-faint">
+                  <summary className="cursor-pointer">Delivery details</summary>
+                  <pre className="whitespace-pre-wrap break-words max-h-64 overflow-y-auto">{message.reply.payload}</pre>
+                </details>
+                {message.reply.error && <p className="text-xs text-red-400">{message.reply.error} · Will retry automatically.</p>}
+                {message.reply.status === 'pending_approval' && <button type="button" disabled={busyId !== null || !status?.enabled}
+                  className="min-h-11 px-3 rounded-sm accent-button text-xs disabled:opacity-40"
+                  onClick={() => void decide(message.id, 'sendReply')}>Send reply to {sender}</button>}
+              </div>
+            )}
             {message.status === 'pending_approval' && (
               <div className="flex flex-wrap gap-2">
                 <button
@@ -109,4 +124,12 @@ export function AgentBridgeInbox() {
 
 function statusLabel(status: AgentBridgeMessage['status']): string {
   return status.replaceAll('_', ' ');
+}
+
+
+function replyPreview(payload: string): string {
+  try {
+    const result = JSON.parse(payload);
+    return [result.status, result.content, result.error].filter(value => typeof value === 'string' && value).join('\n\n');
+  } catch { return payload; }
 }

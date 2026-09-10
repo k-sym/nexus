@@ -1,3 +1,4 @@
+import type { AgentBridgeReply } from '@nexus/shared';
 /**
  * Frontend API client.
  *
@@ -147,6 +148,7 @@ export interface TrustSnapshot {
 export type AgentBridgeMessageStatus = 'received' | 'pending_approval' | 'running' | 'completed' | 'rejected' | 'failed';
 
 export interface AgentBridgeMessage {
+  reply?: AgentBridgeReply;
   id: string;
   sender_id: string;
   sender_display_name: string | null;
@@ -812,6 +814,7 @@ export const api = {
     clearMondayMirror: () => fetchJson<{ ok: boolean; cleared: number; links_kept: number }>('/api/monday/mirror/clear', { method: 'POST' }),
   },
   agentBridge: {
+    sendReply: (id: string) => fetchJson<AgentBridgeReply>(`/api/agent-bridge/messages/${encodeURIComponent(id)}/reply/send`, { method: 'POST' }),
     status: () => fetchJson<AgentBridgeStatus>('/api/agent-bridge/status'),
     messages: (limit = 20) => fetchJson<{ messages: AgentBridgeMessage[] }>(`/api/agent-bridge/messages?limit=${limit}`),
     approve: (id: string) => fetchJson<AgentBridgeMessage>(`/api/agent-bridge/messages/${encodeURIComponent(id)}/approve`, { method: 'POST' }),

@@ -196,6 +196,16 @@ function runMigrations(db: Database.Database) {
     -- Nexus-native Agent Bridge inbox (#249). The envelope id is the primary
     -- key so broker redelivery and sender retries are harmless. Messages land
     -- here before their JetStream delivery is acknowledged.
+    CREATE TABLE IF NOT EXISTS agent_bridge_replies (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL UNIQUE,
+      destination TEXT NOT NULL,
+      payload TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending_approval',
+      error TEXT,
+      sent_at TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS agent_bridge_messages (
       id TEXT PRIMARY KEY,
       protocol_version INTEGER NOT NULL,

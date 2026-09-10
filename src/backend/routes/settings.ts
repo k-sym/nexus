@@ -155,6 +155,11 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       },
     };
 
+    const questionMinutes = merged.server.question_timeout_minutes ?? 30;
+    if (!Number.isFinite(questionMinutes) || questionMinutes < 1 || questionMinutes > 1440) {
+      reply.code(400);
+      return { error: 'Question timeout must be between 1 and 1440 minutes' };
+    }
     const bridgeConfigError = validateAgentBridgeConfig(merged.agent_bridge);
     if (bridgeConfigError) {
       reply.code(400);
