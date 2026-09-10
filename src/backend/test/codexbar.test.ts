@@ -369,3 +369,13 @@ test('getUsageStats refreshes after 300 seconds and preserves last good provider
   assert.equal(refreshed.openrouter.value, '$12.34');
   assert.equal(refreshed.openrouter.error, 'temporary OpenRouter failure');
 });
+
+test('history preserves the latest session and weekly windows independently', () => {
+  const stats = parseUsageHistory('claude', [
+    { provider: 'claude', windowMinutes: 300, usedPercent: 10, sampledAt: '2026-09-10T10:00:00Z' },
+    { provider: 'claude', windowMinutes: 10080, usedPercent: 40, sampledAt: '2026-09-10T10:01:00Z' },
+    { provider: 'claude', windowMinutes: 300, usedPercent: 20, sampledAt: '2026-09-10T10:02:00Z' },
+  ].map(row => JSON.stringify(row)).join('\n'));
+  assert.equal(stats?.windows?.session?.usedPercent, 20);
+  assert.equal(stats?.windows?.weekly?.usedPercent, 40);
+});
