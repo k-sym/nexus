@@ -54,28 +54,29 @@ function updatedLabel(sampledAt?: string) {
   return `Updated ${elapsedDays} day${elapsedDays === 1 ? '' : 's'} ago`;
 }
 
-function UsageWindowRow({ label, window }: { label: string; window: UsageWindow }) {
+function UsageWindowRow({ label, window }: { label: string; window?: UsageWindow }) {
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs font-medium text-zinc-200">{label}</span>
-        {window.resetLabel && <span className="text-[11px] text-faint">Resets {window.resetLabel}</span>}
+        {window?.resetLabel && <span className="text-[11px] text-faint">Resets {window.resetLabel}</span>}
       </div>
       <div className="h-1.5 rounded-full bg-[var(--surface-hover)] overflow-hidden">
-        <div className="h-full bg-cyan-500" style={{ width: `${Math.min(100, Math.max(0, window.usedPercent))}%` }} />
+        {window && <div className="h-full bg-cyan-500" style={{ width: `${Math.min(100, Math.max(0, window.usedPercent))}%` }} />}
       </div>
       <div className="flex items-center justify-between gap-3 text-[11px] text-muted">
-        <span>{window.usedPercent}% used</span>
-        <span>{windowReserveText(window)}</span>
+        <span>{window ? `${window.usedPercent}% used` : 'Usage unavailable'}</span>
+        {window && <span>{windowReserveText(window)}</span>}
       </div>
     </div>
   );
 }
 
-function UsageCard({ title, stat, fallback }: {
+function UsageCard({ title, stat, fallback, showWindows = false }: {
   title: string;
   stat?: UsageStat;
   fallback: string;
+  showWindows?: boolean;
 }) {
   const value = stat?.value ?? '—';
   const caption = stat?.caption ?? fallback;
@@ -87,10 +88,10 @@ function UsageCard({ title, stat, fallback }: {
 
   return (
     <Card title={title}>
-      {windows?.session || windows?.weekly ? (
+      {showWindows || windows?.session || windows?.weekly ? (
         <div className="space-y-3">
-          {windows.session && <UsageWindowRow label="Session" window={windows.session} />}
-          {windows.weekly && <UsageWindowRow label="Weekly" window={windows.weekly} />}
+          {(showWindows || windows?.session) && <UsageWindowRow label="Session" window={windows?.session} />}
+          {(showWindows || windows?.weekly) && <UsageWindowRow label="Weekly" window={windows?.weekly} />}
         </div>
       ) : (
         <>
@@ -213,23 +214,23 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
           <div>
             <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Stats</div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              <UsageCard title="Claude Stats" stat={stats?.claude} fallback="codexbar session · weekly" />
-              <UsageCard title="Codex Stats" stat={stats?.codex} fallback="codexbar session · weekly" />
+              <UsageCard title="Claude Stats" showWindows stat={stats?.claude} fallback="codexbar session · weekly" />
+              <UsageCard title="GPT Stats" showWindows stat={stats?.codex} fallback="codexbar session · weekly" />
               <UsageCard title="OpenRouter Stats" stat={stats?.openrouter} fallback="codexbar credit balance" />
             </div>
           </div>
 
           {/* Agent roster — now a model list. Each row shows provider,
               id, and whether auth is configured. */}
-          <div>
-            <div className="text-[10px] uppercase tracking-wider text-faint font-medium mb-2">Models</div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <details className="surface-glass rounded-xl border border-subtle p-4">
+            <summary className="cursor-pointer text-[10px] uppercase tracking-wider text-faint font-medium">Models</summary>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-3">
               {(status.models ?? []).map((m) => (
                 <ModelCard key={`${m.provider}/${m.id}`} m={m} onClick={() => onSelectAgent(m.id)} />
               ))}
               {(status.models ?? []).length === 0 && <div className="text-sm text-faint">No models available.</div>}
             </div>
-          </div>
+          </details>
         </div>
       )}
     </div>
