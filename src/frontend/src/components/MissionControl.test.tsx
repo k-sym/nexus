@@ -53,7 +53,7 @@ describe('MissionControl', () => {
       />,
     );
     expect(screen.getByText('Claude Stats')).toBeInTheDocument();
-    expect(screen.getByText('Codex Stats')).toBeInTheDocument();
+    expect(screen.getByText('GPT Stats')).toBeInTheDocument();
     expect(screen.getByText('OpenRouter Stats')).toBeInTheDocument();
     expect(screen.getAllByText('Session')).toHaveLength(2);
     expect(screen.getAllByText('Weekly')).toHaveLength(2);

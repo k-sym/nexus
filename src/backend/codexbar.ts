@@ -349,10 +349,16 @@ export function parseCodexBarHistory(provider: CodexBarProvider, historyJsonl: s
 
   const latest = rows.at(-1);
   if (!latest) return null;
+  const windows: CodexBarProviderStats['windows'] = {};
+  for (const row of rows) {
+    const kind = row.windowKind === 'primary' || row.windowMinutes === 300 ? 'session' : 'weekly';
+    const used = row.usedPercent ?? row.percentUsed;
+    if (used == null) continue;
+    const window = usageWindow(used, row.resetsAt ?? row.resetAt, row.windowMinutes ? Number(row.windowMinutes) * 60 : undefined);
+    if (window) windows[kind] = window;
+  }
   const parsed = parseCodexBarUsage(provider, JSON.stringify([{ ...latest, source: 'history-cache' }]));
-  const kind = latest.windowKind === 'primary' || latest.windowMinutes === 300 ? 'session' : 'weekly';
-  const window = usageWindow(latest.usedPercent ?? latest.percentUsed, latest.resetsAt ?? latest.resetAt, latest.windowMinutes ? Number(latest.windowMinutes) * 60 : undefined);
-  return parsed.ok ? { ...parsed, windows: window ? { [kind]: window } : undefined, source: 'history-cache' } : null;
+  return parsed.ok ? { ...parsed, windows: Object.keys(windows).length ? windows : parsed.windows, source: 'history-cache' } : null;
 }
 
 export const parseUsageHistory = parseCodexBarHistory;
