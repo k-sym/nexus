@@ -44,7 +44,7 @@ function defaultConfig(): NexusConfig {
   return {
     // url: '' ⇒ full-stack (spawn a local backend). token: env-expanded, '' ⇒
     // dev-open (no auth) — same convention as gateway.token below.
-    server: { port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
+    server: { question_timeout_minutes: 30, port: 4173, url: '', token: '${NEXUS_BACKEND_TOKEN}' },
     gateway: {
       enabled: true,
       port: 8899,

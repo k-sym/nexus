@@ -15,6 +15,8 @@ import { insertNotification } from '../notifications/index.js';
 import { resolveEnvVars } from '../config.js';
 import {
   AGENT_BRIDGE_STREAM,
+  AGENT_BRIDGE_RESULTS_STREAM,
+  AGENT_BRIDGE_RESULTS_PREFIX,
   AGENT_BRIDGE_SUBJECT_PREFIX,
   bridgeSubject,
   parseAgentBridgeEnvelope,
@@ -44,6 +46,8 @@ export class AgentBridgeService {
   private messages: ConsumerMessages | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private stopping = false;
+  private replyFlush: Promise<void> | null = null;
+  private replyTimer: ReturnType<typeof setInterval> | null = null;
   private readonly recentBySender = new Map<string, number[]>();
 
   constructor(
@@ -77,15 +81,19 @@ export class AgentBridgeService {
       return;
     }
     this.state = 'connecting';
+    if (!this.replyTimer) this.replyTimer = setInterval(() => { void this.flushReplies(); }, 5000);
     void this.connectOnce();
   }
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.replyTimer) clearInterval(this.replyTimer);
+    this.replyTimer = null;
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = null;
     this.messages?.stop();
     this.messages = null;
+    await this.replyFlush;
     const nc = this.nc;
     this.nc = null;
     if (nc) await nc.drain().catch(() => nc.close());
@@ -109,6 +117,26 @@ export class AgentBridgeService {
       });
     }
     return result;
+  }
+
+  flushReplies(): Promise<void> {
+    if (this.replyFlush) return this.replyFlush;
+    if (this.stopping || !this.config.enabled || !this.nc || this.state !== 'connected') return Promise.resolve();
+    const nc = this.nc;
+    this.replyFlush = (async () => {
+      const js = jetstream(nc);
+      for (const reply of this.store.queuedReplies()) {
+        if (this.stopping) break;
+        try {
+          await js.publish(reply.destination, new TextEncoder().encode(reply.payload), { msgID: reply.id });
+          this.store.markReplySent(reply.id);
+        } catch (error) {
+          this.store.markReplyError(reply.id, error instanceof Error ? error.message : 'Reply delivery failed');
+          break;
+        }
+      }
+    })().finally(() => { this.replyFlush = null; });
+    return this.replyFlush;
   }
 
   private recordAndCheckRate(senderId: string, nowMs: number): boolean {
@@ -141,6 +169,7 @@ export class AgentBridgeService {
       await this.ensureDurableConsumer(nc);
       this.state = 'connected';
       this.error = undefined;
+      void this.flushReplies();
       void this.watchConnectionStatus(nc);
       void nc.closed().then((err) => {
         if (this.stopping || this.nc !== nc) return;
@@ -173,6 +202,17 @@ export class AgentBridgeService {
         max_age: STREAM_MAX_AGE_NS,
         max_msgs_per_subject: 1_000,
         max_bytes: 64 * 1024 * 1024,
+      });
+    }
+
+    try {
+      await jsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM);
+    } catch {
+      await jsm.streams.add({
+        name: AGENT_BRIDGE_RESULTS_STREAM,
+        subjects: [`${AGENT_BRIDGE_RESULTS_PREFIX}.*`],
+        storage: StorageType.File, retention: RetentionPolicy.Limits,
+        max_age: STREAM_MAX_AGE_NS, max_bytes: 64 * 1024 * 1024,
       });
     }
 

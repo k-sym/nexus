@@ -1,10 +1,11 @@
+import type { AgentBridgeResultEnvelope } from '@nexus/shared';
 import type { FastifyInstance } from 'fastify';
 import { resolveEnvVars } from '../config.js';
 import { parseAgentBridgeEnvelope } from '../agent-bridge/protocol.js';
 import type { AgentBridgeService } from '../agent-bridge/service.js';
 import type { AgentBridgeMessage, AgentBridgeMessageStatus } from '../agent-bridge/store.js';
 
-interface ManagedTurnResult { completed: boolean; error?: string }
+interface ManagedTurnResult { completed: boolean; status?: AgentBridgeResultEnvelope['status']; content?: string; error?: string }
 type ManagedTurnRunner = (message: AgentBridgeMessage, modelKey: string) => Promise<ManagedTurnResult>;
 
 export interface RegisterAgentBridgeRoutesOptions {
@@ -36,7 +37,7 @@ export async function registerAgentBridgeRoutes(
       messages: service.store.list({
         ...(query.status ? { status: query.status as AgentBridgeMessageStatus } : {}),
         limit: Number.isFinite(parsedLimit) ? parsedLimit : 50,
-      }),
+      }).map((message) => ({ ...message, reply: service.store.reply(message.id) })),
     };
   });
 
@@ -62,6 +63,7 @@ export async function registerAgentBridgeRoutes(
 
   fastify.post('/api/agent-bridge/messages/:id/approve', async (request, reply) => {
     const { id } = request.params as { id: string };
+    if (!service.config.enabled) { reply.code(503); return { error: 'Agent Bridge is disabled' }; }
     const message = service.store.get(id);
     if (!message) {
       reply.code(404);
@@ -90,23 +92,25 @@ export async function registerAgentBridgeRoutes(
 
     void runManagedTurn(running, thread.last_model_key)
       .then((result) => {
-        service.store.transition(
-          id,
-          'running',
-          result.completed ? 'completed' : 'failed',
-          result.error,
-        );
+        service.store.complete(running, result, service.config.instance_id);
       })
       .catch((error) => {
-        service.store.transition(
-          id,
-          'running',
-          'failed',
-          error instanceof Error ? error.message : 'Managed turn failed',
-        );
+        service.store.complete(running, { completed: false, error: error instanceof Error ? error.message : 'Managed turn failed' }, service.config.instance_id);
       });
     reply.code(202);
     return running;
+  });
+
+  // Separate human confirmation: approving a run never authorizes a reply.
+  fastify.post('/api/agent-bridge/messages/:id/reply/send', async (request, reply) => {
+    if (!service.config.enabled) { reply.code(503); return { error: 'Agent Bridge is disabled' }; }
+    const { id } = request.params as { id: string };
+    const draft = service.store.reply(id);
+    if (!draft) { reply.code(404); return { error: 'No completion reply available' }; }
+    service.store.approveReply(id);
+    void service.flushReplies();
+    reply.code(202);
+    return service.store.reply(id);
   });
 
   fastify.post('/api/agent-bridge/messages/:id/reject', async (request, reply) => {
@@ -158,19 +162,27 @@ async function readTerminalRun(response: Response): Promise<ManagedTurnResult> {
   const decoder = new TextDecoder();
   let carry = '';
   let terminal: { status?: string; error?: string } | undefined;
+  let content = '';
   for (;;) {
     const { done, value } = await reader.read();
     carry += decoder.decode(value, { stream: !done });
     const lines = carry.split('\n');
     carry = lines.pop() ?? '';
+    if (done && carry.trim()) { lines.push(carry); carry = ''; }
     for (const line of lines) {
-      if (!line.includes('"kind":"run_end"')) continue;
-      try { terminal = JSON.parse(line).run; } catch { /* malformed event; final check below */ }
+      try {
+        const event = JSON.parse(line);
+        if (event.kind === 'run_end') terminal = event.run;
+        if (event.type === 'message_end' && event.message?.role === 'assistant') {
+          const blocks = event.message.content;
+          if (Array.isArray(blocks)) content = blocks.filter((block: any) => block.type === 'text' && typeof block.text === 'string').map((block: any) => block.text).join('\n').slice(0, 8000);
+        }
+      } catch { /* malformed event; final check below */ }
     }
     if (done) break;
   }
   if (!terminal) return { completed: false, error: 'Managed turn ended without a terminal event' };
   return terminal.status === 'completed'
-    ? { completed: true }
-    : { completed: false, error: terminal.error || `Managed turn ${terminal.status || 'failed'}` };
+    ? { completed: true, status: 'completed', content }
+    : { completed: false, content, status: terminal.status === 'cancelled' || terminal.status === 'interrupted' ? terminal.status : 'failed', error: terminal.error || `Managed turn ${terminal.status || 'failed'}` };
 }

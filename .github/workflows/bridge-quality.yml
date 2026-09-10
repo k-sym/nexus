@@ -1,0 +1,39 @@
+name: Agent Bridge lifecycle
+on:
+  pull_request:
+    paths:
+      - src/backend/**
+      - src/shared/**
+      - package-lock.json
+      - .github/workflows/bridge-quality.yml
+  push:
+    branches: [main]
+    paths:
+      - src/backend/**
+      - src/shared/**
+      - package-lock.json
+      - .github/workflows/bridge-quality.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bridge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run --workspace=src/shared build
+      - name: Install official NATS test broker
+        run: |
+          curl -fsSL https://github.com/nats-io/nats-server/releases/download/v2.14.6/nats-server-v2.14.6-linux-amd64.tar.gz -o /tmp/nats.tar.gz
+          tar -xzf /tmp/nats.tar.gz -C /tmp
+          echo /tmp/nats-server-v2.14.6-linux-amd64 >> "$GITHUB_PATH"
+      - name: Verify real broker and managed chat lifecycle
+        env:
+          NEXUS_REQUIRE_LIVE: '1'
+        run: node --import tsx --test src/backend/test/live/agent-bridge.live.test.ts

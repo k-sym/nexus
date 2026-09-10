@@ -238,6 +238,7 @@ test('run history keeps a mid-run prompt below the turn it answered', () => {
 
 async function makeApp(runtimeOverride?: unknown, options: {
   includeSecondThread?: boolean;
+  questionTimeoutMs?: number;
   detectGitBranch?: (repoPath: string) => Promise<string>;
   capabilityResolver?: { peek: (model: any) => any; resolve: (model: any) => Promise<any> };
 } = {}) {
@@ -306,6 +307,7 @@ async function makeApp(runtimeOverride?: unknown, options: {
     resolve: async (model: any) => capabilitiesFromModel(model),
   };
   app.register(registerChatRoutes, {
+    questionTimeoutMs: options.questionTimeoutMs,
     detectGitBranch: options.detectGitBranch,
     capabilityResolver,
   });
@@ -3228,4 +3230,78 @@ test('a denied decision carries its reason into the transcript (#374)', () => {
     reason: 'destructive',
     decidedAt: '2026-08-27T07:13:00.000Z',
   });
+});
+
+
+test('question expiry aborts before resolving, records interruption and releases the project', async () => {
+  const questions = new QuestionBroker();
+  let aborted = false;
+  let continued = false;
+  const started = deferred<void>();
+  const session = {
+    subscribe: () => () => {},
+    setModel: async () => {},
+    prompt: async () => {
+      const pending = questions.register('thread-1', 'expiry-call', questionRequest);
+      started.resolve();
+      await pending;
+      continued = !aborted;
+    },
+    abort: async () => { aborted = true; },
+  };
+  const runtime = { questions, readMessages: async () => [], sessionFor: async () => session,
+    getSessionModel: () => undefined, setSessionModel: () => {}, dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) } };
+  const { app, db, dir, concurrency } = await makeApp(runtime, { questionTimeoutMs: 100 });
+  try {
+    const stream = app.inject({ method: 'POST', url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'ask', modelKey: 'anthropic/sonnet' } }).then(response => response);
+    await started.promise;
+    const status = (await app.inject({ method: 'GET', url: '/api/projects/proj-1/model-status' })).json();
+    assert.equal(status.waitingForResponse, true);
+    assert.ok(Date.parse(status.questionExpiresAt));
+    assert.ok(concurrency.getProject('proj-1'));
+    const response = await stream;
+    const terminal = parseNdjson(response.body).find(event => event.kind === 'run_end');
+    assert.equal(terminal.run.status, 'interrupted');
+    assert.equal(terminal.run.abortSource, 'timeout');
+    assert.match(terminal.run.error, /Question expired/);
+    assert.equal(aborted, true);
+    assert.equal(continued, false);
+    assert.equal(concurrency.getProject('proj-1'), undefined);
+    assert.equal(questions.answer('thread-1', 'expiry-call', validQuestionAnswer).ok, false);
+  } finally { await app.close(); db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('answering a question clears its deadline while the run continues', async () => {
+  const questions = new QuestionBroker();
+  const started = deferred<void>();
+  const finish = deferred<void>();
+  let abortCalls = 0;
+  const session = {
+    subscribe: () => () => {}, setModel: async () => {},
+    prompt: async () => {
+      const pending = questions.register('thread-1', 'answered-call', questionRequest);
+      started.resolve();
+      await pending;
+      await finish.promise;
+    },
+    abort: async () => { abortCalls++; finish.resolve(); },
+  };
+  const runtime = { questions, readMessages: async () => [], sessionFor: async () => session,
+    getSessionModel: () => undefined, setSessionModel: () => {}, dropSession: () => {},
+    models: { find: () => ({ provider: 'anthropic', id: 'sonnet' }) } };
+  const { app, db, dir, concurrency } = await makeApp(runtime, { questionTimeoutMs: 100 });
+  try {
+    const stream = app.inject({ method: 'POST', url: '/api/threads/thread-1/messages/stream',
+      payload: { content: 'ask', modelKey: 'anthropic/sonnet' } }).then(response => response);
+    await started.promise;
+    assert.equal(questions.answer('thread-1', 'answered-call', validQuestionAnswer).ok, true);
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.equal(abortCalls, 0);
+    assert.ok(concurrency.getProject('proj-1'));
+    finish.resolve();
+    await stream;
+    assert.equal(concurrency.getProject('proj-1'), undefined);
+  } finally { finish.resolve(); await app.close(); db.close(); rmSync(dir, { recursive: true, force: true }); }
 });

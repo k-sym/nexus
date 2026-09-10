@@ -273,6 +273,16 @@ export default function SettingsPage() {
             }
           />
 
+          <Section title="Run safety">
+            <Field label="Question timeout (minutes)">
+              <input aria-label="Question timeout (minutes)" type="number" min={1} max={1440}
+                value={config.server?.question_timeout_minutes ?? 30}
+                onChange={(event) => update(['server', 'question_timeout_minutes'], Number(event.target.value))}
+                className="min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm text-primary" />
+              <p className="text-xs text-faint mt-1">Unanswered questions interrupt the run after this time. The project is released once the run stops.</p>
+            </Field>
+          </Section>
+
           <Section title="Engines">
             <EnginesSection />
           </Section>

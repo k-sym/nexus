@@ -1,6 +1,12 @@
 import type { AgentBridgeConfig } from '@nexus/shared';
 
 export const AGENT_BRIDGE_PROTOCOL_VERSION = 1 as const;
+export const AGENT_BRIDGE_RESULTS_STREAM = 'NEXUS_AGENT_BRIDGE_RESULTS_V1';
+export const AGENT_BRIDGE_RESULTS_PREFIX = 'nexus.bridge.v1.results';
+export function bridgeResultSubject(senderId: string): string {
+  return `${AGENT_BRIDGE_RESULTS_PREFIX}.${Buffer.from(senderId).toString('base64url')}`;
+}
+
 export const AGENT_BRIDGE_STREAM = 'NEXUS_AGENT_BRIDGE_V1';
 export const AGENT_BRIDGE_SUBJECT_PREFIX = 'nexus.bridge.v1.inbox';
 
@@ -114,6 +120,9 @@ export function parseAgentBridgeEnvelope(
   if (displayName !== undefined && (typeof displayName !== 'string' || displayName.length > 128)) throw new Error('sender.displayName is invalid');
   if (harness !== undefined && (typeof harness !== 'string' || harness.length > 64)) throw new Error('sender.harness is invalid');
 
+  if (raw.replyTo !== undefined && raw.replyTo !== sender.id) {
+    throw new Error('replyTo must match sender.id; arbitrary reply subjects are not allowed');
+  }
   return {
     version: AGENT_BRIDGE_PROTOCOL_VERSION,
     kind: 'message',

@@ -83,6 +83,7 @@ interface ThreadRunClaim {
 }
 
 interface RegisterChatRoutesOptions {
+  questionTimeoutMs?: number;
   detectGitBranch?: (repoPath: string) => Promise<string>;
   capabilityResolver?: Pick<ModelCapabilityResolver, 'peek' | 'resolve'>;
 }
@@ -205,6 +206,11 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
   const concurrency = fastify.chatConcurrency;
   const detectGitBranch = options.detectGitBranch ?? detectProjectGitBranch;
   const threadRunClaims = new Map<string, ThreadRunClaim>();
+  const questionDeadlines = new Map<string, Map<string, number>>();
+  const questionExpiresAt = (id: string) => {
+    const deadlines = questionDeadlines.get(id);
+    return deadlines?.size ? new Date(Math.min(...deadlines.values())).toISOString() : undefined;
+  };
   (fastify as any).activeChatStreams = activeStreams;
 
   const threadBusyResponse = (threadId: string, claim: Pick<ThreadRunClaim, 'title' | 'modelKey'>) => ({
@@ -550,6 +556,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     let clientDisconnected = false;
     let lastEventType = '(none)';
     let promptInFlight = false;
+    let questionExpired = false;
     let savedAttachments: ChatAttachment[] = [];
     let promptContent = body.content;
     const abortOnResponseClose = () => {
@@ -698,6 +705,47 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       if (session) {
         activeStreams.set(threadId, { session, runId });
         const runStartMs = Date.parse(startEvent.startedAt);
+        const configuredMinutes = loadConfig().server.question_timeout_minutes ?? 30;
+        const timeoutMs = options.questionTimeoutMs ?? (Number.isFinite(configuredMinutes)
+          ? Math.min(1440, Math.max(1, configuredMinutes)) * 60_000 : 30 * 60_000);
+        const timers = new Map<string, ReturnType<typeof setTimeout>>();
+        const deadlines = new Map<string, number>();
+        questionDeadlines.set(threadId, deadlines);
+        const clearQuestion = (id: string) => {
+          clearTimeout(timers.get(id));
+          timers.delete(id);
+          deadlines.delete(id);
+        };
+        const watchQuestion = (view: { threadId: string; toolCallId: string; requestedAt: number }) => {
+          if (view.threadId !== threadId || timers.has(view.toolCallId)) return;
+          const deadline = view.requestedAt + timeoutMs;
+          deadlines.set(view.toolCallId, deadline);
+          timers.set(view.toolCallId, setTimeout(() => {
+            if (activeStreams.get(threadId)?.runId !== runId || !deadlines.has(view.toolCallId)) return;
+            questionExpired = true;
+            activeStreams.get(threadId)!.abortSource = 'timeout';
+            // Trigger abort before releasing the question promise: otherwise the
+            // model could continue with an unanswered question.
+            void (async () => {
+              try {
+                await session!.abort();
+                if (activeStreams.get(threadId)?.runId === runId) {
+                  pi.questions?.cancelThread(threadId, 'Question expired; run interrupted');
+                }
+              } catch (error) {
+                // Keep the question parked if abort fails; never resume a model
+                // just because its deadline passed. Its claim remains held.
+                console.error('[chat] question expiry abort failed', error);
+              }
+            })();
+          }, Math.max(0, deadline - Date.now())));
+        };
+        const unsubscribeQuestions = pi.questions?.subscribe?.((event) => {
+          if (event.type === 'pending') watchQuestion(event.view);
+          else if (event.threadId === threadId) clearQuestion(event.toolCallId);
+        });
+        for (const view of pi.questions?.listPending?.() ?? []) watchQuestion(view);
+
         // Inline approval decisions (#374): when a gate parked during THIS run
         // settles, persist the decision into the session event log (so replays
         // show it where it happened) and tell the live viewer. Abort-path
@@ -759,6 +807,9 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
           clearInterval(heartbeat);
           subscription();
           unsubscribeApprovals?.();
+          unsubscribeQuestions?.();
+          for (const timer of timers.values()) clearTimeout(timer);
+          questionDeadlines.delete(threadId);
         }
         const completedAbortSource = activeStreams.get(threadId)?.abortSource;
         if (completedAbortSource) {
@@ -799,6 +850,11 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       }
     } finally {
       responseCompleted = true;
+      if (questionExpired) {
+        terminalStatus = 'interrupted';
+        abortSource = 'timeout';
+        streamError = 'Question expired; run interrupted';
+      }
       const endEvent: AgentRunEnd = {
         event: 'end',
         runId,
@@ -988,7 +1044,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     const active = concurrency.getProject(projectId);
     if (active) {
       // A holder blocked on the `question` tool is not doing work — it waits
-      // indefinitely for the user, holding the project claim the whole time.
+      // for the user until the deadline, holding the project claim meanwhile.
       // Report that so the frontend can say "answer it" instead of "it's busy".
       const questionCount = pi.questions?.pendingCount(active.threadId) ?? 0;
       return {
@@ -1000,6 +1056,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         sameModel: !!modelKey && active.modelKey === modelKey,
         waitingForResponse: questionCount > 0,
         questionCount,
+        questionExpiresAt: questionExpiresAt(active.threadId),
         // Kept for older frontends. Historically "an uncancellable mission
         // holds the slot"; always false since missions were removed (#353).
         projectBusy: false,

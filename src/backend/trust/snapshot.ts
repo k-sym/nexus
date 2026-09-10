@@ -205,7 +205,7 @@ export async function buildTrustSnapshot(
       {
         name: 'Agent Bridge',
         destination: safeUrl(bridge.url),
-        sends: ['bridge instance identity', 'subscription metadata'],
+        sends: ['bridge instance identity', 'subscription metadata', 'completion status and assistant result text, only after Send reply approval'],
         enabled: Boolean(bridge.enabled),
       },
     ],

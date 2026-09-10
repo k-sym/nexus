@@ -168,6 +168,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
     threadId: string;
     title: string;
     waitingForResponse: boolean;
+    questionExpiresAt?: string;
   } | null>(null);
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null);
@@ -297,17 +298,19 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled) {
-          if (data.busy && data.activeThreadId !== threadId) {
+          if (data.busy && (data.activeThreadId !== threadId || data.waitingForResponse)) {
             const next = {
               threadId: data.activeThreadId as string,
               title: data.activeTitle as string,
               waitingForResponse: data.waitingForResponse === true,
+              questionExpiresAt: data.questionExpiresAt as string | undefined,
             };
             // Same holder as last tick: keep the old object so the 2 s poll
             // doesn't re-render the panel for nothing.
             setProjectRunBusy((prev) => (
               prev && prev.threadId === next.threadId && prev.title === next.title
                 && prev.waitingForResponse === next.waitingForResponse
+                && prev.questionExpiresAt === next.questionExpiresAt
                 ? prev
                 : next
             ));
@@ -841,7 +844,19 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
                 ? `"${projectRunBusy.title}" is paused on a question and waiting for your answer. It holds this project until you answer or cancel it; sending here will ask before cancelling it.`
                 : `Another session is running in "${projectRunBusy.title}". Nexus allows one run per project to prevent conflicting file changes; sending here will ask before cancelling it.`}
             </span>
-            {onNavigateToThread && (
+            {projectRunBusy.waitingForResponse && (
+              <>
+                {projectRunBusy.questionExpiresAt && <span>Expires {new Date(projectRunBusy.questionExpiresAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>}
+                <button className="shrink-0 px-2 py-0.5 rounded-sm border border-amber-700" onClick={async () => {
+                  try {
+                    const response = await apiFetch(`/api/threads/${projectRunBusy.threadId}/abort`, { method: 'POST' });
+                    if (!response.ok) throw new Error('Could not cancel run');
+                    setProjectRunBusy(null);
+                  } catch (cause) { setError(cause instanceof Error ? cause.message : 'Could not cancel run'); }
+                }}>Cancel run</button>
+              </>
+            )}
+            {onNavigateToThread && projectRunBusy.threadId !== threadId && (
               <button
                 onClick={() => onNavigateToThread(projectRunBusy.threadId)}
                 className="shrink-0 px-2 py-0.5 rounded-sm border border-amber-700 bg-amber-800/50 text-amber-100 hover:bg-amber-700/50"

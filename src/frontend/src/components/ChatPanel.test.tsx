@@ -104,6 +104,7 @@ describe('ChatPanel', () => {
             sameModel: false,
             waitingForResponse: true,
             questionCount: 1,
+            questionExpiresAt: '2026-09-10T22:30:00Z',
             projectBusy: false,
           }),
         } as Response;
@@ -122,6 +123,10 @@ describe('ChatPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: 'Answer it' }));
     expect(onNavigateToThread).toHaveBeenCalledWith('t2');
+    expect(screen.getByText(/^Expires /)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Cancel run' }));
+    expect(global.fetch).toHaveBeenCalledWith('/api/threads/t2/abort', expect.objectContaining({ method: 'POST' }));
+
   });
 
   it('disables the composer and ignores Enter while a turn is running', async () => {

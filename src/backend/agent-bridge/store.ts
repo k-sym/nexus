@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import type { AgentBridgeReply, AgentBridgeResultEnvelope } from '@nexus/shared';
+import { bridgeResultSubject } from './protocol.js';
 import type Database from 'better-sqlite3';
 import type { AgentBridgeConfig, AgentBridgeMode } from '@nexus/shared';
 import type { AgentBridgeEnvelopeV1 } from './protocol.js';
@@ -121,6 +124,44 @@ export class AgentBridgeStore {
       now,
     );
     return { accepted: !rejection, duplicate: false, message: this.get(envelope.id)! };
+  }
+
+  reply(messageId: string): AgentBridgeReply | undefined {
+    return this.db.prepare('SELECT * FROM agent_bridge_replies WHERE message_id = ?').get(messageId) as AgentBridgeReply | undefined;
+  }
+
+  complete(message: AgentBridgeMessage, result: { completed: boolean; status?: AgentBridgeResultEnvelope['status']; content?: string; error?: string }, instanceId: string): void {
+    this.db.transaction(() => {
+      if (!this.transition(message.id, 'running', result.completed ? 'completed' : 'failed', result.error)) return;
+      const envelope: AgentBridgeResultEnvelope = {
+        version: 1, kind: 'result', id: randomUUID(), sentAt: new Date().toISOString(),
+        inReplyTo: message.id, correlationId: message.correlation_id || message.id,
+        sender: { id: instanceId }, target: { senderId: message.sender_id },
+        status: result.status ?? (result.completed ? 'completed' : 'failed'),
+        content: (result.content || '').slice(0, 8000),
+        ...(result.error ? { error: result.error.slice(0, 2000) } : {}),
+      };
+      this.db.prepare('INSERT INTO agent_bridge_replies (id, message_id, destination, payload) VALUES (?, ?, ?, ?)')
+        .run(envelope.id, message.id, bridgeResultSubject(message.sender_id), JSON.stringify(envelope));
+    })();
+  }
+
+  approveReply(messageId: string): AgentBridgeReply | undefined {
+    this.db.prepare("UPDATE agent_bridge_replies SET status = 'queued' WHERE message_id = ? AND status = 'pending_approval'").run(messageId);
+    return this.reply(messageId);
+  }
+
+  queuedReplies(): AgentBridgeReply[] {
+    return this.db.prepare("SELECT * FROM agent_bridge_replies WHERE status = 'queued'").all() as AgentBridgeReply[];
+  }
+
+  markReplySent(id: string): void {
+    this.db.prepare("UPDATE agent_bridge_replies SET status = 'sent', sent_at = ?, error = NULL WHERE id = ? AND status = 'queued'")
+      .run(new Date().toISOString(), id);
+  }
+
+  markReplyError(id: string, error: string): void {
+    this.db.prepare("UPDATE agent_bridge_replies SET error = ? WHERE id = ? AND status = 'queued'").run(error, id);
   }
 
   transition(

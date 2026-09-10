@@ -178,3 +178,37 @@ test('rejects unsafe remote configuration and exposes a stable instance subject'
   assert.equal(validateAgentBridgeConfig(config({ url: 'tls://broker.example.com:4222', token: 'secret' })), null);
   assert.equal(bridgeSubject('nexus-test'), 'nexus.bridge.v1.inbox.nexus-test');
 });
+
+
+test('outbound replies need separate approval, retain their id after restart, and reject arbitrary destinations', async () => {
+  const { db } = fixture();
+  const service = new AgentBridgeService(db, config());
+  assert.throws(() => service.ingest(envelope('redirect', { replyTo: 'unrelated-subject' })), /replyTo/);
+  service.ingest(envelope('reply'));
+  const running = service.store.transition('reply', 'pending_approval', 'running')!;
+  service.store.complete(running, { completed: true, content: 'Verified result' }, 'nexus-test');
+  const draft = service.store.reply('reply')!;
+  assert.equal(draft.status, 'pending_approval');
+  assert.equal(service.store.queuedReplies().length, 0);
+  service.store.complete(running, { completed: false }, 'nexus-test');
+  assert.equal(service.store.reply('reply')!.id, draft.id);
+  service.store.approveReply('reply');
+  const restarted = new AgentBridgeService(db, config());
+  assert.equal(restarted.store.queuedReplies()[0].id, draft.id);
+  assert.equal(restarted.store.get('reply')?.status, 'completed');
+  db.close();
+});
+
+test('disabled bridge refuses running stored work and sending a stored reply', async () => {
+  const { db } = fixture();
+  const service = new AgentBridgeService(db, config({ enabled: false }));
+  service.store.ingest(envelope('stored'), config());
+  const app = Fastify();
+  app.decorate('db', db);
+  let invoked = false;
+  await app.register(registerAgentBridgeRoutes, { service, runManagedTurn: async () => { invoked = true; return { completed: true }; } });
+  assert.equal((await app.inject({ method: 'POST', url: '/api/agent-bridge/messages/stored/approve' })).statusCode, 503);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/agent-bridge/messages/stored/reply/send' })).statusCode, 503);
+  assert.equal(invoked, false);
+  await app.close(); db.close();
+});
