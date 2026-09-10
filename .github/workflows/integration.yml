@@ -99,5 +99,13 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
 
+      # test:live includes the bridge lifecycle suite as well as Docker/browser.
+      # Keep the broker version aligned with bridge-quality.yml.
+      - name: Install official NATS test broker
+        run: |
+          curl -fsSL https://github.com/nats-io/nats-server/releases/download/v2.14.6/nats-server-v2.14.6-linux-amd64.tar.gz -o /tmp/nats.tar.gz
+          tar -xzf /tmp/nats.tar.gz -C /tmp
+          echo /tmp/nats-server-v2.14.6-linux-amd64 >> "$GITHUB_PATH"
+
       - name: Run live integration tests
         run: npm run --workspace=src/backend test:live
