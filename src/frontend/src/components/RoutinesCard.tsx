@@ -124,18 +124,27 @@ export default function RoutinesCard() {
   }, [load]);
 
   const routines = report?.routines ?? [];
-  const attention = routines.filter((r) => r.health === 'failed' || r.health === 'stale').length;
+  const attention = routines.filter((r) => r.health !== 'ok').length;
+
+  const healthy = report != null && report.configured !== false && !report.error && !loadError && routines.length > 0 && attention === 0;
+  const summary = loadError || report?.error ? 'Unable to check health'
+    : report == null ? 'Loading…'
+    : report.configured === false ? 'Not configured'
+    : routines.length === 0 ? 'No routines'
+    : attention > 0 ? `${attention} need${attention === 1 ? 's' : ''} attention` : 'All healthy';
 
   return (
-    <div className="surface-glass rounded-xl border border-subtle p-4">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-[10px] uppercase tracking-wider text-faint font-medium">Routines</div>
-        {routines.length > 0 && (
-          <div className={`text-[10px] ${attention > 0 ? 'text-amber-400' : 'text-faint'}`}>
-            {attention > 0 ? `${attention} need${attention === 1 ? 's' : ''} attention` : 'all healthy'}
-          </div>
-        )}
-      </div>
+    <details className="surface-glass rounded-xl border border-subtle p-4">
+      <summary className="cursor-pointer text-[10px] uppercase tracking-wider text-faint font-medium">
+        <span className="inline-flex items-center justify-between gap-3 w-[calc(100%-1.25rem)] align-middle">
+          <span>Routines</span>
+          <span className="inline-flex items-center gap-2 normal-case tracking-normal">
+            <span aria-hidden="true" className={`h-2 w-2 rounded-full ${healthy ? 'bg-emerald-400' : 'bg-red-500'}`} />
+            {summary}
+          </span>
+        </span>
+      </summary>
+      <div className="mt-3">
       {report == null && !loadError && <div className="text-xs text-faint">Loading routines…</div>}
       {loadError && <div className="text-xs text-red-400">{loadError}</div>}
       {report?.configured === false && (
@@ -148,6 +157,7 @@ export default function RoutinesCard() {
       {routines.map((routine) => (
         <RoutineRow key={routine.name} routine={routine} />
       ))}
-    </div>
+      </div>
+    </details>
   );
 }
