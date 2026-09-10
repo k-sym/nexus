@@ -396,7 +396,15 @@ function defaultReadCodexAuth(): Promise<string> {
   return readFile(DEFAULT_CODEX_AUTH_PATH, 'utf8');
 }
 
-async function runCodexBar(args: string[]): Promise<string> {
+async function runCodexBar(args: string[], timeout = CODEXBAR_TIMEOUT_MS): Promise<string> {
+  const env = { ...process.env };
+  if (args.includes('claude') && args.includes('cli')) {
+    // Subscription quota probes must use Claude's local sign-in, not the
+    // credentials Nexus loads for its agent runtime.
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+    delete env.ANTHROPIC_API_KEY;
+    delete env.ANTHROPIC_AUTH_TOKEN;
+  }
   const candidates = ['/opt/homebrew/bin/codexbar', '/usr/local/bin/codexbar', 'codexbar'];
   let missing: unknown;
   for (const executable of candidates) {
@@ -404,7 +412,7 @@ async function runCodexBar(args: string[]): Promise<string> {
       const { stdout } = await execFileAsync(
         executable,
         args,
-        { timeout: CODEXBAR_TIMEOUT_MS, maxBuffer: 2 * 1024 * 1024 },
+        { timeout, env, maxBuffer: 2 * 1024 * 1024 },
       );
       return stdout;
     } catch (error: any) {
@@ -416,7 +424,12 @@ async function runCodexBar(args: string[]): Promise<string> {
 }
 
 function defaultCodexBarUsage(provider: CodexBarProvider): Promise<string> {
-  return runCodexBar(['--provider', provider, '--format', 'json', '--json-only']);
+  // Claude's CLI source can use the active Claude sign-in even when the
+  // separately cached OAuth token or browser cookies are unavailable.
+  return runCodexBar(
+    ['--provider', provider, ...(provider === 'claude' ? ['--source', 'cli'] : []), '--format', 'json', '--json-only'],
+    provider === 'claude' ? 45_000 : CODEXBAR_TIMEOUT_MS,
+  );
 }
 
 function defaultCodexBarCost(): Promise<string> {
@@ -501,11 +514,18 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
 
   const entries = await Promise.all(PROVIDERS.map(async (provider) => {
     if (provider === 'claude') {
+      let quotaError: string | undefined;
       if (codexBarUsage) {
         try {
           const live = sampled(parseCodexBarUsage(provider, await codexBarUsage(provider)), sampledAt);
           if (live.ok && (live.windows?.session || live.windows?.weekly)) return [provider, live] as const;
-        } catch {
+          quotaError = live.error;
+        } catch (err: any) {
+          try {
+            quotaError = parseCodexBarUsage(provider, err?.stdout || '').error;
+          } catch {
+            quotaError = 'Claude quota could not be retrieved. Check the Claude sign-in in CodexBar.';
+          }
           // Prefer a cached quota window, then fall back to local cost data.
         }
       }
@@ -518,7 +538,7 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
       if (!codexBarCost) return [provider, unavailable(provider, 'No Claude usage data found')] as const;
       try {
         const cost = parseCodexBarCost(await codexBarCost(), () => new Date(now));
-        return [provider, cost.ok && !cost.sampledAt ? { ...cost, sampledAt } : cost] as const;
+        return [provider, { ...cost, sampledAt: cost.sampledAt ?? sampledAt, error: quotaError ?? cost.error }] as const;
       } catch (err: any) {
         const message = err?.code === 'ENOENT' ? 'CodexBar CLI not found' : err?.message || 'No Claude usage data found';
         return [provider, unavailable(provider, message)] as const;

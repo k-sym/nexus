@@ -290,6 +290,7 @@ test('getUsageStats falls back to Claude cost data when quota windows are unavai
 
   assert.equal(stats.claude.ok, true);
   assert.equal(stats.claude.source, 'codexbar-cost');
+  assert.equal(stats.claude.error, 'Claude usage temporarily unavailable');
   assert.equal(stats.claude.value, '$180.17');
   assert.equal(stats.claude.sampledAt, '2026-09-01T16:17:24Z');
 });
