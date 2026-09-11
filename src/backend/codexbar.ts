@@ -581,6 +581,12 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
     ? Object.fromEntries(PROVIDERS.map((provider) => {
         const fresh = freshStats[provider];
         const previous = cached?.stats[provider];
+        // A local cost scan can succeed even though quota retrieval failed.
+        // Keep the last actual quota reading and its age, not a cost-only card.
+        if (provider === 'claude' && previous?.ok && (previous.windows?.session || previous.windows?.weekly)
+          && !fresh.windows?.session && !fresh.windows?.weekly) {
+          return [provider, { ...previous, source: 'history-cache', error: fresh.error || 'Live Claude quota unavailable; showing the last captured usage.' }];
+        }
         if (!fresh.ok && previous?.ok) return [provider, { ...previous, error: fresh.error }];
         return [provider, fresh];
       })) as CodexBarStats
