@@ -64,7 +64,7 @@ test('prompt persists the user turn, streams events, persists the reply and reco
     assert.equal(calls[0].options.model, 'claude-opus-5');
     assert.equal(calls[0].options.resume, undefined);
     assert.equal(calls[0].options.systemPrompt.append, 'Nexus orientation');
-    assert.deepEqual(calls[0].options.disallowedTools, ['AskUserQuestion']);
+    assert.deepEqual(calls[0].options.disallowedTools, ['AskUserQuestion', 'Agent']);
     assert.ok(calls[0].options.mcpServers.nexus);
   } finally {
     rmSync(dir, { recursive: true, force: true });

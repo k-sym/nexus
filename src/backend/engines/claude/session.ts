@@ -232,7 +232,11 @@ export class ClaudeEngineSession implements EngineSession {
       ...(Array.isArray(this.deps.skills) && this.deps.skills.length === 0 ? { settings: { disableBundledSkills: true } } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', ...(appendix ? { append: appendix } : {}) },
       // Nexus's `question` tool (via MCP) replaces Claude's built-in so the existing question UI/broker/iOS flow works.
-      disallowedTools: ['AskUserQuestion'],
+      // `Agent` (Claude Code's own subagents) is off: they would spawn at the
+      // thread's model, unrendered (events.ts drops parent_tool_use_id traffic)
+      // and outside Nexus's role picker. Nexus-owned roles replace it — #454
+      // decision 4.
+      disallowedTools: ['AskUserQuestion', 'Agent'],
       mcpServers: { [NEXUS_MCP_SERVER]: mcp },
       canUseTool: this.gate(controller.signal),
       hooks: { PreToolUse: [{ hooks: [preToolUseHook(correlator)] }] },
