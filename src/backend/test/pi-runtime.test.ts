@@ -13,6 +13,45 @@ import { buildModelCatalog } from '../routes/pi';
 /** Stand-in policy for tests that only care about extension wiring, not gating. */
 const allowAll: ToolPolicyResolver = () => 'allow';
 
+// DefaultResourceLoader scans ~/.agents/skills for skill descriptions and
+// folds them into the prompt — real machine state that must not leak into a
+// test (this one has a dev-browser skill whose description says "take a
+// screenshot"). HOME is redirected to a fixture dir with a controlled,
+// screenshot-free skill; cwd is also redirected as belt-and-braces against
+// project-trust-gated .agents/skills and .pi/skills scanning under cwd.
+function redirectHomeToFixture(): { home: string; cwd: string; restore: () => void } {
+  const home = mkdtempSync(join(tmpdir(), 'nexus-pi-test-home-'));
+  const cwd = mkdtempSync(join(tmpdir(), 'nexus-pi-test-cwd-'));
+  const skillDir = join(home, '.agents', 'skills', 'nexus-fixture-skill');
+  mkdirSync(skillDir, { recursive: true });
+  writeFileSync(
+    join(skillDir, 'SKILL.md'),
+    [
+      '---',
+      'name: nexus-fixture-skill',
+      'description: Fixture skill for pi-runtime tests; proves skills are read from the test HOME.',
+      '---',
+      '',
+      '# nexus-fixture-skill',
+      '',
+      'Fixture only — not a real skill.',
+      '',
+    ].join('\n'),
+  );
+  const originalHome = process.env.HOME;
+  process.env.HOME = home;
+  return {
+    home,
+    cwd,
+    restore: () => {
+      if (originalHome === undefined) delete process.env.HOME;
+      else process.env.HOME = originalHome;
+      rmSync(home, { recursive: true, force: true });
+      rmSync(cwd, { recursive: true, force: true });
+    },
+  };
+}
+
 test('cwdSlug encodes repo paths safely', () => {
   assert.equal(cwdSlug('/Users/me/Projects/foo'), 'Users_me_Projects_foo');
   assert.equal(cwdSlug(''), 'default');
@@ -90,6 +129,7 @@ test('PiRuntime.dropSession evicts the cached session', async () => {
 test('a session prompt gains the orientation block, conditional on its capabilities', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };
+  const fixture = redirectHomeToFixture();
   try {
     // A runtime with memory + docker + browser deps present; no model key, so
     // no vision.
@@ -99,7 +139,7 @@ test('a session prompt gains the orientation block, conditional on its capabilit
       browserTools: () => ({ getPage: async () => ({} as never), allowedHosts: () => [] }),
       sessionModelKey: () => undefined,
     });
-    const session = await rt.sessionFor('thread-1', '/tmp/proj');
+    const session = await rt.sessionFor('thread-1', fixture.cwd);
     const prompt = (session as unknown as { systemPrompt: string }).systemPrompt;
 
     assert.match(prompt, /Working in Nexus/, 'orientation block present');
@@ -107,9 +147,15 @@ test('a session prompt gains the orientation block, conditional on its capabilit
     assert.match(prompt, /memory_recall/, 'memory line (hasMemory)');
     assert.match(prompt, /docker_service/, 'docker line (hasDocker)');
     assert.match(prompt, /verify front-end work in a real browser/, 'browser line (hasBrowser)');
+    // Positive control: proves the fixture HOME is actually the dir being
+    // scanned for skills — otherwise a silently-ignored fixture would let the
+    // negative assertion below pass for the wrong reason (e.g. skills
+    // discovery quietly finding nothing at all).
+    assert.match(prompt, /nexus-fixture-skill/, 'fixture skill discovered from the redirected HOME');
     assert.doesNotMatch(prompt, /screenshot/i, 'no screenshot line without vision');
     assert.ok(prompt.length > 400, 'the base coding-agent prompt still comes through');
   } finally {
+    fixture.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
@@ -141,18 +187,22 @@ test('policyFor threads the toolPolicy dep, resolved live for the cwd', async ()
 test('a session with no capability deps is oriented but claims no tools', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-test-'));
   const paths: PiRuntimePaths = { authFile: join(dir, 'auth.json'), sessionsDir: join(dir, 'sessions') };
+  const fixture = redirectHomeToFixture();
   try {
     const rt = await PiRuntime.create(paths);
-    const session = await rt.sessionFor('thread-1', '/tmp/proj');
+    const session = await rt.sessionFor('thread-1', fixture.cwd);
     const prompt = (session as unknown as { systemPrompt: string }).systemPrompt;
 
     assert.match(prompt, /Working in Nexus/);
     assert.match(prompt, /project_docs/);
+    // Positive control — same reasoning as the sibling orientation test above.
+    assert.match(prompt, /nexus-fixture-skill/, 'fixture skill discovered from the redirected HOME');
     // The block must never promise a tool this session doesn't have.
     assert.doesNotMatch(prompt, /memory_recall/);
     assert.doesNotMatch(prompt, /docker_service/);
     assert.doesNotMatch(prompt, /real browser/);
   } finally {
+    fixture.restore();
     rmSync(dir, { recursive: true, force: true });
   }
 });
