@@ -380,3 +380,34 @@ test('history preserves the latest session and weekly windows independently', ()
   assert.equal(stats?.windows?.session?.usedPercent, 20);
   assert.equal(stats?.windows?.weekly?.usedPercent, 40);
 });
+
+test('a transient Claude subscription notice preserves quota bars and their capture time instead of replacing them with cost', async () => {
+  resetUsageStatsCacheForTests();
+  let calls = 0;
+  const options = {
+    useCache: true,
+    readHistory: async () => '',
+    codexBarUsage: async (provider: string) => {
+      if (provider !== 'claude') throw new Error('unused');
+      calls++;
+      if (calls === 2) return JSON.stringify([{ provider, error: { message: 'Claude CLI /usage returned a subscription notice without session quota data.' } }]);
+      return JSON.stringify([{ provider, source: 'claude', usage: {
+        primary: { usedPercent: calls === 1 ? 23 : 25, windowMinutes: 300 },
+        secondary: { usedPercent: 53, windowMinutes: 10080 },
+      } }]);
+    },
+    codexBarCost: async () => JSON.stringify([{ provider: 'claude', sessionCostUSD: 0 }]),
+    codexUsage: async () => ({}),
+    openRouterBalance: async () => null,
+  };
+  const first = await getUsageStats({ ...options, now: () => 1_000 });
+  const failed = await getUsageStats({ ...options, now: () => 301_001 });
+  assert.deepEqual(failed.claude.windows, first.claude.windows);
+  assert.equal(failed.claude.sampledAt, first.claude.sampledAt);
+  assert.equal(failed.claude.source, 'history-cache');
+  assert.match(failed.claude.error ?? '', /subscription notice/);
+  const recovered = await getUsageStats({ ...options, now: () => 602_000 });
+  assert.equal(recovered.claude.windows?.session?.usedPercent, 25);
+  assert.equal(recovered.claude.source, 'codexbar-claude');
+  assert.equal(recovered.claude.error, undefined);
+});

@@ -101,7 +101,7 @@ function UsageCard({ title, stat, fallback, showWindows = false }: {
       )}
       {updated && <div className="text-[10px] text-faint mt-2">{updated}</div>}
       {source && <div className="text-[10px] text-faint mt-1">{source}</div>}
-      {stat?.error && <div className="text-[10px] text-faint mt-1 truncate" title={stat.error}>{stat.error}</div>}
+      {stat?.error && <div className="text-[10px] text-faint mt-1 break-words" title={stat.error}>{stat.error}</div>}
     </Card>
   );
 }
