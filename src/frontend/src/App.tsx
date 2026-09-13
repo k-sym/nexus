@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { X } from '@phosphor-icons/react';
-import type { Project, Ticket, ChatThread, BoardResponse, BoardCard, BoardInboxItem } from '@nexus/shared';
+import type { Project, Ticket, ChatThread, BoardResponse, BoardCard, BoardInboxItem, DesktopSessionSummary } from '@nexus/shared';
+import { DesktopSessionPicker } from './components/DesktopSessionPicker';
 import { api, MissionStatus } from './api';
 import { keepIfSameJson, keepIfSameSet } from './lib/stable';
 import TopBar from './components/TopBar';
@@ -58,6 +59,7 @@ export default function App() {
   const [board, setBoard] = useState<BoardResponse | null>(null);
   const [boardLoading, setBoardLoading] = useState(false);
   const [selectedInbox, setSelectedInbox] = useState<BoardInboxItem | null>(null);
+  const [desktopPickerOpen, setDesktopPickerOpen] = useState(false);
   const [showProjectModal, setShowProjectModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [diffReviewThread, setDiffReviewThread] = useState<{ threadId: string; title: string } | null>(null);
@@ -487,6 +489,20 @@ export default function App() {
   };
 
   /**
+   * Import from Claude Desktop: a thread that continues the chosen session on
+   * the same id. The backend stamps it shared, so the card carries the chip.
+   */
+  const handleDesktopImport = async (session: DesktopSessionSummary) => {
+    if (!activeProjectId) return;
+    const projectId = activeProjectId;
+    const { thread } = await api.projects.importDesktopSession(projectId, session.id);
+    await loadThreads(projectId);
+    setDesktopPickerOpen(false);
+    selectThread(projectId, thread.id);
+    void loadBoard(projectId);
+  };
+
+  /**
    * Inbox item to session (#439): the board's counterpart of handleTicketGo.
    * The origin (GitHub issue or Monday item) is stamped on the thread by the
    * backend, so the item leaves the Inbox on the next board read.
@@ -717,9 +733,17 @@ export default function App() {
                     current && inboxKey(current) === inboxKey(item) ? null : item
                   ))}
                   onNewIdea={() => selectGlobal('ideas')}
+                  onImportDesktop={() => setDesktopPickerOpen(true)}
                   onOpenDiffReview={handleOpenDiffReview}
                 />
               </div>
+              {desktopPickerOpen && (
+                <DesktopSessionPicker
+                  projectId={activeProject.id}
+                  onImport={handleDesktopImport}
+                  onClose={() => setDesktopPickerOpen(false)}
+                />
+              )}
               {selectedInbox && (
                 <OriginSessionPanel
                   projectId={activeProject.id}

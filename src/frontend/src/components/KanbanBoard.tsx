@@ -5,6 +5,7 @@
  * the OriginSessionPanel beside the board; the "+" files an idea (D14).
  */
 import { useEffect, useMemo, useState } from 'react';
+import { Desktop } from '@phosphor-icons/react';
 import { BOARD_LANES, BOARD_LANE_LABELS } from '@nexus/shared';
 import type { BoardCard, BoardInboxItem, BoardLane, BoardOrigin, BoardResponse, ChatThread, MondayItemWithLinks } from '@nexus/shared';
 import { MondayBadge } from './MondayBadge';
@@ -21,6 +22,8 @@ interface KanbanBoardProps {
   onOpenThread: (threadId: string) => void;
   onOpenInboxItem: (item: BoardInboxItem) => void;
   onNewIdea: () => void;
+  /** Import a Claude Desktop or terminal session as a card; the button is hidden when absent. */
+  onImportDesktop?: () => void;
   onOpenDiffReview: (card: BoardCard) => void;
 }
 
@@ -164,6 +167,15 @@ function Card({ card, mondayItem, onOpen, onOpenDiffReview }: {
               {shortModelName(model)}
             </span>
           )}
+          {card.thread.desktop_shared_at && (
+            <span
+              data-testid="desktop-chip"
+              title="Shared with Claude Desktop — both sides continue the same session"
+              className="text-[10px] px-1.5 py-0.5 rounded-sm bg-sky-500/15 text-sky-400"
+            >
+              Desktop
+            </span>
+          )}
           <MondayBadge item={mondayItem} />
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -183,7 +195,7 @@ function Card({ card, mondayItem, onOpen, onOpenDiffReview }: {
   );
 }
 
-export default function KanbanBoard({ board, loading = false, projectId, selectedInboxKey, onOpenThread, onOpenInboxItem, onNewIdea, onOpenDiffReview }: KanbanBoardProps) {
+export default function KanbanBoard({ board, loading = false, projectId, selectedInboxKey, onOpenThread, onOpenInboxItem, onNewIdea, onImportDesktop, onOpenDiffReview }: KanbanBoardProps) {
   const [filter, setFilter] = useState('');
 
   // Loaded once per project, not per card. Keyed by thread id via `thread_ids`,
@@ -253,15 +265,28 @@ export default function KanbanBoard({ board, loading = false, projectId, selecte
                 </span>
               </div>
               {isInbox && (
-                <button
-                  type="button"
-                  onClick={onNewIdea}
-                  title="New idea"
-                  aria-label="New idea"
-                  className="text-faint hover:text-[var(--text-primary)] text-lg leading-none transition-colors"
-                >
-                  +
-                </button>
+                <div className="flex items-center gap-2">
+                  {onImportDesktop && (
+                    <button
+                      type="button"
+                      onClick={onImportDesktop}
+                      title="Import from Claude Desktop"
+                      aria-label="Import from Claude Desktop"
+                      className="text-faint hover:text-[var(--text-primary)] leading-none transition-colors"
+                    >
+                      <Desktop size={15} />
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={onNewIdea}
+                    title="New idea"
+                    aria-label="New idea"
+                    className="text-faint hover:text-[var(--text-primary)] text-lg leading-none transition-colors"
+                  >
+                    +
+                  </button>
+                </div>
               )}
             </div>
 

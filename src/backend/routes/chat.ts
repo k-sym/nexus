@@ -344,6 +344,14 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       | { repo_path: string }
       | undefined;
     const cwd = project?.repo_path || process.cwd();
+    // Shared with the Claude Desktop app: pull in turns made there first.
+    if (thread.desktop_shared_at) {
+      try {
+        await engines.get('claude-code')?.reconcileShared?.(threadId, cwd);
+      } catch (err: any) {
+        console.error(`[chat] desktop reconcile failed for ${threadId}:`, err?.message ?? err);
+      }
+    }
     const entries = await pi.readMessages(threadId, cwd);
     const activeRunId = activeStreams.get(threadId)?.runId;
     const activeThreadIds = threadRunClaims.has(threadId) ? new Set([threadId]) : undefined;
@@ -391,6 +399,13 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       | { repo_path: string }
       | undefined;
     const cwd = project?.repo_path || process.cwd();
+    if (thread.desktop_shared_at) {
+      try {
+        await engines.get('claude-code')?.reconcileShared?.(threadId, cwd);
+      } catch (err: any) {
+        console.error(`[chat] desktop reconcile failed for ${threadId}:`, err?.message ?? err);
+      }
+    }
     const entries = await pi.readMessages(threadId, cwd);
     const activeRunId = activeStreams.get(threadId)?.runId;
     const activeThreadIds = threadRunClaims.has(threadId) ? new Set([threadId]) : undefined;
@@ -810,6 +825,13 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
           unsubscribeQuestions?.();
           for (const timer of timers.values()) clearTimeout(timer);
           questionDeadlines.delete(threadId);
+          // The Claude engine's session id, once the SDK has told us: the
+          // desktop handoff and import dedupe read it from the row.
+          const engineSessionId = session?.engineSessionId;
+          if (typeof engineSessionId === 'string' && engineSessionId) {
+            db.prepare('UPDATE chat_threads SET claude_session_id = ? WHERE id = ? AND (claude_session_id IS NULL OR claude_session_id != ?)')
+              .run(engineSessionId, threadId, engineSessionId);
+          }
         }
         const completedAbortSource = activeStreams.get(threadId)?.abortSource;
         if (completedAbortSource) {

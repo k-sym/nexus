@@ -252,3 +252,35 @@ describe('KanbanBoard (session-first, #439)', () => {
     expect(title.closest('[data-kanban-card]')).toHaveClass('kanban-card');
   });
 });
+
+describe('Claude Desktop handoff', () => {
+  it('shows the Desktop chip on shared cards and the import button in the Inbox header', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([] as never);
+    const shared: BoardResponse = {
+      cards: [
+        card({ thread: thread('t-shared', 'Handed off', { last_model_key: 'claude-code/claude-opus-5', desktop_shared_at: '2026-09-13T10:00:00.000Z' }), lane: 'idle', origin: { kind: 'chat' } }),
+        card({ thread: thread('t-plain', 'Not shared'), lane: 'idle', origin: { kind: 'chat' } }),
+      ],
+      inbox: [],
+      inbox_errors: {},
+    };
+    const onImportDesktop = vi.fn();
+    render(
+      <KanbanBoard board={shared} projectId="project-1" onOpenThread={noop} onOpenInboxItem={noop} onNewIdea={noop} onImportDesktop={onImportDesktop} onOpenDiffReview={noop} />,
+    );
+    const chips = await screen.findAllByTestId('desktop-chip');
+    expect(chips).toHaveLength(1);
+    expect(within(chips[0].closest('[data-kanban-card]') ?? chips[0].parentElement!.parentElement!.parentElement!).getByText('Handed off')).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Import from Claude Desktop'));
+    expect(onImportDesktop).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides the import button when no handler is given', async () => {
+    vi.spyOn(api, 'fetchMondayItems').mockResolvedValue([] as never);
+    render(
+      <KanbanBoard board={board} projectId="project-1" onOpenThread={noop} onOpenInboxItem={noop} onNewIdea={noop} onOpenDiffReview={noop} />,
+    );
+    await screen.findByLabelText('New idea');
+    expect(screen.queryByLabelText('Import from Claude Desktop')).not.toBeInTheDocument();
+  });
+});

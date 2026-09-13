@@ -28,3 +28,20 @@ test('normalizeClaudeEngineConfig treats a skills list that filters down to noth
   const result = normalizeClaudeEngineConfig({ ...base, setting_sources: [], skills: ['', 3, '   '] as any });
   assert.equal(result.skills, 'none');
 });
+
+test('desktopStatus reports the app and its session index on macOS only', async () => {
+  const { desktopStatus } = await import('../engines/claude/desktop.js');
+  assert.deepEqual(desktopStatus({ platform: 'linux', exists: () => true }), { appFound: false, indexFound: false });
+  assert.deepEqual(desktopStatus({ platform: 'darwin', exists: (p) => p.endsWith('Claude.app') }), { appFound: true, indexFound: false });
+  assert.deepEqual(desktopStatus({ platform: 'darwin', exists: (p) => p.endsWith('claude-code-sessions') }), { appFound: false, indexFound: true });
+});
+
+test('desktopResumeUrl only accepts a Claude Code session id', async () => {
+  const { desktopResumeUrl, modelKeyFor } = await import('../engines/claude/desktop.js');
+  assert.equal(desktopResumeUrl('AAAAAAAA-bbbb-cccc-dddd-eeeeeeeeeeee'), 'claude://resume?session=AAAAAAAA-bbbb-cccc-dddd-eeeeeeeeeeee');
+  assert.throws(() => desktopResumeUrl('last'), /Not a Claude Code session id/);
+  assert.throws(() => desktopResumeUrl('x; open /'), /Not a Claude Code session id/);
+  assert.equal(modelKeyFor('claude-opus-5'), 'claude-code/claude-opus-5');
+  assert.match(modelKeyFor('claude-unknown-9'), /^claude-code\//);
+  assert.match(modelKeyFor(undefined), /^claude-code\//);
+});

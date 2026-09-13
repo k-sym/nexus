@@ -318,6 +318,10 @@ export interface ChatThread {
   github_issue?: number | null;
   /** `provider/id` of the model last used on this thread; restored by the picker. */
   last_model_key?: string | null;
+  /** The Claude Code session id behind a Claude-engine thread, once a turn has run (or the thread was imported). */
+  claude_session_id?: string | null;
+  /** Set when the transcript is shared with the Claude Desktop app (handed off or imported); drop leaves the transcript alone. */
+  desktop_shared_at?: string | null;
 }
 
 export interface SignalFilterFlags {

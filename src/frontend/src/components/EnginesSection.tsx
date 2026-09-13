@@ -6,6 +6,7 @@ interface EngineStatus {
   tokenConfigured: boolean; authSource: 'token' | 'login' | 'api_key';
   executablePath: string | null; modelCount: number;
   settingSources: string[]; skills: 'all' | 'none' | string[];
+  desktop?: { appFound: boolean; indexFound: boolean };
 }
 interface EnginesResponse { engines: EngineStatus[]; piAnthropicOAuthHidden: boolean }
 
@@ -39,6 +40,11 @@ export function EnginesSection() {
     : claude.skills === 'none'
       ? 'Skills: none (bundled skills disabled)'
       : `Skills: ${claude.skills.length} listed`;
+  const desktopText = claude.desktop
+    ? claude.desktop.appFound
+      ? `Claude Desktop: app found${claude.desktop.indexFound ? ', session index found' : ', no session index yet'}. Sessions can be opened in the desktop app and imported from it.`
+      : 'Claude Desktop: not found on this machine. Open in Claude Desktop is disabled; import still lists terminal sessions.'
+    : null;
   return (
     <div className="space-y-2 text-xs text-zinc-300">
       <div className="flex items-center gap-2">
@@ -50,6 +56,7 @@ export function EnginesSection() {
       <p className="text-zinc-500">{settingsLoadedText}</p>
       <p className="text-zinc-500">{skillsText}</p>
       {claude.executablePath && <p className="text-zinc-500">Executable: <span className="font-mono">{claude.executablePath}</span></p>}
+      {desktopText && <p className={claude.desktop?.appFound ? 'text-zinc-500' : 'text-amber-300/90'}>{desktopText}</p>}
       {data.piAnthropicOAuthHidden && (
         <p className="text-amber-300/90">Anthropic subscription models via Pi are hidden while this engine is on. Remove the Pi Anthropic login under Provider Auth to tidy up; an Anthropic API key is unaffected.</p>
       )}

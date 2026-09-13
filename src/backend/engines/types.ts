@@ -41,6 +41,8 @@ export type EngineSession = Pick<
 > & {
   setModel(model: any): Promise<void>;
   sessionManager?: Pick<AgentSession['sessionManager'], 'appendCustomEntry' | 'getLeafId' | 'getLeafEntry' | 'getEntries'>;
+  /** The engine's own conversation id, once known (the Claude engine's SDK session id). */
+  readonly engineSessionId?: string;
 };
 
 export interface ChatEngine {
@@ -50,4 +52,9 @@ export interface ChatEngine {
   sessionFor(threadId: string, cwd: string): Promise<EngineSession>;
   hasSession(threadId: string, cwd: string): boolean;
   dropSession(threadId: string, cwd: string): void;
+  /**
+   * Mirror turns made outside Nexus (the Claude Desktop app) into the
+   * thread's JSONL. Only engines whose transcript can be shared implement it.
+   */
+  reconcileShared?(threadId: string, cwd: string): Promise<unknown>;
 }
