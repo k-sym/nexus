@@ -57,6 +57,15 @@ final class ChatViewModel {
 
     var supportsModelPicker: Bool { endpoint.supportsModelPicker }
     var supportsSupervise: Bool { endpoint.supportsSupervise }
+    /// Claude Desktop handoff: threads on the Claude engine only. The model
+    /// key that pins the engine comes from the loaded detail, not the picker.
+    var canOpenInDesktop: Bool {
+        endpoint.supportsDesktopHandoff && (loadedModelKey?.hasPrefix("claude-code/") ?? false)
+    }
+    /// When the transcript is shared with the Claude Desktop app (badge).
+    private(set) var desktopSharedAt: String?
+    private(set) var isOpeningDesktop = false
+    private var loadedModelKey: String?
     var supportsBackgroundHandoff: Bool { endpoint.supportsBackgroundHandoff }
     var supportsAttachments: Bool { endpoint.supportsAttachments }
     /// Per-conversation key for the sent-attachment thumbnail cache (assistant only).
@@ -104,6 +113,8 @@ final class ChatViewModel {
             supervised = detail.supervised ?? false
             if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
             if selectedModelKey == nil { selectedModelKey = detail.lastModelKey }
+            loadedModelKey = detail.lastModelKey
+            desktopSharedAt = detail.desktopSharedAt
             // Assistant sessions persist last-turn usage server-side (#75); seed
             // the meter so a reopened session shows it before the next turn.
             reducer.seedContextUsage(detail.contextUsage)
@@ -118,6 +129,19 @@ final class ChatViewModel {
         // Model list for the picker — best-effort, only where the endpoint has one.
         if supportsModelPicker, availableModels.isEmpty {
             availableModels = (try? await endpoint.models()) ?? []
+        }
+    }
+
+    /// Hand the thread to the Claude Desktop app on the backend's Mac. Both
+    /// sides keep the same session; the badge flips once the backend confirms.
+    func openInDesktop() async {
+        guard canOpenInDesktop, !isOpeningDesktop else { return }
+        isOpeningDesktop = true
+        defer { isOpeningDesktop = false }
+        do {
+            desktopSharedAt = try await endpoint.openInDesktop()
+        } catch {
+            errorBanner = (error as? APIError)?.errorDescription ?? error.localizedDescription
         }
     }
 

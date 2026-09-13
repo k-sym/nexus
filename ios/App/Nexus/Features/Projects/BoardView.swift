@@ -47,12 +47,21 @@ struct BoardView: View {
         content
             .toolbar {
                 ToolbarItem(placement: .primaryAction) {
-                    NavigationLink {
-                        IdeasView(api: api)
+                    Menu {
+                        NavigationLink {
+                            IdeasView(api: api)
+                        } label: {
+                            Label("New idea", systemImage: "lightbulb")
+                        }
+                        NavigationLink {
+                            DesktopSessionListView(api: api, projectId: vm.projectId)
+                        } label: {
+                            Label("Import from Claude Desktop", systemImage: "desktopcomputer")
+                        }
                     } label: {
                         Image(systemName: "plus")
                     }
-                    .accessibilityLabel("New idea")
+                    .accessibilityLabel("Add")
                 }
             }
             // Runs now, then every 5 s while the view is on screen and the scene
@@ -205,6 +214,10 @@ private struct CardRow: View {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 if let badge = originBadge {
                     OriginBadge(text: badge.text, tint: badge.tint)
+                }
+                if card.thread.desktopSharedAt != nil {
+                    OriginBadge(text: "Desktop", tint: .cyan)
+                        .accessibilityLabel("Shared with Claude Desktop")
                 }
                 Text(card.thread.title).font(.body).lineLimit(2)
                 Spacer(minLength: 0)

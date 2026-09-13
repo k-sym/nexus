@@ -49,6 +49,9 @@ final class BoardDecodingTests: XCTestCase {
         XCTAssertEqual(ticket.thread.ticketKey, "SUP-123")
         XCTAssertNil(ticket.thread.githubIssue)
         XCTAssertEqual(ticket.thread.lastModelKey, "claude-code/claude-sonnet-5")
+        XCTAssertEqual(ticket.thread.desktopSharedAt, "2026-09-13T11:00:00.000Z")
+        XCTAssertEqual(ticket.thread.claudeSessionId, "aaaaaaaa-0000-0000-0000-000000000009")
+        XCTAssertNil(github.thread.desktopSharedAt)
 
         XCTAssertEqual(board.cards[2].mondayItemId, "123")
         XCTAssertEqual(board.cards[3].thread.archivedAt, "2026-09-02T10:00:00.000Z")

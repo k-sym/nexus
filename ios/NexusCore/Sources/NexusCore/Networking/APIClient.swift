@@ -234,6 +234,23 @@ public actor APIClient {
         _ = try await requestData(.archiveThread(threadId))
     }
 
+    // MARK: Claude Desktop session handoff
+
+    /// Hand the thread to the Claude Desktop app; both sides keep the same session.
+    public func openThreadInDesktop(threadId: String) async throws -> DesktopOpenResult {
+        try await request(.openThreadInDesktop(threadId), decoder: plainDecoder)
+    }
+
+    /// Sessions under the project's repo path that are not on the board yet.
+    public func desktopSessions(projectId: String) async throws -> DesktopSessionsResponse {
+        try await request(.desktopSessions(projectId: projectId), decoder: plainDecoder)
+    }
+
+    /// A thread that continues the chosen session on the same id.
+    public func importDesktopSession(projectId: String, sessionId: String) async throws -> DesktopImportResult {
+        try await request(.importDesktopSession(projectId: projectId, sessionId: sessionId), decoder: plainDecoder)
+    }
+
     public func abortThread(threadId: String, source: String = "user") async throws {
         let body = try JSONEncoder().encode(["source": source])
         _ = try await requestData(.threadAbort(threadId, body: body))

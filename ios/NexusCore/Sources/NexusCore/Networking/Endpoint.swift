@@ -118,6 +118,26 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/threads/\(threadId)/archive", method: "POST")
     }
 
+    // MARK: Claude Desktop session handoff
+
+    /// Hand a Claude-engine thread to the Claude Desktop app → `DesktopOpenResult`.
+    /// A 409 here is a reason (Pi thread, no session yet, app not installed),
+    /// not a busy turn.
+    public static func openThreadInDesktop(_ threadId: String) -> Endpoint {
+        Endpoint(path: "/api/threads/\(threadId)/desktop/open", method: "POST", conflictIsBusy: false)
+    }
+
+    /// Desktop and terminal sessions for the project's repo path → `DesktopSessionsResponse`.
+    public static func desktopSessions(projectId: String) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/desktop/sessions")
+    }
+
+    /// A thread that continues the session on the same id → `DesktopImportResult`.
+    /// 409 means the session is already on the board.
+    public static func importDesktopSession(projectId: String, sessionId: String) -> Endpoint {
+        Endpoint(path: "/api/projects/\(projectId)/desktop/sessions/\(sessionId)/import", method: "POST", conflictIsBusy: false)
+    }
+
     /// Send a message and stream the turn (NDJSON). Body is a `SendMessageRequest`.
     public static func threadStream(_ threadId: String, body: Data, confirmCancel: Bool) -> Endpoint {
         Endpoint(
