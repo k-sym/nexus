@@ -39,6 +39,14 @@ const transcript = [
   user('u4', [{ type: 'text', text: 'Thanks' }]),
 ];
 
+test('claudeProjectDir slugs the resolved path the way the SDK does', () => {
+  const env = { CLAUDE_CONFIG_DIR: '/cfg' };
+  assert.equal(claudeProjectDir('/Users/k-sym/Projects/dj-k-sym/', env), '/cfg/projects/-Users-k-sym-Projects-dj-k-sym');
+  assert.equal(claudeProjectDir('/Users/k-sym/Projects/dj-k-sym', env), '/cfg/projects/-Users-k-sym-Projects-dj-k-sym');
+  assert.equal(claudeProjectDir('/private/var/T/nexus_live', env), '/cfg/projects/-private-var-T-nexus-live');
+  assert.equal(transcriptPath('/repo/', 'abc', env), '/cfg/projects/-repo/abc.jsonl');
+});
+
 test('replaySdkMessages turns a Claude transcript into Pi entries in order', () => {
   const sm = fakeSessionManager();
   const result = replaySdkMessages(sm as any, transcript as any, { model: 'claude-sonnet-5', now: () => 5 });

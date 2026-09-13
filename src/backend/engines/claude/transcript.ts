@@ -13,7 +13,7 @@
  */
 import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { getSessionMessages as sdkGetSessionMessages, type SessionMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { SessionManager } from '@earendil-works/pi-coding-agent';
 import type { UserMessage } from '@earendil-works/pi-ai';
@@ -25,10 +25,14 @@ export type GetSessionMessagesFn = (sessionId: string, options: { dir: string })
 
 type TranscriptSessionManager = Pick<SessionManager, 'appendMessage' | 'appendCustomEntry' | 'getEntries'>;
 
-/** `~/.claude/projects/<slug>` for a cwd — the SDK's own naming, which replaces every non-alphanumeric character with a dash. */
+/**
+ * `~/.claude/projects/<slug>` for a cwd — the SDK's own naming: the resolved
+ * path (no trailing slash; project rows sometimes carry one) with every
+ * non-alphanumeric character replaced by a dash.
+ */
 export function claudeProjectDir(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
   const configDir = env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude');
-  return join(configDir, 'projects', cwd.replace(/[^a-zA-Z0-9]/g, '-'));
+  return join(configDir, 'projects', resolve(cwd).replace(/[^a-zA-Z0-9]/g, '-'));
 }
 
 export function transcriptPath(cwd: string, sessionId: string, env: NodeJS.ProcessEnv = process.env): string {
