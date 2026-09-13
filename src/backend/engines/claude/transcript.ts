@@ -74,13 +74,47 @@ function textOf(content: unknown): string {
 }
 
 /**
- * Human prompts only: Claude Code also stores slash-command echoes and
- * injected context as user entries, wrapped in tags nobody typed.
+ * What a person (or another session) actually said, out of what Claude Code
+ * stores as a user entry: injected `<system-reminder>` blocks are dropped (the
+ * desktop app prepends one when it takes over a session), a
+ * `<cross-session-message>` wrapper is unwrapped to its body, and entries that
+ * are only slash-command echoes or injected context yield nothing.
  */
-function isHumanPrompt(text: string): boolean {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-  return !/^<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat|system-reminder|task-notification)\b/i.test(trimmed);
+export function humanPromptText(text: string): string {
+  let cleaned = text.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/gi, '');
+  cleaned = cleaned.replace(/<cross-session-message\b[^>]*>([\s\S]*?)<\/cross-session-message>/gi, (_m, body: string) => body);
+  const trimmed = cleaned.trim();
+  if (!trimmed) return '';
+  if (/^<(command-name|command-message|command-args|local-command-stdout|local-command-stderr|local-command-caveat|task-notification)\b/i.test(trimmed)) return '';
+  return trimmed;
+}
+
+/**
+ * Claude Code stores one assistant entry per content block, each carrying the
+ * response's `message.id` and (unlike the live stream's frames) the final
+ * `stop_reason`. Fold consecutive entries of one response into a single
+ * message before the mapper sees them, or every block would flush on its own.
+ */
+function foldAssistantBlocks(messages: SessionMessage[]): SessionMessage[] {
+  const folded: SessionMessage[] = [];
+  for (const entry of messages) {
+    const previous = folded.at(-1);
+    const raw = entry.message as any;
+    const prevRaw = previous?.message as any;
+    if (
+      entry.type === 'assistant' && previous?.type === 'assistant'
+      && !entry.parent_tool_use_id && !previous.parent_tool_use_id
+      && raw?.id && raw.id === prevRaw?.id && Array.isArray(raw.content) && Array.isArray(prevRaw.content)
+    ) {
+      folded[folded.length - 1] = {
+        ...entry,
+        message: { ...prevRaw, ...raw, content: [...prevRaw.content, ...raw.content] },
+      };
+      continue;
+    }
+    folded.push(entry);
+  }
+  return folded;
 }
 
 export interface ReplayOptions {
@@ -124,7 +158,7 @@ export function replaySdkMessages(sessionManager: TranscriptSessionManager, mess
     onContextUsage: () => {},
     now,
   });
-  for (const entry of messages) {
+  for (const entry of foldAssistantBlocks(messages)) {
     const raw = entry.message as any;
     if (entry.type === 'assistant') {
       mapper.handle({ type: 'assistant', parent_tool_use_id: entry.parent_tool_use_id, message: raw, uuid: entry.uuid, session_id: entry.session_id } as any);
@@ -137,8 +171,8 @@ export function replaySdkMessages(sessionManager: TranscriptSessionManager, mess
       mapper.handle({ type: 'user', parent_tool_use_id: null, message: raw, uuid: entry.uuid, session_id: entry.session_id } as any);
       continue;
     }
-    const text = textOf(content);
-    if (!isHumanPrompt(text)) continue;
+    const text = humanPromptText(textOf(content));
+    if (!text) continue;
     // A prompt closes the previous response the way a live `user` frame does.
     mapper.handle({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content: [] }, uuid: entry.uuid, session_id: entry.session_id } as any);
     const message: UserMessage = { role: 'user', content: text, timestamp: now() };

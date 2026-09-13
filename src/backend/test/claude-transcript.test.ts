@@ -7,6 +7,7 @@ import { DESKTOP_SYNC_CUSTOM_TYPE } from '@nexus/shared';
 import {
   advanceSyncCursorToEnd,
   claudeProjectDir,
+  humanPromptText,
   readSyncCursor,
   reconcileSharedTranscript,
   replaySdkMessages,
@@ -61,6 +62,28 @@ test('replaySdkMessages turns a Claude transcript into Pi entries in order', () 
   assert.equal(sm.entries[2].message.toolName, 'Read');
   assert.equal(sm.entries[2].message.content[0].text, 'file contents');
   assert.equal(sm.entries[4].message.content, 'Thanks');
+});
+
+test('replaySdkMessages folds per-block assistant entries of one response and unwraps desktop-app prompts', () => {
+  const sm = fakeSessionManager();
+  const desktopPrompt = user('u1', '<system-reminder>\nThis conversation is now continuing in the Claude desktop app (Code tab).\n</system-reminder>\n<cross-session-message session="local_x" name="Other">\nHandoff check: reply PONG.\n</cross-session-message>');
+  const thinking = assistant('a1', [{ type: 'thinking', thinking: 'hm', signature: 'sig' }]);
+  const text = { ...assistant('a2', [{ type: 'text', text: 'PONG' }]), message: { ...assistant('a2', []).message, id: thinking.message.id, content: [{ type: 'text', text: 'PONG' }] } };
+  const reminderOnly = user('u2', '<system-reminder>context</system-reminder>');
+  const result = replaySdkMessages(sm as any, [desktopPrompt, thinking, text, reminderOnly] as any, { model: 'm' });
+  assert.deepEqual(sm.entries.map((e) => e.message.role), ['user', 'assistant']);
+  assert.equal(sm.entries[0].message.content, 'Handoff check: reply PONG.');
+  assert.deepEqual(sm.entries[1].message.content.map((b: any) => b.type), ['thinking', 'text']);
+  assert.equal(sm.entries[1].message.content[1].text, 'PONG');
+  assert.equal(result.appended, 2);
+});
+
+test('humanPromptText keeps typed prompts and drops injected context', () => {
+  assert.equal(humanPromptText('Plain question?'), 'Plain question?');
+  assert.equal(humanPromptText('<command-name>/clear</command-name>'), '');
+  assert.equal(humanPromptText('<system-reminder>x</system-reminder>'), '');
+  assert.equal(humanPromptText('<system-reminder>x</system-reminder>\nAfter the reminder'), 'After the reminder');
+  assert.equal(humanPromptText('<cross-session-message a="b">\nbody\n</cross-session-message>'), 'body');
 });
 
 test('replaySdkMessages flushes a response the transcript left open and skips subagent traffic', () => {
