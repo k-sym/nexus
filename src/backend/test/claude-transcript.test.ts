@@ -134,6 +134,36 @@ test('reconcileSharedTranscript replays past the cursor, once, and is a stat whe
   }
 });
 
+test('reconcileSharedTranscript follows a branch the desktop made past a Nexus turn, keyed on mirrored response ids', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-transcript-'));
+  const env = { CLAUDE_CONFIG_DIR: join(dir, 'claude') };
+  const cwd = join(dir, 'repo');
+  const sessionId = '11111111-2222-3333-4444-555555555555';
+  try {
+    const sm = fakeSessionManager();
+    // Desktop turn mirrored, then a Nexus turn persisted live (responseId msg-nx).
+    makeTranscriptDir(cwd, sessionId, env, 2);
+    let served: any[] = [user('u1', 'first'), assistant('a1', [{ type: 'text', text: 'PONG' }])];
+    await reconcileSharedTranscript({ sessionManager: sm as any, cwd, sessionId, model: 'm', env, getSessionMessages: async () => served });
+    sm.appendMessage({ role: 'user', content: 'from nexus', timestamp: 1 });
+    sm.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'PING' }], responseId: 'msg-nx', timestamp: 2 });
+    makeTranscriptDir(cwd, sessionId, env, 4);
+    served = [...served, user('un', 'from nexus'), assistant('an', [{ type: 'text', text: 'PING' }], { id: 'msg-nx' })];
+    await advanceSyncCursorToEnd({ sessionManager: sm as any, cwd, sessionId, env, getSessionMessages: async () => served });
+
+    // The desktop app, holding the session in memory, answers on its own
+    // branch: the chain the SDK now returns skips the Nexus turn entirely.
+    makeTranscriptDir(cwd, sessionId, env, 6);
+    served = [user('u1', 'first'), assistant('a1', [{ type: 'text', text: 'PONG' }]), assistant('a2', [{ type: 'text', text: 'PONG2' }])];
+    const result = await reconcileSharedTranscript({ sessionManager: sm as any, cwd, sessionId, model: 'm', env, getSessionMessages: async () => served });
+    assert.equal(result.appended, 1);
+    const texts = sm.entries.filter((e) => e.type === 'message' && e.message.role === 'assistant').map((e) => e.message.content[0].text);
+    assert.deepEqual(texts, ['PONG', 'PING', 'PONG2']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('reconcileSharedTranscript falls back to the message count when the cursor uuid is gone, and reports a missing transcript', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-transcript-'));
   const env = { CLAUDE_CONFIG_DIR: join(dir, 'claude') };
@@ -150,6 +180,7 @@ test('reconcileSharedTranscript falls back to the message count when the cursor 
     const result = await reconcileSharedTranscript({ sessionManager: sm as any, cwd, sessionId, model: 'm', env, getSessionMessages: async () => transcript.slice(0, 2) as any, log: (l) => logs.push(l) });
     assert.equal(result.appended, 1);
     assert.match(logs[0], /falling back to offset 1/);
+    assert.match(logs[0], /no mirrored response/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

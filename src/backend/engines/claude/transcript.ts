@@ -49,6 +49,25 @@ export function transcriptStat(cwd: string, sessionId: string, env: NodeJS.Proce
   }
 }
 
+/**
+ * API response ids (`message.id`, kept as `responseId` on Pi assistant
+ * messages by the mapper) already in the thread's JSONL — whether a live
+ * Nexus turn or a replay wrote them. The replay's real dedupe key: a
+ * transcript is a tree (each entry names its parent), and a writer that held
+ * the session in memory — the desktop app between turns — branches past
+ * entries another writer appended, so the SDK's chain view can lose the uuid
+ * the cursor remembers while still containing responses Nexus mirrored.
+ */
+export function mirroredResponseIds(sessionManager: Pick<SessionManager, 'getEntries'>): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of sessionManager.getEntries() as any[]) {
+    if (entry?.type !== 'message') continue;
+    const message = entry.message;
+    if (message?.role === 'assistant' && typeof message.responseId === 'string' && message.responseId) ids.add(message.responseId);
+  }
+  return ids;
+}
+
 /** The last `nexus.desktop_sync` entry in the thread's JSONL, if any. */
 export function readSyncCursor(sessionManager: Pick<SessionManager, 'getEntries'>): DesktopSyncRecord | undefined {
   const entries = sessionManager.getEntries();
@@ -218,16 +237,27 @@ export async function reconcileSharedTranscript(deps: ReconcileDeps): Promise<Re
 
   const getMessages = deps.getSessionMessages ?? ((id, options) => sdkGetSessionMessages(id, options));
   const messages = await getMessages(deps.sessionId, { dir: deps.cwd });
+  // Replay from just past the last response Nexus already holds. That beats
+  // the cursor's uuid because the chain the SDK returns follows the latest
+  // leaf, and another writer may have branched past the entries the cursor
+  // points at (see `mirroredResponseIds`). The cursor is the fallback for a
+  // transcript with no mirrored response yet.
+  const mirrored = mirroredResponseIds(deps.sessionManager);
   let start = 0;
-  if (cursor) {
-    if (cursor.lastUuid) {
-      const index = messages.findIndex((message) => message.uuid === cursor.lastUuid);
-      if (index >= 0) start = index + 1;
-      else {
-        deps.log?.(`[claude-desktop] cursor ${cursor.lastUuid} not found in ${deps.sessionId}; falling back to offset ${cursor.messageCount}`);
-        start = Math.min(cursor.messageCount, messages.length);
-      }
-    } else {
+  let lastMirrored = -1;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.type !== 'assistant') continue;
+    const id = (message.message as any)?.id;
+    if (typeof id === 'string' && mirrored.has(id)) lastMirrored = index;
+  }
+  if (lastMirrored >= 0) {
+    start = lastMirrored + 1;
+  } else if (cursor) {
+    const index = cursor.lastUuid ? messages.findIndex((message) => message.uuid === cursor.lastUuid) : -1;
+    if (index >= 0) start = index + 1;
+    else {
+      deps.log?.(`[claude-desktop] no mirrored response and cursor ${cursor.lastUuid || '(none)'} not found in ${deps.sessionId}; falling back to offset ${cursor.messageCount}`);
       start = Math.min(cursor.messageCount, messages.length);
     }
   }
