@@ -43,9 +43,9 @@ struct DesktopSessionListView: View {
         case .loaded(let res):
             if res.sessions.isEmpty {
                 ContentUnavailableView {
-                    Label("No sessions", systemImage: "desktopcomputer")
+                    Label("Nothing to import", systemImage: "desktopcomputer")
                 } description: {
-                    Text("No Claude Desktop or terminal sessions for this project's repo path.")
+                    Text("No Claude Desktop or terminal sessions for this project's repo path. Sessions Nexus started itself and sessions already on the board are not listed.")
                 }
             } else {
                 List {
