@@ -16,21 +16,21 @@
     "test": "node --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@evenrealities/even_hub_sdk": "^0.0.14",
+    "@evenrealities/even_hub_sdk": "^0.0.15",
     "even-toolkit": "^1.7.7",
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "upng-js": "^2.1.0"
   },
   "devDependencies": {
     "@evenrealities/evenhub-cli": "^0.1.14",
     "@evenrealities/evenhub-simulator": "^0.9.5",
-    "@types/node": "^26.4.1",
-    "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.7",
+    "@types/node": "^26.5.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.1.1",
     "typescript": "~5.9.3",
-    "vite": "^8.2.2"
+    "vite": "^8.3.0"
   },
   "overrides": {
     "nanoid": "^3.3.17"
