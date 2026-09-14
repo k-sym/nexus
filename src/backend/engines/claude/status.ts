@@ -5,6 +5,7 @@
 import { readStoredCredential } from '@earendil-works/pi-coding-agent';
 import { CLAUDE_CODE_MODELS } from './models.js';
 import { interpolate, type ClaudeEngineConfig } from './auth.js';
+import { desktopStatus, type DesktopStatus } from './desktop.js';
 
 export interface EngineStatus {
   id: 'claude-code';
@@ -16,6 +17,8 @@ export interface EngineStatus {
   modelCount: number;
   settingSources: string[];
   skills: 'all' | 'none' | string[];
+  /** The Claude Desktop app on this host — what "Open in Claude Desktop" and import need. */
+  desktop: DesktopStatus;
 }
 
 const SETTING_SOURCES = new Set(['user', 'project', 'local']);
@@ -42,9 +45,10 @@ export function normalizeClaudeEngineConfig(cfg: ClaudeEngineConfig): { settingS
   return { settingSources, skills };
 }
 
-export function claudeEngineStatus(cfg: ClaudeEngineConfig, env: NodeJS.ProcessEnv = process.env): EngineStatus {
+export function claudeEngineStatus(cfg: ClaudeEngineConfig, env: NodeJS.ProcessEnv = process.env, desktop: DesktopStatus = desktopStatus()): EngineStatus {
   const tokenConfigured = interpolate(cfg.oauth_token || '', env).trim().length > 0;
   return {
+    desktop,
     id: 'claude-code',
     enabled: cfg.enabled === true,
     auth: cfg.auth === 'api_key' ? 'api_key' : 'subscription',

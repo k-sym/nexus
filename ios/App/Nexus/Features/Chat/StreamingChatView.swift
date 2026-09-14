@@ -26,6 +26,35 @@ struct StreamingChatView: View {
         transcript
             .navigationTitle(vm.title)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if vm.canOpenInDesktop {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            Button {
+                                Task { await vm.openInDesktop() }
+                            } label: {
+                                Label(vm.desktopSharedAt == nil ? "Open in Claude Desktop" : "Open in Claude Desktop again", systemImage: "desktopcomputer")
+                            }
+                            .disabled(vm.isOpeningDesktop || vm.isSending)
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                        }
+                        .accessibilityLabel("Session actions")
+                    }
+                }
+            }
+            .safeAreaInset(edge: .top) {
+                if vm.desktopSharedAt != nil {
+                    Label("Shared with Claude Desktop", systemImage: "desktopcomputer")
+                        .font(.caption)
+                        .foregroundStyle(.cyan)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(.cyan.opacity(0.12), in: Capsule())
+                        .padding(.top, 6)
+                        .accessibilityIdentifier("desktop-shared-badge")
+                }
+            }
             .safeAreaInset(edge: .bottom) { composer }
             .task {
                 if case .loading = vm.historyState { await vm.loadHistory() }

@@ -1671,3 +1671,51 @@ describe('ChatPanel', () => {
     expect(screen.queryByText('first thread answer')).not.toBeInTheDocument();
   }, 15000);
 });
+
+describe('ChatPanel Claude Desktop handoff', () => {
+  it('offers Open in Claude Desktop on a Claude thread and shows the chip once shared', async () => {
+    const calls: string[] = [];
+    let sharedAt: string | null = null;
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push(`${init?.method ?? 'GET'} ${url}`);
+      if (url === '/api/models') {
+        return { ok: true, json: async () => ({ models: [{ id: 'claude-opus-5', name: 'Opus', provider: 'claude-code', configured: true }] }) } as Response;
+      }
+      if (url === '/api/engines') {
+        return { ok: true, json: async () => ({ engines: [{ id: 'claude-code', desktop: { appFound: true, indexFound: true } }], piAnthropicOAuthHidden: false }) } as Response;
+      }
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'claude-code/claude-opus-5', desktop_shared_at: sharedAt }, messages: [] }) } as Response;
+      }
+      if (url === '/api/threads/t1/desktop/open') {
+        sharedAt = '2026-09-13T10:00:00.000Z';
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'claude-code/claude-opus-5', desktop_shared_at: sharedAt }, url: 'claude://resume?session=x' }) } as Response;
+      }
+      return { ok: true, json: async () => ({}) } as Response;
+    });
+
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    const button = await screen.findByTestId('open-in-desktop');
+    expect(button).toHaveTextContent('Open in Claude Desktop');
+    expect(screen.queryByTestId('desktop-shared-chip')).not.toBeInTheDocument();
+
+    fireEvent.click(button);
+    expect(await screen.findByTestId('desktop-shared-chip')).toHaveTextContent('Claude Desktop');
+    expect(calls).toContain('POST /api/threads/t1/desktop/open');
+    expect(screen.getByTestId('open-in-desktop')).toHaveTextContent('Open in Claude Desktop again');
+  });
+
+  it('has no handoff button on a Pi thread', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/threads/t1') {
+        return { ok: true, json: async () => ({ thread: { id: 't1', last_model_key: 'openrouter/x' }, messages: [] }) } as Response;
+      }
+      return { ok: true, json: async () => ({ models: [], engines: [] }) } as Response;
+    });
+    render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
+    await screen.findByTestId('chat-input');
+    expect(screen.queryByTestId('open-in-desktop')).not.toBeInTheDocument();
+  });
+});

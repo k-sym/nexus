@@ -14,6 +14,8 @@ public struct ChatDetail: Sendable {
     /// Last-turn context usage to seed the meter on rehydrate (assistant only —
     /// threads get theirs from the live `context_usage` frame).
     public let contextUsage: ContextUsage?
+    /// When the thread's transcript is shared with the Claude Desktop app (threads only).
+    public let desktopSharedAt: String?
 
     public init(
         messages: [PersistedMessage],
@@ -21,7 +23,8 @@ public struct ChatDetail: Sendable {
         supervised: Bool? = nil,
         lastModelKey: String? = nil,
         latestRun: AssistantRun? = nil,
-        contextUsage: ContextUsage? = nil
+        contextUsage: ContextUsage? = nil,
+        desktopSharedAt: String? = nil
     ) {
         self.messages = messages
         self.title = title
@@ -29,6 +32,7 @@ public struct ChatDetail: Sendable {
         self.lastModelKey = lastModelKey
         self.latestRun = latestRun
         self.contextUsage = contextUsage
+        self.desktopSharedAt = desktopSharedAt
     }
 }
 
@@ -56,6 +60,9 @@ public protocol ChatEndpoint: Sendable {
     /// extension) so it dispatches through the witness table** — an extension-only
     /// property would statically resolve to the `nil` default via the existential.
     var attachmentScopeId: String? { get }
+    /// Whether the chat can be handed to the Claude Desktop app (threads only;
+    /// the composer also checks the thread runs on the Claude engine).
+    var supportsDesktopHandoff: Bool { get }
 
     /// Rehydrate history + seeds.
     func loadDetail() async throws -> ChatDetail
@@ -79,6 +86,10 @@ public protocol ChatEndpoint: Sendable {
     func syncBackgroundRuns() async throws
     /// Ask a specific background run to stop. No-op by default.
     func stopBackgroundRun(runId: String) async throws
+    /// Hand the conversation to the Claude Desktop app; returns the new
+    /// `desktopSharedAt`. Only called where `supportsDesktopHandoff`; the
+    /// default throws.
+    func openInDesktop() async throws -> String?
 }
 
 /// Threads (and any future endpoint) get the background-handoff and attachment
@@ -89,11 +100,15 @@ public extension ChatEndpoint {
     /// A stable per-conversation key for caching sent-attachment thumbnails so
     /// they survive a rehydrate. Nil where there are no attachments (threads).
     var attachmentScopeId: String? { nil }
+    var supportsDesktopHandoff: Bool { false }
     func startBackgroundRun(content: String, attachments: [AssistantAttachment]) async throws -> AssistantRun {
         throw APIError.server(status: 400, message: "This chat doesn't support background handoff.")
     }
     func syncBackgroundRuns() async throws {}
     func stopBackgroundRun(runId: String) async throws {}
+    func openInDesktop() async throws -> String? {
+        throw APIError.server(status: 400, message: "This chat can't be opened in Claude Desktop.")
+    }
 }
 
 /// Project-thread chat. Wraps today's thread calls byte-for-byte so the existing
@@ -109,6 +124,7 @@ public struct ThreadChatEndpoint: ChatEndpoint {
 
     public var supportsModelPicker: Bool { true }
     public var supportsSupervise: Bool { true }
+    public var supportsDesktopHandoff: Bool { true }
 
     public func loadDetail() async throws -> ChatDetail {
         let detail = try await api.threadDetail(threadId: threadId)
@@ -116,7 +132,12 @@ public struct ThreadChatEndpoint: ChatEndpoint {
             messages: detail.messages,
             title: detail.thread.title,
             supervised: detail.supervised,
-            lastModelKey: detail.thread.lastModelKey)
+            lastModelKey: detail.thread.lastModelKey,
+            desktopSharedAt: detail.thread.desktopSharedAt)
+    }
+
+    public func openInDesktop() async throws -> String? {
+        try await api.openThreadInDesktop(threadId: threadId).thread.desktopSharedAt
     }
 
     public func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error> {

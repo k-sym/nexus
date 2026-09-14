@@ -181,6 +181,11 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
   // Per-thread Supervise (tool-gate every call). Ephemeral on the pi runtime;
   // seeded from GET /api/threads/:id and toggled via POST .../supervise.
   const [supervised, setSupervised] = useState(false);
+  /** The thread row's engine/desktop facts, from GET /api/threads/:id. */
+  const [threadMeta, setThreadMeta] = useState<{ lastModelKey: string | null; desktopSharedAt: string | null } | null>(null);
+  /** Whether the backend host has the Claude Desktop app (null until /api/engines answers). */
+  const [desktopAvailable, setDesktopAvailable] = useState<boolean | null>(null);
+  const [openingDesktop, setOpeningDesktop] = useState(false);
   // Live mirror of loadedMessages + the persisted-history length captured when
   // the current turn started. Used to decide when the optimistic in-flight turn
   // has been superseded by persisted history (see `visible` below) — keeping it
@@ -381,6 +386,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
     setFallbackSubmissions({});
     setModel('', '');
     setSupervised(false);
+    setThreadMeta(null);
     
     let cancelled = false;
     (async () => {
@@ -388,6 +394,12 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
         const res = await apiFetch(`/api/threads/${threadId}`);
         if (!res.ok) throw new Error(`GET /api/threads/${threadId} ${res.status}`);
         const data = (await res.json()) as { messages: any[]; thread?: any; supervised?: boolean };
+        if (!cancelled && data.thread) {
+          setThreadMeta({
+            lastModelKey: typeof data.thread.last_model_key === 'string' ? data.thread.last_model_key : null,
+            desktopSharedAt: typeof data.thread.desktop_shared_at === 'string' ? data.thread.desktop_shared_at : null,
+          });
+        }
         
         // Restore the thread's saved model if it has one
         if (!cancelled && data.thread?.last_model_key) {
@@ -416,6 +428,44 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
       cancelled = true;
     };
   }, [threadId, setModel]);
+
+  // Claude Desktop handoff: the button only makes sense when the backend host
+  // has the app. One read per mount; the answer does not change while open.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await apiFetch('/api/engines');
+        if (!res.ok) return;
+        const data = (await res.json()) as { engines?: Array<{ id: string; desktop?: { appFound?: boolean } }> };
+        const claude = data.engines?.find((engine) => engine.id === 'claude-code');
+        if (!cancelled && claude?.desktop) setDesktopAvailable(claude.desktop.appFound === true);
+      } catch {
+        /* status only; the button falls back to trying */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const isClaudeThread = threadMeta?.lastModelKey?.startsWith('claude-code/') === true;
+
+  const openInDesktop = async () => {
+    if (!threadId || openingDesktop) return;
+    setOpeningDesktop(true);
+    setError(null);
+    try {
+      const { thread } = await api.chat.openInDesktop(threadId);
+      setThreadMeta({
+        lastModelKey: thread.last_model_key ?? null,
+        desktopSharedAt: thread.desktop_shared_at ?? null,
+      });
+      onThreadsChanged?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOpeningDesktop(false);
+    }
+  };
 
   // --- re-attach to a backend-owned run after navigation ---------------------
   // ChatPanel is remounted on project switch (key={activeProject.id}), so a run
@@ -825,6 +875,29 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
           <span className="text-[10px] text-faint truncate" data-testid="active-model-label">
             {activeModelId}
           </span>
+        )}
+        {threadMeta?.desktopSharedAt && (
+          <span
+            data-testid="desktop-shared-chip"
+            title={`Shared with Claude Desktop since ${new Date(threadMeta.desktopSharedAt).toLocaleString()} — both sides continue the same session`}
+            className="inline-flex shrink-0 rounded px-1.5 py-0.5 text-[10px] bg-sky-500/15 text-sky-400"
+          >
+            Claude Desktop
+          </span>
+        )}
+        {isClaudeThread && (
+          <button
+            type="button"
+            data-testid="open-in-desktop"
+            onClick={() => void openInDesktop()}
+            disabled={openingDesktop || isRunning || desktopAvailable === false}
+            title={desktopAvailable === false
+              ? 'Claude Desktop is not installed on the machine running the Nexus backend'
+              : 'Open this session in the Claude Desktop app; it stays live here too'}
+            className="ml-auto shrink-0 text-[11px] px-2 py-1 rounded-md surface-elevated text-muted hover:text-[var(--text-primary)] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            {openingDesktop ? 'Opening…' : threadMeta?.desktopSharedAt ? 'Open in Claude Desktop again' : 'Open in Claude Desktop'}
+          </button>
         )}
       </header>
 

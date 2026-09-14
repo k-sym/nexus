@@ -18,6 +18,10 @@ public struct ChatThread: Decodable, Identifiable, Hashable, Sendable {
     public let ticketKey: String?
     /// GitHub origin (#439): the issue number this session was started from.
     public let githubIssue: Int?
+    /// The Claude Code session id behind a Claude-engine thread, once a turn has run.
+    public let claudeSessionId: String?
+    /// Set when the transcript is shared with the Claude Desktop app (handed off or imported).
+    public let desktopSharedAt: String?
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -30,6 +34,8 @@ public struct ChatThread: Decodable, Identifiable, Hashable, Sendable {
         case lastModelKey = "last_model_key"
         case ticketKey = "ticket_key"
         case githubIssue = "github_issue"
+        case claudeSessionId = "claude_session_id"
+        case desktopSharedAt = "desktop_shared_at"
     }
 }
 

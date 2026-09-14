@@ -30,6 +30,13 @@ import { NEXUS_MCP_SERVER, toPolicyToolName } from './tool-names.js';
 import { ToolUseCorrelator } from './tool-use-correlator.js';
 import { createNexusMcpServer, type PiToolDefinition } from './pi-tools-bridge.js';
 import { SdkEventMapper } from './events.js';
+import {
+  advanceSyncCursorToEnd,
+  reconcileSharedTranscript,
+  waitForTranscriptToSettle,
+  type GetSessionMessagesFn,
+  type ReconcileResult,
+} from './transcript.js';
 
 export type QueryFn = typeof sdkQuery;
 
@@ -56,6 +63,10 @@ export interface ClaudeSessionDeps {
   executablePath?: string;
   /** Injected by tests; production uses the SDK's `query`. */
   queryFn?: QueryFn;
+  /** Whether the transcript is shared with the Claude Desktop app right now (read per turn: a handoff can happen mid-session). */
+  isShared?: () => boolean;
+  /** Injected by tests; production reads transcripts through the SDK. */
+  getSessionMessages?: GetSessionMessagesFn;
   log?: (line: string) => void;
 }
 
@@ -186,9 +197,41 @@ export class ClaudeEngineSession implements EngineSession {
     }
   }
 
+  /**
+   * Mirror turns the Claude Desktop app made on this session into the Pi
+   * JSONL. Skipped while a turn is in flight (`prompt` reconciles before it
+   * starts) and before the first turn (no transcript yet).
+   */
+  async reconcileFromDesktop(): Promise<ReconcileResult | undefined> {
+    if (this.active || !this.sdkSessionId) return undefined;
+    return reconcileSharedTranscript({
+      sessionManager: this.sessionManager,
+      cwd: this.deps.cwd,
+      sessionId: this.sdkSessionId,
+      model: this.model.id,
+      contextWindow: this.model.contextWindow,
+      getSessionMessages: this.deps.getSessionMessages,
+      log: this.deps.log,
+    });
+  }
+
+  private shared(): boolean {
+    return this.deps.isShared?.() ?? false;
+  }
+
   async prompt(text: string, options?: { images?: ImageContent[] }): Promise<void> {
     if (this.active) throw new Error('A turn is already in progress for this session');
     const images = options?.images ?? [];
+    // Shared with the desktop app: let a desktop turn in flight finish, then
+    // mirror whatever it wrote before this turn's entries go after it.
+    if (this.shared() && this.sdkSessionId) {
+      await waitForTranscriptToSettle(this.deps.cwd, this.sdkSessionId);
+      try {
+        await this.reconcileFromDesktop();
+      } catch (err: any) {
+        this.deps.log?.(`[claude-engine ${this.deps.threadId}] reconcile before turn failed: ${err?.message ?? err}`);
+      }
+    }
     this.persistUserMessage(text, images);
 
     const controller = new AbortController();
@@ -273,6 +316,15 @@ export class ClaudeEngineSession implements EngineSession {
       this.active = null;
       correlator.clear();
       this.detailsByToolCall.clear();
+    }
+    // This turn's entries are already in the Pi JSONL; move the cursor past
+    // them so the next reconcile does not replay them from the transcript.
+    if (this.shared() && this.sdkSessionId) {
+      try {
+        await advanceSyncCursorToEnd({ sessionManager: this.sessionManager, cwd: this.deps.cwd, sessionId: this.sdkSessionId, getSessionMessages: this.deps.getSessionMessages });
+      } catch (err: any) {
+        this.deps.log?.(`[claude-engine ${this.deps.threadId}] cursor advance failed: ${err?.message ?? err}`);
+      }
     }
   }
 

@@ -13,10 +13,12 @@ import { PiEngine } from '../engines/pi-engine.js';
 
 const enabled = { enabled: true, auth: 'subscription' as const, oauth_token: '${CLAUDE_CODE_OAUTH_TOKEN}', executable_path: '' };
 
+const desktop = { appFound: true, indexFound: false };
+
 test('claudeEngineStatus reports token, login and api_key modes without leaking the token', () => {
-  assert.deepEqual(claudeEngineStatus(enabled, { CLAUDE_CODE_OAUTH_TOKEN: 'secret' }), {
+  assert.deepEqual(claudeEngineStatus(enabled, { CLAUDE_CODE_OAUTH_TOKEN: 'secret' }, desktop), {
     id: 'claude-code', enabled: true, auth: 'subscription', tokenConfigured: true, authSource: 'token', executablePath: null, modelCount: 5,
-    settingSources: [], skills: 'all',
+    settingSources: [], skills: 'all', desktop,
   });
   assert.equal(claudeEngineStatus(enabled, {}).authSource, 'login');
   assert.equal(claudeEngineStatus({ ...enabled, auth: 'api_key' }, {}).authSource, 'api_key');

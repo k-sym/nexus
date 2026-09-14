@@ -106,6 +106,58 @@ test('dropping the Pi session also deletes the SDK transcript, even after a rest
   }
 });
 
+test('a transcript shared with Claude Desktop survives dropping the thread', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-engine-'));
+  try {
+    const pi = await makeRuntime(dir);
+    const deleted: string[] = [];
+    const logs: string[] = [];
+    let shared = false;
+    const engine = new ClaudeEngine({
+      pi, config: () => enabled, queryFn,
+      deleteSdkSession: async (id) => { deleted.push(id); },
+      isTranscriptShared: () => shared,
+      log: (line) => logs.push(line),
+    });
+    const session = await engine.sessionFor('thread-1', '/repo');
+    await session.prompt('hello');
+    shared = true;
+    pi.dropSession('thread-1', '/repo');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(deleted, []);
+    assert.ok(logs.some((line) => /shared with Claude Desktop; left in place/.test(line)));
+    assert.equal(engine.hasSession('thread-1', '/repo'), false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('importSdkSession seeds a new thread from a Claude transcript and records the session id', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-engine-'));
+  try {
+    const pi = await makeRuntime(dir);
+    const transcript = [
+      { type: 'user', uuid: 'u1', session_id: 'desk-1', parent_tool_use_id: null, parent_agent_id: null, message: { role: 'user', content: 'Where is the badge?' } },
+      { type: 'assistant', uuid: 'a1', session_id: 'desk-1', parent_tool_use_id: null, parent_agent_id: null, message: { id: 'm1', role: 'assistant', model: 'claude-sonnet-5', content: [{ type: 'text', text: 'In KanbanBoard.tsx.' }], stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } } },
+    ];
+    const { queryFn: recording, calls } = recordingQueryFn();
+    const engine = new ClaudeEngine({ pi, config: () => enabled, queryFn: recording, getSessionMessages: async () => transcript as any });
+    const result = await engine.importSdkSession('thread-9', '/repo', 'desk-1');
+    assert.equal(result.appended, 2);
+    assert.equal(result.modelKey, 'claude-code/claude-sonnet-5');
+    const entries = await pi.readMessages('thread-9', '/repo');
+    assert.deepEqual(entries.map((e: any) => e.message.role), ['user', 'assistant']);
+    // The next turn resumes the imported session rather than starting a new one.
+    const session = await engine.sessionFor('thread-9', '/repo');
+    assert.equal(session.engineSessionId, 'desk-1');
+    await session.prompt('and the chip?');
+    assert.equal(calls[0].options.resume, 'desk-1');
+    await assert.rejects(engine.importSdkSession('thread-9', '/repo', 'desk-1'), /already has a live Claude session/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('a session appends the project AGENTS.md to the system prompt', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-engine-'));
   try {

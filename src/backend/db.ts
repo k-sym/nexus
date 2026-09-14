@@ -533,6 +533,18 @@ function runMigrations(db: Database.Database) {
   }
   db.exec('CREATE INDEX IF NOT EXISTS idx_chat_threads_github_issue ON chat_threads(project_id, github_issue)');
 
+  // Claude Desktop session handoff: the SDK session id behind a Claude-engine
+  // thread (so import can hide sessions already on the board without opening
+  // every JSONL) and the moment its transcript became shared with the desktop
+  // app (the badge, and the guard that keeps drop from deleting it).
+  if (!threadCols.some((c) => c.name === 'claude_session_id')) {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN claude_session_id TEXT');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_chat_threads_claude_session_id ON chat_threads(claude_session_id)');
+  if (!threadCols.some((c) => c.name === 'desktop_shared_at')) {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN desktop_shared_at TEXT');
+  }
+
   // Session-first board (#439): Monday links move from tasks to threads, table
   // for table. `task_monday_links` stays as a tombstone (audit ledger). The
   // backfill copies every task link whose task had a session, exactly once:

@@ -12,6 +12,17 @@ import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER, findClaudeModel } from './mod
 import { collectPiTools } from './pi-tools-bridge.js';
 import { projectContextAppendix } from './context-files.js';
 import { ClaudeEngineSession, type QueryFn } from './session.js';
+import { modelKeyFor } from './desktop.js';
+import {
+  advanceSyncCursorToEnd,
+  readSyncCursor,
+  replaySdkMessages,
+  transcriptStat,
+  writeSyncCursor,
+  type GetSessionMessagesFn,
+  type ReconcileResult,
+} from './transcript.js';
+import { getSessionMessages as sdkGetSessionMessages } from '@anthropic-ai/claude-agent-sdk';
 import { resolveClaudeAuthEnv, type ClaudeEngineConfig } from './auth.js';
 import { normalizeClaudeEngineConfig } from './status.js';
 
@@ -22,7 +33,23 @@ export interface ClaudeEngineDeps {
   queryFn?: QueryFn;
   /** Removes the SDK's own transcript for a dropped thread. Defaults to the SDK's `deleteSession`. */
   deleteSdkSession?: (sessionId: string, cwd: string) => Promise<void>;
+  /**
+   * True when the thread's transcript is shared with the Claude Desktop app
+   * (handed off or imported): drop then leaves the SDK transcript alone, and
+   * sessions reconcile from it around every turn. Defaults to never shared.
+   */
+  isTranscriptShared?: (threadId: string, cwd: string) => boolean;
+  /** Injected by tests; production reads transcripts through the SDK. */
+  getSessionMessages?: GetSessionMessagesFn;
   log?: (line: string) => void;
+}
+
+export interface ImportedSdkSession {
+  sessionId: string;
+  /** Pi messages appended to the new thread's JSONL. */
+  appended: number;
+  /** `claude-code/<id>` for the transcript's last assistant model (catalog fallback otherwise). */
+  modelKey: string;
 }
 
 /**
@@ -83,7 +110,7 @@ export class ClaudeEngine implements ChatEngine {
     return this.sessions.has(this.key(threadId, cwd));
   }
 
-  async sessionFor(threadId: string, cwd: string): Promise<EngineSession> {
+  async sessionFor(threadId: string, cwd: string): Promise<ClaudeEngineSession> {
     const key = this.key(threadId, cwd);
     const cached = this.sessions.get(key);
     if (cached) return cached;
@@ -127,8 +154,50 @@ export class ClaudeEngine implements ChatEngine {
       skills: skills === 'none' ? [] : skills,
       executablePath: cfg.executable_path?.trim() || undefined,
       queryFn: this.deps.queryFn,
+      isShared: () => this.deps.isTranscriptShared?.(threadId, cwd) ?? false,
+      getSessionMessages: this.deps.getSessionMessages,
       log: this.deps.log ?? ((line) => console.log(line)),
     });
+  }
+
+  /**
+   * Pull turns made in the Claude Desktop app into the thread's Pi JSONL.
+   * A no-op while a Nexus turn is in flight (the session reconciles itself
+   * before prompting), when the thread is not shared, or when nothing changed.
+   */
+  async reconcileShared(threadId: string, cwd: string): Promise<ReconcileResult | undefined> {
+    if (!(this.deps.isTranscriptShared?.(threadId, cwd) ?? false)) return undefined;
+    const session = await this.sessionFor(threadId, cwd);
+    return session.reconcileFromDesktop();
+  }
+
+  /**
+   * Seed a brand-new thread from a Claude Code session: replay the whole
+   * transcript into the thread's Pi JSONL, record the SDK session id so the
+   * next turn resumes it, and set the sync cursor at the end. The caller marks
+   * the thread shared before any turn runs.
+   */
+  async importSdkSession(threadId: string, cwd: string, sessionId: string): Promise<ImportedSdkSession> {
+    if (this.hasSession(threadId, cwd)) throw new Error(`Thread ${threadId} already has a live Claude session`);
+    const pi = this.deps.pi;
+    const sessionDir = pi.sessionDirFor(cwd);
+    if (!existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true });
+    const sessionManager = await openSessionManagerFor(threadId, cwd, sessionDir);
+    if (readSyncCursor(sessionManager)) throw new Error(`Thread ${threadId} was already imported`);
+    const getMessages = this.deps.getSessionMessages ?? ((id, options) => sdkGetSessionMessages(id, options));
+    const messages = await getMessages(sessionId, { dir: cwd });
+    const result = replaySdkMessages(sessionManager, messages, { model: CLAUDE_CODE_MODELS[0].id, log: this.deps.log });
+    const record: EngineSessionRecord = { engine: 'claude-code', sessionId, recordedAt: new Date().toISOString() };
+    sessionManager.appendCustomEntry(ENGINE_SESSION_CUSTOM_TYPE, record);
+    const stat = transcriptStat(cwd, sessionId);
+    writeSyncCursor(sessionManager, { lastUuid: result.lastUuid ?? '', messageCount: messages.length, fileSize: stat?.size ?? 0 });
+    return { sessionId, appended: result.appended, modelKey: modelKeyFor(result.lastModel) };
+  }
+
+  /** After a handoff: mark everything currently in the transcript as already mirrored. */
+  async markSharedFromHere(threadId: string, cwd: string, sessionId: string): Promise<void> {
+    const session = await this.sessionFor(threadId, cwd);
+    await advanceSyncCursorToEnd({ sessionManager: session.sessionManager, cwd, sessionId, getSessionMessages: this.deps.getSessionMessages });
   }
 
   dropSession(threadId: string, cwd: string): void {
@@ -138,6 +207,11 @@ export class ClaudeEngine implements ChatEngine {
     this.pending.delete(key);
     const sdkSessionId = cached?.engineSessionId ?? readStoredSessionIdFromFile(this.deps.pi.sessionDirFor(cwd), threadId);
     if (!sdkSessionId) return;
+    // Shared with the desktop app: the transcript is its history too.
+    if (this.deps.isTranscriptShared?.(threadId, cwd)) {
+      this.deps.log?.(`[claude-engine ${threadId}] transcript ${sdkSessionId} is shared with Claude Desktop; left in place`);
+      return;
+    }
     // Fire-and-forget: the SDK transcript is a few KB in ~/.claude; failing to
     // remove it must never fail the drop.
     void this.deleteSdkSession(sdkSessionId, cwd).catch((err: any) => {

@@ -71,6 +71,7 @@ import { ClaudeEngine } from './engines/claude/engine.js';
 import type { ClaudeEngineConfig } from './engines/claude/auth.js';
 import { isPiAnthropicOAuthHidden } from './engines/claude/status.js';
 import { registerEngineRoutes } from './routes/engines.js';
+import { registerDesktopRoutes } from './routes/desktop.js';
 import {
   createHealthProbe,
   createListenerWatchdog,
@@ -185,7 +186,17 @@ async function main() {
   const piEngine = new PiEngine(pi, {
     isHidden: (model) => model.provider === 'anthropic' && isPiAnthropicOAuthHidden(claudeConfig(), pi.paths.authFile),
   });
-  const claudeEngine = new ClaudeEngine({ pi, config: claudeConfig });
+  const claudeEngine = new ClaudeEngine({
+    pi,
+    config: claudeConfig,
+    // A transcript shared with the Claude Desktop app (handed off or imported)
+    // is the desktop's history too: drop must leave it alone. Read while the
+    // row still exists (the delete route drops the session before the row).
+    isTranscriptShared: (threadId) => {
+      const row = db.prepare('SELECT desktop_shared_at FROM chat_threads WHERE id = ?').get(threadId) as { desktop_shared_at: string | null } | undefined;
+      return Boolean(row?.desktop_shared_at);
+    },
+  });
   const engines = new EngineRegistry([piEngine, claudeEngine]);
 
   await initMemorySystem(db);
@@ -303,6 +314,7 @@ async function main() {
   app.register(registerAuthRoutes);
   app.register(registerPiRoutes);
   app.register(registerEngineRoutes);
+  app.register(registerDesktopRoutes);
   app.register(registerActivityRoutes);
   app.register(registerApprovalRoutes);
   // The human-facing view of a thread's headless browser. Wired to the same

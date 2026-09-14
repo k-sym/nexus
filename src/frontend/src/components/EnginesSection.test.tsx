@@ -24,6 +24,7 @@ function baseEngine(overrides: Partial<Record<string, unknown>> = {}) {
     modelCount: 3,
     settingSources: [],
     skills: 'all',
+    desktop: { appFound: true, indexFound: true },
     ...overrides,
   };
 }
@@ -105,6 +106,22 @@ describe('EnginesSection', () => {
     expect(
       await screen.findByText(/Anthropic subscription models via Pi are hidden while this engine is on/),
     ).toBeInTheDocument();
+  });
+
+  it('says whether the Claude Desktop app was found on the backend host', async () => {
+    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/engines') {
+        return jsonResponse({ engines: [baseEngine({ desktop: { appFound: true, indexFound: false } })], piAnthropicOAuthHidden: false });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    render(<EnginesSection />);
+    expect(await screen.findByText(/Claude Desktop: app found, no session index yet/)).toBeInTheDocument();
+
+    global.fetch = vi.fn(async () => jsonResponse({ engines: [baseEngine({ desktop: { appFound: false, indexFound: false } })], piAnthropicOAuthHidden: false }));
+    render(<EnginesSection />);
+    expect(await screen.findByText(/Claude Desktop: not found on this machine/)).toBeInTheDocument();
   });
 
   it('shows isolated settings and no skills for an empty configuration', async () => {

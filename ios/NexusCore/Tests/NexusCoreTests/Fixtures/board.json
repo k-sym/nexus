@@ -11,7 +11,9 @@
         "archived_at": null,
         "last_model_key": "claude-code/claude-sonnet-5",
         "ticket_key": "SUP-123",
-        "github_issue": null
+        "github_issue": null,
+        "claude_session_id": "aaaaaaaa-0000-0000-0000-000000000009",
+        "desktop_shared_at": "2026-09-13T11:00:00.000Z"
       },
       "lane": "running",
       "origin": { "kind": "ticket", "key": "SUP-123", "url": "https://x.atlassian.net/browse/SUP-123" },

@@ -6,7 +6,7 @@ import type { AgentBridgeReply } from '@nexus/shared';
  * Each thread is now a pi-runtime-backed session; auth lives in
  * ~/.nexus/auth.json; the model registry is the curated pi list.
  */
-import { Project, ChatThread, Ticket, TicketDescription, TicketDraft, TicketSessionRequest, TicketSessionResult, GitDiffState, ReviewActionRequest, ReviewActionResult, Idea, IdeaState, CreateIdeaInput, UpdateIdeaInput, IdeaIssueDraft, MondayItem, MondayItemWithLinks, ThreadMondayLink, MondayProjectConfig, BoardResponse, OriginRef, OriginDraft, OriginSessionRequest, OriginSessionResult } from '@nexus/shared';
+import { Project, ChatThread, Ticket, TicketDescription, TicketDraft, TicketSessionRequest, TicketSessionResult, GitDiffState, ReviewActionRequest, ReviewActionResult, Idea, IdeaState, CreateIdeaInput, UpdateIdeaInput, IdeaIssueDraft, MondayItem, MondayItemWithLinks, ThreadMondayLink, MondayProjectConfig, BoardResponse, OriginRef, OriginDraft, OriginSessionRequest, OriginSessionResult, DesktopSessionSummary } from '@nexus/shared';
 export type { GitDiffState, ReviewActionRequest, ReviewActionResult } from '@nexus/shared';
 import { apiFetch } from './api-base';
 import type { QuestionAnswer } from './lib/questions';
@@ -740,6 +740,12 @@ export const api = {
     /** Open an origin-stamped thread; send `firstTurn` through the chat stream. */
     boardSession: (id: string, body: OriginSessionRequest) =>
       fetchJson<OriginSessionResult>(`/api/projects/${id}/board/session`, { method: 'POST', body: JSON.stringify(body) }),
+    /** Claude Desktop and terminal sessions under the project's repo path that are not on the board yet. */
+    desktopSessions: (id: string) =>
+      fetchJson<{ sessions: DesktopSessionSummary[]; desktop: { appFound: boolean; indexFound: boolean } }>(`/api/projects/${id}/desktop/sessions`),
+    /** A thread that continues a Claude Desktop session on the same session id. */
+    importDesktopSession: (id: string, sessionId: string) =>
+      fetchJson<{ thread: ChatThread; appended: number }>(`/api/projects/${id}/desktop/sessions/${encodeURIComponent(sessionId)}/import`, { method: 'POST' }),
     gitDiff: (id: string) => fetchJson<GitDiffState>(`/api/projects/${id}/git/diff`),
     previewFile: (id: string, path: string) =>
       fetchJson<FilePreview>(`/api/projects/${id}/files/preview?path=${encodeURIComponent(path)}`),
@@ -775,6 +781,9 @@ export const api = {
         `/api/threads/${encodeURIComponent(threadId)}/supervise`,
         { method: 'POST', body: JSON.stringify({ supervised }) },
       ),
+    /** Hand a Claude-engine thread to the Claude Desktop app (same session id, both sides live). */
+    openInDesktop: (threadId: string) =>
+      fetchJson<{ thread: ChatThread; url: string }>(`/api/threads/${encodeURIComponent(threadId)}/desktop/open`, { method: 'POST' }),
   },
   models: {
     list: () => fetchJson<ModelsResponse>(`/api/models`),
