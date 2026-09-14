@@ -4,6 +4,8 @@ on:
     paths:
       - src/backend/**
       - src/shared/**
+      - src/bridge-client/**
+      - package.json
       - package-lock.json
       - .github/workflows/bridge-quality.yml
   push:
@@ -11,6 +13,8 @@ on:
     paths:
       - src/backend/**
       - src/shared/**
+      - src/bridge-client/**
+      - package.json
       - package-lock.json
       - .github/workflows/bridge-quality.yml
   workflow_dispatch:
@@ -37,3 +41,14 @@ jobs:
         env:
           NEXUS_REQUIRE_LIVE: '1'
         run: node --import tsx --test src/backend/test/live/agent-bridge.live.test.ts
+
+      - name: Build and typecheck standalone bridge client
+        run: npm run --workspace=src/bridge-client build && npm run --workspace=src/bridge-client typecheck
+      - name: Verify client unit tests
+        run: npm run --workspace=src/bridge-client test
+      - name: Verify CLI and MCP against real broker
+        env:
+          NEXUS_REQUIRE_LIVE: '1'
+        run: npm run --workspace=src/bridge-client test:live
+      - name: Verify standalone package installation
+        run: npm run --workspace=src/bridge-client test:package

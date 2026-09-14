@@ -1,5 +1,5 @@
 # Intent: Agent Bridge sender adapter
-Author: Keith. Status: draft. Source: issue #451 and 2026-09-14 conversation.
+Author: Keith. Status: accepted. Source: issue #451 and 2026-09-14 conversation.
 
 ## Problem
 External agent sessions still copy findings into Nexus manually. The bridge receives
@@ -22,5 +22,5 @@ sender hosts, baker-pro backend and broker. No iOS changes.
 - Preserve the unrelated local iOS project-file edit.
 
 ## Open questions
-Design defaults for approval: fire-and-follow rather than waiting for a run in send;
+Approved design: fire-and-follow rather than waiting for a run in send;
 explicit stable sender ID per machine/harness; durable local send/reply state.

@@ -406,3 +406,22 @@ test('Trust route reports actual enabled project scope and configured retention 
   assert.deepEqual((await app.inject('/api/trust')).json().agentBridge.projects, []);
   await app.close(); db.close();
 });
+
+test('targets route exposes only enabled project threads with names/timestamps and runtime limits', async () => {
+  const { db } = fixture(); const service = new AgentBridgeService(db, config());
+  const app = Fastify(); app.decorate('db', db); await app.register(registerAgentBridgeRoutes, { service });
+  service.store.setPolicy('project-a', { enabled: true, thread_ids: ['thread-b'] });
+  let data = (await app.inject('/api/agent-bridge/targets')).json();
+  assert.equal(data.instanceId, 'nexus-test'); assert.equal(data.mode, 'queue_for_approval'); assert.equal(data.maxMessageBytes, 1024);
+  assert.equal(data.projects.length, 1); assert.equal(data.projects[0].name, 'Project A');
+  assert.deepEqual(data.projects[0].threads.map((thread: any) => thread.id), ['thread-b']);
+  assert.equal(data.projects[0].threads[0].name, 'thread-b'); assert.ok(data.projects[0].threads[0].updatedAt);
+  assert.deepEqual(Object.keys(data.projects[0].threads[0]).sort(), ['id', 'name', 'updatedAt']);
+  service.store.setPolicy('project-a', { enabled: true, thread_ids: [] });
+  assert.deepEqual((await app.inject('/api/agent-bridge/targets')).json().projects, []);
+  service.store.setPolicy('project-a', { enabled: false, thread_ids: null });
+  assert.deepEqual((await app.inject('/api/agent-bridge/targets')).json().projects, []);
+  service.store.setPolicy('project-a', { enabled: true, thread_ids: null }); service.config.enabled = false;
+  data = (await app.inject('/api/agent-bridge/targets')).json(); assert.equal(data.enabled, false); assert.deepEqual(data.projects, []);
+  await app.close(); db.close();
+});
