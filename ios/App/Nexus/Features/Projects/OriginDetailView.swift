@@ -2,7 +2,7 @@ import SwiftUI
 import NexusCore
 
 /// Inbox item to session (#439), phone edition — the Tickets detail form for a
-/// GitHub issue or Monday item: the item, Draft with Sonnet, project + model
+/// GitHub issue or Monday item: the item, Draft with Agent, project + model
 /// pickers, editable prompt and branch, Go. Go opens the new, origin-stamped
 /// thread as a cover with the first turn seeded, exactly like `TicketDetailView`.
 @MainActor
@@ -166,7 +166,7 @@ struct OriginDetailView: View {
             } label: {
                 HStack {
                     Image(systemName: "sparkles")
-                    Text(vm.drafting ? "Drafting…" : vm.hasDraft ? "Draft again" : "Draft with Sonnet")
+                    Text(vm.drafting ? "Drafting…" : vm.hasDraft ? "Draft again" : "Draft with Agent")
                     if vm.drafting { Spacer(); ProgressView() }
                 }
             }
@@ -192,7 +192,7 @@ struct OriginDetailView: View {
                 .font(.callout)
                 .overlay(alignment: .topLeading) {
                     if vm.problem.isEmpty {
-                        Text("Draft with Sonnet, or write the problem yourself.")
+                        Text("Draft with Agent, or write the problem yourself.")
                             .foregroundStyle(.tertiary)
                             .padding(.top, 8).padding(.leading, 4)
                             .allowsHitTesting(false)

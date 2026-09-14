@@ -197,7 +197,7 @@ struct TicketDetailView: View {
             } label: {
                 HStack {
                     Image(systemName: "sparkles")
-                    Text(vm.drafting ? "Drafting…" : vm.hasDraft ? "Draft again" : "Draft with Sonnet")
+                    Text(vm.drafting ? "Drafting…" : vm.hasDraft ? "Draft again" : "Draft with Agent")
                     if vm.drafting { Spacer(); ProgressView() }
                 }
             }
@@ -223,7 +223,7 @@ struct TicketDetailView: View {
                 .font(.callout)
                 .overlay(alignment: .topLeading) {
                     if vm.problem.isEmpty {
-                        Text("Draft with Sonnet, or write the problem yourself.")
+                        Text("Draft with Agent, or write the problem yourself.")
                             .foregroundStyle(.tertiary)
                             .padding(.top, 8).padding(.leading, 4)
                             .allowsHitTesting(false)

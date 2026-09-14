@@ -1,6 +1,6 @@
 /**
  * TicketSessionPanel — the part of the Tickets sidebar that turns a ticket into
- * a session (#432): Draft with Sonnet, pick a project and a model, edit the
+ * a session (#432): Draft with Agent, pick a project and a model, edit the
  * prompt and branch, Go. The session replaces the old "create a Kanban task".
  *
  * The panel owns the draft state per ticket; the parent owns the network call
@@ -132,7 +132,7 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
         className="w-full flex items-center justify-center gap-2 text-sm text-zinc-200 border border-zinc-800 hover:border-strong rounded-md py-2 transition-colors disabled:opacity-60"
       >
         <Sparkle size={14} weight="fill" className={drafting ? 'animate-pulse' : ''} />
-        {drafting ? 'Drafting…' : draft ? 'Draft again' : 'Draft with Sonnet'}
+        {drafting ? 'Drafting…' : draft ? 'Draft again' : 'Draft with Agent'}
       </button>
       {draftError && <p className="text-xs text-red-400">{draftError}</p>}
 
@@ -148,7 +148,7 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
         />
         {suggestedProject && (
           <p className="mt-1 text-[10px] text-faint">
-            Sonnet suggested {suggestedProject.name}.{' '}
+            Agent suggested {suggestedProject.name}.{' '}
             <button type="button" onClick={() => pickProject(suggestedProject.id)} className="accent-text hover:underline">
               Use it
             </button>
@@ -201,7 +201,7 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
           value={problem}
           onChange={(e) => setProblem(e.target.value)}
           rows={6}
-          placeholder="Draft with Sonnet, or write the problem yourself."
+          placeholder="Draft with Agent, or write the problem yourself."
           className={`${inputClass} mt-1 resize-y leading-relaxed`}
           aria-label="Prompt"
         />

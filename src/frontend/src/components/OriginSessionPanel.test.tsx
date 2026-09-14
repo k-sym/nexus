@@ -62,13 +62,13 @@ describe('OriginSessionPanel', () => {
     expect(screen.getByRole('button', { name: /^go$/i })).toBeDisabled();
   });
 
-  it('drafts with Sonnet, lets every field be edited, and Go hands the edited values to the parent', async () => {
+  it('drafts with the agent, lets every field be edited, and Go hands the edited values to the parent', async () => {
     vi.mocked(api.projects.boardDraft).mockResolvedValue(draft);
     const onGo = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
     render(<OriginSessionPanel projectId="nexus" item={issue} projects={projects} onGo={onGo} onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole('button', { name: /draft with sonnet/i }));
+    await user.click(screen.getByRole('button', { name: /draft with agent/i }));
     await waitFor(() => expect(api.projects.boardDraft).toHaveBeenCalledWith('nexus', { kind: 'github', id: '439' }));
 
     // The draft fills the form: prompt, type, branch, and the project it picked.
@@ -102,7 +102,7 @@ describe('OriginSessionPanel', () => {
     const user = userEvent.setup();
     render(<OriginSessionPanel projectId="nexus" item={issue} projects={projects} onGo={vi.fn()} onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole('button', { name: /draft with sonnet/i }));
+    await user.click(screen.getByRole('button', { name: /draft with agent/i }));
     const branch = screen.getByLabelText('Branch name') as HTMLInputElement;
     await waitFor(() => expect(branch.value).toBe('fix/session-first-kanban'));
 
@@ -123,7 +123,7 @@ describe('OriginSessionPanel', () => {
     const user = userEvent.setup();
     render(<OriginSessionPanel projectId="nexus" item={issue} projects={projects} onGo={onGo} onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole('button', { name: /draft with sonnet/i }));
+    await user.click(screen.getByRole('button', { name: /draft with agent/i }));
     expect(await screen.findByText('Draft model unavailable')).toBeInTheDocument();
 
     await user.type(screen.getByLabelText('Prompt'), 'Hand-written problem');
@@ -140,7 +140,7 @@ describe('OriginSessionPanel', () => {
     const user = userEvent.setup();
     const { rerender } = render(<OriginSessionPanel projectId="nexus" item={issue} projects={projects} onGo={vi.fn()} onClose={vi.fn()} />);
 
-    await user.click(screen.getByRole('button', { name: /draft with sonnet/i }));
+    await user.click(screen.getByRole('button', { name: /draft with agent/i }));
     await waitFor(() => expect((screen.getByLabelText('Branch name') as HTMLInputElement).value).toBe('fix/session-first-kanban'));
     await user.selectOptions(screen.getByLabelText('Model'), 'claude-code/claude-opus-5');
 
