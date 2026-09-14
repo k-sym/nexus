@@ -26,6 +26,20 @@ export async function registerAgentBridgeRoutes(
 
   fastify.get('/api/agent-bridge/status', async () => service.status());
 
+  fastify.get('/api/agent-bridge/targets', async () => {
+    const projects = service.config.enabled ? service.store.projects().filter(project => project.enabled) : [];
+    const updated = (table: 'projects' | 'chat_threads', id: string): string =>
+      (fastify.db.prepare(`SELECT updated_at FROM ${table} WHERE id = ?`).get(id) as { updated_at: string }).updated_at;
+    return {
+      instanceId: service.config.instance_id, enabled: service.config.enabled, mode: service.config.mode,
+      maxMessageBytes: service.config.max_message_bytes,
+      projects: projects.map(project => ({ id: project.id, name: project.name, updatedAt: updated('projects', project.id),
+        threads: project.threads.filter(thread => project.thread_ids === null || project.thread_ids.includes(thread.id))
+          .map(thread => ({ id: thread.id, name: thread.title, updatedAt: updated('chat_threads', thread.id) })),
+      })).filter(project => project.threads.length > 0),
+    };
+  });
+
   fastify.get('/api/agent-bridge/projects', async () => ({ projects: service.store.projects() }));
 
   fastify.put('/api/agent-bridge/projects/:id', async (request, reply) => {
