@@ -3,7 +3,7 @@ import { api, type TrustSnapshot } from '../api';
 
 const CLEAR_PHRASE = 'CLEAR NEXUS MEMORY';
 
-export function TrustPrivacySection() {
+export function TrustPrivacySection({ refreshKey = 0 }: { refreshKey?: number }) {
   const [snapshot, setSnapshot] = useState<TrustSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -22,7 +22,7 @@ export function TrustPrivacySection() {
     }
   }, []);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void load(); }, [load, refreshKey]);
 
   const rebuild = async () => {
     setOperation('rebuild');
@@ -127,6 +127,14 @@ export function TrustPrivacySection() {
             ))}
             <p className="text-faint">Configured providers receive the request content required to perform their service.</p>
           </Boundary>
+
+          {snapshot.agentBridge && <Boundary title="Agent Bridge scope and retention">
+            <Row label="Bridge" value={snapshot.agentBridge.enabled ? 'Enabled' : 'Disabled'} />
+            <Row label="Inbox retention" value={`${snapshot.agentBridge.retention_days} days; pending work and unsent replies are kept`} />
+            <Row label="Reply attempts" value={`${snapshot.agentBridge.reply_max_attempts} failed attempts before delivery stops`} />
+            {snapshot.agentBridge.projects.length === 0 && <p className="text-faint">No projects enabled for bridge delivery.</p>}
+            {snapshot.agentBridge.projects.map(project => <Row key={project.id} label={project.name} value={project.thread_ids === null ? 'All threads' : project.thread_ids.length === 0 ? 'No threads selected' : project.thread_ids.map(id => project.threads.find(thread => thread.id === id)?.title || id).join(', ')} />)}
+          </Boundary>}
 
           <Boundary title="Telemetry">
             <p className="text-primary font-medium">No application telemetry</p>

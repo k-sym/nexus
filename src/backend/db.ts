@@ -196,6 +196,12 @@ function runMigrations(db: Database.Database) {
     -- Nexus-native Agent Bridge inbox (#249). The envelope id is the primary
     -- key so broker redelivery and sender retries are harmless. Messages land
     -- here before their JetStream delivery is acknowledged.
+    CREATE TABLE IF NOT EXISTS agent_bridge_project_policy (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      enabled INTEGER NOT NULL DEFAULT 0,
+      thread_ids TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS agent_bridge_replies (
       id TEXT PRIMARY KEY,
       message_id TEXT NOT NULL UNIQUE,
@@ -329,6 +335,17 @@ function runMigrations(db: Database.Database) {
     CREATE INDEX IF NOT EXISTS idx_operations_project_id ON operations(project_id);
     CREATE INDEX IF NOT EXISTS idx_operations_thread_id ON operations(thread_id);
   `);
+
+  const bridgeReplyCols = db.pragma('table_info(agent_bridge_replies)') as { name: string }[];
+  for (const [name, definition] of [
+    ['attempts', 'INTEGER NOT NULL DEFAULT 0'],
+    ['discarded_at', 'TEXT'],
+    ['discarded_by', 'TEXT'],
+  ]) {
+    if (!bridgeReplyCols.some(column => column.name === name)) {
+      db.exec(`ALTER TABLE agent_bridge_replies ADD COLUMN ${name} ${definition}`);
+    }
+  }
 
   // Memory moved to the standalone @nexus/memory-daemon — drop the legacy in-db table.
   db.exec('DROP TABLE IF EXISTS memories;');

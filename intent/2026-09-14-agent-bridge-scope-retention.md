@@ -1,5 +1,5 @@
 # Intent: Agent Bridge project scope and retention
-Author: Keith. Status: draft. Source: issue #452 and 2026-09-14 conversation.
+Author: Keith. Status: accepted. Source: issue #452 and 2026-09-14 conversation.
 
 ## Problem
 Allowed bridge senders can address every project. SQLite inbox history grows without
@@ -22,4 +22,4 @@ baker-pro after PR review. No iOS changes.
 - Preserve the user's existing iOS project-file edit.
 
 ## Open questions
-Design defaults: scope controls in Settings → Agent Bridge; 30-day SQLite retention.
+Approved: scope controls in Settings → Agent Bridge; 30-day SQLite retention.

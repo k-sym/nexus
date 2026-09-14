@@ -6,6 +6,7 @@ import { EnginesSection } from './EnginesSection';
 import { ModelCurationSection } from './ModelCurationSection';
 import { TrustPrivacySection } from './TrustPrivacySection';
 import { AgentBridgeInbox } from './AgentBridgeInbox';
+import { AgentBridgeScopeSettings } from './AgentBridgeScopeSettings';
 import { getBackgroundMotion, setBackgroundMotion, type BackgroundMotion } from '../appearance';
 
 const MOTION_OPTIONS: { mode: BackgroundMotion; label: string }[] = [
@@ -34,6 +35,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [trustRevision, setTrustRevision] = useState(0);
   const [testingLocalModel, setTestingLocalModel] = useState(false);
   const [localModelStatus, setLocalModelStatus] = useState<{ ok: boolean; message: string } | null>(null);
   // Per-provider API-helper Test state (#291), keyed by provider id.
@@ -92,6 +94,7 @@ export default function SettingsPage() {
     try {
       const updated = await api.settings.update(config);
       setConfig(updated);
+      setTrustRevision(revision => revision + 1);
       window.dispatchEvent(new Event('nexus:models-refresh'));
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
@@ -767,10 +770,20 @@ export default function SettingsPage() {
                 </Field>
               </div>
             </details>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="text-xs text-muted">Inbox retention (days)
+                <input aria-label="Agent Bridge retention days" type="number" min={1} max={3650} value={config.agent_bridge?.retention_days ?? 30} onChange={event => update(['agent_bridge', 'retention_days'], Number(event.target.value))} className="block mt-1 min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm text-primary" />
+              </label>
+              <label className="text-xs text-muted">Failed delivery attempts before stopping
+                <input aria-label="Agent Bridge reply attempts" type="number" min={1} max={10000} value={config.agent_bridge?.reply_max_attempts ?? 60} onChange={event => update(['agent_bridge', 'reply_max_attempts'], Number(event.target.value))} className="block mt-1 min-h-11 w-full surface-panel border border-subtle rounded-sm px-3 text-sm text-primary" />
+              </label>
+            </div>
+            <p className="text-xs text-faint">Retention preserves pending work and unsent replies. Failed replies stop at the attempt limit for your Retry or Discard decision. Save configuration and restart the backend to apply these limits.</p>
+            <AgentBridgeScopeSettings onSaved={() => setTrustRevision(revision => revision + 1)} />
             <AgentBridgeInbox />
           </Section>
 
-          <TrustPrivacySection />
+          <TrustPrivacySection refreshKey={trustRevision} />
         </div>
       </div>
     </div>

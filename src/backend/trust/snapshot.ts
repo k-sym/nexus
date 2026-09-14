@@ -1,5 +1,7 @@
 import { join, resolve } from 'node:path';
-import type { NexusConfig } from '@nexus/shared';
+import type { AgentBridgeTrust, NexusConfig } from '@nexus/shared';
+import type Database from 'better-sqlite3';
+import { AgentBridgeStore } from '../agent-bridge/store.js';
 import type { PiRuntime } from '../pi/runtime.js';
 import { expandHome, getNexusDir, resolveEnvVars } from '../config.js';
 import { resolveGitHubTokenStatus } from '../github/token.js';
@@ -8,6 +10,7 @@ import { DEFAULT_RECALL_LIMIT, DEFAULT_RECALL_TOKEN_BUDGET } from '../memory/ind
 export type SecretSource = 'environment' | 'config-env-reference' | 'config-literal' | 'pi-auth-file' | 'gh-cli' | 'absent' | 'unknown';
 export interface TrustSecret { configured: boolean; source: SecretSource; location?: string; credentialType?: 'api_key' | 'oauth' }
 export interface TrustSnapshot {
+  agentBridge: AgentBridgeTrust;
   services: Array<{ name: string; url: string; loopback: boolean }>;
   storage: Array<{ name: string; path: string; role: 'canonical' | 'rebuildable' | 'application' | 'credentials' | 'configuration' }>;
   secrets: Record<string, TrustSecret>;
@@ -17,6 +20,7 @@ export interface TrustSnapshot {
 }
 
 export interface TrustSnapshotDependencies {
+  db?: Database.Database;
   githubStatus?: typeof resolveGitHubTokenStatus;
   nexusDir?: string;
 }
@@ -209,6 +213,12 @@ export async function buildTrustSnapshot(
         enabled: Boolean(bridge.enabled),
       },
     ],
+    agentBridge: {
+      enabled: Boolean(bridge.enabled),
+      retention_days: config.agent_bridge?.retention_days ?? 30,
+      reply_max_attempts: config.agent_bridge?.reply_max_attempts ?? 60,
+      projects: dependencies.db ? new AgentBridgeStore(dependencies.db).projects().filter(project => project.enabled) : [],
+    },
     telemetry: {
       applicationTelemetry: false,
       statement: 'Nexus has no application analytics or telemetry integration. Configured providers receive requests needed to provide their service.',

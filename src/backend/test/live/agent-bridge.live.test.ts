@@ -59,8 +59,9 @@ test('real broker → approval → managed chat → supervised work / expiry →
     for (const id of ['a', 'b']) db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, last_model_key) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, 'project', id, now, now, 'test/model');
     const config = { enabled: true, mode: 'queue_for_approval' as const, url: `nats://127.0.0.1:${port}`, instance_id: 'live',
-      allowed_senders: ['reviewer'], token: '', max_message_bytes: 4096, max_messages_per_minute: 30, max_hops: 4 };
+      allowed_senders: ['reviewer'], token: '', max_message_bytes: 4096, max_messages_per_minute: 30, max_hops: 4, retention_days: 30, reply_max_attempts: 60 };
     let service = new AgentBridgeService(db, config);
+    service.store.setPolicy('project', { enabled: true, thread_ids: null });
     const questions = new QuestionBroker();
     const approvals = new ApprovalBroker();
     const concurrency = new ConcurrencyTracker();
@@ -169,6 +170,90 @@ test('real broker → approval → managed chat → supervised work / expiry →
   } finally {
     await nc?.close();
     if (broker.pid && broker.exitCode === null) { broker.kill('SIGTERM'); await new Promise(resolve => broker.once('exit', resolve)); }
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('broker outage reaches dead letter; restart preserves state; retry delivers original ID and discard stays local', { timeout: 60_000 }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'nexus-bridge-outage-'));
+  const port = await freePort();
+  const url = `nats://127.0.0.1:${port}`;
+  const binary = process.env.NATS_SERVER_BINARY || 'nats-server';
+  let broker: ReturnType<typeof spawn> | undefined;
+  let launchError: Error | undefined;
+  const launch = () => {
+    broker = spawn(binary, ['-js', '-a', '127.0.0.1', '-p', String(port), '-sd', join(root, 'jetstream')], { stdio: 'ignore' });
+    broker.on('error', error => { launchError = error; });
+  };
+  const kill = async () => {
+    if (broker?.pid && broker.exitCode === null) {
+      const exited = new Promise(resolve => broker!.once('exit', resolve));
+      broker.kill('SIGTERM'); await exited;
+    }
+  };
+  const db = getDb(join(root, 'nexus.db'));
+  let service: AgentBridgeService | undefined;
+  let nc: Awaited<ReturnType<typeof connect>> | undefined;
+  const app = Fastify(); app.decorate('db', db);
+  try {
+    launch();
+    await until(async () => {
+      if (launchError) return true;
+      try { nc = await connect({ servers: url, timeout: 100, reconnect: false }); return true; } catch { return false; }
+    }, 'outage broker startup');
+    if (launchError) {
+      if (process.env.NEXUS_REQUIRE_LIVE === '1') throw launchError;
+      t.skip('Install nats-server or set NATS_SERVER_BINARY'); return;
+    }
+    const now = new Date().toISOString();
+    db.prepare('INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('p', 'p', 'Project', root, now, now);
+    db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('t', 'p', 'Thread', now, now);
+    const config = { enabled: true, mode: 'queue_for_approval' as const, url, instance_id: 'outage', allowed_senders: ['reviewer'], token: '', max_message_bytes: 4096,
+      max_messages_per_minute: 30, max_hops: 4, retention_days: 30, reply_max_attempts: 2 };
+    service = new AgentBridgeService(db, config);
+    service.store.setPolicy('p', { enabled: true, thread_ids: ['t'] });
+    service.start(); await until(() => service!.status().state === 'connected', 'outage service connected');
+    for (const id of ['retry', 'discard']) {
+      service.ingest({ version: 1, kind: 'message', id, sentAt: now, sender: { id: 'reviewer' }, target: { instanceId: 'outage', projectId: 'p', threadId: 't' }, content: 'Review' });
+      const running = service.store.transition(id, 'pending_approval', 'running')!;
+      service.store.complete(running, { completed: true, content: `Report ${id}` }, 'outage');
+    }
+    const original = service.store.reply('retry')!;
+    assert.equal((await (await jetstreamManager(nc!)).streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 0);
+    await nc!.close(); nc = undefined;
+    await kill();
+    await until(() => service!.status().state !== 'connected', 'disconnect observed');
+    for (const id of ['retry', 'discard']) service.store.approveReply(id);
+    await service.flushReplies(); await service.flushReplies();
+    for (const id of ['retry', 'discard']) {
+      assert.equal(service.store.reply(id)?.status, 'dead_letter');
+      assert.equal(service.store.reply(id)?.attempts, 2);
+    }
+    await service.stop();
+    service = new AgentBridgeService(db, config);
+    assert.equal(service.store.reply('retry')?.status, 'dead_letter');
+    assert.equal(service.store.reply('retry')?.attempts, 2);
+    await app.register(registerAgentBridgeRoutes, { service });
+    assert.equal((await app.inject({ method: 'POST', url: '/api/agent-bridge/messages/discard/reply/discard' })).statusCode, 200);
+    launch();
+    await until(async () => {
+      try { nc = await connect({ servers: url, timeout: 100, reconnect: false }); return true; } catch { return false; }
+    }, 'broker restarted');
+    service.start(); await until(() => service!.status().state === 'connected', 'service reconnected');
+    const jsm = await jetstreamManager(nc!);
+    assert.equal((await jsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 0, 'dead letters do not resend on reconnect');
+    assert.equal((await app.inject({ method: 'POST', url: '/api/agent-bridge/messages/retry/reply/retry' })).statusCode, 202);
+    await until(() => service!.store.reply('retry')?.status === 'sent', 'manual retry sent');
+    const stored = await jsm.streams.getMessage(AGENT_BRIDGE_RESULTS_STREAM, { seq: 1 });
+    const result = JSON.parse(new TextDecoder().decode(stored.data));
+    assert.equal(result.id, original.id);
+    assert.equal(new TextDecoder().decode(stored.data), original.payload);
+    assert.equal(service.store.reply('discard')?.status, 'discarded');
+    assert.equal(service.store.reply('discard')?.discarded_by, 'user');
+    await service.flushReplies();
+    assert.equal((await jsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 1);
+  } finally {
+    await service?.stop(); await app.close(); await nc?.close(); await kill(); db.close();
     rmSync(root, { recursive: true, force: true });
   }
 });

@@ -169,3 +169,13 @@ describe('TrustPrivacySection', () => {
     expect(trust.clearMondayMirror).not.toHaveBeenCalled();
   });
 });
+
+it('shows enabled bridge scope, thread restrictions and retention limits', async () => {
+  trust.get.mockResolvedValue({ ...snapshot, agentBridge: { enabled: true, retention_days: 45, reply_max_attempts: 12,
+    projects: [{ id: 'p', name: 'Bridge project', enabled: true, thread_ids: ['a'], threads: [{ id: 'a', title: 'Review thread' }] }] } });
+  render(<TrustPrivacySection />);
+  expect(await screen.findByText('Bridge project')).toBeInTheDocument();
+  expect(screen.getByText('Review thread')).toBeInTheDocument();
+  expect(screen.getByText(/45 days; pending work/)).toBeInTheDocument();
+  expect(screen.getByText(/12 failed attempts/)).toBeInTheDocument();
+});

@@ -207,12 +207,21 @@ test('settings masks and preserves the Agent Bridge token and rejects unsafe rem
       url: '/api/settings',
       payload: {
         ...get.json(),
-        agent_bridge: { ...get.json().agent_bridge, mode: 'queue_for_approval' },
+        agent_bridge: { ...get.json().agent_bridge, mode: 'queue_for_approval', retention_days: 45, reply_max_attempts: 12 },
       },
     });
     assert.equal(put.statusCode, 200);
     assert.equal(loadConfig().agent_bridge.token, 'bridge-secret');
     assert.equal(loadConfig().agent_bridge.mode, 'queue_for_approval');
+    assert.equal(loadConfig().agent_bridge.retention_days, 45);
+    assert.equal(loadConfig().agent_bridge.reply_max_attempts, 12);
+    for (const invalid of [{ retention_days: 0 }, { reply_max_attempts: 1.5 }]) {
+      const response = await app.inject({ method: 'PUT', url: '/api/settings', payload: {
+        ...put.json(), agent_bridge: { ...put.json().agent_bridge, ...invalid },
+      } });
+      assert.equal(response.statusCode, 400);
+    }
+
 
     const unsafe = await app.inject({
       method: 'PUT',
