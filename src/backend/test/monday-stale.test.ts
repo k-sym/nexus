@@ -114,7 +114,7 @@ test('a linked session that moved recently counts as movement, with the session 
 async function buildApp(db: ReturnType<typeof getDb>) {
   const app = Fastify();
   app.decorate('db', db);
-  await app.register(registerMondayRoutes);
+  await app.register(registerMondayRoutes, { now: () => NOW });
   return app;
 }
 

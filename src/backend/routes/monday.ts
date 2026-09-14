@@ -130,8 +130,14 @@ function validateMondayConfig(body: unknown): { config: MondayProjectConfig } | 
   };
 }
 
-export async function registerMondayRoutes(fastify: FastifyInstance) {
+export interface RegisterMondayRoutesOptions {
+  /** Clock for the stale report; tests pin it so fixtures do not drift with the calendar. */
+  now?: () => Date;
+}
+
+export async function registerMondayRoutes(fastify: FastifyInstance, options: RegisterMondayRoutesOptions = {}) {
   const db = fastify.db;
+  const now = options.now ?? (() => new Date());
 
   fastify.get('/api/monday/status', async () => {
     const cfg = loadConfig().monday;
@@ -198,7 +204,7 @@ export async function registerMondayRoutes(fastify: FastifyInstance) {
       }
     }
 
-    return { ...buildStaleReport(db, days, new Date(), excludeLabels), refreshed, warnings };
+    return { ...buildStaleReport(db, days, now(), excludeLabels), refreshed, warnings };
   });
 
   // The two retry targets the Activity Console reaches through
