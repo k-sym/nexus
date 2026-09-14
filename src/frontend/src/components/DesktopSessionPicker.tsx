@@ -106,9 +106,12 @@ export function DesktopSessionPicker({ projectId, onImport, onClose }: Props) {
           {!loadError && sessions === null && <div className="px-4 py-6 text-sm text-faint text-center">Looking for sessions…</div>}
           {!loadError && sessions !== null && filtered.length === 0 && (
             <div className="px-4 py-6 text-sm text-faint text-center">
-              {sessions.length === 0
-                ? 'No Claude Desktop or terminal sessions for this project\'s repo path.'
-                : 'No matches.'}
+              {sessions.length === 0 ? (
+                <>
+                  <p>No Claude Desktop or terminal sessions to import for this project's repo path.</p>
+                  <p className="mt-2 text-[11px]">Sessions Nexus started itself and sessions already on the board are not listed.</p>
+                </>
+              ) : 'No matches.'}
             </div>
           )}
           {filtered.map((session, i) => (

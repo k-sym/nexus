@@ -42,6 +42,7 @@ describe('DesktopSessionPicker', () => {
   it('explains when the repo path has no sessions', async () => {
     vi.spyOn(api.api.projects, 'desktopSessions').mockResolvedValue({ sessions: [], desktop: { appFound: true, indexFound: true } });
     render(<DesktopSessionPicker projectId="p1" onImport={async () => {}} onClose={() => {}} />);
-    expect(await screen.findByText(/No Claude Desktop or terminal sessions/)).toBeInTheDocument();
+    expect(await screen.findByText(/No Claude Desktop or terminal sessions to import/)).toBeInTheDocument();
+    expect(screen.getByText(/Sessions Nexus started itself and sessions already on the board are not listed/)).toBeInTheDocument();
   });
 });
