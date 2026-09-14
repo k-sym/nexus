@@ -1,6 +1,6 @@
 /**
  * OriginSessionPanel — the board's right-hand drawer that turns an Inbox item
- * (a GitHub issue or a Monday item) into a session (#439): Draft with Sonnet,
+ * (a GitHub issue or a Monday item) into a session (#439): Draft with Agent,
  * pick a project and a model, edit the prompt and branch, Go. The same form as
  * TicketSessionPanel, kept as its own component so #432's panel stays untouched.
  *
@@ -143,7 +143,7 @@ export default function OriginSessionPanel({ projectId, item, projects, onGo, on
           className="w-full flex items-center justify-center gap-2 text-sm text-zinc-200 border border-zinc-800 hover:border-strong rounded-md py-2 transition-colors disabled:opacity-60"
         >
           <Sparkle size={14} weight="fill" className={drafting ? 'animate-pulse' : ''} />
-          {drafting ? 'Drafting…' : draft ? 'Draft again' : 'Draft with Sonnet'}
+          {drafting ? 'Drafting…' : draft ? 'Draft again' : 'Draft with Agent'}
         </button>
         {draftError && <p className="text-xs text-red-400">{draftError}</p>}
 
@@ -200,7 +200,7 @@ export default function OriginSessionPanel({ projectId, item, projects, onGo, on
             value={problem}
             onChange={(e) => setProblem(e.target.value)}
             rows={8}
-            placeholder="Draft with Sonnet, or write the problem yourself."
+            placeholder="Draft with Agent, or write the problem yourself."
             className={`${inputClass} mt-1 resize-y leading-relaxed`}
             aria-label="Prompt"
           />

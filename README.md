@@ -722,7 +722,7 @@ The board is a view over a project's sessions, not a separate task list (#439). 
 Inbox → Running → Needs you → Idle → Done
 ```
 
-- **Inbox** — the project's open GitHub issues and active Monday items that have no card on the board. Click one: **Draft with Sonnet** distils the problem, suggests a project and a branch (`feat|fix|hotfix/<slug>`, the repo convention), you edit, pick a model, press **Go**, and land in a new session whose first turn is the edited prompt plus a fixed trailer (work on the branch, push it, do not open a PR, do not touch the issue or item). The thread is stamped with its origin — `chat_threads.github_issue`, or a `thread_monday_links` row — so the issue or item leaves the Inbox while its card is on the board.
+- **Inbox** — the project's open GitHub issues and active Monday items that have no card on the board. Click one: **Draft with Agent** distils the problem, suggests a project and a branch (`feat|fix|hotfix/<slug>`, the repo convention), you edit, pick a model, press **Go**, and land in a new session whose first turn is the edited prompt plus a fixed trailer (work on the branch, push it, do not open a PR, do not touch the issue or item). The thread is stamped with its origin — `chat_threads.github_issue`, or a `thread_monday_links` row — so the issue or item leaves the Inbox while its card is on the board.
 - **Running** — a thread with an active run. **Needs you** — a running thread waiting on a question or a tool approval.
 - **Idle** — a live thread with no run. **Done** — threads archived in the last 30 days; after that an origin still open upstream returns to the Inbox.
 
@@ -877,7 +877,7 @@ it gets populated:
 > "no tickets." The instance host accepts either `your-company.atlassian.net` or a full `https://…` URL.
 
 **Ticket to session (#432).** Selecting a ticket shows its cleaned body and a session panel (web sidebar;
-a detail screen on iOS). **Draft with Sonnet** runs a one-shot Claude Agent SDK call (tools off, one turn,
+a detail screen on iOS). **Draft with Agent** runs a one-shot Claude Agent SDK call (tools off, one turn,
 nothing persisted) that distils the real problem out of the forwarded-mail noise, suggests a project, and
 proposes a branch in SSUK's form `fix/SUP123-short-description` (`fix` / `hotfix` / `feature`). You pick the
 project and a model from the curated list, edit the prompt and branch, and press **Go** (a project you

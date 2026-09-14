@@ -89,7 +89,7 @@ describe('TicketsView', () => {
     expect(detailPriority).toHaveClass('ticket-priority-pill', 'ticket-priority-medium');
   });
 
-  it('drafts with Sonnet, lets the draft be edited, and calls Go with the edited values', async () => {
+  it('drafts with the agent, lets the draft be edited, and calls Go with the edited values', async () => {
     vi.mocked(api.tickets.list).mockResolvedValue([ticket]);
     vi.mocked(api.tickets.description).mockResolvedValue({ key: ticket.key, body: 'Ticket body', trimmed: [], fetchedAt: null, empty: false });
     vi.mocked(api.tickets.draft).mockResolvedValue({
@@ -113,14 +113,14 @@ describe('TicketsView', () => {
     // Nothing to send yet: Go is disabled until there is a prompt.
     expect(screen.getByRole('button', { name: /^Go$/ })).toBeDisabled();
 
-    await user.click(screen.getByRole('button', { name: /Draft with Sonnet/ }));
+    await user.click(screen.getByRole('button', { name: /Draft with Agent/ }));
     await waitFor(() => expect(api.tickets.draft).toHaveBeenCalledWith('SUP-1058'));
 
     const prompt = await screen.findByLabelText('Prompt') as HTMLTextAreaElement;
     await waitFor(() => expect(prompt.value).toMatch(/8AOFI/));
     // No pick by hand yet, so the draft's project is applied.
     expect(screen.getByRole('button', { name: 'Project' })).toHaveTextContent('WSE');
-    expect(screen.queryByText(/Sonnet suggested/)).toBeNull();
+    expect(screen.queryByText(/Agent suggested/)).toBeNull();
     expect((screen.getByLabelText('Branch name') as HTMLInputElement).value).toBe('fix/SUP1058-last-score-missing');
 
     await user.type(prompt, ' Look at audit_build.php.');
@@ -163,9 +163,9 @@ describe('TicketsView', () => {
     // Pick Wise CI by hand, then draft: Sonnet's WSE must not replace it.
     await user.click(screen.getByRole('button', { name: 'Project' }));
     await user.click(screen.getByRole('option', { name: /Wise CI/ }));
-    await user.click(screen.getByRole('button', { name: /Draft with Sonnet/ }));
+    await user.click(screen.getByRole('button', { name: /Draft with Agent/ }));
     await waitFor(() => expect(api.tickets.draft).toHaveBeenCalledWith('SUP-1058'));
-    await screen.findByText(/Sonnet suggested WSE/);
+    await screen.findByText(/Agent suggested WSE/);
     expect(screen.getByRole('button', { name: 'Project' })).toHaveTextContent('Wise CI');
 
     await user.click(screen.getByRole('button', { name: /^Go$/ }));
@@ -175,7 +175,7 @@ describe('TicketsView', () => {
     // "Use it" adopts the suggestion and the hint goes away.
     await user.click(screen.getByRole('button', { name: 'Use it' }));
     expect(screen.getByRole('button', { name: 'Project' })).toHaveTextContent('WSE');
-    expect(screen.queryByText(/Sonnet suggested/)).toBeNull();
+    expect(screen.queryByText(/Agent suggested/)).toBeNull();
   });
 
   it('shows a session badge and an Open session button for a ticket that has one', async () => {
@@ -190,6 +190,6 @@ describe('TicketsView', () => {
     await user.click(screen.getByRole('button', { name: /SUP-1058/ }));
     await user.click(await screen.findByRole('button', { name: /Open session/ }));
     expect(onOpenSession).toHaveBeenCalledWith('p-wse', 't-1');
-    expect(screen.queryByRole('button', { name: /Draft with Sonnet/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Draft with Agent/ })).toBeNull();
   });
 });
