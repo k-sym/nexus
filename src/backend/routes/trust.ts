@@ -31,7 +31,7 @@ export async function registerTrustRoutes(fastify: FastifyInstance, options: Tru
   const getConfig = options.config ?? loadConfig;
   const daemonClient = options.daemonClient ?? daemon;
 
-  fastify.get('/api/trust', async () => buildTrustSnapshot(getConfig(), fastify.pi, options.snapshot));
+  fastify.get('/api/trust', async () => buildTrustSnapshot(getConfig(), fastify.pi, { ...options.snapshot, db: fastify.db }));
   fastify.post('/api/trust/memory/rebuild', async (_request, reply) =>
     proxy(reply, () => daemonClient.rebuildIndex()));
   fastify.post('/api/trust/memory/clear-nexus', async (request, reply) => {

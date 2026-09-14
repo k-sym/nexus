@@ -61,3 +61,15 @@ test('saveConfig leaves no temp file behind', () => {
   saveConfig(loadConfig());
   assert.deepEqual(readdirSync(NEXUS_HOME).filter((f) => f.includes('.tmp')), []);
 });
+
+
+test('older Agent Bridge configuration gains retention and retry defaults on load', () => {
+  const original = readFileSync(join(NEXUS_HOME, 'config.yaml'), 'utf8');
+  try {
+    writeFileSync(join(NEXUS_HOME, 'config.yaml'), 'agent_bridge:\n  enabled: false\n  max_hops: 2\n');
+    const config = loadConfig();
+    assert.equal(config.agent_bridge.max_hops, 2);
+    assert.equal(config.agent_bridge.retention_days, 30);
+    assert.equal(config.agent_bridge.reply_max_attempts, 60);
+  } finally { writeFileSync(join(NEXUS_HOME, 'config.yaml'), original); }
+});

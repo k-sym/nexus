@@ -48,6 +48,7 @@ export class AgentBridgeService {
   private stopping = false;
   private replyFlush: Promise<void> | null = null;
   private replyTimer: ReturnType<typeof setInterval> | null = null;
+  private retentionTimer: ReturnType<typeof setInterval> | null = null;
   private readonly recentBySender = new Map<string, number[]>();
 
   constructor(
@@ -73,7 +74,13 @@ export class AgentBridgeService {
   }
 
   start(): void {
-    if (!this.config.enabled || this.stopping || this.nc) return;
+    if (this.stopping) return;
+    if (!this.retentionTimer) {
+      this.store.prune(this.config.retention_days);
+      this.retentionTimer = setInterval(() => this.store.prune(this.config.retention_days), 3_600_000);
+      this.retentionTimer.unref();
+    }
+    if (!this.config.enabled || this.nc) return;
     const invalid = validateAgentBridgeConfig({ ...this.config, token: resolveEnvVars(this.config.token) });
     if (invalid) {
       this.state = 'error';
@@ -87,6 +94,8 @@ export class AgentBridgeService {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.retentionTimer) clearInterval(this.retentionTimer);
+    this.retentionTimer = null;
     if (this.replyTimer) clearInterval(this.replyTimer);
     this.replyTimer = null;
     if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -121,18 +130,17 @@ export class AgentBridgeService {
 
   flushReplies(): Promise<void> {
     if (this.replyFlush) return this.replyFlush;
-    if (this.stopping || !this.config.enabled || !this.nc || this.state !== 'connected') return Promise.resolve();
-    const nc = this.nc;
+    if (this.stopping || !this.config.enabled) return Promise.resolve();
     this.replyFlush = (async () => {
-      const js = jetstream(nc);
       for (const reply of this.store.queuedReplies()) {
         if (this.stopping) break;
         try {
+          if (!this.nc || this.state !== 'connected') throw new Error('Agent Bridge broker is unavailable');
+          const js = jetstream(this.nc);
           await js.publish(reply.destination, new TextEncoder().encode(reply.payload), { msgID: reply.id });
           this.store.markReplySent(reply.id);
         } catch (error) {
-          this.store.markReplyError(reply.id, error instanceof Error ? error.message : 'Reply delivery failed');
-          break;
+          this.store.markReplyError(reply.id, error instanceof Error ? error.message : 'Reply delivery failed', this.config.reply_max_attempts);
         }
       }
     })().finally(() => { this.replyFlush = null; });

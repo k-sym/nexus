@@ -418,6 +418,8 @@ export interface AgentBridgeConfig {
   max_message_bytes: number;
   max_messages_per_minute: number;
   max_hops: number;
+  retention_days: number;
+  reply_max_attempts: number;
 }
 
 export interface NexusConfig {
@@ -950,7 +952,27 @@ export interface AgentBridgeReply {
   message_id: string;
   destination: string;
   payload: string;
-  status: 'pending_approval' | 'queued' | 'sent';
+  status: 'pending_approval' | 'queued' | 'sent' | 'dead_letter' | 'discarded';
+  attempts: number;
+  discarded_at: string | null;
+  discarded_by: string | null;
   error: string | null;
   sent_at: string | null;
+}
+
+/** Human-managed delivery scope; null permits all threads, [] permits none. */
+export interface AgentBridgeProjectPolicy {
+  enabled: boolean;
+  thread_ids: string[] | null;
+}
+export interface AgentBridgeProjectScope extends AgentBridgeProjectPolicy {
+  id: string;
+  name: string;
+  threads: Array<{ id: string; title: string }>;
+}
+export interface AgentBridgeTrust {
+  enabled: boolean;
+  retention_days: number;
+  reply_max_attempts: number;
+  projects: AgentBridgeProjectScope[];
 }

@@ -30,6 +30,8 @@ vi.mock('../api', () => ({
           max_message_bytes: 65536,
           max_messages_per_minute: 30,
           max_hops: 4,
+          retention_days: 30,
+          reply_max_attempts: 60,
         },
       })),
       update: vi.fn(async (config) => config),
@@ -55,6 +57,7 @@ vi.mock('../api', () => ({
       clearNexusMemory: vi.fn(),
     },
     agentBridge: {
+      projects: vi.fn(async () => ({ projects: [] })),
       status: vi.fn(async () => ({
         enabled: false,
         state: 'disabled',
@@ -163,6 +166,10 @@ describe('SettingsPage', () => {
     await user.click(section.getByRole('button', { name: 'Agent Bridge Disabled' }));
     await user.selectOptions(section.getByLabelText('Inbound behavior'), 'queue_for_approval');
     await user.type(section.getByLabelText('Allowed Agent Bridge senders'), 'claude-reviewer');
+    await user.clear(section.getByLabelText('Agent Bridge retention days'));
+    await user.type(section.getByLabelText('Agent Bridge retention days'), '45');
+    await user.clear(section.getByLabelText('Agent Bridge reply attempts'));
+    await user.type(section.getByLabelText('Agent Bridge reply attempts'), '12');
     await user.click(screen.getByRole('button', { name: 'Save Changes' }));
 
     await waitFor(() => {
@@ -171,6 +178,8 @@ describe('SettingsPage', () => {
           enabled: true,
           mode: 'queue_for_approval',
           allowed_senders: ['claude-reviewer'],
+          retention_days: 45,
+          reply_max_attempts: 12,
         }),
       }));
     });

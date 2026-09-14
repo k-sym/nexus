@@ -12,6 +12,8 @@ vi.mock('../api', () => ({
       approve: vi.fn(),
       reject: vi.fn(),
       sendReply: vi.fn(),
+      retryReply: vi.fn(),
+      discardReply: vi.fn(),
     },
   },
 }));
@@ -61,7 +63,7 @@ describe('AgentBridgeInbox', () => {
   it('previews the exact completion reply and sends only on explicit confirmation', async () => {
     const user = userEvent.setup();
     const reply = { id: 'reply-1', message_id: pending.id, destination: 'nexus.bridge.v1.results.cmV2aWV3ZXI',
-      payload: JSON.stringify({ kind: 'result', content: 'Review complete' }), status: 'pending_approval' as const, error: null, sent_at: null };
+      payload: JSON.stringify({ kind: 'result', content: 'Review complete' }), status: 'pending_approval' as const, error: null, sent_at: null, attempts: 0, discarded_at: null, discarded_by: null };
     vi.mocked(api.agentBridge.messages).mockResolvedValue({ messages: [{ ...pending, status: 'completed', reply }] });
     vi.mocked(api.agentBridge.sendReply).mockResolvedValue({ ...reply, status: 'queued' });
     render(<AgentBridgeInbox />);
@@ -72,4 +74,24 @@ describe('AgentBridgeInbox', () => {
     await waitFor(() => expect(api.agentBridge.sendReply).toHaveBeenCalledWith(pending.id));
   });
 
+});
+
+it('stops promising automatic retries and offers explicit Retry and Discard for dead letters', async () => {
+  const user = userEvent.setup();
+  const reply = { id: 'r', message_id: pending.id, destination: 'nexus.bridge.v1.results.test', payload: '{"content":"Ready"}',
+    status: 'dead_letter' as const, error: 'Broker unavailable', sent_at: null, attempts: 60, discarded_at: null, discarded_by: null };
+  vi.mocked(api.agentBridge.status).mockResolvedValue({ enabled: true, state: 'error', mode: 'queue_for_approval', instanceId: 'test', subject: 'test', url: '', durable: true });
+  vi.mocked(api.agentBridge.messages).mockResolvedValue({ messages: [{ ...pending, status: 'completed', reply }] });
+  vi.mocked(api.agentBridge.retryReply).mockRejectedValueOnce(new Error('Still unavailable'));
+  vi.mocked(api.agentBridge.discardReply).mockResolvedValue({ ...reply, status: 'discarded' });
+  render(<AgentBridgeInbox />);
+  expect(await screen.findByText(/Delivery stopped/)).toBeInTheDocument();
+  expect(screen.queryByText(/Will retry automatically/)).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'Retry reply to Claude reviewer' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Still unavailable');
+  vi.mocked(api.agentBridge.messages).mockResolvedValue({ messages: [{ ...pending, status: 'completed', reply: { ...reply, status: 'discarded', discarded_at: '2026-09-14T10:00:00Z', discarded_by: 'user' } }] });
+  await user.click(screen.getByRole('button', { name: 'Discard reply to Claude reviewer' }));
+  await waitFor(() => expect(api.agentBridge.discardReply).toHaveBeenCalledWith(pending.id));
+  expect(await screen.findByText(/Discarded by user/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /Retry reply/ })).not.toBeInTheDocument();
 });

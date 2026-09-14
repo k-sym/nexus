@@ -130,6 +130,8 @@ function defaultConfig(): NexusConfig {
       max_message_bytes: 65_536,
       max_messages_per_minute: 30,
       max_hops: 4,
+      retention_days: 30,
+      reply_max_attempts: 60,
     },
     browser: {
       // Off by default for the same reason as docker: an agent-driven browser

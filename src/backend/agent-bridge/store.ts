@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentBridgeReply, AgentBridgeResultEnvelope } from '@nexus/shared';
+import type { AgentBridgeReply, AgentBridgeResultEnvelope, AgentBridgeProjectPolicy, AgentBridgeProjectScope } from '@nexus/shared';
 import { bridgeResultSubject } from './protocol.js';
 import type Database from 'better-sqlite3';
 import type { AgentBridgeConfig, AgentBridgeMode } from '@nexus/shared';
@@ -42,6 +42,54 @@ export interface BridgeIngestResult {
 
 export class AgentBridgeStore {
   constructor(private readonly db: Database.Database) {}
+
+  projects(): AgentBridgeProjectScope[] {
+    const projects = this.db.prepare(`SELECT p.id, p.name, COALESCE(b.enabled, 0) AS enabled, b.thread_ids
+      FROM projects p LEFT JOIN agent_bridge_project_policy b ON b.project_id = p.id
+      ORDER BY p.name, p.id`).all() as Array<{ id: string; name: string; enabled: number; thread_ids: string | null }>;
+    const threads = this.db.prepare('SELECT id, title, project_id FROM chat_threads ORDER BY title, id').all() as
+      Array<{ id: string; title: string; project_id: string }>;
+    return projects.map(project => ({
+      id: project.id, name: project.name, enabled: project.enabled === 1,
+      thread_ids: project.thread_ids === null ? null : JSON.parse(project.thread_ids),
+      threads: threads.filter(thread => thread.project_id === project.id).map(({ id, title }) => ({ id, title })),
+    }));
+  }
+
+  setPolicy(projectId: string, policy: AgentBridgeProjectPolicy): void {
+    this.db.prepare(`INSERT INTO agent_bridge_project_policy (project_id, enabled, thread_ids) VALUES (?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET enabled = excluded.enabled, thread_ids = excluded.thread_ids`)
+      .run(projectId, Number(policy.enabled), policy.thread_ids === null ? null : JSON.stringify(policy.thread_ids));
+  }
+
+  scopeRejection(projectId: string, threadId: string): string | null {
+    const policy = this.db.prepare('SELECT enabled, thread_ids FROM agent_bridge_project_policy WHERE project_id = ?')
+      .get(projectId) as { enabled: number; thread_ids: string | null } | undefined;
+    if (policy?.enabled !== 1) return 'project_not_enabled';
+    if (policy.thread_ids !== null && !(JSON.parse(policy.thread_ids) as string[]).includes(threadId)) return 'thread_not_enabled';
+    const thread = this.db.prepare('SELECT project_id FROM chat_threads WHERE id = ?').get(threadId) as
+      { project_id: string } | undefined;
+    if (!thread) return 'target thread was not found';
+    if (thread.project_id !== projectId) return 'target thread does not belong to the target project';
+    return null;
+  }
+
+  /** Preserve unresolved work and unsent replies, even after their age limit. */
+  prune(retentionDays: number, nowMs = Date.now()): number {
+    if (!Number.isInteger(retentionDays) || retentionDays < 1 || retentionDays > 3650) return 0;
+    const cutoff = new Date(nowMs - retentionDays * 86_400_000).toISOString();
+    return this.db.transaction(() => {
+      const eligible = this.db.prepare(`SELECT m.id FROM agent_bridge_messages m
+        LEFT JOIN agent_bridge_replies r ON r.message_id = m.id
+        WHERE m.status IN ('received', 'completed', 'rejected', 'failed') AND m.updated_at < ?
+          AND (r.id IS NULL OR (r.status IN ('sent', 'discarded')
+            AND COALESCE(r.discarded_at, r.sent_at, m.updated_at) < ?))`).all(cutoff, cutoff) as Array<{ id: string }>;
+      const deleteReply = this.db.prepare('DELETE FROM agent_bridge_replies WHERE message_id = ?');
+      const deleteMessage = this.db.prepare('DELETE FROM agent_bridge_messages WHERE id = ?');
+      for (const { id } of eligible) { deleteReply.run(id); deleteMessage.run(id); }
+      return eligible.length;
+    })();
+  }
 
   /** A process crash can cut off a managed chat turn after acceptance. Put the
    * durable work back in the human queue instead of leaving it permanently
@@ -88,10 +136,7 @@ export class AgentBridgeStore {
     else if ((envelope.hopCount ?? 0) > config.max_hops) rejection = 'hop limit exceeded';
     else if (options.rateLimited) rejection = 'sender rate limit exceeded';
 
-    const thread = this.db.prepare('SELECT project_id FROM chat_threads WHERE id = ?').get(envelope.target.threadId) as
-      { project_id: string } | undefined;
-    if (!rejection && !thread) rejection = 'target thread was not found';
-    if (!rejection && thread?.project_id !== envelope.target.projectId) rejection = 'target thread does not belong to the target project';
+    if (!rejection) rejection = this.scopeRejection(envelope.target.projectId, envelope.target.threadId);
 
     const now = options.receivedAt ?? new Date().toISOString();
     const status: AgentBridgeMessageStatus = rejection
@@ -160,8 +205,22 @@ export class AgentBridgeStore {
       .run(new Date().toISOString(), id);
   }
 
-  markReplyError(id: string, error: string): void {
-    this.db.prepare("UPDATE agent_bridge_replies SET error = ? WHERE id = ? AND status = 'queued'").run(error, id);
+  markReplyError(id: string, error: string, maxAttempts: number): void {
+    this.db.prepare(`UPDATE agent_bridge_replies SET error = ?, attempts = attempts + 1,
+      status = CASE WHEN attempts + 1 >= ? THEN 'dead_letter' ELSE 'queued' END
+      WHERE id = ? AND status = 'queued'`).run(error.slice(0, 2000), maxAttempts, id);
+  }
+
+  retryReply(messageId: string): AgentBridgeReply | undefined {
+    const result = this.db.prepare(`UPDATE agent_bridge_replies SET status = 'queued', attempts = 0, error = NULL
+      WHERE message_id = ? AND status = 'dead_letter'`).run(messageId);
+    return result.changes ? this.reply(messageId) : undefined;
+  }
+
+  discardReply(messageId: string): AgentBridgeReply | undefined {
+    const result = this.db.prepare(`UPDATE agent_bridge_replies SET status = 'discarded', discarded_at = ?, discarded_by = 'user'
+      WHERE message_id = ? AND status = 'dead_letter'`).run(new Date().toISOString(), messageId);
+    return result.changes ? this.reply(messageId) : undefined;
   }
 
   transition(

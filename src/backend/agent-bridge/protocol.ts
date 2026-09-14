@@ -80,6 +80,12 @@ export function validateAgentBridgeConfig(config: AgentBridgeConfig): string | n
   if (!Number.isInteger(config.max_hops) || config.max_hops < 0 || config.max_hops > 32) {
     return 'Agent Bridge hop limit must be between 0 and 32.';
   }
+  if (!Number.isInteger(config.retention_days) || config.retention_days < 1 || config.retention_days > 3650) {
+    return 'Agent Bridge retention must be between 1 and 3650 days.';
+  }
+  if (!Number.isInteger(config.reply_max_attempts) || config.reply_max_attempts < 1 || config.reply_max_attempts > 10000) {
+    return 'Agent Bridge reply attempts must be between 1 and 10000.';
+  }
   return null;
 }
 

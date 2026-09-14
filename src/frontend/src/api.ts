@@ -1,4 +1,4 @@
-import type { AgentBridgeReply } from '@nexus/shared';
+import type { AgentBridgeReply, AgentBridgeProjectPolicy, AgentBridgeProjectScope, AgentBridgeTrust } from '@nexus/shared';
 /**
  * Frontend API client.
  *
@@ -133,6 +133,7 @@ export interface TrustSecret {
 }
 
 export interface TrustSnapshot {
+  agentBridge?: AgentBridgeTrust;
   services: Array<{ name: string; url: string; loopback: boolean }>;
   storage: Array<{ name: string; path: string; role: 'canonical' | 'rebuildable' | 'application' | 'credentials' | 'configuration' }>;
   secrets: Record<string, TrustSecret>;
@@ -823,6 +824,10 @@ export const api = {
     clearMondayMirror: () => fetchJson<{ ok: boolean; cleared: number; links_kept: number }>('/api/monday/mirror/clear', { method: 'POST' }),
   },
   agentBridge: {
+    projects: () => fetchJson<{ projects: AgentBridgeProjectScope[] }>('/api/agent-bridge/projects'),
+    setPolicy: (id: string, policy: AgentBridgeProjectPolicy) => fetchJson<AgentBridgeProjectScope>(`/api/agent-bridge/projects/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(policy) }),
+    retryReply: (id: string) => fetchJson<AgentBridgeReply>(`/api/agent-bridge/messages/${encodeURIComponent(id)}/reply/retry`, { method: 'POST' }),
+    discardReply: (id: string) => fetchJson<AgentBridgeReply>(`/api/agent-bridge/messages/${encodeURIComponent(id)}/reply/discard`, { method: 'POST' }),
     sendReply: (id: string) => fetchJson<AgentBridgeReply>(`/api/agent-bridge/messages/${encodeURIComponent(id)}/reply/send`, { method: 'POST' }),
     status: () => fetchJson<AgentBridgeStatus>('/api/agent-bridge/status'),
     messages: (limit = 20) => fetchJson<{ messages: AgentBridgeMessage[] }>(`/api/agent-bridge/messages?limit=${limit}`),

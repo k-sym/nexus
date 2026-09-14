@@ -26,6 +26,26 @@ export async function registerAgentBridgeRoutes(
 
   fastify.get('/api/agent-bridge/status', async () => service.status());
 
+  fastify.get('/api/agent-bridge/projects', async () => ({ projects: service.store.projects() }));
+
+  fastify.put('/api/agent-bridge/projects/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const project = service.store.projects().find(project => project.id === id);
+    if (!project) return reply.code(404).send({ error: 'Project not found' });
+    const body = request.body as { enabled?: unknown; thread_ids?: unknown } | null;
+    if (!body || typeof body.enabled !== 'boolean' ||
+      !(body.thread_ids === null || (Array.isArray(body.thread_ids) && body.thread_ids.every(id => typeof id === 'string')))) {
+      return reply.code(400).send({ error: 'Provide enabled and thread_ids (null for all threads or an array of thread IDs)' });
+    }
+    const threadIds = body.thread_ids === null ? null : [...new Set(body.thread_ids as string[])];
+    if (threadIds?.some(id => !project.threads.some(thread => thread.id === id))) {
+      return reply.code(400).send({ error: 'Every selected thread must belong to this project' });
+    }
+    const policy = { enabled: body.enabled, thread_ids: threadIds };
+    service.store.setPolicy(id, policy);
+    return { ...project, ...policy };
+  });
+
   fastify.get('/api/agent-bridge/messages', async (request, reply) => {
     const query = (request.query ?? {}) as { status?: string; limit?: string };
     if (query.status && !STATUSES.has(query.status as AgentBridgeMessageStatus)) {
@@ -73,6 +93,8 @@ export async function registerAgentBridgeRoutes(
       reply.code(409);
       return { error: `Message cannot be approved from status ${message.status}` };
     }
+    const scopeError = service.store.scopeRejection(message.project_id, message.thread_id);
+    if (scopeError) return reply.code(409).send({ error: scopeError });
     const thread = fastify.db.prepare(
       'SELECT last_model_key FROM chat_threads WHERE id = ? AND project_id = ?',
     ).get(message.thread_id, message.project_id) as { last_model_key: string | null } | undefined;
@@ -107,11 +129,28 @@ export async function registerAgentBridgeRoutes(
     const { id } = request.params as { id: string };
     const draft = service.store.reply(id);
     if (!draft) { reply.code(404); return { error: 'No completion reply available' }; }
+    if (draft.status === 'dead_letter' || draft.status === 'discarded') {
+      return reply.code(409).send({ error: `Reply cannot be sent from status ${draft.status}` });
+    }
+    if (draft.status !== 'pending_approval') return reply.code(202).send(draft);
     service.store.approveReply(id);
     void service.flushReplies();
     reply.code(202);
     return service.store.reply(id);
   });
+
+  for (const action of ['retry', 'discard'] as const) {
+    fastify.post(`/api/agent-bridge/messages/:id/reply/${action}`, async (request, reply) => {
+      if (action === 'retry' && !service.config.enabled) return reply.code(503).send({ error: 'Agent Bridge is disabled' });
+      const { id } = request.params as { id: string };
+      const current = service.store.reply(id);
+      if (!current) return reply.code(404).send({ error: 'No completion reply available' });
+      const updated = action === 'retry' ? service.store.retryReply(id) : service.store.discardReply(id);
+      if (!updated) return reply.code(409).send({ error: `Reply cannot be ${action === 'retry' ? 'retried' : 'discarded'} from status ${current.status}` });
+      if (action === 'retry') void service.flushReplies();
+      return reply.code(action === 'retry' ? 202 : 200).send(updated);
+    });
+  }
 
   fastify.post('/api/agent-bridge/messages/:id/reject', async (request, reply) => {
     const { id } = request.params as { id: string };
