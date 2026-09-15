@@ -481,3 +481,17 @@ test('POST /api/settings/helpers/:provider/test verifies keys and maps failures'
     saveConfig(original);
   }
 });
+
+test('settings masks and preserves both bridge client credentials', async () => {
+  const original = loadConfig(); const app = makeApp();
+  try {
+    saveConfig({ ...original, bridge_client: { sender_id: 'chonk', token: 'client-broker-secret', backend_token: 'client-http-secret' } });
+    const get = await app.inject({ method: 'GET', url: '/api/settings' });
+    assert.equal(get.json().bridge_client.token, '••••••••');
+    assert.equal(get.json().bridge_client.backend_token, '••••••••');
+    assert.equal(get.body.includes('client-broker-secret'), false); assert.equal(get.body.includes('client-http-secret'), false);
+    const put = await app.inject({ method: 'PUT', url: '/api/settings', payload: get.json() });
+    assert.equal(put.statusCode, 200); assert.equal(put.body.includes('client-broker-secret'), false); assert.equal(put.body.includes('client-http-secret'), false);
+    assert.equal(loadConfig().bridge_client?.token, 'client-broker-secret'); assert.equal(loadConfig().bridge_client?.backend_token, 'client-http-secret');
+  } finally { saveConfig(original); await app.close(); }
+});

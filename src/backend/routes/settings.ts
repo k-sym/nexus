@@ -54,12 +54,24 @@ function mergeHelpers(
   return out;
 }
 
+function maskBridgeClient(config: NexusConfig['bridge_client']): NexusConfig['bridge_client'] {
+  return config ? { ...config, token: maskSecret(config.token || ''), backend_token: maskSecret(config.backend_token || '') } : undefined;
+}
+function mergeBridgeClient(current: NexusConfig['bridge_client'], incoming: NexusConfig['bridge_client']): NexusConfig['bridge_client'] {
+  if (!current && !incoming) return undefined;
+  return { ...current, ...incoming,
+    token: !incoming?.token || incoming.token === MASK ? current?.token : incoming.token,
+    backend_token: !incoming?.backend_token || incoming.backend_token === MASK ? current?.backend_token : incoming.backend_token,
+  };
+}
+
 export async function registerSettingsRoutes(fastify: FastifyInstance) {
   fastify.get('/api/settings', async () => {
     const config = loadConfig();
     // Mask the API key so we never ship the raw secret to the browser.
     return {
       ...config,
+      bridge_client: maskBridgeClient(config.bridge_client),
       // server.token is the backend bearer — mask it like any other secret.
       server: { ...config.server, token: maskSecret(config.server.token || '') },
       models: {
@@ -115,6 +127,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const merged: NexusConfig = {
       ...current,
       ...incoming,
+      bridge_client: mergeBridgeClient(current.bridge_client, incoming.bridge_client),
       // Merge server explicitly so the masked token isn't persisted over the real one.
       server: {
         ...current.server,
@@ -180,6 +193,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
 
     return {
       ...merged,
+      bridge_client: maskBridgeClient(merged.bridge_client),
       server: { ...merged.server, token: maskSecret(merged.server.token || '') },
       models: {
         ...merged.models,

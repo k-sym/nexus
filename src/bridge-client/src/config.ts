@@ -13,7 +13,7 @@ export interface ClientConfig {
   backend_token: string;
   state_dir: string;
 }
-const fields = ['url', 'instance_id', 'sender_id', 'backend_url'] as const;
+const fields = ['url', 'instance_id', 'sender_id', 'backend_url', 'token', 'backend_token'] as const;
 export function loopback(hostname: string): boolean {
   return ['127.0.0.1', 'localhost', '[::1]'].includes(hostname);
 }
@@ -30,35 +30,58 @@ export function validateConfig(config: ClientConfig): ClientConfig {
   }
   if (!['nats:', 'tls:'].includes(broker.protocol)) throw new Error('Broker URL must use nats:// or tls://.');
   if (!loopback(broker.hostname) && broker.protocol !== 'tls:') throw new Error('Remote brokers require tls:// and a token.');
-  if (broker.protocol === 'tls:' && !config.token.trim()) throw new Error('TLS brokers require NEXUS_AGENT_BRIDGE_TOKEN.');
+  if (broker.protocol === 'tls:' && !config.token.trim()) throw new Error('TLS brokers require a token in bridge_client.token or NEXUS_AGENT_BRIDGE_TOKEN.');
   if (backend.protocol !== 'https:' && !(backend.protocol === 'http:' && loopback(backend.hostname))) {
     throw new Error('Backend URL requires HTTPS, or HTTP on loopback.');
   }
   return { ...config, url: broker.toString(), backend_url: backend.origin };
 }
-export function loadConfig(path?: string, env: NodeJS.ProcessEnv = process.env): ClientConfig {
-  const configPath = path ?? env.NEXUS_BRIDGE_CONFIG ?? join(homedir(), '.nexus', 'bridge-client.yaml');
-  let raw: unknown = {};
-  try { raw = load(readFileSync(configPath, 'utf8')) ?? {}; }
+function readYaml(path: string, required: boolean): Record<string, unknown> {
+  let raw: unknown;
+  try { raw = load(readFileSync(path, 'utf8')) ?? {}; }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || path || env.NEXUS_BRIDGE_CONFIG) {
-      throw new Error('Could not read client configuration; check its path and YAML syntax.');
-    }
+    if (!required && (error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    // YAML parser messages can quote secret values; never forward them.
+    throw new Error('Could not read client configuration; check its path and YAML syntax.');
   }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Client configuration must be a mapping.');
-  const yaml = raw as Record<string, unknown>;
-  if (Object.keys(yaml).some(key => !fields.includes(key as typeof fields[number]))) {
-    throw new Error('Client YAML accepts only url, instance_id, sender_id and backend_url. Credentials must be environment variables.');
+  return raw as Record<string, unknown>;
+}
+function clientFields(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('bridge_client must be a mapping.');
+  const values = raw as Record<string, unknown>;
+  if (Object.keys(values).some(key => !fields.includes(key as typeof fields[number]))) {
+    throw new Error('Client configuration accepts only url, instance_id, sender_id, backend_url, token and backend_token.');
   }
-  for (const key of fields) if (yaml[key] !== undefined && typeof yaml[key] !== 'string') throw new Error(`Client ${key} must be text.`);
+  for (const key of fields) if (values[key] !== undefined && typeof values[key] !== 'string') throw new Error(`Client ${key} must be text.`);
+  return values as Record<string, string>;
+}
+function secret(value: string, env: NodeJS.ProcessEnv): string {
+  const reference = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(value);
+  if (!reference) return value;
+  if (!env[reference[1]]) throw new Error(`Export ${reference[1]} or store a token value in bridge_client configuration.`);
+  return env[reference[1]]!;
+}
+export function loadConfig(path?: string, env: NodeJS.ProcessEnv = process.env): ClientConfig {
+  const nexusHome = env.NEXUS_HOME ?? join(homedir(), '.nexus');
+  const explicit = path ?? env.NEXUS_BRIDGE_CONFIG;
+  let yaml: Record<string, string>;
+  if (explicit) {
+    const raw = readYaml(explicit, true);
+    yaml = clientFields(raw.bridge_client ?? raw);
+  } else {
+    const shared = readYaml(join(nexusHome, 'config.yaml'), false);
+    const standalone = readYaml(join(nexusHome, 'bridge-client.yaml'), false);
+    yaml = { ...clientFields(shared.bridge_client ?? {}), ...clientFields(standalone) };
+  }
   return validateConfig({
-    url: env.NEXUS_BRIDGE_URL ?? yaml.url as string ?? 'nats://127.0.0.1:4222',
-    instance_id: env.NEXUS_BRIDGE_INSTANCE ?? yaml.instance_id as string ?? '',
-    sender_id: env.NEXUS_BRIDGE_SENDER ?? yaml.sender_id as string ?? '',
-    backend_url: env.NEXUS_BRIDGE_BACKEND_URL ?? yaml.backend_url as string ?? 'http://127.0.0.1:4173',
-    token: env.NEXUS_AGENT_BRIDGE_TOKEN ?? '',
-    backend_token: env.NEXUS_BRIDGE_BACKEND_TOKEN ?? '',
-    state_dir: env.NEXUS_BRIDGE_STATE_DIR ?? join(homedir(), '.nexus', 'bridge-client'),
+    url: env.NEXUS_BRIDGE_URL ?? yaml.url ?? 'nats://127.0.0.1:4222',
+    instance_id: env.NEXUS_BRIDGE_INSTANCE ?? yaml.instance_id ?? '',
+    sender_id: env.NEXUS_BRIDGE_SENDER ?? yaml.sender_id ?? '',
+    backend_url: env.NEXUS_BRIDGE_BACKEND_URL ?? yaml.backend_url ?? 'http://127.0.0.1:4173',
+    token: secret(env.NEXUS_AGENT_BRIDGE_TOKEN ?? yaml.token ?? '', env),
+    backend_token: secret(env.NEXUS_BRIDGE_BACKEND_TOKEN ?? yaml.backend_token ?? '', env),
+    state_dir: env.NEXUS_BRIDGE_STATE_DIR ?? join(nexusHome, 'bridge-client'),
   });
 }
 export function safeError(error: unknown, config?: ClientConfig): string {

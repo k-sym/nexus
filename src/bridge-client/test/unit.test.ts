@@ -22,8 +22,9 @@ test('configuration uses env over YAML and never prints credentials', t => {
   assert.equal(config.url, 'nats://localhost:4222');
   assert.equal(JSON.stringify(identity(config)).includes('secret'), false);
   assert.equal(safeError(new Error('broker-secret/http-secret'), config), '[redacted]/[redacted]');
-  writeFileSync(path, 'token: broker-secret\n');
-  assert.throws(() => loadConfig(path, {}), /Credentials must be environment/);
+  writeFileSync(path, 'instance_id: yaml\nsender_id: yaml-sender\nurl: tls://broker.example:4222\nbackend_url: https://nexus.example\ntoken: broker-secret\nbackend_token: http-secret\n');
+  assert.equal(loadConfig(path, {}).token, 'broker-secret');
+  assert.equal(loadConfig(path, {}).backend_token, 'http-secret');
   writeFileSync(path, 'instance_id: [\nsecret-token');
   assert.throws(() => loadConfig(path, {}), error => !String(error).includes('secret-token'));
   assert.throws(() => loadConfig(join(root, 'missing'), {}), /Could not read/);
@@ -104,4 +105,23 @@ test('target discovery sends only the backend credential and rejects bad respons
   response = { ...valid, maxMessageBytes: 999999999 }; await assert.rejects(client.send({ project: 'p', thread: 't', content: 'hello' }), /Invalid target/);
   assert.equal((client.state.db.prepare('SELECT COUNT(*) AS n FROM sends').get() as any).n, 0);
   await client.close();
+});
+
+test('shared Nexus YAML loads without shell exports, standalone and environment overrides win', t => {
+  const { root } = fixture(t);
+  writeFileSync(join(root, 'config.yaml'), 'server:\n  token: server-only-secret\nbridge_client:\n  instance_id: nexus-test\n  sender_id: chonk\n  url: tls://broker.example:4222\n  backend_url: https://nexus.example\n  token: broker-secret\n  backend_token: backend-secret\n');
+  const config = loadConfig(undefined, { NEXUS_HOME: root });
+  assert.equal(config.sender_id, 'chonk'); assert.equal(config.token, 'broker-secret'); assert.equal(config.backend_token, 'backend-secret');
+  assert.equal(JSON.stringify(identity(config)).includes('secret'), false);
+  assert.equal(safeError(new Error('broker-secret backend-secret'), config), '[redacted] [redacted]');
+  writeFileSync(join(root, 'bridge-client.yaml'), 'sender_id: standalone\n');
+  assert.equal(loadConfig(undefined, { NEXUS_HOME: root }).sender_id, 'standalone');
+  assert.equal(loadConfig(undefined, { NEXUS_HOME: root, NEXUS_AGENT_BRIDGE_TOKEN: 'override' }).token, 'override');
+  assert.equal(loadConfig(join(root, 'config.yaml'), {}).sender_id, 'chonk');
+});
+test('shared YAML never infers credentials from the Nexus server or broker sections', t => {
+  const { root } = fixture(t);
+  writeFileSync(join(root, 'config.yaml'), 'server:\n  token: server-secret\nagent_bridge:\n  token: broker-secret\nbridge_client:\n  instance_id: test\n  sender_id: chonk\n');
+  assert.equal(loadConfig(undefined, { NEXUS_HOME: root }).token, '');
+  assert.equal(loadConfig(undefined, { NEXUS_HOME: root }).backend_token, '');
 });
