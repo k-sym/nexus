@@ -342,7 +342,7 @@ describe('AssistantView', () => {
         // First attempt: the packaged webview drops the stream connection.
         if (streamCalls === 1) throw new TypeError('Load failed');
         return ndjsonStreamResponse([
-          { kind: 'run_start', run: { runId: 'r9', threadId: 's1', startedAt: 'x', provider: 'assistant', model: 'hermes-agent' } },
+          { kind: 'run_start', run: { runId: 'r9', threadId: 's1', startedAt: 'x', provider: 'assistant', model: 'partner' } },
           { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'recovered' } },
           { kind: 'run_end', run: { runId: 'r9', threadId: 's1', completedAt: 'y', status: 'completed' } },
         ]);
@@ -481,7 +481,7 @@ describe('AssistantView', () => {
     expect(apiFetchMock).not.toHaveBeenCalledWith('/api/assistant/abort', { method: 'POST' });
   });
 
-  it('keeps foreground Hermes runs visible and syncs while the remote run is still running', async () => {
+  it('keeps foreground Partner runs visible and syncs while the remote run is still running', async () => {
     let started = false;
     let synced = false;
     apiFetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
@@ -497,7 +497,7 @@ describe('AssistantView', () => {
             messages: synced
               ? [
                   { id: 'm4', role: 'user', content: 'Run now', created_at: '2026-07-01T10:00:00.000Z' },
-                  { id: 'm5', role: 'assistant', content: 'Hermes finished.', created_at: '2026-07-01T10:01:00.000Z' },
+                  { id: 'm5', role: 'assistant', content: 'Partner finished.', created_at: '2026-07-01T10:01:00.000Z' },
                 ]
               : [],
             latestRun: active ? { id: 'r-live', status: 'running' } : synced ? { id: 'r-live', status: 'succeeded' } : null,
@@ -538,7 +538,7 @@ describe('AssistantView', () => {
     });
 
     expect(apiFetchMock).toHaveBeenCalledWith('/api/assistant/sync', { method: 'POST' });
-    expect(screen.getByText('Hermes finished.')).toBeInTheDocument();
+    expect(screen.getByText('Partner finished.')).toBeInTheDocument();
   });
 
   it('builds an AgentRunView from the structured NDJSON stream and accumulates text', async () => {
@@ -546,7 +546,7 @@ describe('AssistantView', () => {
       if (url === '/api/assistant/current') return { ok: true, json: async () => ({ session: { id: 's1', title: 'S', status: 'idle' }, messages: [], latestRun: null }) } as Response;
       if (url.endsWith('/messages/stream')) {
         return ndjsonStreamResponse([
-          { kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: '2026-07-02T00:00:00.000Z', provider: 'assistant', model: 'hermes-agent' } },
+          { kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: '2026-07-02T00:00:00.000Z', provider: 'assistant', model: 'partner' } },
           { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'Bash', args: { command: 'ls' } },
           { type: 'tool_execution_end', toolCallId: 'c1', toolName: 'Bash', result: { content: [{ type: 'text', text: 'ok' }] }, isError: false },
           { type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Done.' } },
@@ -576,7 +576,7 @@ describe('AssistantView', () => {
       if (url.endsWith('/messages/stream')) {
         // Stream stays "open" (no run_end) so the run is still active when we assert.
         return ndjsonStreamResponse([
-          { kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: '2026-07-02T00:00:00.000Z', provider: 'assistant', model: 'hermes-agent' } },
+          { kind: 'run_start', run: { runId: 'r1', threadId: 's1', startedAt: '2026-07-02T00:00:00.000Z', provider: 'assistant', model: 'partner' } },
           { type: 'tool_execution_start', toolCallId: 'c1', toolName: 'Bash', args: { command: 'ls' } },
         ]);
       }
@@ -614,8 +614,8 @@ describe('AssistantView', () => {
                 tool_calls: [
                   { id: 'c1', name: 'read_file', args: {}, status: 'succeeded', queuedAt: 1783059305766, partialOutput: '', result: 'body', completedAt: 1783059305766 },
                 ],
-                model: 'hermes-agent',
-                provider: 'hermes',
+                model: 'partner',
+                provider: 'partner',
                 isError: false,
                 timestamp: 1783059305766,
                 run: {
@@ -626,8 +626,8 @@ describe('AssistantView', () => {
                   startedAt: 1782986400000,
                   lastEventAt: 1782986401000,
                   completedAt: 1782986401000,
-                  provider: 'hermes',
-                  model: 'hermes-agent',
+                  provider: 'partner',
+                  model: 'partner',
                   tools: [
                     { id: 'c1', name: 'read_file', args: {}, status: 'succeeded', queuedAt: 1783059305766, partialOutput: '', result: 'body', completedAt: 1783059305766 },
                   ],

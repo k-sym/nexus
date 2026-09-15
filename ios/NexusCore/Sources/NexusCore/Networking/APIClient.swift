@@ -525,7 +525,7 @@ public actor APIClient {
 
     // MARK: Assistant (M6)
 
-    /// Merged local + adoptable-remote Hermes sessions. Mixed snake/camel keys →
+    /// Merged local + adoptable-remote Partner sessions. Mixed snake/camel keys →
     /// `plainDecoder` + explicit CodingKeys on `AssistantSession`.
     public func assistantSessions() async throws -> [AssistantSession] {
         let res: AssistantSessionsResponse = try await request(.assistantSessions, decoder: plainDecoder)
@@ -537,7 +537,7 @@ public actor APIClient {
         return try await request(.createAssistantSession(body: body), decoder: plainDecoder)
     }
 
-    /// Adopt a remote Hermes session into a local one. Pass the un-prefixed id
+    /// Adopt a remote Partner session into a local one. Pass the un-prefixed id
     /// (`AssistantSession.adoptableRemoteId`).
     public func importAssistantSession(remoteSessionId: String) async throws -> AssistantSessionDetail {
         let body = try JSONEncoder().encode(ImportAssistantSessionRequest(remoteSessionId: remoteSessionId))
@@ -585,8 +585,8 @@ public actor APIClient {
     // MARK: Assistant background handoff (M6 Phase B)
 
     /// Hand a turn off to a durable server-side run. The run executes against
-    /// Hermes and outlives this connection; poll `syncAssistant()` + reload the
-    /// session to see its progress. Throws `.server(400)` if Hermes isn't
+    /// Partner and outlives this connection; poll `syncAssistant()` + reload the
+    /// session to see its progress. Throws `.server(400)` if Partner isn't
     /// configured or the content is empty.
     public func startAssistantRun(
         sessionId: String, content: String, attachments: [AssistantAttachment] = []
@@ -614,7 +614,7 @@ public actor APIClient {
         _ = try await requestData(.stopAssistantRun(runId))
     }
 
-    /// Reconcile all in-flight background runs against Hermes; returns how many
+    /// Reconcile all in-flight background runs against Partner; returns how many
     /// changed status. Reload the session afterwards for the freshened transcript.
     @discardableResult
     public func syncAssistant() async throws -> Int {

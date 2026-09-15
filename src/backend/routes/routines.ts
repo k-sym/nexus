@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
-import { createHermesClient, type HermesFetch } from '../hermes/client.js';
+import { createPartnerClient, type PartnerFetch } from '../partner/client.js';
 import type { NexusConfig } from '@nexus/shared';
 
 interface RoutinesRoutesOptions {
-  fetchImpl?: HermesFetch;
+  fetchImpl?: PartnerFetch;
 }
 
 // Read-only proxy over the partner adapter's routine fleet (`GET /v1/routines`,
@@ -17,17 +17,17 @@ export function createRoutinesRoutes(load: () => NexusConfig = loadConfig, optio
       const url = resolveEnvVars(config.assistant.url || '').trim();
       const key = resolveAssistantKey(config);
       if (!url || !key) return undefined;
-      return createHermesClient({ url, key, fetchImpl: options.fetchImpl });
+      return createPartnerClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
     // Fail-soft like the other assistant-backed reads: an unconfigured or
     // unreachable adapter yields an empty list plus a reason, never a 5xx —
     // the dashboard card renders its empty state instead of breaking.
     fastify.get('/api/routines', async () => {
-      const hermes = client();
-      if (!hermes) return { configured: false, routines: [] };
+      const partner = client();
+      if (!partner) return { configured: false, routines: [] };
       try {
-        const report = (await hermes.listRoutines()) as Record<string, unknown>;
+        const report = (await partner.listRoutines()) as Record<string, unknown>;
         return { configured: true, routines: [], ...report };
       } catch (err: any) {
         return { configured: true, routines: [], error: err?.message || 'Routines fetch failed.' };
@@ -36,13 +36,13 @@ export function createRoutinesRoutes(load: () => NexusConfig = loadConfig, optio
 
     fastify.get('/api/routines/:name', async (request, reply) => {
       const { name } = request.params as { name: string };
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.getRoutine(name);
+        return await partner.getRoutine(name);
       } catch (err: any) {
         const message: string = err?.message || 'Routine fetch failed.';
         reply.code(/not found/i.test(message) ? 404 : 502);

@@ -22,7 +22,7 @@ final class AssistantModelPickerTests: XCTestCase {
     }
 
     func testDetailToleratesAbsentSeeds() throws {
-        // Pre-#75 backend / plain-Hermes rows: both seeds absent.
+        // Pre-#75 backend / rows from the retired Partner server: both seeds absent.
         let json = Data("""
         { "session": { "id": "s1", "title": "T", "status": "idle" }, "messages": [] }
         """.utf8)

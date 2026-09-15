@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { createDraftsRoutes } from '../routes/drafts';
-import type { HermesFetch } from '../hermes/client';
+import type { PartnerFetch } from '../partner/client';
 import type { NexusConfig } from '@nexus/shared';
 
 const QUEUE = {
@@ -32,7 +32,7 @@ function jsonRes(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-async function appWith(load: () => NexusConfig, fetchImpl?: HermesFetch) {
+async function appWith(load: () => NexusConfig, fetchImpl?: PartnerFetch) {
   const app = Fastify({ logger: false });
   app.register(createDraftsRoutes(load, { fetchImpl }));
   await app.ready();

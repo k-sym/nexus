@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
-import { createHermesClient, type HermesFetch } from '../hermes/client.js';
+import { createPartnerClient, type PartnerFetch } from '../partner/client.js';
 import type { NexusConfig } from '@nexus/shared';
 
 /** The adapter answers errors as FastAPI's `{"detail": "..."}`. Unwrap it so
@@ -17,7 +17,7 @@ function detailOf(err: any, fallback: string): string {
 }
 
 interface WorkshopRoutesOptions {
-  fetchImpl?: HermesFetch;
+  fetchImpl?: PartnerFetch;
 }
 
 /**
@@ -42,25 +42,25 @@ export function createWorkshopRoutes(
       const url = resolveEnvVars(config.assistant.url || '').trim();
       const key = resolveAssistantKey(config);
       if (!url || !key) return undefined;
-      return createHermesClient({ url, key, fetchImpl: options.fetchImpl });
+      return createPartnerClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
     // Reads: fail-soft, matching /api/routines and /api/night-queue.
     fastify.get('/api/night-queue/readiness', async () => {
-      const hermes = client();
-      if (!hermes) return { configured: false, criteria: [] };
+      const partner = client();
+      if (!partner) return { configured: false, criteria: [] };
       try {
-        return { configured: true, ...(await hermes.nightQueueReadiness() as object) };
+        return { configured: true, ...(await partner.nightQueueReadiness() as object) };
       } catch (err: any) {
         return { configured: true, criteria: [], error: err?.message || 'Readiness fetch failed.' };
       }
     });
 
     fastify.get('/api/night-queue/candidates', async () => {
-      const hermes = client();
-      if (!hermes) return { configured: false, candidates: [] };
+      const partner = client();
+      if (!partner) return { configured: false, candidates: [] };
       try {
-        return { configured: true, ...(await hermes.nightQueueCandidates() as object) };
+        return { configured: true, ...(await partner.nightQueueCandidates() as object) };
       } catch (err: any) {
         return { configured: true, candidates: [], error: err?.message || 'Candidate fetch failed.' };
       }
@@ -75,15 +75,15 @@ export function createWorkshopRoutes(
         reply.code(400);
         return { error: 'repo (string) and number (number) are required.' };
       }
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.assessIssue(repo, number);
+        return await partner.assessIssue(repo, number);
       } catch (err: any) {
-        // The client attaches the upstream status (see hermes/client.ts) —
+        // The client attaches the upstream status (see partner/client.ts) —
         // 404 for an unknown issue, 502 for an unreadable verdict. Use it
         // rather than sniffing the message.
         reply.code(err?.status ?? 502);
@@ -108,13 +108,13 @@ export function createWorkshopRoutes(
         reply.code(400);
         return { error: 'repo (string) and number (number) are required.' };
       }
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.discussIssue({
+        return await partner.discussIssue({
           repo, number,
           draft: typeof draft === 'string' ? draft : undefined,
         });
@@ -135,13 +135,13 @@ export function createWorkshopRoutes(
     // the chat endpoints are keyed by — the card holds both.
     fastify.get('/api/night-queue/discuss/:sessionId/comment', async (request, reply) => {
       const { sessionId } = request.params as { sessionId: string };
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.discussComment(sessionId);
+        return await partner.discussComment(sessionId);
       } catch (err: any) {
         // 404 is "no workshop conversation with that id" and reads quite
         // differently from "the adapter is down". Keep them apart.
@@ -162,8 +162,8 @@ export function createWorkshopRoutes(
         reply.code(400);
         return { error: 'repo, number and comment are required.' };
       }
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
@@ -171,7 +171,7 @@ export function createWorkshopRoutes(
         // Forwarded so the autonomy ledger records WHERE the decision was
         // made — a phone tap and a desk session are the same write but not the
         // same act. Defaults to the desktop's value when a client omits it.
-        return await hermes.armIssue({
+        return await partner.armIssue({
           repo, number, comment,
           decided_by: typeof decided_by === 'string' && decided_by.trim()
             ? decided_by.trim().slice(0, 64)

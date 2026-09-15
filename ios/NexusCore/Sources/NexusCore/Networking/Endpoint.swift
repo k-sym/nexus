@@ -326,7 +326,7 @@ public struct Endpoint: Sendable {
 
     // MARK: M6 assistant
 
-    /// Merged local + adoptable-remote Hermes sessions → `AssistantSessionsResponse`.
+    /// Merged local + adoptable-remote Partner sessions → `AssistantSessionsResponse`.
     public static let assistantSessions = Endpoint(path: "/api/assistant/sessions")
 
     /// Create a local assistant session → `AssistantSession`. Body `{ title? }`.
@@ -334,8 +334,8 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/assistant/sessions", method: "POST", body: body)
     }
 
-    /// Adopt a remote Hermes session as a local one → `AssistantSessionDetail`.
-    /// Body `{ remoteSessionId }` (the un-prefixed Hermes id).
+    /// Adopt a remote Partner session as a local one → `AssistantSessionDetail`.
+    /// Body `{ remoteSessionId }` (the un-prefixed Partner id).
     public static func importAssistantSession(body: Data) -> Endpoint {
         Endpoint(path: "/api/assistant/sessions/import", method: "POST", body: body)
     }
@@ -372,7 +372,7 @@ public struct Endpoint: Sendable {
 
     /// Hand a turn off to a durable server-side run → `{ run }`. Body an
     /// `AssistantStreamRequest` (`{ content }`). Unlike the stream, this returns
-    /// immediately; the run keeps executing against Hermes after we disconnect.
+    /// immediately; the run keeps executing against Partner after we disconnect.
     public static func startAssistantRun(_ id: String, body: Data) -> Endpoint {
         Endpoint(path: "/api/assistant/sessions/\(id)/runs", method: "POST", body: body)
     }
@@ -387,7 +387,7 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/assistant/runs/\(runId)/stop", method: "POST")
     }
 
-    /// Reconcile all in-flight background runs against Hermes → `{ updated }`.
+    /// Reconcile all in-flight background runs against Partner → `{ updated }`.
     /// Global, not session-scoped; the caller reloads the session afterwards to
     /// pull the freshened transcript.
     public static let assistantSync = Endpoint(path: "/api/assistant/sync", method: "POST")
