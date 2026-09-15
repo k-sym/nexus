@@ -130,6 +130,20 @@ function configuredAssistant(load: () => NexusConfig) {
   return { url, key };
 }
 
+// Background runs (`/v1/runs*`) are a Hermes-era feature the Partner adapter does
+// not implement: its `/v1/capabilities` reports run_submission=false (verified
+// live 2026-09-15). Each route that would hit `/v1/runs*` asks first, cached per
+// configured URL, and fails closed when the document is unreadable.
+const CAPABILITIES_TTL_MS = 5 * 60 * 1000;
+const CAPABILITIES_FAILURE_TTL_MS = 30 * 1000;
+const BACKGROUND_HANDOFF_UNSUPPORTED = 'Background Handoff is not available: the configured assistant does not support background runs.';
+const BACKGROUND_STOP_UNSUPPORTED = 'Stopping a background run is not available: the configured assistant does not support it.';
+
+interface RunSupport {
+  runs: boolean;
+  runStop: boolean;
+}
+
 // Partner tags every session with a `source`. The Assistant rail surfaces
 // human-driven sessions — those started from the API server (Nexus's own path),
 // the TUI, or the CLI — and hides machine sources (cron, job, scheduled) and
@@ -574,6 +588,30 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return createPartnerClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
+    const capabilityCache = new Map<string, { support: RunSupport; expiresAt: number }>();
+    const runSupport = async (partner: ReturnType<typeof createPartnerClient>): Promise<RunSupport> => {
+      const { url } = configuredAssistant(load);
+      const now = Date.now();
+      const cached = capabilityCache.get(url);
+      if (cached && cached.expiresAt > now) return cached.support;
+      let support: RunSupport;
+      let ttl = CAPABILITIES_TTL_MS;
+      try {
+        const caps = await partner.capabilities();
+        support = { runs: caps.runs, runStop: caps.runStop };
+      } catch {
+        support = { runs: false, runStop: false };
+        ttl = CAPABILITIES_FAILURE_TTL_MS;
+      }
+      capabilityCache.set(url, { support, expiresAt: now + ttl });
+      return support;
+    };
+    // Session-detail payloads carry this so clients (iOS) offer Background
+    // Handoff only when the adapter can honour it.
+    const assistantCapabilities = async (partner: ReturnType<typeof createPartnerClient> | undefined) => ({
+      backgroundHandoff: partner ? (await runSupport(partner)).runs : false,
+    });
+
     const ensureRemoteSession = async (
       partner: ReturnType<typeof createPartnerClient>,
       session: AssistantSession,
@@ -888,6 +926,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           session,
           messages: await renderSessionMessages(db, session, assistantSessionDir, undefined),
           latestRun: publicRun(latestRun(db, session.id)),
+          capabilities: await assistantCapabilities(undefined),
         };
       }
       let remote;
@@ -906,6 +945,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         session,
         messages: await renderSessionMessages(db, session, assistantSessionDir, partner),
         latestRun: publicRun(latestRun(db, session.id)),
+        capabilities: await assistantCapabilities(partner),
         ...(await remoteSessionSeeds(session, partner)),
       };
     };
@@ -926,6 +966,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         session,
         messages: await renderSessionMessages(db, session, assistantSessionDir, partner),
         latestRun: publicRun(latestRun(db, id)),
+        capabilities: await assistantCapabilities(partner),
         ...(await remoteSessionSeeds(session, partner)),
       };
     });
@@ -1035,6 +1076,12 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
+      // Refuse before any attachment or run row is written: the Partner has no
+      // /v1/runs, so nothing downstream could complete this turn.
+      if (!(await runSupport(partner)).runs) {
+        reply.code(400);
+        return { error: BACKGROUND_HANDOFF_UNSUPPORTED };
+      }
       const ideaScope = ideaAttachmentScope(session);
       if (attachmentsResult.attachments.length > 0 && ideaScope.repoGateError) {
         reply.code(400);
@@ -1079,7 +1126,13 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
-      if (run.remote_run_id) await partner.stopRun(run.remote_run_id);
+      if (run.remote_run_id) {
+        if (!(await runSupport(partner)).runStop) {
+          reply.code(400);
+          return { error: BACKGROUND_STOP_UNSUPPORTED };
+        }
+        await partner.stopRun(run.remote_run_id);
+      }
       const now = new Date().toISOString();
       db.prepare('UPDATE assistant_runs SET status = ?, updated_at = ? WHERE id = ?').run('cancelling', now, run.id);
       return { ok: true };
@@ -1088,6 +1141,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     fastify.post('/api/assistant/sync', async () => {
       const partner = client();
       if (!partner) return { updated: 0 };
+      // Nothing to reconcile against an adapter with no /v1/runs; polling it
+      // would only mark every stale row unknown.
+      if (!(await runSupport(partner)).runs) return { updated: 0 };
       const runs = db
         .prepare('SELECT * FROM assistant_runs WHERE remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(...Array.from(RUNNING_STATUSES)) as AssistantRun[];
