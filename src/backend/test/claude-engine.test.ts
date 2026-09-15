@@ -237,3 +237,30 @@ test('Pi child exposes the Scout allowlist and disposal retains audit entries', 
     assert.ok(pi.models.getAll().filter(m => m.provider === 'openai').length > 1);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('disposing a child session removes its SDK transcript but keeps the child JSONL', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-claude-engine-'));
+  try {
+    const pi = await makeRuntime(dir);
+    const deleted: string[] = [];
+    const engine = new ClaudeEngine({ pi, config: () => enabled, queryFn, deleteSdkSession: async (id, cwd) => { deleted.push(`${id}@${cwd}`); } });
+    const child = await engine.createChildSession({ id: 'child-1', parentThreadId: 'thread-1', cwd: '/repo', role: 'scout', prompt: 'Scout the repo.' });
+    // Children never enter the engine's session map, so dropSession cannot reach them.
+    assert.equal(engine.hasSession('child-1', '/repo'), false);
+    await child.prompt('Find callers');
+    assert.equal(child.engineSessionId, 'sdk-sess-9');
+    child.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(deleted, ['sdk-sess-9@/repo']);
+    // The child's own Pi JSONL (the retained role record) is untouched.
+    const entries = await pi.readMessages('child-1', '/repo');
+    assert.deepEqual(entries.map((e: any) => e.message.role), ['user', 'assistant']);
+    // A child that never ran a turn has no SDK transcript to remove.
+    const idle = await engine.createChildSession({ id: 'child-2', parentThreadId: 'thread-1', cwd: '/repo', role: 'scout', prompt: 'Scout.' });
+    idle.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(deleted, ['sdk-sess-9@/repo']);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

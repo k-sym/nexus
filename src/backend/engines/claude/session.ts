@@ -71,6 +71,8 @@ export interface ClaudeSessionDeps {
   isShared?: () => boolean;
   /** Injected by tests; production reads transcripts through the SDK. */
   getSessionMessages?: GetSessionMessagesFn;
+  /** Runs once from `dispose()` with the SDK session id, if a turn ever recorded one. Set by the engine for child (role) sessions. */
+  onDispose?: (sdkSessionId: string | undefined) => void;
   log?: (line: string) => void;
 }
 
@@ -176,6 +178,23 @@ export class ClaudeEngineSession implements EngineSession {
 
   getContextUsage(): ContextUsage | undefined {
     return this.lastContextUsage;
+  }
+
+  /**
+   * Release the session's runtime resources once its owner is done with it.
+   * Child (role) sessions never enter the engine's `sessions` map, so
+   * `dropSession` cannot reach them; the role runner calls this on settle
+   * instead. The thread's Pi JSONL is untouched — it is the retained child
+   * record — and `onDispose` lets the engine remove only the SDK's own copy.
+   */
+  dispose(): void {
+    if (this.active) void this.abort().catch(() => { /* already tearing down */ });
+    this.listeners.clear();
+    const onDispose = this.deps.onDispose;
+    if (!onDispose) return;
+    try { onDispose(this.sdkSessionId); } catch (err: any) {
+      this.deps.log?.(`[claude-engine ${this.deps.threadId}] dispose hook failed: ${err?.message ?? err}`);
+    }
   }
 
   async abort(): Promise<void> {

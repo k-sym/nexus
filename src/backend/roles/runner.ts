@@ -56,7 +56,7 @@ export class RoleRunner {
   }
   private async run(parent: Parent, role: RoleName, callId: string, args: { brief: string; files?: string[] }, signal?: AbortSignal) {
     const row = this.deps.db.prepare('SELECT role_models FROM chat_threads WHERE id = ?').get(parent.threadId) as { role_models: string | null };
-    const modelKey = readOverrides(row?.role_models)[role] ?? this.deps.config.models[role];
+    const modelKey = readOverrides(row?.role_models, `thread ${parent.threadId}`)[role] ?? this.deps.config.models[role];
     const resolved = this.deps.engines.resolveModel(modelKey);
     if (!resolved || !resolved.engine.createChildSession || !this.deps.engines.listModels().some(m => `${m.provider}/${m.id}` === modelKey && m.configured !== false)) throw new Error(`${role} model unavailable: ${modelKey}`);
     const id = randomUUID(), start = Date.now();

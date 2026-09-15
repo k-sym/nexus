@@ -496,6 +496,39 @@ test('settings masks and preserves both bridge client credentials', async () => 
   } finally { saveConfig(original); await app.close(); }
 });
 
+test('PUT /api/settings rejects a new role model the registry does not know but keeps a saved one', async () => {
+  const original = loadConfig();
+  const app = Fastify({ logger: false });
+  // A registry knowing exactly one model. The saved defaults are claude-code/*
+  // keys it has never heard of, which is the "retained unavailable" case.
+  app.decorate('engines', { listModels: () => [{ provider: 'fake', id: 'model', name: 'Fake', configured: true }] } as any);
+  app.register(registerSettingsRoutes);
+  try {
+    delete process.env.GITHUB_TOKEN;
+    __primeTokenCache(null);
+    const roles = { ...original.roles, enabled: true };
+    const rejected = await app.inject({ method: 'PUT', url: '/api/settings', payload: { ...original, roles: { ...roles, models: { ...roles.models, scout: 'fake/missing' } } } });
+    assert.equal(rejected.statusCode, 400);
+    assert.match(rejected.json().error, /Unknown model for scout: fake\/missing/);
+    assert.equal(loadConfig().roles.models.scout, original.roles.models.scout, 'nothing persisted on rejection');
+
+    const accepted = await app.inject({ method: 'PUT', url: '/api/settings', payload: { ...original, roles: { ...roles, models: { ...roles.models, scout: 'fake/model' } } } });
+    assert.equal(accepted.statusCode, 200);
+    assert.equal(loadConfig().roles.models.scout, 'fake/model');
+
+    // A selection already on disk that the catalog no longer knows survives an unrelated edit.
+    saveConfig({ ...loadConfig(), roles: { ...roles, models: { ...roles.models, scout: 'fake/gone' } } });
+    const retained = await app.inject({ method: 'PUT', url: '/api/settings', payload: { ...loadConfig(), roles: { ...roles, models: { ...roles.models, scout: 'fake/gone' }, max_turns: 7 } } });
+    assert.equal(retained.statusCode, 200);
+    assert.equal(loadConfig().roles.models.scout, 'fake/gone');
+    assert.equal(loadConfig().roles.max_turns, 7);
+    assert.equal(retained.json().roles.models.researcher, original.roles.models.researcher, 'unchanged claude-code defaults pass too');
+  } finally {
+    saveConfig(original);
+    await app.close();
+  }
+});
+
 test('PUT /api/settings rejects non-string bridge client values before they reach config.yaml', async () => {
   const original = loadConfig(); const app = makeApp();
   try {

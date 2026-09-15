@@ -128,6 +128,12 @@ export class ClaudeEngine implements ChatEngine {
     }
   }
 
+  /**
+   * Children bypass `sessions`, so `dropSession` never sees them: their
+   * `dispose()` (called by the role runner when the run settles) removes the
+   * SDK's ~/.claude transcript instead, while the child's Pi JSONL stays as the
+   * retained record the role_runs ledger points at.
+   */
   async createChildSession(options: ChildSessionOptions): Promise<ClaudeEngineSession> {
     return this.createSession(options.id, options.cwd, options);
   }
@@ -163,6 +169,7 @@ export class ClaudeEngine implements ChatEngine {
       queryFn: this.deps.queryFn,
       isShared: () => this.deps.isTranscriptShared?.(threadId, cwd) ?? false,
       getSessionMessages: this.deps.getSessionMessages,
+      onDispose: child ? (sdkSessionId) => { if (sdkSessionId) this.removeSdkTranscript(threadId, cwd, sdkSessionId); } : undefined,
       log: this.deps.log ?? ((line) => console.log(line)),
     });
   }
@@ -219,8 +226,11 @@ export class ClaudeEngine implements ChatEngine {
       this.deps.log?.(`[claude-engine ${threadId}] transcript ${sdkSessionId} is shared with Claude Desktop; left in place`);
       return;
     }
-    // Fire-and-forget: the SDK transcript is a few KB in ~/.claude; failing to
-    // remove it must never fail the drop.
+    this.removeSdkTranscript(threadId, cwd, sdkSessionId);
+  }
+
+  /** Fire-and-forget: the SDK transcript is a few KB in ~/.claude; failing to remove it must never fail a drop or a child's disposal. */
+  private removeSdkTranscript(threadId: string, cwd: string, sdkSessionId: string): void {
     void this.deleteSdkSession(sdkSessionId, cwd).catch((err: any) => {
       this.deps.log?.(`[claude-engine ${threadId}] could not delete SDK session ${sdkSessionId}: ${err?.message ?? err}`);
     });
