@@ -9,10 +9,10 @@ PRAGMA busy_timeout = 5000;
 -- ── Canonical memory rows (mirror of one markdown file each) ──────────────────
 CREATE TABLE IF NOT EXISTS memories (
   id               TEXT PRIMARY KEY,          -- ULID, also lives in the file's frontmatter
-  namespace        TEXT NOT NULL,             -- nexus | openclaw | global
+  namespace        TEXT NOT NULL,             -- nexus | global
   project          TEXT,                      -- project slug (nullable)
   category         TEXT,                      -- general|decision|chat|agent_run|specs|...
-  source           TEXT NOT NULL,             -- nexus|openclaw|human|orchestrator
+  source           TEXT NOT NULL,             -- nexus|mcp|human|orchestrator
   title            TEXT,
   body             TEXT NOT NULL,
   frontmatter_json TEXT,                       -- full frontmatter as JSON (lossless round-trip)

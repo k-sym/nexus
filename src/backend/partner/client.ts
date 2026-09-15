@@ -1,6 +1,12 @@
-export type HermesFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
+/**
+ * Client for the Partner assistant-api (baker-internal `apps/partner/assistant-api`,
+ * FastAPI on 127.0.0.1:8788, headless Claude). It implements the session API the
+ * retired Hermes server exposed, so a few wire strings keep their historical
+ * names: the `X-Hermes-Session-Key` header and `hermes.*` object tags in responses.
+ */
+export type PartnerFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export interface HermesRunInput {
+export interface PartnerRunInput {
   input: string;
   sessionId?: string;
   sessionKey?: string;
@@ -9,12 +15,12 @@ export interface HermesRunInput {
   previousResponseId?: string;
 }
 
-export interface HermesRunStart {
+export interface PartnerRunStart {
   runId: string;
   status: string;
 }
 
-export interface HermesRunStatus {
+export interface PartnerRunStatus {
   runId: string;
   status: string;
   sessionId?: string;
@@ -24,7 +30,7 @@ export interface HermesRunStatus {
   error?: string;
 }
 
-export interface HermesResponsesInput {
+export interface PartnerResponsesInput {
   input: string;
   sessionId?: string;
   sessionKey?: string;
@@ -33,7 +39,7 @@ export interface HermesResponsesInput {
   signal?: AbortSignal;
 }
 
-export type HermesResponseEvent =
+export type PartnerResponseEvent =
   | { kind: 'created'; responseId?: string }
   | { kind: 'text_delta'; delta: string }
   | { kind: 'reasoning_delta'; delta: string }
@@ -42,49 +48,49 @@ export type HermesResponseEvent =
   | { kind: 'completed'; responseId?: string }
   | { kind: 'failed'; error: string };
 
-export type HermesContentPart =
+export type PartnerContentPart =
   | { type: 'text' | 'input_text'; text: string }
   | { type: 'image_url'; image_url: { url: string; detail?: string } }
   | { type: 'input_image'; image_url: string };
 
-export interface HermesSessionInput {
+export interface PartnerSessionInput {
   sessionId: string;
   sessionKey?: string;
   title?: string;
 }
 
-export interface HermesSessionChatInput {
+export interface PartnerSessionChatInput {
   sessionId: string;
   sessionKey?: string;
-  input: string | HermesContentPart[];
+  input: string | PartnerContentPart[];
   instructions?: string;
   /** Model alias for this turn (partner adapter: sonnet|opus|haiku). Omit for
-   * the session's persisted choice / service default. Hermes ignored it. */
+   * the session's persisted choice / service default. the retired Partner server ignored it. */
   model?: string;
 }
 
 /** Context-window usage as the partner adapter reports it (#75 wire shape). */
-export interface HermesContextUsage {
+export interface PartnerContextUsage {
   used?: number;
   limit?: number;
   model?: string;
 }
 
-export interface HermesSessionChatResult {
+export interface PartnerSessionChatResult {
   sessionId: string;
   output: string;
   usage?: unknown;
   model?: string;
-  context?: HermesContextUsage;
+  context?: PartnerContextUsage;
 }
 
-export interface HermesSessionChatStreamInput {
+export interface PartnerSessionChatStreamInput {
   sessionId: string;
   sessionKey?: string;
-  input: string | HermesContentPart[];
-  /** Ephemeral system prompt for this turn (Hermes `system_message`). */
+  input: string | PartnerContentPart[];
+  /** Ephemeral system prompt for this turn (Partner `system_message`). */
   instructions?: string;
-  /** Model alias for this turn; see HermesSessionChatInput.model. */
+  /** Model alias for this turn; see PartnerSessionChatInput.model. */
   model?: string;
   signal?: AbortSignal;
 }
@@ -96,17 +102,17 @@ export interface HermesSessionChatStreamInput {
  * `tool_started`→`tool_completed` themselves (FIFO by name) and take authoritative
  * ids + full output from `/api/sessions/{id}/messages` on reload.
  */
-export type HermesChatStreamEvent =
+export type PartnerChatStreamEvent =
   | { kind: 'text_delta'; delta: string }
   | { kind: 'reasoning_delta'; delta: string }
   | { kind: 'tool_started'; toolName: string; args?: Record<string, unknown> }
   | { kind: 'tool_completed'; toolName: string; preview: string; isError: boolean }
   // The partner adapter enriches `run.completed` with model/usage/context (#75);
-  // plain Hermes (and the trailing `done`) yields a bare completed.
-  | { kind: 'completed'; model?: string; usage?: unknown; context?: HermesContextUsage }
+  // the retired Partner server (and the trailing `done`) yields a bare completed.
+  | { kind: 'completed'; model?: string; usage?: unknown; context?: PartnerContextUsage }
   | { kind: 'failed'; error: string };
 
-export interface HermesListSessionsInput {
+export interface PartnerListSessionsInput {
   limit?: number;
   offset?: number;
   /**
@@ -119,7 +125,7 @@ export interface HermesListSessionsInput {
   includeChildren?: boolean;
 }
 
-export interface HermesListedSession {
+export interface PartnerListedSession {
   id: string;
   title?: string;
   source?: string;
@@ -136,37 +142,37 @@ export interface HermesListedSession {
   preview?: string;
   message_count?: number;
   // Partner adapter meter fields (#75): the session's persisted model alias and
-  // the context tokens its last turn ended at. Absent on Hermes rows.
+  // the context tokens its last turn ended at. Absent on rows from the retired Partner server.
   model?: string | null;
   context_used?: number | null;
   context_limit?: number;
 }
 
 /** One choice from the partner adapter's `GET /v1/models` (#75). */
-export interface HermesModelChoice {
+export interface PartnerModelChoice {
   id: string;
   label?: string;
   context_limit?: number;
   default?: boolean;
 }
 
-export interface HermesModelsResult {
-  models: HermesModelChoice[];
+export interface PartnerModelsResult {
+  models: PartnerModelChoice[];
   default?: string;
 }
 
-export interface HermesListSessionsResult {
-  sessions: HermesListedSession[];
+export interface PartnerListSessionsResult {
+  sessions: PartnerListedSession[];
   nextOffset: number | null;
 }
 
 /**
- * A tool call as Hermes persists it — OpenAI `tool_calls` shape (some providers
+ * A tool call as Partner persists it — OpenAI `tool_calls` shape (some providers
  * flatten `name`/`arguments` onto the object instead of nesting under
- * `function`). `arguments` is a JSON string. Hermes JSON-parses the column into
+ * `function`). `arguments` is a JSON string. Partner JSON-parses the column into
  * this array before returning it from `/api/sessions/{id}/messages`.
  */
-export interface HermesRawToolCall {
+export interface PartnerRawToolCall {
   id?: string;
   call_id?: string;
   type?: string;
@@ -175,10 +181,10 @@ export interface HermesRawToolCall {
   arguments?: string;
 }
 
-export interface HermesSessionMessage {
-  // Hermes's `messages` table PK is `INTEGER PRIMARY KEY AUTOINCREMENT`, so
+export interface PartnerSessionMessage {
+  // the Partner assistant-api's `messages` table PK is `INTEGER PRIMARY KEY AUTOINCREMENT`, so
   // `/api/sessions/{id}/messages` sends `id` as a JSON *number*. Typed as
-  // `string | number` to keep the wire honest; `hermesMessagesToTranscript`
+  // `string | number` to keep the wire honest; `partnerMessagesToTranscript`
   // stringifies it before it reaches any client (see PR #319 — iOS's strict
   // decoder rejects a numeric id).
   id?: string | number;
@@ -188,13 +194,13 @@ export interface HermesSessionMessage {
   // Present on `assistant` rows that call tools, and on `tool` result rows.
   // Nexus used to discard these, flattening tool output into assistant text
   // bubbles when adopting a remote session.
-  tool_calls?: HermesRawToolCall[];
+  tool_calls?: PartnerRawToolCall[];
   tool_call_id?: string;
   tool_name?: string;
   reasoning_content?: string;
 }
 
-export interface HermesCapabilities {
+export interface PartnerCapabilities {
   runs: boolean;
   runEvents: boolean;
   runStop: boolean;
@@ -204,14 +210,14 @@ export interface HermesCapabilities {
   sessionKeyHeader?: string;
 }
 
-export interface HermesClient {
-  capabilities(): Promise<HermesCapabilities>;
-  startRun(input: HermesRunInput): Promise<HermesRunStart>;
-  getRun(runId: string): Promise<HermesRunStatus>;
+export interface PartnerClient {
+  capabilities(): Promise<PartnerCapabilities>;
+  startRun(input: PartnerRunInput): Promise<PartnerRunStart>;
+  getRun(runId: string): Promise<PartnerRunStatus>;
   stopRun(runId: string): Promise<void>;
-  listModels(): Promise<HermesModelsResult>;
+  listModels(): Promise<PartnerModelsResult>;
   /** Partner adapter's routine fleet report (baker-internal#82). Passed through
-   * untyped — the nexus route proxies the payload as-is. Plain Hermes lacks the
+   * untyped — the nexus route proxies the payload as-is. The retired Partner server lacked the
    * endpoint and the request throws; callers fail-soft. */
   listRoutines(): Promise<unknown>;
   getRoutine(name: string): Promise<unknown>;
@@ -245,28 +251,28 @@ export interface HermesClient {
   /** Edit-before-send (baker-internal#97): replaces the body and returns the
    * draft to pending, so a prior approval can never be inherited. */
   editDraft(id: string, body: string, by: string): Promise<unknown>;
-  createSession(input: HermesSessionInput): Promise<{ sessionId: string }>;
+  createSession(input: PartnerSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
-  listSessions(input?: HermesListSessionsInput): Promise<HermesListSessionsResult>;
-  getSession(sessionId: string): Promise<HermesListedSession | null>;
+  listSessions(input?: PartnerListSessionsInput): Promise<PartnerListSessionsResult>;
+  getSession(sessionId: string): Promise<PartnerListedSession | null>;
   /** The partner's server-held current-session pointer (baker-internal#114):
    * one conversation, every surface. rotate = the /new verb. */
-  currentSession(): Promise<HermesListedSession | null>;
-  rotateCurrentSession(): Promise<HermesListedSession | null>;
-  getSessionMessages(sessionId: string): Promise<HermesSessionMessage[]>;
-  sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult>;
-  sessionChatStream(input: HermesSessionChatStreamInput): AsyncIterable<HermesChatStreamEvent>;
+  currentSession(): Promise<PartnerListedSession | null>;
+  rotateCurrentSession(): Promise<PartnerListedSession | null>;
+  getSessionMessages(sessionId: string): Promise<PartnerSessionMessage[]>;
+  sessionChat(input: PartnerSessionChatInput): Promise<PartnerSessionChatResult>;
+  sessionChatStream(input: PartnerSessionChatStreamInput): AsyncIterable<PartnerChatStreamEvent>;
   streamChatCompletions(messages: Array<{ role: string; content: string }>): AsyncIterable<string>;
-  streamResponses(input: HermesResponsesInput): AsyncIterable<HermesResponseEvent>;
+  streamResponses(input: PartnerResponsesInput): AsyncIterable<PartnerResponseEvent>;
 }
 
-interface CreateHermesClientOptions {
+interface CreatePartnerClientOptions {
   url: string;
   key: string;
-  fetchImpl?: HermesFetch;
+  fetchImpl?: PartnerFetch;
 }
 
-export function normalizeHermesBaseUrl(url: string): string {
+export function normalizePartnerBaseUrl(url: string): string {
   let trimmed = url.trim().replace(/\/+$/, '');
   if (trimmed.endsWith('/v1/chat/completions')) trimmed = trimmed.slice(0, -'/v1/chat/completions'.length);
   else if (trimmed.endsWith('/v1/responses')) trimmed = trimmed.slice(0, -'/v1/responses'.length);
@@ -274,8 +280,8 @@ export function normalizeHermesBaseUrl(url: string): string {
   return trimmed.replace(/\/+$/, '');
 }
 
-export function createHermesClient(options: CreateHermesClientOptions): HermesClient {
-  const baseUrl = normalizeHermesBaseUrl(options.url);
+export function createPartnerClient(options: CreatePartnerClientOptions): PartnerClient {
+  const baseUrl = normalizePartnerBaseUrl(options.url);
   const fetchImpl = options.fetchImpl ?? fetch;
   const key = options.key;
 
@@ -299,7 +305,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       // Carry the status: the draft-approval routes (baker-internal#42) must tell
       // "someone already approved this" (409) apart from "the send itself failed"
       // (502), and a flattened message cannot.
-      const error = new Error(text || `Hermes request failed with ${response.status}`) as Error & {
+      const error = new Error(text || `Partner request failed with ${response.status}`) as Error & {
         status?: number;
       };
       error.status = response.status;
@@ -310,7 +316,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
   }
 
   return {
-    async capabilities(): Promise<HermesCapabilities> {
+    async capabilities(): Promise<PartnerCapabilities> {
       const body = await requestJson('/v1/capabilities');
       const features = (body as any)?.features ?? {};
       const endpoints = (body as any)?.endpoints ?? {};
@@ -325,9 +331,9 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       };
     },
 
-    async listModels(): Promise<HermesModelsResult> {
+    async listModels(): Promise<PartnerModelsResult> {
       const body = (await requestJson('/v1/models')) as any;
-      const models = Array.isArray(body?.models) ? (body.models as HermesModelChoice[]) : [];
+      const models = Array.isArray(body?.models) ? (body.models as PartnerModelChoice[]) : [];
       return { models, ...(typeof body?.default === 'string' ? { default: body.default } : {}) };
     },
 
@@ -433,7 +439,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       });
     },
 
-    async startRun(input: HermesRunInput): Promise<HermesRunStart> {
+    async startRun(input: PartnerRunInput): Promise<PartnerRunStart> {
       const body: Record<string, unknown> = { input: input.input };
       if (input.sessionId) body.session_id = input.sessionId;
       if (input.instructions) body.instructions = input.instructions;
@@ -450,9 +456,9 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       };
     },
 
-    async getRun(runId: string): Promise<HermesRunStatus> {
+    async getRun(runId: string): Promise<PartnerRunStatus> {
       const response = await requestJson(`/v1/runs/${encodeURIComponent(runId)}`);
-      const status: HermesRunStatus = {
+      const status: PartnerRunStatus = {
         runId: String((response as any).run_id ?? (response as any).runId ?? runId),
         status: String((response as any).status ?? 'unknown'),
       };
@@ -468,7 +474,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       await requestJson(`/v1/runs/${encodeURIComponent(runId)}/stop`, { method: 'POST' });
     },
 
-    async createSession(input: HermesSessionInput): Promise<{ sessionId: string }> {
+    async createSession(input: PartnerSessionInput): Promise<{ sessionId: string }> {
       const body: Record<string, unknown> = { id: input.sessionId };
       if (input.title) body.title = input.title;
       const response = await requestJson('/api/sessions', {
@@ -484,7 +490,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
     },
 
-    async listSessions(input: HermesListSessionsInput = {}): Promise<HermesListSessionsResult> {
+    async listSessions(input: PartnerListSessionsInput = {}): Promise<PartnerListSessionsResult> {
       const params = new URLSearchParams();
       if (input.limit !== undefined) params.set('limit', String(input.limit));
       if (input.offset !== undefined) params.set('offset', String(input.offset));
@@ -492,37 +498,37 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       if (input.includeChildren !== undefined) params.set('include_children', String(input.includeChildren));
       const query = params.toString();
       const body = (await requestJson(`/api/sessions${query ? `?${query}` : ''}`)) as any;
-      const sessions: HermesListedSession[] = Array.isArray(body) ? body : body?.sessions ?? body?.data ?? [];
+      const sessions: PartnerListedSession[] = Array.isArray(body) ? body : body?.sessions ?? body?.data ?? [];
       const rawNext = body?.next_offset ?? body?.nextOffset ?? null;
       const nextOffset = rawNext === null || rawNext === undefined ? null : Number(rawNext);
       return { sessions, nextOffset };
     },
 
-    async getSession(sessionId: string): Promise<HermesListedSession | null> {
+    async getSession(sessionId: string): Promise<PartnerListedSession | null> {
       const body = (await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`)) as any;
       const session = body?.session ?? body;
-      return session && typeof session === 'object' ? (session as HermesListedSession) : null;
+      return session && typeof session === 'object' ? (session as PartnerListedSession) : null;
     },
 
-    async currentSession(): Promise<HermesListedSession | null> {
+    async currentSession(): Promise<PartnerListedSession | null> {
       const body = (await requestJson('/v1/current-session')) as any;
       const session = body?.session ?? body;
-      return session && typeof session === 'object' ? (session as HermesListedSession) : null;
+      return session && typeof session === 'object' ? (session as PartnerListedSession) : null;
     },
 
-    async rotateCurrentSession(): Promise<HermesListedSession | null> {
+    async rotateCurrentSession(): Promise<PartnerListedSession | null> {
       const body = (await requestJson('/v1/current-session/rotate', { method: 'POST' })) as any;
       const session = body?.session ?? body;
-      return session && typeof session === 'object' ? (session as HermesListedSession) : null;
+      return session && typeof session === 'object' ? (session as PartnerListedSession) : null;
     },
 
-    async getSessionMessages(sessionId: string): Promise<HermesSessionMessage[]> {
+    async getSessionMessages(sessionId: string): Promise<PartnerSessionMessage[]> {
       const body = (await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}/messages`)) as any;
       const messages = Array.isArray(body) ? body : body?.messages ?? body?.data ?? [];
-      return messages as HermesSessionMessage[];
+      return messages as PartnerSessionMessage[];
     },
 
-    async sessionChat(input: HermesSessionChatInput): Promise<HermesSessionChatResult> {
+    async sessionChat(input: PartnerSessionChatInput): Promise<PartnerSessionChatResult> {
       const body: Record<string, unknown> = { input: input.input };
       if (input.instructions) body.instructions = input.instructions;
       if (input.model) body.model = input.model;
@@ -531,18 +537,18 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
         headers: jsonHeaders(input.sessionKey ? { 'X-Hermes-Session-Key': input.sessionKey } : {}),
         body: JSON.stringify(body),
       });
-      const result: HermesSessionChatResult = {
+      const result: PartnerSessionChatResult = {
         sessionId: String((response as any).session_id ?? (response as any).sessionId ?? input.sessionId),
         output: String((response as any).message?.content ?? (response as any).output ?? ''),
         usage: (response as any).usage,
       };
       if (typeof (response as any).model === 'string') result.model = (response as any).model;
       const context = (response as any).context;
-      if (context && typeof context === 'object') result.context = context as HermesContextUsage;
+      if (context && typeof context === 'object') result.context = context as PartnerContextUsage;
       return result;
     },
 
-    async *sessionChatStream(input: HermesSessionChatStreamInput): AsyncIterable<HermesChatStreamEvent> {
+    async *sessionChatStream(input: PartnerSessionChatStreamInput): AsyncIterable<PartnerChatStreamEvent> {
       const body: Record<string, unknown> = { message: input.input };
       if (input.instructions) body.system_message = input.instructions;
       if (input.model) body.model = input.model;
@@ -554,15 +560,15 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(text || `Hermes request failed with ${response.status}`);
+        throw new Error(text || `Partner request failed with ${response.status}`);
       }
-      if (!response.body) throw new Error('Hermes response did not include a stream.');
+      if (!response.body) throw new Error('Partner response did not include a stream.');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let pending = '';
       // SSE frames are separated by a blank line; a frame may span reads.
-      const drain = function* (buffer: string, flushTail: boolean): Generator<HermesChatStreamEvent> {
+      const drain = function* (buffer: string, flushTail: boolean): Generator<PartnerChatStreamEvent> {
         let rest = buffer;
         let sep = rest.indexOf('\n\n');
         while (sep !== -1) {
@@ -592,13 +598,13 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       const response = await fetchImpl(`${baseUrl}/v1/chat/completions`, {
         method: 'POST',
         headers: jsonHeaders(),
-        body: JSON.stringify({ model: 'hermes-agent', stream: true, messages }),
+        body: JSON.stringify({ model: 'partner', stream: true, messages }),
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(text || `Hermes request failed with ${response.status}`);
+        throw new Error(text || `Partner request failed with ${response.status}`);
       }
-      if (!response.body) throw new Error('Hermes response did not include a stream.');
+      if (!response.body) throw new Error('Partner response did not include a stream.');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -618,7 +624,7 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       if (delta) yield delta;
     },
 
-    async *streamResponses(input: HermesResponsesInput): AsyncIterable<HermesResponseEvent> {
+    async *streamResponses(input: PartnerResponsesInput): AsyncIterable<PartnerResponseEvent> {
       const body: Record<string, unknown> = { input: input.input, stream: true };
       if (input.sessionId) body.session_id = input.sessionId;
       if (input.previousResponseId) body.previous_response_id = input.previousResponseId;
@@ -631,14 +637,14 @@ export function createHermesClient(options: CreateHermesClientOptions): HermesCl
       });
       if (!response.ok) {
         const text = await response.text().catch(() => '');
-        throw new Error(text || `Hermes request failed with ${response.status}`);
+        throw new Error(text || `Partner request failed with ${response.status}`);
       }
-      if (!response.body) throw new Error('Hermes response did not include a stream.');
+      if (!response.body) throw new Error('Partner response did not include a stream.');
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let pending = '';
-      const flush = function* (line: string): Generator<HermesResponseEvent> {
+      const flush = function* (line: string): Generator<PartnerResponseEvent> {
         const ev = parseResponsesEvent(line);
         if (ev) yield ev;
       };
@@ -672,7 +678,7 @@ export function extractOpenAiDelta(line: string): string {
   }
 }
 
-export function parseResponsesEvent(line: string): HermesResponseEvent | null {
+export function parseResponsesEvent(line: string): PartnerResponseEvent | null {
   const trimmed = line.trim();
   if (!trimmed || trimmed === 'data: [DONE]') return null;
   const jsonText = trimmed.startsWith('data:') ? trimmed.slice(5).trim() : trimmed;
@@ -723,7 +729,7 @@ export function parseResponsesEvent(line: string): HermesResponseEvent | null {
  * comment frames (`: keepalive`) and lifecycle-only events (run.started,
  * message.started, assistant.completed) return null.
  */
-export function parseChatStreamFrame(frame: string): HermesChatStreamEvent | null {
+export function parseChatStreamFrame(frame: string): PartnerChatStreamEvent | null {
   let eventName = '';
   const dataLines: string[] = [];
   for (const rawLine of frame.split(/\r?\n/)) {
@@ -754,8 +760,8 @@ export function parseChatStreamFrame(frame: string): HermesChatStreamEvent | nul
     case 'run.completed':
     case 'done': {
       // The partner adapter enriches run.completed with model/usage/context
-      // (#75); anything absent (plain Hermes, the trailing `done`) stays bare.
-      const completed: Extract<HermesChatStreamEvent, { kind: 'completed' }> = { kind: 'completed' };
+      // (#75); anything absent (the retired Partner server, the trailing `done`) stays bare.
+      const completed: Extract<PartnerChatStreamEvent, { kind: 'completed' }> = { kind: 'completed' };
       if (typeof data.model === 'string') completed.model = data.model;
       if (data.usage !== undefined) completed.usage = data.usage;
       if (data.context && typeof data.context === 'object') completed.context = data.context;

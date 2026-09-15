@@ -57,6 +57,20 @@ function mergeHelpers(
 function maskBridgeClient(config: NexusConfig['bridge_client']): NexusConfig['bridge_client'] {
   return config ? { ...config, token: maskSecret(config.token || ''), backend_token: maskSecret(config.backend_token || '') } : undefined;
 }
+const BRIDGE_CLIENT_KEYS = ['url', 'backend_url', 'instance_id', 'sender_id', 'token', 'backend_token'] as const;
+
+/** bridge_client is persisted verbatim into config.yaml, so refuse anything
+ *  but string values before it gets there. Returns an error message or null. */
+function validateBridgeClient(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) return 'bridge_client must be an object';
+  for (const key of BRIDGE_CLIENT_KEYS) {
+    const field = (value as Record<string, unknown>)[key];
+    if (field !== undefined && typeof field !== 'string') return `bridge_client.${key} must be a string`;
+  }
+  return null;
+}
+
 function mergeBridgeClient(current: NexusConfig['bridge_client'], incoming: NexusConfig['bridge_client']): NexusConfig['bridge_client'] {
   if (!current && !incoming) return undefined;
   return { ...current, ...incoming,
@@ -99,6 +113,8 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
     const { github_token_detected: _ignored, ...incoming } =
       request.body as NexusConfig & { github_token_detected?: boolean };
     const current = loadConfig();
+    const bridgeClientError = validateBridgeClient(incoming.bridge_client);
+    if (bridgeClientError) return reply.code(400).send({ error: bridgeClientError });
 
     // Preserve the existing API key unless a new (non-masked) one was provided.
     const incomingKey = incoming.models?.openrouter?.api_key;

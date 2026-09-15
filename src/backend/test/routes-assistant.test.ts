@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { createAssistantRoutes } from '../routes/assistant';
 import { loadConfig } from '../config';
 import { getDb } from '../db';
-import type { HermesFetch } from '../hermes/client';
+import type { PartnerFetch } from '../partner/client';
 import { ActivityManager } from '../activity/manager';
 
 function sseResponse(chunks: string[]): Response {
@@ -29,21 +29,30 @@ function jsonRes(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
+/** `GET /v1/capabilities` as the adapter reports it. The Partner says
+ * `run_submission=false`; the Hermes-era tests below opt into runs. */
+function capabilitiesRes(features: { run_submission?: boolean; run_stop?: boolean } = { run_submission: true, run_stop: true }): Response {
+  return jsonRes({ features: { session_create: true, ...features }, endpoints: { session_chat_stream: true } });
+}
+
 /**
- * Mock the session-scoped Hermes surface the Assistant now uses:
+ * Mock the session-scoped Partner surface the Assistant now uses:
  * `POST /api/sessions` (ensureRemoteSession), `POST /api/sessions/{id}/chat/stream`
  * (foreground send), and `GET /api/sessions/{id}/messages` (history render).
  * `frames` are raw SSE frames for the chat stream; `messages` is the transcript
  * that `/messages` returns on reload.
  */
-function hermesChatMock(opts: {
+function partnerChatMock(opts: {
   frames?: string[];
   messages?: any[];
+  /** `/v1/capabilities` features; defaults to a runs-capable (Hermes-era) adapter. */
+  capabilities?: { run_submission?: boolean; run_stop?: boolean };
   onChatStream?: (url: string, init?: RequestInit) => Response | Promise<Response>;
   onOther?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
-}): HermesFetch {
+}): PartnerFetch {
   return async (url, init) => {
     const u = String(url);
+    if (u.endsWith('/v1/capabilities')) return capabilitiesRes(opts.capabilities);
     if (/\/api\/sessions\/[^/]+\/chat\/stream$/.test(u)) {
       if (opts.onChatStream) return opts.onChatStream(u, init);
       return sseResponse(opts.frames ?? ['event: run.completed\ndata: {}\n\n', 'event: done\ndata: {}\n\n']);
@@ -61,11 +70,11 @@ function hermesChatMock(opts: {
       // getSession detail (title lookup on import); harmless default.
       return jsonRes({ session: { id: u.split('/').pop() } });
     }
-    throw new Error(`unexpected Hermes request ${u}`);
+    throw new Error(`unexpected Partner request ${u}`);
   };
 }
 
-// A tool turn as Hermes /messages returns it (assistant tool_calls + tool rows).
+// A tool turn as Partner /messages returns it (assistant tool_calls + tool rows).
 function toolTurnMessages(userText: string, assistantText: string) {
   return [
     { id: 'u1', role: 'user', content: userText },
@@ -79,7 +88,7 @@ function toolTurnMessages(userText: string, assistantText: string) {
   ];
 }
 
-function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: HermesFetch; activity?: boolean } = {}) {
+function makeApp(options: { config?: ReturnType<typeof loadConfig>; fetchImpl?: PartnerFetch; activity?: boolean } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-assistant-test-'));
   const assistantSessionDir = join(dir, 'assistant-sessions');
   const db = getDb(join(dir, 'test.db'));
@@ -212,7 +221,7 @@ test('session detail lazily seeds Pi store from legacy messages', async () => {
 });
 
 test('Assistant foreground stream persists via /chat/stream and completes the run', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     frames: [
       'event: run.started\ndata: {"user_message":{"role":"user","content":"Run checks tonight"}}\n\n',
       'event: assistant.delta\ndata: {"delta":"Finished overnight checks."}\n\n',
@@ -241,7 +250,7 @@ test('Assistant foreground stream persists via /chat/stream and completes the ru
     const runEnd = ndjsonEvents(streamed.body).find((e) => e.kind === 'run_end');
     assert.equal(runEnd.run.status, 'completed');
 
-    // Transcript is NOT mirrored locally — it renders from Hermes /messages.
+    // Transcript is NOT mirrored locally — it renders from Partner /messages.
     const legacyCount = db.prepare('SELECT COUNT(*) c FROM assistant_session_messages WHERE session_id = ?').get(sessionId) as any;
     assert.equal(legacyCount.c, 0, 'live turns no longer write legacy messages');
     const detail = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
@@ -258,7 +267,7 @@ test('Assistant foreground stream persists via /chat/stream and completes the ru
 });
 
 test('streamSessionTurn maps /chat/stream tool SSE to structured NDJSON events', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     frames: [
       'event: assistant.delta\ndata: {"delta":"Reading."}\n\n',
       'event: tool.started\ndata: {"tool_name":"read_file","args":{"path":"/tmp/x"}}\n\n',
@@ -308,11 +317,11 @@ test('streamSessionTurn maps /chat/stream tool SSE to structured NDJSON events',
 
 test('foreground send hits the session-scoped /chat/stream endpoint (not /v1/responses)', async () => {
   const calls: string[] = [];
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     frames: ['event: assistant.delta\ndata: {"delta":"ok"}\n\n', 'event: done\ndata: {}\n\n'],
     onOther: (url) => { calls.push(url); return undefined; },
   });
-  const wrapped: HermesFetch = async (url, init) => { calls.push(String(url)); return fetchImpl(url, init); };
+  const wrapped: PartnerFetch = async (url, init) => { calls.push(String(url)); return fetchImpl(url, init); };
   const { app, db, dir } = makeApp({ fetchImpl: wrapped });
   try {
     const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'T' } });
@@ -327,7 +336,7 @@ test('foreground send hits the session-scoped /chat/stream endpoint (not /v1/res
 });
 
 test('streamSessionTurn emits error event when /chat/stream yields an error event mid-stream', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     frames: [
       'event: assistant.delta\ndata: {"delta":"Starting work."}\n\n',
       'event: error\ndata: {"message":"API rate limit exceeded"}\n\n',
@@ -367,8 +376,8 @@ test('streamSessionTurn emits error event when /chat/stream yields an error even
 
 test('streamSessionTurn marks the run failed when the /chat/stream body throws mid-stream', async () => {
   // A body that emits a valid frame then ERRORS the stream — surfaces as a thrown
-  // (non-abort) error out of hermes.sessionChatStream.
-  const fetchImpl = hermesChatMock({
+  // (non-abort) error out of partner.sessionChatStream.
+  const fetchImpl = partnerChatMock({
     onChatStream: () => {
       const enc = new TextEncoder();
       const body = new ReadableStream<Uint8Array>({
@@ -402,9 +411,9 @@ test('streamSessionTurn marks the run failed when the /chat/stream body throws m
   }
 });
 
-test('Assistant detached run sync reconciles completed Hermes output after restart', async () => {
-  const fetchImpl = hermesChatMock({
-    // The run agent persists the turn to Hermes SessionDB; history renders from /messages.
+test('Assistant detached run sync reconciles completed Partner output after restart', async () => {
+  const fetchImpl = partnerChatMock({
+    // The run agent persists the turn to Partner SessionDB; history renders from /messages.
     messages: [
       { id: 'u1', role: 'user', content: 'Work while Nexus is closed' },
       { id: 'a1', role: 'assistant', content: 'The overnight run is complete.' },
@@ -445,14 +454,14 @@ test('Assistant detached run sync reconciles completed Hermes output after resta
   }
 });
 
-test('Assistant foreground and background turns compose in one Hermes transcript', async () => {
-  const fetchImpl = hermesChatMock({
+test('Assistant foreground and background turns compose in one Partner transcript', async () => {
+  const fetchImpl = partnerChatMock({
     frames: [
       'event: assistant.delta\ndata: {"delta":"Hi there."}\n\n',
       'event: run.completed\ndata: {}\n\n',
       'event: done\ndata: {}\n\n',
     ],
-    // Both the foreground and the background turn live in the same Hermes session.
+    // Both the foreground and the background turn live in the same Partner session.
     messages: [
       { id: 'u1', role: 'user', content: 'Hello' },
       { id: 'a1', role: 'assistant', content: 'Hi there.' },
@@ -500,11 +509,11 @@ test('Assistant foreground and background turns compose in one Hermes transcript
   }
 });
 
-test('Assistant runs persist attachments and send Hermes saved file references', async () => {
-  let hermesMessage = '';
-  const fetchImpl = hermesChatMock({
+test('Assistant runs persist attachments and send Partner saved file references', async () => {
+  let partnerMessage = '';
+  const fetchImpl = partnerChatMock({
     onChatStream: (_url, init) => {
-      hermesMessage = JSON.parse(String(init?.body)).message;
+      partnerMessage = JSON.parse(String(init?.body)).message;
       return sseResponse([
         'event: assistant.delta\ndata: {"delta":"Read the attached brief."}\n\n',
         'event: done\ndata: {}\n\n',
@@ -532,8 +541,8 @@ test('Assistant runs persist attachments and send Hermes saved file references',
 
     assert.equal(streamed.statusCode, 200);
     // The saved-file reference is threaded into the /chat/stream `message` field.
-    assert.match(hermesMessage, /^Summarise this\n\nAttached files:\n- brief\.txt: /);
-    assert.match(hermesMessage, /project_docs\/uploads\/brief\.txt/);
+    assert.match(partnerMessage, /^Summarise this\n\nAttached files:\n- brief\.txt: /);
+    assert.match(partnerMessage, /project_docs\/uploads\/brief\.txt/);
 
     const savedPath = join(dir, 'project_docs', 'uploads', 'brief.txt');
     assert.equal(existsSync(savedPath), true, 'attachment file saved to disk');
@@ -544,10 +553,10 @@ test('Assistant runs persist attachments and send Hermes saved file references',
 });
 
 test('Idea dialogue attachments are gated on a valid target repo and filed per idea', async () => {
-  let hermesMessage = '';
-  const fetchImpl = hermesChatMock({
+  let partnerMessage = '';
+  const fetchImpl = partnerChatMock({
     onChatStream: (_url, init) => {
-      hermesMessage = JSON.parse(String(init?.body)).message;
+      partnerMessage = JSON.parse(String(init?.body)).message;
       return sseResponse([
         'event: assistant.delta\ndata: {"delta":"Got the file."}\n\n',
         'event: done\ndata: {}\n\n',
@@ -604,7 +613,7 @@ test('Idea dialogue attachments are gated on a valid target repo and filed per i
     // reference threaded into the prompt points there.
     const savedPath = join(dir, 'project_docs', 'uploads', 'ideas', 'idea-1', 'shot.txt');
     assert.equal(existsSync(savedPath), true, 'attachment filed under ideas/<id>/');
-    assert.match(hermesMessage, /ideas\/idea-1\/shot\.txt/);
+    assert.match(partnerMessage, /ideas\/idea-1\/shot\.txt/);
 
     // Text-only turns are never gated — the repo requirement is upload-only.
     const textOnly = await app.inject({
@@ -618,11 +627,11 @@ test('Idea dialogue attachments are gated on a valid target repo and filed per i
   }
 });
 
-test('Assistant foreground stream sends image attachments to Hermes as inline data images', async () => {
+test('Assistant foreground stream sends image attachments to Partner as inline data images', async () => {
   let createdRemoteSession = '';
-  let hermesChatBody: any = null;
+  let partnerChatBody: any = null;
   const imageData = Buffer.from('fake-png').toString('base64');
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     const requestUrl = String(url);
     if (requestUrl.endsWith('/api/sessions') && init?.method === 'POST') {
       const body = JSON.parse(String(init.body));
@@ -633,7 +642,7 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
       });
     }
     if (requestUrl.endsWith(`/api/sessions/${createdRemoteSession}/chat`) && init?.method === 'POST') {
-      hermesChatBody = JSON.parse(String(init.body));
+      partnerChatBody = JSON.parse(String(init.body));
       return new Response(JSON.stringify({
         object: 'hermes.session.chat.completion',
         session_id: createdRemoteSession,
@@ -641,7 +650,7 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
         usage: { total_tokens: 25 },
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
-    throw new Error(`unexpected Hermes request ${requestUrl}`);
+    throw new Error(`unexpected Partner request ${requestUrl}`);
   };
   const { app, db, dir } = makeApp({ fetchImpl });
   try {
@@ -665,13 +674,13 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
 
     assert.equal(streamed.statusCode, 200);
     assert.equal(createdRemoteSession, sessionId);
-    assert.ok(Array.isArray(hermesChatBody.input));
-    assert.deepEqual(hermesChatBody.input[0], { type: 'text', text: 'What do you see?' });
-    assert.deepEqual(hermesChatBody.input[1], {
+    assert.ok(Array.isArray(partnerChatBody.input));
+    assert.deepEqual(partnerChatBody.input[0], { type: 'text', text: 'What do you see?' });
+    assert.deepEqual(partnerChatBody.input[1], {
       type: 'image_url',
       image_url: { url: `data:image/png;base64,${imageData}`, detail: 'high' },
     });
-    assert.equal(JSON.stringify(hermesChatBody.input).includes('project_docs/uploads'), false);
+    assert.equal(JSON.stringify(partnerChatBody.input).includes('project_docs/uploads'), false);
 
     const events = ndjsonEvents(streamed.body);
     const kinds = events.map((e) => e.kind ?? e.type);
@@ -691,11 +700,11 @@ test('Assistant foreground stream sends image attachments to Hermes as inline da
   }
 });
 
-test('Assistant foreground vision turn persists to the Hermes session and renders from /messages', async () => {
+test('Assistant foreground vision turn persists to the Partner session and renders from /messages', async () => {
   const imageData = Buffer.from('fake-png').toString('base64');
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     // The vision turn goes through the session-scoped /chat endpoint, which persists
-    // to Hermes SessionDB; history then renders from /messages.
+    // to Partner SessionDB; history then renders from /messages.
     messages: [
       { id: 'u1', role: 'user', content: 'What do you see?' },
       { id: 'a1', role: 'assistant', content: 'I can see the screenshot.' },
@@ -768,8 +777,126 @@ test('Assistant background handoff rejects image attachments instead of dropping
   }
 });
 
+// The Partner assistant-api has no /v1/runs (capabilities: run_submission=false,
+// verified live 2026-09-15). The run routes ask before they write anything.
+test('Background handoff is refused with a clear 400 when the adapter does not advertise run_submission', async () => {
+  const requested: string[] = [];
+  const fetchImpl = partnerChatMock({
+    capabilities: { run_submission: false, run_stop: false },
+    onOther: (url) => { requested.push(url); return undefined; },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Partner' } });
+    const sessionId = created.json().id;
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/runs`,
+      payload: { content: 'Work while Nexus is closed' },
+    });
+    assert.equal(response.statusCode, 400);
+    assert.match(response.json().error, /Background Handoff is not available/);
+    assert.ok(!requested.some((u) => u.includes('/v1/runs')), 'never calls /v1/runs');
+    const rows = db.prepare('SELECT COUNT(*) AS count FROM assistant_runs WHERE session_id = ?').get(sessionId) as { count: number };
+    assert.equal(rows.count, 0, 'no local run row for a refused handoff');
+    assert.equal(db.prepare('SELECT status FROM assistant_sessions WHERE id = ?').get(sessionId)!.status, 'idle');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Session detail reports capabilities.backgroundHandoff from /v1/capabilities and caches the answer', async () => {
+  let capabilityCalls = 0;
+  const fetchImpl: PartnerFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/capabilities')) { capabilityCalls += 1; return capabilitiesRes({ run_submission: true, run_stop: true }); }
+    return partnerChatMock({})(url, init);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Caps' } });
+    const sessionId = created.json().id;
+    const first = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.equal(first.statusCode, 200);
+    assert.deepEqual(first.json().capabilities, { backgroundHandoff: true });
+    const second = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.deepEqual(second.json().capabilities, { backgroundHandoff: true });
+    assert.equal(capabilityCalls, 1, 'one capabilities fetch per configured URL');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Session detail hides background handoff for the Partner, an unreadable capabilities document, and no assistant', async () => {
+  const partner = makeApp({ fetchImpl: partnerChatMock({ capabilities: { run_submission: false } }) });
+  try {
+    const created = await partner.app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Partner' } });
+    const detail = await partner.app.inject({ method: 'GET', url: `/api/assistant/sessions/${created.json().id}` });
+    assert.deepEqual(detail.json().capabilities, { backgroundHandoff: false });
+  } finally {
+    await cleanup(partner.app, partner.db, partner.dir);
+  }
+
+  // Fail closed: a 500 on /v1/capabilities must not break the detail route.
+  const broken = makeApp({
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith('/v1/capabilities')) return new Response('boom', { status: 500 });
+      return partnerChatMock({})(url, init);
+    },
+  });
+  try {
+    const created = await broken.app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Broken' } });
+    const detail = await broken.app.inject({ method: 'GET', url: `/api/assistant/sessions/${created.json().id}` });
+    assert.equal(detail.statusCode, 200);
+    assert.deepEqual(detail.json().capabilities, { backgroundHandoff: false });
+  } finally {
+    await cleanup(broken.app, broken.db, broken.dir);
+  }
+
+  const unconfigured = makeApp({ config: { ...loadConfig(), assistant: { url: '', api_key: '' } } });
+  try {
+    const created = await unconfigured.app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Local' } });
+    const detail = await unconfigured.app.inject({ method: 'GET', url: `/api/assistant/sessions/${created.json().id}` });
+    assert.deepEqual(detail.json().capabilities, { backgroundHandoff: false });
+    const current = await unconfigured.app.inject({ method: 'GET', url: '/api/assistant/current' });
+    assert.deepEqual(current.json().capabilities, { backgroundHandoff: false });
+  } finally {
+    await cleanup(unconfigured.app, unconfigured.db, unconfigured.dir);
+  }
+});
+
+test('Sync and stop skip /v1/runs when the adapter cannot run or stop background runs', async () => {
+  const requested: string[] = [];
+  const fetchImpl = partnerChatMock({
+    capabilities: { run_submission: false, run_stop: false },
+    onOther: (url) => { requested.push(url); return undefined; },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Stale' } });
+    const sessionId = created.json().id;
+    // A Hermes-era row left behind with a remote id the Partner cannot resolve.
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO assistant_runs (id, session_id, remote_run_id, kind, status, input, output, started_at, updated_at)
+       VALUES ('stale-run', ?, 'remote-stale', 'overnight', 'running', 'old work', '', ?, ?)`,
+    ).run(sessionId, now, now);
+
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(sync.statusCode, 200);
+    assert.deepEqual(sync.json(), { updated: 0 });
+
+    const stop = await app.inject({ method: 'POST', url: '/api/assistant/runs/stale-run/stop' });
+    assert.equal(stop.statusCode, 400);
+    assert.match(stop.json().error, /Stopping a background run is not available/);
+    assert.equal(db.prepare('SELECT status FROM assistant_runs WHERE id = ?').get('stale-run')!.status, 'running', 'no optimistic cancelling');
+    assert.ok(!requested.some((u) => u.includes('/v1/runs')), 'never calls /v1/runs');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant sync isolates stale Hermes run_not_found failures and continues other runs', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     messages: [
       { id: 'u1', role: 'user', content: 'current work' },
       { id: 'a1', role: 'assistant', content: 'Current run completed.' },
@@ -829,10 +956,10 @@ test('Assistant sync isolates stale Hermes run_not_found failures and continues 
   }
 });
 
-test('deleting an Assistant session best-effort stops its running Hermes runs without blocking delete', async () => {
+test('deleting an Assistant session best-effort stops its running Partner runs without blocking delete', async () => {
   let stopCalls = 0;
   let deleteCalls = 0;
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     if (String(url).endsWith('/api/sessions') && init?.method === 'POST') {
       // ensureRemoteSession before the background handoff.
       return new Response(JSON.stringify({ session: { id: JSON.parse(String(init.body)).id } }), {
@@ -840,6 +967,7 @@ test('deleting an Assistant session best-effort stops its running Hermes runs wi
         headers: { 'content-type': 'application/json' },
       });
     }
+    if (String(url).endsWith('/v1/capabilities')) return capabilitiesRes();
     if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
       return new Response(JSON.stringify({ run_id: 'remote-delete-running', status: 'started' }), {
         status: 200,
@@ -848,13 +976,13 @@ test('deleting an Assistant session best-effort stops its running Hermes runs wi
     }
     if (String(url).endsWith('/v1/runs/remote-delete-running/stop')) {
       stopCalls += 1;
-      return new Response('Hermes stop failed', { status: 500 });
+      return new Response('Partner stop failed', { status: 500 });
     }
     if (String(url).includes('/api/sessions/') && init?.method === 'DELETE') {
       deleteCalls += 1;
       return new Response(JSON.stringify({ deleted: true }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
-    throw new Error(`unexpected Hermes request ${String(url)}`);
+    throw new Error(`unexpected Partner request ${String(url)}`);
   };
   const { app, db, dir } = makeApp({ fetchImpl });
   try {
@@ -928,7 +1056,7 @@ function abortAwareSseResponse(chunks: string[], signal: AbortSignal | undefined
 }
 
 test('POST /api/assistant/abort tears down the in-flight /chat/stream and finalizes the run as cancelled', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     onChatStream: (_url, init) => abortAwareSseResponse([
       'event: tool.started\ndata: {"tool_name":"read_file","args":{"path":"/tmp/x"}}\n\n',
     ], init?.signal ?? undefined),
@@ -1003,8 +1131,8 @@ test('Assistant session list fetches remote api_server, tui, and cli sources and
       { id: 'remote-cli-1', title: 'Remote CLI session', source: 'cli', started_at: 1784123000, last_active: 1784123500 },
     ],
   };
-  const fetchImpl: HermesFetch = async (url) => {
-    const parsed = new URL(String(url), 'http://hermes.local');
+  const fetchImpl: PartnerFetch = async (url) => {
+    const parsed = new URL(String(url), 'http://partner.local');
     if (parsed.pathname === '/api/sessions') {
       const source = parsed.searchParams.get('source') ?? '';
       // The widened filter must never fall back to a cron-flooding bare query.
@@ -1015,7 +1143,7 @@ test('Assistant session list fetches remote api_server, tui, and cli sources and
         headers: { 'content-type': 'application/json' },
       });
     }
-    throw new Error(`unexpected Hermes request ${String(url)}`);
+    throw new Error(`unexpected Partner request ${String(url)}`);
   };
   const { app, db, dir } = makeApp({ fetchImpl });
   try {
@@ -1065,13 +1193,13 @@ test('Assistant session list fetches remote api_server, tui, and cli sources and
 });
 
 test('Assistant session list merges remote sessions that already have local rows', async () => {
-  const fetchImpl: HermesFetch = async (url) => {
+  const fetchImpl: PartnerFetch = async (url) => {
     if (String(url).includes('/api/sessions?')) {
       return new Response(JSON.stringify({
         sessions: [{ id: 'remote-api-1', title: 'Remote title', source: 'api_server', updated_at: '2026-07-02T10:00:00.000Z' }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
     }
-    throw new Error(`unexpected Hermes request ${String(url)}`);
+    throw new Error(`unexpected Partner request ${String(url)}`);
   };
   const { app, db, dir } = makeApp({ fetchImpl });
   try {
@@ -1088,8 +1216,8 @@ test('Assistant session list merges remote sessions that already have local rows
   }
 });
 
-test('Assistant import route adopts a remote Hermes session and renders its transcript', async () => {
-  const fetchImpl = hermesChatMock({
+test('Assistant import route adopts a remote Partner session and renders its transcript', async () => {
+  const fetchImpl = partnerChatMock({
     messages: [
       { id: 'hm1', role: 'user', content: 'continue this' },
       { id: 'hm2', role: 'assistant', content: 'I can continue.' },
@@ -1134,8 +1262,8 @@ test('Assistant import route adopts a remote Hermes session and renders its tran
 });
 
 test('Assistant import folds tool output into the assistant message (never a raw bubble)', async () => {
-  const fetchImpl = hermesChatMock({
-    // Hermes JSON-parses the tool_calls column before returning it, and emits
+  const fetchImpl = partnerChatMock({
+    // Partner JSON-parses the tool_calls column before returning it, and emits
     // tool output as a standalone `role:'tool'` row with tool_call_id/tool_name.
     messages: [
       { id: 'hm1', role: 'user', content: 'run the check' },
@@ -1177,11 +1305,11 @@ test('Assistant import folds tool output into the assistant message (never a raw
   }
 });
 
-test('Assistant foreground send runs against the adopted remote Hermes session', async () => {
+test('Assistant foreground send runs against the adopted remote Partner session', async () => {
   // The foreground turn streams over the session-scoped /chat/stream endpoint;
   // assert the request targets the adopted remote session id, not the local row id.
   let chatStreamUrl = '';
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     onChatStream: (url) => {
       chatStreamUrl = url;
       return sseResponse(['event: assistant.delta\ndata: {"delta":"resumed"}\n\n', 'event: done\ndata: {}\n\n']);
@@ -1207,11 +1335,11 @@ test('Assistant foreground send runs against the adopted remote Hermes session',
   }
 });
 
-test('foreground turns run against the same Hermes session for native continuity', async () => {
-  // Continuity is handled by Hermes (the session loads its own history), so every
+test('foreground turns run against the same Partner session for native continuity', async () => {
+  // Continuity is handled by Partner (the session loads its own history), so every
   // turn targets the same session-scoped /chat/stream — no previous_response_id.
   const streamUrls: string[] = [];
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     onChatStream: (url) => {
       streamUrls.push(url);
       return sseResponse(['event: assistant.delta\ndata: {"delta":"ok"}\n\n', 'event: done\ndata: {}\n\n']);
@@ -1235,7 +1363,7 @@ test('foreground turns run against the same Hermes session for native continuity
 
 test('Assistant stream passes modelKey to the adapter and relays context_usage (#75)', async () => {
   let streamBody: any = null;
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     onChatStream: (_url, init) => {
       streamBody = JSON.parse(String(init?.body ?? '{}'));
       return sseResponse([
@@ -1273,7 +1401,7 @@ test('Assistant stream passes modelKey to the adapter and relays context_usage (
 
 test('Assistant stream without modelKey stays off the wire and emits no context_usage on bare completions', async () => {
   let streamBody: any = null;
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     onChatStream: (_url, init) => {
       streamBody = JSON.parse(String(init?.body ?? '{}'));
       return sseResponse(['event: run.completed\ndata: {}\n\n', 'event: done\ndata: {}\n\n']);
@@ -1299,7 +1427,7 @@ test('Assistant stream without modelKey stays off the wire and emits no context_
 });
 
 test('GET /api/assistant/models proxies the adapter catalog into the /api/models shape (#75)', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     onOther: (url) => {
       if (String(url).endsWith('/v1/models')) {
         return jsonRes({
@@ -1335,8 +1463,8 @@ test('GET /api/assistant/models proxies the adapter catalog into the /api/models
 });
 
 test('GET /api/assistant/models fails soft to an empty list', async () => {
-  // hermesChatMock throws on /v1/models by default (unexpected request).
-  const { app, db, dir } = makeApp({ fetchImpl: hermesChatMock({}) });
+  // partnerChatMock throws on /v1/models by default (unexpected request).
+  const { app, db, dir } = makeApp({ fetchImpl: partnerChatMock({}) });
   try {
     const res = await app.inject({ method: 'GET', url: '/api/assistant/models' });
     assert.equal(res.statusCode, 200);
@@ -1347,7 +1475,7 @@ test('GET /api/assistant/models fails soft to an empty list', async () => {
 });
 
 test('Assistant session detail seeds lastModelKey + contextUsage from the adapter row (#75)', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     messages: [{ id: 1, role: 'user', content: 'hi' }],
     onOther: (url, init) => {
       if (/\/api\/sessions\/[^/]+$/.test(String(url)) && (!init?.method || init.method === 'GET')) {
@@ -1386,7 +1514,7 @@ test('Assistant session detail seeds lastModelKey + contextUsage from the adapte
 // -- the one-conversation model (baker-internal#114 / #381) ------------------
 
 test('GET /api/assistant/current adopts the remote pointer session and re-finds it on repeat', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     messages: [{ id: 'm1', role: 'assistant', content: 'hello from the partner' }],
     onOther: (u, init) => {
       if (u.endsWith('/v1/current-session') && (!init?.method || init.method === 'GET')) {
@@ -1416,7 +1544,7 @@ test('GET /api/assistant/current adopts the remote pointer session and re-finds 
 });
 
 test('POST /api/assistant/current/rotate adopts the fresh pointer session', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     messages: [],
     onOther: (u, init) => {
       if (u.endsWith('/v1/current-session/rotate') && init?.method === 'POST') {
@@ -1449,7 +1577,7 @@ test('GET /api/assistant/current falls back to a local session when no assistant
 });
 
 test('GET /api/assistant/current surfaces adapter failure as 502, not a crash', async () => {
-  const fetchImpl = hermesChatMock({
+  const fetchImpl = partnerChatMock({
     onOther: (u) => {
       if (u.endsWith('/v1/current-session')) {
         return new Response('adapter down', { status: 503 });

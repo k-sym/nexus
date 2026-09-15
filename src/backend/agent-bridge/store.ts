@@ -196,23 +196,38 @@ export class AgentBridgeStore {
     return this.reply(messageId);
   }
 
-  queuedReplies(): AgentBridgeReply[] {
-    return this.db.prepare("SELECT * FROM agent_bridge_replies WHERE status = 'queued'").all() as AgentBridgeReply[];
+  /** Queued replies whose backoff window has elapsed. */
+  queuedReplies(nowMs = Date.now()): AgentBridgeReply[] {
+    return this.db.prepare(`SELECT * FROM agent_bridge_replies WHERE status = 'queued'
+      AND (next_attempt_at IS NULL OR next_attempt_at <= ?)`).all(new Date(nowMs).toISOString()) as AgentBridgeReply[];
   }
 
   markReplySent(id: string): void {
-    this.db.prepare("UPDATE agent_bridge_replies SET status = 'sent', sent_at = ?, error = NULL WHERE id = ? AND status = 'queued'")
+    this.db.prepare("UPDATE agent_bridge_replies SET status = 'sent', sent_at = ?, error = NULL, next_attempt_at = NULL WHERE id = ? AND status = 'queued'")
       .run(new Date().toISOString(), id);
   }
 
-  markReplyError(id: string, error: string, maxAttempts: number): void {
-    this.db.prepare(`UPDATE agent_bridge_replies SET error = ?, attempts = attempts + 1,
-      status = CASE WHEN attempts + 1 >= ? THEN 'dead_letter' ELSE 'queued' END
-      WHERE id = ? AND status = 'queued'`).run(error.slice(0, 2000), maxAttempts, id);
+  /** Record why delivery could not be tried without spending the retry budget
+   * (the broker is unavailable, so no publish happened). */
+  markReplyDeferred(id: string, error: string): void {
+    this.db.prepare("UPDATE agent_bridge_replies SET error = ? WHERE id = ? AND status = 'queued'").run(error.slice(0, 2000), id);
+  }
+
+  /** A publish attempt failed: count it, then wait `backoff.initialMs`
+   * doubling per failure up to `backoff.maxMs`, or dead-letter at the limit. */
+  markReplyError(id: string, error: string, options: { maxAttempts: number; backoff: { initialMs: number; maxMs: number }; nowMs?: number }): void {
+    const current = this.db.prepare("SELECT attempts FROM agent_bridge_replies WHERE id = ? AND status = 'queued'").get(id) as { attempts: number } | undefined;
+    if (!current) return;
+    const attempts = current.attempts + 1;
+    const exhausted = attempts >= options.maxAttempts;
+    const delayMs = Math.min(options.backoff.initialMs * 2 ** (attempts - 1), options.backoff.maxMs);
+    const nextAttemptAt = exhausted ? null : new Date((options.nowMs ?? Date.now()) + delayMs).toISOString();
+    this.db.prepare(`UPDATE agent_bridge_replies SET error = ?, attempts = ?, status = ?, next_attempt_at = ?
+      WHERE id = ? AND status = 'queued'`).run(error.slice(0, 2000), attempts, exhausted ? 'dead_letter' : 'queued', nextAttemptAt, id);
   }
 
   retryReply(messageId: string): AgentBridgeReply | undefined {
-    const result = this.db.prepare(`UPDATE agent_bridge_replies SET status = 'queued', attempts = 0, error = NULL
+    const result = this.db.prepare(`UPDATE agent_bridge_replies SET status = 'queued', attempts = 0, error = NULL, next_attempt_at = NULL
       WHERE message_id = ? AND status = 'dead_letter'`).run(messageId);
     return result.changes ? this.reply(messageId) : undefined;
   }

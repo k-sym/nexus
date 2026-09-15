@@ -341,6 +341,7 @@ function runMigrations(db: Database.Database) {
     ['attempts', 'INTEGER NOT NULL DEFAULT 0'],
     ['discarded_at', 'TEXT'],
     ['discarded_by', 'TEXT'],
+    ['next_attempt_at', 'TEXT'],
   ]) {
     if (!bridgeReplyCols.some(column => column.name === name)) {
       db.exec(`ALTER TABLE agent_bridge_replies ADD COLUMN ${name} ${definition}`);
@@ -362,7 +363,7 @@ function runMigrations(db: Database.Database) {
     db.exec('ALTER TABLE assistant_session_messages ADD COLUMN attachments_json TEXT DEFAULT \'[]\'');
   }
 
-  // Continuity for foreground /v1/responses turns: Hermes ignores session_id and threads
+  // Continuity for foreground /v1/responses turns: the Partner assistant-api (like Hermes before it) ignores session_id and threads
   // conversation state via previous_response_id, so we persist the last response id per session.
   const assistantSessionCols = db.pragma('table_info(assistant_sessions)') as { name: string }[];
   if (!assistantSessionCols.some((c) => c.name === 'last_response_id')) {

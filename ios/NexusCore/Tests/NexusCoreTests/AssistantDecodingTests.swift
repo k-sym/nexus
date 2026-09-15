@@ -2,7 +2,7 @@ import XCTest
 @testable import NexusCore
 
 /// Covers the M6 assistant surface's two decode gotchas — mixed snake/camel keys
-/// (plain decoder + explicit CodingKeys) and the Hermes transcript's OPTIONAL
+/// (plain decoder + explicit CodingKeys) and the Partner transcript's OPTIONAL
 /// message `id` (synthesized index id) — plus the assistant stream replay.
 final class AssistantDecodingTests: XCTestCase {
 
@@ -76,10 +76,10 @@ final class AssistantDecodingTests: XCTestCase {
         XCTAssertEqual(noRemoteId.adoptableRemoteId, "xyz")
     }
 
-    // MARK: Session detail — optional Hermes message id
+    // MARK: Session detail — optional Partner message id
 
-    func testDetailSynthesizesIdsForIdlessHermesRows() throws {
-        // Hermes /messages rows may omit `id`; the tolerant AssistantMessage keeps
+    func testDetailSynthesizesIdsForIdlessPartnerRows() throws {
+        // Partner /messages rows may omit `id`; the tolerant AssistantMessage keeps
         // it optional and synthesizes an index id when projecting to PersistedMessage.
         let json = Data("""
         {
@@ -180,7 +180,7 @@ final class AssistantDecodingTests: XCTestCase {
         // Paragraph break inserted between pre-tool and post-tool prose.
         XCTAssertEqual(assistant.content, "Let me check the weather.\n\nIt's sunny, 24C.")
         XCTAssertEqual(assistant.provider, "assistant")
-        XCTAssertEqual(assistant.model, "hermes-agent")
+        XCTAssertEqual(assistant.model, "partner")
         XCTAssertEqual(assistant.toolCalls.count, 1)
         let tool = assistant.toolCalls[0]
         XCTAssertEqual(tool.name, "web_search")

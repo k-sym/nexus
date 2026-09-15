@@ -1,11 +1,11 @@
-import { coerceArgs, type HermesRawToolCall, type HermesSessionMessage } from './client.js';
+import { coerceArgs, type PartnerRawToolCall, type PartnerSessionMessage } from './client.js';
 
 /**
- * SPIKE ARTIFACT (single-source-of-truth transport) — render a remote Hermes
+ * SPIKE ARTIFACT (single-source-of-truth transport) — render a remote Partner
  * transcript **directly** from `GET /api/sessions/{id}/messages`, with no local
  * pi-store round-trip and no `flattenEntries`.
  *
- * Hermes already persists everything we need: an `assistant` row carries
+ * Partner already persists everything we need: an `assistant` row carries
  * OpenAI-shape `tool_calls`, and each output is a `role:'tool'` row whose
  * `tool_call_id` matches the call `id`. This pairs them and inlines the result
  * into the assistant message's tool call — the exact shape the frontend's
@@ -15,7 +15,7 @@ import { coerceArgs, type HermesRawToolCall, type HermesSessionMessage } from '.
  * The output shape mirrors `flattenEntries`' per-message projection
  * (`{role, content, tool_calls:[{id,name,args,status,result,...}]}`) so the
  * frontend renders it unchanged. Because it is a pure function of the live
- * Hermes payload, every load reflects the current transcript — there is no
+ * Partner payload, every load reflects the current transcript — there is no
  * local mirror to drift, which removes the "already-adopted sessions keep stale
  * entries" caveat of the import path.
  */
@@ -39,8 +39,8 @@ export interface TranscriptMessage {
 }
 
 function toTranscriptToolCall(
-  call: HermesRawToolCall,
-  results: Map<string, HermesSessionMessage>,
+  call: PartnerRawToolCall,
+  results: Map<string, PartnerSessionMessage>,
 ): TranscriptToolCall | null {
   const id = call.id ?? call.call_id;
   const name = call.function?.name ?? call.name;
@@ -57,14 +57,14 @@ function toTranscriptToolCall(
   };
 }
 
-// Hermes `/messages` rows don't carry an explicit is_error flag today; a tool
+// Partner `/messages` rows don't carry an explicit is_error flag today; a tool
 // row is treated as an error only if a future field marks it. Kept as a single
 // chokepoint so the heuristic can tighten without touching callers.
-function isErrorResult(_result: HermesSessionMessage): boolean {
+function isErrorResult(_result: PartnerSessionMessage): boolean {
   return false;
 }
 
-// Hermes sends the message PK as a JSON number (`messages.id` is
+// Partner sends the message PK as a JSON number (`messages.id` is
 // `INTEGER PRIMARY KEY AUTOINCREMENT`); stringify it so the transcript's `id`
 // honours its declared `string` type on the wire. JS tolerates a numeric id,
 // but a strict client decoder (iOS) rejects it — see PR #319.
@@ -72,8 +72,8 @@ function toMessageId(id: string | number | undefined): string | undefined {
   return id == null ? undefined : String(id);
 }
 
-export function hermesMessagesToTranscript(messages: HermesSessionMessage[]): TranscriptMessage[] {
-  const results = new Map<string, HermesSessionMessage>();
+export function partnerMessagesToTranscript(messages: PartnerSessionMessage[]): TranscriptMessage[] {
+  const results = new Map<string, PartnerSessionMessage>();
   for (const m of messages) {
     if (m.role === 'tool' && m.tool_call_id) results.set(m.tool_call_id, m);
   }

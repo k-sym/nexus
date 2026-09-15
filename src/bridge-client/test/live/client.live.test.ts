@@ -60,7 +60,7 @@ test('CLI and stdio MCP send through scoped Nexus; approvals, retry, restart and
     db.prepare('INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('p', 'p', 'Nexus', root, now, now);
     for (const id of ['t', 'excluded']) db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, last_model_key) VALUES (?, ?, ?, ?, ?, ?)').run(id, 'p', id === 't' ? 'Review' : 'Hidden', now, now, 'test/model');
     service = new AgentBridgeService(db, { enabled: true, mode: 'queue_for_approval', url, token: 'broker-secret', instance_id: 'test', allowed_senders: ['reviewer'],
-      max_message_bytes: 1024, max_messages_per_minute: 100, max_hops: 4, retention_days: 30, reply_max_attempts: 60 });
+      max_message_bytes: 1024, max_messages_per_minute: 100, max_hops: 4, retention_days: 30, reply_max_attempts: 60, reply_backoff_seconds: 5, reply_backoff_max_seconds: 300 });
     service.store.setPolicy('p', { enabled: true, thread_ids: ['t'] });
     let runs = 0;
     await app.register(registerAgentBridgeRoutes, { service, runManagedTurn: async () => { runs++; return { completed: true, content: 'Verified report' }; } });

@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { createWorkshopRoutes } from '../routes/night-queue-workshop';
-import type { HermesFetch } from '../hermes/client';
+import type { PartnerFetch } from '../partner/client';
 import type { NexusConfig } from '@nexus/shared';
 
 const CANDIDATES = {
@@ -31,7 +31,7 @@ function jsonRes(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-async function appWith(load: () => NexusConfig, fetchImpl?: HermesFetch) {
+async function appWith(load: () => NexusConfig, fetchImpl?: PartnerFetch) {
   const app = Fastify({ logger: false });
   app.register(createWorkshopRoutes(load, { fetchImpl }));
   await app.ready();

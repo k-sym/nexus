@@ -88,7 +88,7 @@ test("storeMemory metadata cannot override reserved identity/scope keys", async 
       body: "Scope stays owned by the contract.",
       metadata: {
         id: "spoofed-id",
-        namespace: "openclaw",
+        namespace: "spoofed-ns",
         project: "other",
         source: "spoofed",
         title: "spoofed title",

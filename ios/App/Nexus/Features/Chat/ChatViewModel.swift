@@ -77,7 +77,11 @@ final class ChatViewModel {
     private(set) var desktopSharedAt: String?
     private(set) var isOpeningDesktop = false
     private var loadedModelKey: String?
-    var supportsBackgroundHandoff: Bool { endpoint.supportsBackgroundHandoff }
+    /// Background Handoff is offered on the server's word: session detail carries
+    /// the adapter's capability (the Partner has none). Until detail loads, or on
+    /// a backend without the field, the endpoint's static answer applies.
+    private var loadedBackgroundHandoff: Bool?
+    var supportsBackgroundHandoff: Bool { loadedBackgroundHandoff ?? endpoint.supportsBackgroundHandoff }
     var supportsAttachments: Bool { endpoint.supportsAttachments }
     /// Per-conversation key for the sent-attachment thumbnail cache (assistant only).
     private var attachmentScope: String? { endpoint.attachmentScopeId }
@@ -125,6 +129,7 @@ final class ChatViewModel {
             if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
             if selectedModelKey == nil { selectedModelKey = detail.lastModelKey }
             loadedModelKey = detail.lastModelKey
+            loadedBackgroundHandoff = detail.supportsBackgroundHandoff
             desktopSharedAt = detail.desktopSharedAt
             // Assistant sessions persist last-turn usage server-side (#75); seed
             // the meter so a reopened session shows it before the next turn.
@@ -243,7 +248,7 @@ final class ChatViewModel {
     }
 
     /// Poll `sync` + reload every 5s while a background run is in flight, then
-    /// stop. Reloading pulls the freshened Hermes transcript, so incremental
+    /// stop. Reloading pulls the freshened Partner transcript, so incremental
     /// progress (new assistant text, tool cards) appears as the run advances.
     private func startSyncLoop() {
         syncTask?.cancel()
@@ -269,6 +274,7 @@ final class ChatViewModel {
             let detail = try await endpoint.loadDetail()
             reducer.loadPersisted(detail.messages, attachmentsForUserOrdinal: preservedAttachments())
             if let loadedTitle = detail.title, !loadedTitle.isEmpty { title = loadedTitle }
+            loadedBackgroundHandoff = detail.supportsBackgroundHandoff
             backgroundRun = detail.latestRun
         } catch {
             // Transient failure — keep the loop alive; a later tick reconciles.

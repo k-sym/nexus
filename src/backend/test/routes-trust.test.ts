@@ -51,6 +51,7 @@ function config(root: string): NexusConfig {
     jira: { enabled: true, user: 'user@example.com', instance: 'acme.atlassian.net', project: 'SUP', poll_minutes: 15, content_rules: [] },
     github: { enabled: true },
     monday: { enabled: false, api_version: '2026-07', poll_minutes: 10 },
+    bridge_client: { sender_id: 'chonk', token: 'client-literal-secret', backend_token: '${NEXUS_BRIDGE_BACKEND_TOKEN}' },
   };
 }
 
@@ -76,18 +77,21 @@ test('trust snapshot labels sources without serializing secrets', async () => {
   process.env.OPENROUTER_API_KEY = 'openrouter-secret';
   process.env.ASSISTANT_API_KEY = 'assistant-secret';
   process.env.GITHUB_TOKEN = 'github-secret';
+  process.env.NEXUS_BRIDGE_BACKEND_TOKEN = 'bridge-backend-secret';
   const { app, root } = await fixture();
   try {
     const response = await app.inject({ method: 'GET', url: '/api/trust' });
     assert.equal(response.statusCode, 200);
     const body = response.json();
+    assert.deepEqual(body.secrets.bridgeClient, { configured: true, source: 'config-literal' });
+    assert.deepEqual(body.secrets.bridgeClientBackend, { configured: true, source: 'config-env-reference' });
     assert.equal(body.secrets.jira.source, 'environment');
     assert.equal(body.secrets.openrouter.source, 'config-env-reference');
     assert.equal(body.secrets.localModel.source, 'config-literal');
     assert.equal(body.secrets.assistant.source, 'config-env-reference');
     assert.equal(body.secrets.github.source, 'gh-cli');
     assert.deepEqual(body.secrets['pi:anthropic'], { configured: true, source: 'pi-auth-file', location: join(root, 'auth.json'), credentialType: 'api_key' });
-    for (const secret of ['jira-secret', 'openrouter-secret', 'assistant-secret', 'github-secret', 'literal-local-secret', 'pi-secret']) {
+    for (const secret of ['jira-secret', 'openrouter-secret', 'assistant-secret', 'github-secret', 'literal-local-secret', 'pi-secret', 'client-literal-secret', 'bridge-backend-secret']) {
       assert.equal(response.body.includes(secret), false);
     }
     assert.equal(body.memory.archive.mode, 'manual');
@@ -111,17 +115,34 @@ test('trust snapshot labels sources without serializing secrets', async () => {
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.ASSISTANT_API_KEY;
     delete process.env.GITHUB_TOKEN;
+    delete process.env.NEXUS_BRIDGE_BACKEND_TOKEN;
+  }
+});
+
+test('trust snapshot lists bridge client credentials as absent when the block is missing', async () => {
+  delete process.env.NEXUS_AGENT_BRIDGE_TOKEN;
+  delete process.env.NEXUS_BRIDGE_BACKEND_TOKEN;
+  const { app, root } = await fixture({ config: { ...config(tmpdir()), bridge_client: undefined } });
+  try {
+    const body = (await app.inject({ method: 'GET', url: '/api/trust' })).json();
+    assert.deepEqual(body.secrets.bridgeClient, { configured: false, source: 'absent' });
+    assert.deepEqual(body.secrets.bridgeClientBackend, { configured: false, source: 'absent' });
+  } finally {
+    await app.close();
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
 test('trust snapshot reports absent config references and GitHub fallback metadata', async () => {
   delete process.env.OPENROUTER_API_KEY;
   delete process.env.ASSISTANT_API_KEY;
+  delete process.env.NEXUS_BRIDGE_BACKEND_TOKEN;
   const { app, root } = await fixture({ githubSource: { configured: false, source: 'absent' } });
   try {
     const body = (await app.inject({ method: 'GET', url: '/api/trust' })).json();
     assert.deepEqual(body.secrets.openrouter, { configured: false, source: 'config-env-reference' });
     assert.deepEqual(body.secrets.github, { configured: false, source: 'absent' });
+    assert.deepEqual(body.secrets.bridgeClientBackend, { configured: false, source: 'config-env-reference' });
   } finally {
     await app.close();
     rmSync(root, { recursive: true, force: true });

@@ -14,7 +14,7 @@ export function extractStreamText(content: unknown): string {
 
 /**
  * Map one backend stream event to the agent-run reducer action(s) it implies.
- * Shared by the Projects (pi) stream and the Assistant (Hermes) stream so both
+ * Shared by the Projects (pi) stream and the Assistant (Partner) stream so both
  * build an identical AgentRunView. Events that don't affect run state → [].
  */
 export function agentRunActionsFor(ev: StreamEvent, now: number): AgentRunAction[] {

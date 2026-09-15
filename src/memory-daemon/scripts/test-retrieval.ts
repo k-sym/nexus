@@ -28,7 +28,7 @@ async function waitJobs(db: any) {
 const SEED = [
   { ns: "nexus", project: "alpha", title: "Key rotation", body: "We decided to rotate encryption keys nightly using AES-256-GCM. Backups are tested weekly. The team documented the runbook." },
   { ns: "nexus", project: "alpha", title: "Frontend stack", body: "The frontend uses React with Vite. State is managed via Zustand. Styling is Tailwind." },
-  { ns: "openclaw", project: null, title: "Local models", body: "Baker runs local llama models on ports 4001, 4002 and 4003 via launchd agents. Embeddings are 768-dim." },
+  { ns: "nexus", project: null, title: "Local models", body: "Baker runs local llama models on ports 4001, 4002 and 4003 via launchd agents. Embeddings are 768-dim." },
   { ns: "global", project: null, title: "Preferences", body: "Keith prefers Obsidian for notes and dislikes heavyweight databases. Markdown is canonical." },
   { ns: "nexus", project: "beta", title: "Analytics store", body: "Postgres was chosen for the analytics pipeline. Tables are partitioned by month for performance." },
   { ns: "global", project: null, title: "Reranker", body: "The reranker is Qwen3-Reranker-0.6B and scores document relevance for retrieval." },
@@ -67,8 +67,8 @@ async function main() {
   check("recall finds keyword match (Postgres)", c.items.some((it) => it.id === ids["Analytics store"]));
 
   // D. scope isolation
-  const d = await recall(ctx, "models and ports", { namespace: "openclaw", scope: "isolated" });
-  check("scope isolation keeps only the namespace", d.items.length > 0 && d.items.every((it) => it.namespace === "openclaw"));
+  const d = await recall(ctx, "models and ports", { namespace: "nexus", scope: "isolated" });
+  check("scope isolation keeps only the namespace", d.items.length > 0 && d.items.every((it) => it.namespace === "nexus"));
 
   // E. surgical sentence trim (fewer than full body) + small-to-big parent chunk
   const e = a.items[0];

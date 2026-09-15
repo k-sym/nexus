@@ -1,6 +1,6 @@
 # @nexus/memory-daemon
 
-Standalone local memory daemon for **Nexus + OpenClaw**. The Obsidian markdown vault is the
+Standalone local memory daemon for **Nexus**. The Obsidian markdown vault is the
 **canonical** source of truth; the SQLite index (`sqlite-vec` + FTS5) is **disposable** and
 rebuildable from the vault at any time. Retrieval primitives are the local llama stack on
 loopback (embed 4002, rerank 4003, gen 4001).
@@ -11,8 +11,9 @@ Full architecture: `~/Projects/baker-internal/project_docs/nexus-memory-architec
 
 Daemon complete: skeleton + schema + health, sync engine, indexing + job queue, hybrid
 retrieval + recall API, knowledge-graph extraction/fusion, and the MCP server. The Nexus
-Electron backend that consumes it (via `MemoryClient`) is not built yet; the actual OpenClaw
-vault migration is pending the vault-root decision.
+backend consumes it via `MemoryClient`. Namespaces are `nexus` (per-project, under
+`Nexus/Projects/<slug>`) and `global` (`Memories/`); the retired `openclaw` namespace and its
+`OpenClaw/` vault folder were dropped on 2026-09-15 (leftover index rows fold into `global`).
 
 ## Requirements
 
@@ -58,7 +59,7 @@ Each uses a throwaway vault under `$TMPDIR`. Retrieval/KG/MCP tests need the liv
 | DELETE | `/memories/:id` | unlink the markdown file + soft-delete |
 | POST | `/recall` | injection-ready recall: returns `context` string + items + KG facts |
 
-## MCP (OpenClaw agents)
+## MCP (CLI agents)
 
 `npm run build`, then register the stdio server with Claude Code / Codex (daemon must be running):
 

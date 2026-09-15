@@ -1,5 +1,5 @@
 // Regression tests for the MCP memory_store namespace defaulting (2026-08-14 incident:
-// stores with an omitted namespace landed in `openclaw`, invisible to global recall).
+// stores with an omitted namespace landed in a retired agent namespace, invisible to global recall).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -32,7 +32,7 @@ async function callStore(args: Record<string, unknown>, defaults?: McpEnvDefault
   return captured!;
 }
 
-test("memory_store: omitted namespace defaults to global (not openclaw)", async () => {
+test("memory_store: omitted namespace defaults to global (not a stray agent namespace)", async () => {
   const input = await callStore({ body: "hello" });
   assert.equal(input.namespace, "global");
   assert.equal(input.project, null);
@@ -40,9 +40,9 @@ test("memory_store: omitted namespace defaults to global (not openclaw)", async 
 });
 
 test("memory_store: explicit namespace arg wins", async () => {
-  const input = await callStore({ body: "hello", namespace: "openclaw", source: "openclaw" });
-  assert.equal(input.namespace, "openclaw");
-  assert.equal(input.source, "openclaw");
+  const input = await callStore({ body: "hello", namespace: "nexus", source: "human" });
+  assert.equal(input.namespace, "nexus");
+  assert.equal(input.source, "human");
 });
 
 test("memory_store: env project pin scopes stores like reads", async () => {

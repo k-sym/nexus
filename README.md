@@ -43,8 +43,8 @@ A personal agent orchestration platform. NEXUS lets you define projects, start s
 | **Projects** | Link existing local git repos. NEXUS scaffolds a `project_docs/` structure (`specs`, `plans`, `design`, `uploads`) and, when the repo has none, a starter `AGENTS.md` — so a new project starts agent-aware. Existing agent-instruction files are never overwritten. |
 | **Board** | A session-first board per project: cards are chat sessions with their origin (GitHub issue, Monday item, Jira ticket, or plain chat), lanes are derived from live state (Inbox · Running · Needs you · Idle · Done) and never dragged. The Inbox lists open GitHub issues and Monday items with no session yet; one click drafts the problem with Sonnet and Go opens a session stamped with the origin. |
 | **Models & curation** | A model registry (the Pi runtime) knows every model reachable from your configured auth — API keys (OpenRouter, local servers) and OAuth (Anthropic, OpenAI/Codex, GitHub Copilot). You curate which models show up in the picker; per-thread model selection with image/document attachments. No more YAML "personas". |
-| **Multi-provider chat** | One runtime drives Claude Code, Codex, OpenCode, OpenRouter, local OpenAI-compatible servers (omlx, LM Studio, llama.cpp), and remote Hermes-style endpoints — each reached through the Pi SDK's provider bridges. |
-| **Assistant** | A separate, project-less Hermes Assistant surface with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs that can be reconciled after restart. |
+| **Multi-provider chat** | One runtime drives Claude Code, Codex, OpenCode, OpenRouter, local OpenAI-compatible servers (omlx, LM Studio, llama.cpp) — each reached through the Pi SDK's provider bridges — plus the Partner assistant-api behind the Assistant surface. |
+| **Assistant** | A separate, project-less Assistant surface backed by the Partner assistant-api (baker-internal, headless Claude) with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs that can be reconciled after restart. |
 | **Idea Watcher** | Park free-form ideas frictionlessly, then ripen each through a dialogue with the partner assistant — commission research into the thread, pull the findings apart, and graduate the idea into a new project or a detailed GitHub issue set (confirm-gated filing). |
 | **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Agents pull it on demand via a `memory_recall` tool; exposed over HTTP + MCP. |
@@ -199,7 +199,7 @@ The backend loads `.env` on startup. Already-exported shell variables take prece
 export OPENROUTER_API_KEY="sk-or-..."   # OpenRouter models + chat
 export OMLX_API_KEY="..."               # local model server, if it requires auth
 export ASSISTANT_API_KEY="..."          # the standalone Assistant view endpoint
-export HERMES_API_KEY="..."             # remote Hermes-style endpoint (if used)
+export ASSISTANT_API_KEY="..."          # Partner assistant-api key (Assistant surface)
 ```
 
 GitHub issue sync: run `gh auth login` before starting, or set `GITHUB_TOKEN`.
@@ -840,7 +840,7 @@ On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `g
 
 ### Assistant
 
-A project-less Hermes Assistant surface against the configured endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It is independent of project sessions and stores its own local Assistant sessions, transcripts, and run ledger in `assistant_sessions`, `assistant_session_messages`, and `assistant_runs`. Each session can be reopened from the Assistant rail, foreground turns stream over NDJSON, and detached background runs store the remote Hermes run ID so Nexus can poll `/api/assistant/sync` after restart. When Hermes exposes session listing, the Assistant rail can also show filtered remote API sessions; selecting one adopts it into Nexus, imports message history, and resumes future turns against the mapped Hermes `remote_session_id`. The legacy single-thread Assistant endpoints remain as wrappers over the newest/default session for compatibility.
+A project-less Assistant surface against the Partner assistant-api (baker-internal `apps/partner/assistant-api`, FastAPI on 127.0.0.1:8788, headless Claude) at the configured endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It is independent of project sessions and stores its own local Assistant sessions, transcripts, and run ledger in `assistant_sessions`, `assistant_session_messages`, and `assistant_runs`. Each session can be reopened from the Assistant rail, foreground turns stream over NDJSON, and detached background runs store the remote Partner run ID so Nexus can poll `/api/assistant/sync` after restart. When the Partner exposes session listing, the Assistant rail can also show filtered remote API sessions; selecting one adopts it into Nexus, imports message history, and resumes future turns against the mapped Partner `remote_session_id`. The legacy single-thread Assistant endpoints remain as wrappers over the newest/default session for compatibility.
 
 ### Idea Watcher
 
@@ -868,7 +868,7 @@ it gets populated:
   sync that changes tickets it raises an in-app notification (silent on a no-op, error toast on
   failure). Config is read once at startup, so **changes apply on the next backend restart**.
 - **Push endpoint.** `POST /api/jira/sync` (`{ tickets, source, replaceAll }` → `{ inserted, updated, removed }`)
-  remains for an external sync agent (e.g. an OpenClaw cron) to push the current set in. Both paths share
+  remains for an external sync agent (the retired OpenClaw-era cron was one) to push the current set in. Both paths share
   the same upsert.
 
 > **`JIRA_TOKEN`** is your Jira API token; it is read from the environment and is not stored in
@@ -910,7 +910,7 @@ There is no fixed persona → provider mapping anymore. Any curated model can dr
 | `anthropic` | OAuth (Pi `anthropic-messages` bridge) | Claude models via your Anthropic account |
 | `openai-codex` | OAuth | OpenAI Codex models |
 | `github-copilot` | OAuth | Copilot-backed models |
-| `local` / custom | HTTP (OpenAI-compatible) | omlx, LM Studio, llama.cpp, a remote Hermes-style endpoint |
+| `local` / custom | HTTP (OpenAI-compatible) | omlx, LM Studio, llama.cpp |
 | `claude-code` / `codex` / `opencode` | CLI-backed Pi provider bridges | the `claude`, `codex`, `opencode` binaries on your `PATH` |
 
 Spawning the CLI agent tools through the Pi SDK (rather than calling their HTTP APIs directly) is deliberate — it lets you use them as standalone tools and sidesteps subscription-in-harness restrictions.
@@ -986,16 +986,16 @@ The task board was replaced by the session-first board in #439. These routes sta
 ### Assistant
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/assistant/sessions` | List non-archived Assistant sessions with latest run status, plus any filtered adoptable remote Hermes API sessions (`remoteOnly: true`) |
+| GET | `/api/assistant/sessions` | List non-archived Assistant sessions with latest run status, plus any filtered adoptable remote Partner API sessions (`remoteOnly: true`) |
 | POST | `/api/assistant/sessions` | Create an Assistant session |
-| POST | `/api/assistant/sessions/import` | Adopt a remote Hermes session by `remoteSessionId`: upsert a local row, import its transcript, and map `remote_session_id` |
+| POST | `/api/assistant/sessions/import` | Adopt a remote Partner session by `remoteSessionId`: upsert a local row, import its transcript, and map `remote_session_id` |
 | GET | `/api/assistant/sessions/:id` | Load one session, its transcript, and latest run |
 | PATCH | `/api/assistant/sessions/:id` | Rename or archive a session |
 | DELETE | `/api/assistant/sessions/:id` | Delete a local Assistant session |
 | POST | `/api/assistant/sessions/:id/messages/stream` | Send a foreground message; streams NDJSON (`run_start` / `text_delta` / `complete` / `error`) |
-| POST | `/api/assistant/sessions/:id/runs` | Start a detached Hermes background run for a session |
-| GET | `/api/assistant/runs/:runId` | Read local run state, refreshed from Hermes when possible |
-| POST | `/api/assistant/runs/:runId/stop` | Stop a remote Hermes run |
+| POST | `/api/assistant/sessions/:id/runs` | Start a detached Partner background run for a session |
+| GET | `/api/assistant/runs/:runId` | Read local run state, refreshed from the Partner when possible |
+| POST | `/api/assistant/runs/:runId/stop` | Stop a remote Partner run |
 | POST | `/api/assistant/sync` | Poll running Assistant runs and append completed output |
 | GET | `/api/assistant/thread` | Compatibility wrapper over the newest/default Assistant session |
 | DELETE | `/api/assistant/thread` | Compatibility wrapper that clears the newest/default session |
@@ -1339,7 +1339,7 @@ SQLite at `~/.nexus/nexus.db`. Schema and migrations live in `src/backend/db.ts`
 | Custom-endpoint model not in the picker | Confirm the server is running and reachable at `models.local.base_url` (it need not be on this machine — a LAN or tailnet address is fine), then **Settings → Auth → save-key** for the `local` provider and **Settings → Models** to enable it. The model `id` must match a loaded model name (check `GET {base_url}/models`). |
 | `409 model_busy` / `project_busy` on a chat turn | Another run holds the per-`(project, model)` or project-wide slot. Retry with `X-Confirm-Cancel: true` to abort the holder first, or pick a different model. See issue #95. |
 | OAuth flow stuck | **Settings → Auth** polls the flow; if a provider needs a manual callback, the flow UI accepts the value via `/api/auth/oauth/:flowId/respond`. Cancel with `/api/auth/cancel-oauth` and retry. |
-| Hermes-style remote endpoint fails | Ensure `HERMES_API_KEY` is exported in the backend's environment before launching (or the endpoint's auth is otherwise configured); the key is never stored in git. |
+| Partner assistant-api calls fail | Ensure `ASSISTANT_API_KEY` is exported in the backend's environment before launching (or the endpoint's auth is otherwise configured); the key is never stored in git. |
 | Jira tickets don't appear | Check, in order: (1) **Settings → Jira** is *Enabled* and you **restarted the backend** afterwards (config is read once at startup — `npm run restart:backend` if it runs as a service); (2) `JIRA_TOKEN` is exported in the shell that launched the backend; (3) the **account email** is the one that owns the token — a wrong email returns an empty result, not an error, so it looks like "no tickets". The instance host accepts a bare host or a full `https://…` URL. |
 | GitHub issues don't show in the board's Inbox | Run `gh auth login` or set `GITHUB_TOKEN`; confirm **Settings → GitHub** is enabled; ensure the project's repo has a detected remote (`git_remote` on the project). The Inbox reads through a 3-minute cache; `GET /api/projects/:id/board?refresh=1` bypasses it, and a feed error is shown on the board itself. |
 
