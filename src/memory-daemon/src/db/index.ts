@@ -17,6 +17,10 @@ export function openDb(dbPath: string): DB {
   sqliteVec.load(db);
   // schema.sql sets WAL + pragmas and is fully idempotent (CREATE ... IF NOT EXISTS).
   db.exec(readFileSync(SCHEMA_PATH, "utf8"));
+  // The `openclaw` namespace (a retired agent's vault folder) was dropped on
+  // 2026-09-15; fold any leftover rows into `global` so the index never carries a
+  // namespace the sync layer no longer knows. Idempotent, and a no-op on a fresh index.
+  db.exec("UPDATE memories SET namespace = 'global' WHERE namespace = 'openclaw'");
   return db;
 }
 

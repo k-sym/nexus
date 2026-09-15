@@ -2,7 +2,7 @@
 // over the daemon HTTP API via MemoryClient — no direct DB access, so the daemon stays the
 // single writer. Stores default to the `global` namespace (the one global recall reads) unless
 // env defaults pin a project scope — an omitted namespace must never file a memory where
-// recall can't see it (2026-08-14 incident: the old `openclaw` default swallowed vault pages).
+// recall can't see it (2026-08-14 incident: the old default namespace, since removed, swallowed vault pages).
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { MemoryClient } from "../client.js";

@@ -193,7 +193,6 @@ function scopeToPath(
     const cat = capitalize(input.category ?? "memory");
     return join(vault, "Nexus", "Projects", input.project, cat, `${id}.md`);
   }
-  if (input.namespace === "openclaw") return join(vault, "OpenClaw", "memory", `${id}.md`);
   return join(vault, "Memories", `${id}.md`);
 }
 
