@@ -5,7 +5,7 @@
 //    in ingest when the embedder is up (instant vectors); the deep_index job backfills
 //    anything that failed and embeds sentences. Embedder downtime degrades gracefully.
 import type { AppContext } from "../context.js";
-import { splitIntoChunks, splitIntoSentences } from "./chunk.js";
+import { chunkDocument, splitIntoSentences } from "./chunk.js";
 import { fnv1a } from "../sync/hash.js";
 import { upsertFts } from "./fts.js";
 import { dropVectors, embedSegments, type Segment } from "./embed.js";
@@ -24,11 +24,13 @@ export function buildSegments(ctx: AppContext, memoryId: string, title: string, 
       "INSERT INTO sentences (memory_id, chunk_id, ord, text, seg_hash, embedded) VALUES (?, ?, ?, ?, ?, 0)",
     );
 
-    const seenSentence = new Set<string>(); // dedupe sentences across overlapping chunks
+    const seenSentence = new Set<string>(); // dedupe repeated sentences within a memory
     let sOrd = 0;
-    splitIntoChunks(body).forEach((text, ord) => {
+    // Chunks are heading-aligned and breadcrumbed; sentences come from the section
+    // piece only, so the breadcrumb line never enters the sentence index.
+    chunkDocument(title, body).forEach(({ text, source }, ord) => {
       const chunkId = Number(insChunk.run(memoryId, ord, text, fnv1a(text)).lastInsertRowid);
-      for (const sent of splitIntoSentences(text)) {
+      for (const sent of splitIntoSentences(source)) {
         const h = fnv1a(sent);
         if (seenSentence.has(h)) continue;
         seenSentence.add(h);
