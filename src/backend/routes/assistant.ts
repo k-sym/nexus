@@ -11,7 +11,7 @@ import {
   appendUserMessage,
   appendAssistantMessage,
 } from '../pi/assistant-session.js';
-import type { NexusConfig } from '@nexus/shared';
+import type { AssistantCapabilities, NexusConfig } from '@nexus/shared';
 import {
   createPartnerClient,
   type PartnerClient,
@@ -574,6 +574,37 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       return createPartnerClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
+    // What the configured endpoint can do, from its `/v1/capabilities`. The
+    // Partner assistant-api has no `/v1/runs*`, so the background-run routes
+    // below are gated on this instead of failing against a missing endpoint.
+    // Cached per (url, key) — a successful read for a minute, a failed one for a
+    // few seconds so a restarting endpoint is retried soon. `null` = unreadable.
+    const CAPABILITIES_TTL_MS = 60_000;
+    const CAPABILITIES_FAIL_TTL_MS = 5_000;
+    const NO_CAPABILITIES: AssistantCapabilities = { backgroundRuns: false, runStop: false };
+    let capabilitiesCache: { key: string; at: number; value: AssistantCapabilities | null } | undefined;
+    const assistantCapabilities = async (partner: PartnerClient): Promise<AssistantCapabilities | null> => {
+      const { url, key } = configuredAssistant(load);
+      const cacheKey = `${url}\n${key}`;
+      const now = Date.now();
+      if (capabilitiesCache && capabilitiesCache.key === cacheKey) {
+        const ttl = capabilitiesCache.value ? CAPABILITIES_TTL_MS : CAPABILITIES_FAIL_TTL_MS;
+        if (now - capabilitiesCache.at < ttl) return capabilitiesCache.value;
+      }
+      let value: AssistantCapabilities | null = null;
+      try {
+        const remote = await partner.capabilities();
+        value = { backgroundRuns: remote.runs, runStop: remote.runStop };
+      } catch {
+        value = null;
+      }
+      capabilitiesCache = { key: cacheKey, at: now, value };
+      return value;
+    };
+    const BACKGROUND_RUNS_UNSUPPORTED = 'The configured assistant does not support background runs. Use Send instead.';
+    const RUN_STOP_UNSUPPORTED = 'The configured assistant does not support stopping background runs.';
+    const CAPABILITIES_UNREADABLE = 'Could not read the assistant capabilities. Check the Assistant URL and key, then try again.';
+
     const ensureRemoteSession = async (
       partner: ReturnType<typeof createPartnerClient>,
       session: AssistantSession,
@@ -926,8 +957,18 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         session,
         messages: await renderSessionMessages(db, session, assistantSessionDir, partner),
         latestRun: publicRun(latestRun(db, id)),
+        // Clients hide background handoff unless the endpoint can run it; an
+        // unconfigured or unreadable endpoint reads as "cannot".
+        capabilities: (partner && (await assistantCapabilities(partner))) ?? NO_CAPABILITIES,
         ...(await remoteSessionSeeds(session, partner)),
       };
+    });
+
+    fastify.get('/api/assistant/capabilities', async () => {
+      const partner = client();
+      if (!partner) return { configured: false, reachable: false, capabilities: NO_CAPABILITIES };
+      const capabilities = await assistantCapabilities(partner);
+      return { configured: true, reachable: capabilities !== null, capabilities: capabilities ?? NO_CAPABILITIES };
     });
 
     fastify.patch('/api/assistant/sessions/:id', async (request, reply) => {
@@ -959,8 +1000,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         .prepare('SELECT * FROM assistant_runs WHERE session_id = ? AND remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(id, ...Array.from(RUNNING_STATUSES)) as AssistantRun[];
       if (partner) {
+        const capabilities = runningRuns.length > 0 ? await assistantCapabilities(partner) : null;
         for (const run of runningRuns) {
-          if (!run.remote_run_id) continue;
+          if (!run.remote_run_id || !capabilities?.runStop) continue;
           await partner.stopRun(run.remote_run_id).catch(() => undefined);
         }
         const hasRemoteWork = Boolean(session.remote_session_id) || Boolean(
@@ -1030,6 +1072,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
+      const capabilities = await assistantCapabilities(partner);
+      if (!capabilities) {
+        reply.code(503);
+        return { error: CAPABILITIES_UNREADABLE };
+      }
+      if (!capabilities.backgroundRuns) {
+        reply.code(501);
+        return { error: BACKGROUND_RUNS_UNSUPPORTED };
+      }
       const session = getSession(db, id);
       if (!session) {
         reply.code(404);
@@ -1079,7 +1130,18 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
-      if (run.remote_run_id) await partner.stopRun(run.remote_run_id);
+      if (run.remote_run_id) {
+        const capabilities = await assistantCapabilities(partner);
+        if (!capabilities) {
+          reply.code(503);
+          return { error: CAPABILITIES_UNREADABLE };
+        }
+        if (!capabilities.runStop) {
+          reply.code(501);
+          return { error: RUN_STOP_UNSUPPORTED };
+        }
+        await partner.stopRun(run.remote_run_id);
+      }
       const now = new Date().toISOString();
       db.prepare('UPDATE assistant_runs SET status = ?, updated_at = ? WHERE id = ?').run('cancelling', now, run.id);
       return { ok: true };
@@ -1091,7 +1153,21 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const runs = db
         .prepare('SELECT * FROM assistant_runs WHERE remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(...Array.from(RUNNING_STATUSES)) as AssistantRun[];
+      if (runs.length === 0) return { updated: 0 };
+      // Unreadable capabilities are treated as transient: leave the ledger alone
+      // rather than marking runs unknown over a blip. An endpoint that cannot run
+      // background work cannot finish these rows either, so settle them as unknown
+      // (once) instead of polling a `/v1/runs` that does not exist.
+      const capabilities = await assistantCapabilities(partner);
+      if (!capabilities) return { updated: 0 };
       let updated = 0;
+      if (!capabilities.backgroundRuns) {
+        for (const run of runs) {
+          markRunUnknown(db, run, BACKGROUND_RUNS_UNSUPPORTED);
+          updated += 1;
+        }
+        return { updated };
+      }
       for (const run of runs) {
         if (!run.remote_run_id) continue;
         try {
@@ -1135,7 +1211,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       if (!latest) return { ok: false, reason: 'no_run' };
       const partner = client();
       const remoteRunId = latest.remote_run_id || activeRemoteRuns.get(latest.id);
-      if (partner && remoteRunId) await partner.stopRun(remoteRunId);
+      if (partner && remoteRunId && (await assistantCapabilities(partner))?.runStop) await partner.stopRun(remoteRunId);
       activeStreamControllers.get(latest.id)?.abort();
       const now = new Date().toISOString();
       db.prepare('UPDATE assistant_runs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?').run(

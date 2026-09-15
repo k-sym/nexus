@@ -1012,3 +1012,17 @@ export interface ThreadRoles {
   effective: RoleModels;
   available: Record<RoleName, boolean>;
 }
+
+/**
+ * What the configured assistant endpoint can do, read from its `/v1/capabilities`
+ * (the Partner assistant-api reports `run_submission` / `run_stop` = false; the
+ * retired Hermes server had them). The backend gates the background-run routes on
+ * this and reports it on session detail so clients hide handoff where it cannot
+ * run.
+ */
+export interface AssistantCapabilities {
+  /** Detached background runs (`POST /api/assistant/sessions/:id/runs`, `/sync`). */
+  backgroundRuns: boolean;
+  /** Stopping a remote run (`POST /api/assistant/runs/:id/stop`). */
+  runStop: boolean;
+}

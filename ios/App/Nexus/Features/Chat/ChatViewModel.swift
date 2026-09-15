@@ -77,7 +77,11 @@ final class ChatViewModel {
     private(set) var desktopSharedAt: String?
     private(set) var isOpeningDesktop = false
     private var loadedModelKey: String?
-    var supportsBackgroundHandoff: Bool { endpoint.supportsBackgroundHandoff }
+    /// Handoff needs both an endpoint type that offers it and a live endpoint
+    /// that can run it (the backend reports the latter on session detail; the
+    /// Partner assistant-api cannot, so the control stays hidden there).
+    var supportsBackgroundHandoff: Bool { endpoint.supportsBackgroundHandoff && backgroundHandoffAvailable }
+    private var backgroundHandoffAvailable = false
     var supportsAttachments: Bool { endpoint.supportsAttachments }
     /// Per-conversation key for the sent-attachment thumbnail cache (assistant only).
     private var attachmentScope: String? { endpoint.attachmentScopeId }
@@ -126,6 +130,7 @@ final class ChatViewModel {
             if selectedModelKey == nil { selectedModelKey = detail.lastModelKey }
             loadedModelKey = detail.lastModelKey
             desktopSharedAt = detail.desktopSharedAt
+            backgroundHandoffAvailable = detail.backgroundHandoffAvailable
             // Assistant sessions persist last-turn usage server-side (#75); seed
             // the meter so a reopened session shows it before the next turn.
             reducer.seedContextUsage(detail.contextUsage)

@@ -62,6 +62,40 @@ final class AssistantBackgroundRunTests: XCTestCase {
         XCTAssertTrue(detail.latestRun?.isRunning ?? false)
     }
 
+    // MARK: Capabilities gate (audit 2026-09-15 §3)
+
+    func testSessionDetailDecodesCapabilities() throws {
+        let json = Data("""
+        { "session": { "id": "s1", "title": "T", "status": "idle" },
+          "messages": [], "latestRun": null,
+          "capabilities": { "backgroundRuns": true, "runStop": false } }
+        """.utf8)
+        let detail = try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: json)
+        XCTAssertEqual(detail.capabilities, AssistantCapabilities(backgroundRuns: true, runStop: false))
+    }
+
+    func testSessionDetailWithoutCapabilitiesReadsAsNoHandoff() throws {
+        // Pre-gate backends omit the block; the app must not offer a handoff the
+        // endpoint may not be able to run.
+        let json = Data("""
+        { "session": { "id": "s1", "title": "T", "status": "idle" }, "messages": [] }
+        """.utf8)
+        let detail = try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: json)
+        XCTAssertNil(detail.capabilities)
+        XCTAssertFalse(detail.capabilities?.backgroundRuns ?? false)
+        // Partial blocks default the missing flags to false rather than failing.
+        let partial = Data("""
+        { "session": { "id": "s1", "title": "T", "status": "idle" }, "capabilities": {} }
+        """.utf8)
+        let decoded = try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: partial)
+        XCTAssertEqual(decoded.capabilities, AssistantCapabilities())
+    }
+
+    func testChatDetailHandoffAvailabilityDefaultsOff() {
+        XCTAssertFalse(ChatDetail(messages: []).backgroundHandoffAvailable)
+        XCTAssertTrue(ChatDetail(messages: [], backgroundHandoffAvailable: true).backgroundHandoffAvailable)
+    }
+
     // MARK: Reducer — non-streaming user append
 
     func testAppendUserMessageAddsBubbleWithoutStreaming() {

@@ -16,6 +16,11 @@ public struct ChatDetail: Sendable {
     public let contextUsage: ContextUsage?
     /// When the thread's transcript is shared with the Claude Desktop app (threads only).
     public let desktopSharedAt: String?
+    /// Whether the backend's configured endpoint can run a background handoff
+    /// right now (assistant only; from `capabilities.backgroundRuns` on session
+    /// detail). `supportsBackgroundHandoff` says the endpoint *type* offers the
+    /// control; this says the live endpoint can honour it. Defaults to false.
+    public let backgroundHandoffAvailable: Bool
 
     public init(
         messages: [PersistedMessage],
@@ -24,7 +29,8 @@ public struct ChatDetail: Sendable {
         lastModelKey: String? = nil,
         latestRun: AssistantRun? = nil,
         contextUsage: ContextUsage? = nil,
-        desktopSharedAt: String? = nil
+        desktopSharedAt: String? = nil,
+        backgroundHandoffAvailable: Bool = false
     ) {
         self.messages = messages
         self.title = title
@@ -33,6 +39,7 @@ public struct ChatDetail: Sendable {
         self.latestRun = latestRun
         self.contextUsage = contextUsage
         self.desktopSharedAt = desktopSharedAt
+        self.backgroundHandoffAvailable = backgroundHandoffAvailable
     }
 }
 
@@ -50,10 +57,12 @@ public protocol ChatEndpoint: Sendable {
     var supportsModelPicker: Bool { get }
     /// Whether the composer offers a Supervise toggle (threads: yes, assistant: no).
     var supportsSupervise: Bool { get }
-    /// Whether the composer offers "hand off to a background run" (assistant only).
-    /// A background turn runs server-side against Partner and outlives the app, so
-    /// progress is polled via `syncBackgroundRuns()` + `loadDetail()` rather than
-    /// streamed. Threads have no equivalent.
+    /// Whether this endpoint type can offer "hand off to a background run"
+    /// (assistant only). The composer shows it only when the loaded
+    /// `ChatDetail.backgroundHandoffAvailable` also says the live endpoint can run
+    /// one — the Partner assistant-api cannot. A background turn runs server-side
+    /// and outlives the app, so progress is polled via `syncBackgroundRuns()` +
+    /// `loadDetail()` rather than streamed. Threads have no equivalent.
     var supportsBackgroundHandoff: Bool { get }
     /// Whether the composer offers attachments (assistant only). Images route
     /// through the backend's vision path; threads don't accept attachments here.
@@ -196,7 +205,8 @@ public struct AssistantChatEndpoint: ChatEndpoint {
             supervised: nil,
             lastModelKey: detail.lastModelKey,
             latestRun: detail.latestRun,
-            contextUsage: ContextUsage(detail.contextUsage))
+            contextUsage: ContextUsage(detail.contextUsage),
+            backgroundHandoffAvailable: detail.capabilities?.backgroundRuns ?? false)
     }
 
     public func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error> {

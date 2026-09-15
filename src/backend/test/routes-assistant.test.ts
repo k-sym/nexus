@@ -34,16 +34,24 @@ function jsonRes(body: unknown): Response {
  * `POST /api/sessions` (ensureRemoteSession), `POST /api/sessions/{id}/chat/stream`
  * (foreground send), and `GET /api/sessions/{id}/messages` (history render).
  * `frames` are raw SSE frames for the chat stream; `messages` is the transcript
- * that `/messages` returns on reload.
+ * that `/messages` returns on reload. `/v1/capabilities` answers as a runs-capable
+ * endpoint unless `capabilities` overrides a feature or is 'unreachable'.
  */
 function partnerChatMock(opts: {
   frames?: string[];
   messages?: any[];
+  capabilities?: Partial<Record<'run_submission' | 'run_stop', boolean>> | 'unreachable';
   onChatStream?: (url: string, init?: RequestInit) => Response | Promise<Response>;
   onOther?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
 }): PartnerFetch {
   return async (url, init) => {
     const u = String(url);
+    if (u.endsWith('/v1/capabilities')) {
+      if (opts.capabilities === 'unreachable') return new Response('down', { status: 503 });
+      return jsonRes({
+        features: { session_create: true, session_chat_stream: true, run_submission: true, run_stop: true, ...(opts.capabilities ?? {}) },
+      });
+    }
     if (/\/api\/sessions\/[^/]+\/chat\/stream$/.test(u)) {
       if (opts.onChatStream) return opts.onChatStream(u, init);
       return sseResponse(opts.frames ?? ['event: run.completed\ndata: {}\n\n', 'event: done\ndata: {}\n\n']);
@@ -846,6 +854,12 @@ test('deleting an Assistant session best-effort stops its running Partner runs w
         headers: { 'content-type': 'application/json' },
       });
     }
+    if (String(url).endsWith('/v1/capabilities')) {
+      return new Response(JSON.stringify({ features: { run_submission: true, run_stop: true } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
     if (String(url).endsWith('/v1/runs/remote-delete-running/stop')) {
       stopCalls += 1;
       return new Response('Partner stop failed', { status: 500 });
@@ -1462,6 +1476,143 @@ test('GET /api/assistant/current surfaces adapter failure as 502, not a crash', 
     const res = await app.inject({ method: 'GET', url: '/api/assistant/current' });
     assert.equal(res.statusCode, 502);
     assert.match((res.json() as any).error, /current-session failed/);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+// ── Capabilities gate (audit 2026-09-15 §3): the Partner assistant-api has no
+// /v1/runs*, so the background-run routes must consult /v1/capabilities first.
+
+test('background-run routes are gated on the Partner capabilities', async () => {
+  const runCalls: string[] = [];
+  const fetchImpl = partnerChatMock({
+    capabilities: { run_submission: false, run_stop: false },
+    onOther: (url) => {
+      if (url.includes('/v1/runs')) runCalls.push(url);
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const caps = await app.inject({ method: 'GET', url: '/api/assistant/capabilities' });
+    assert.equal(caps.statusCode, 200);
+    assert.deepEqual(caps.json(), { configured: true, reachable: true, capabilities: { backgroundRuns: false, runStop: false } });
+
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Gated' } });
+    const sessionId = created.json().id;
+    const detached = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/runs`,
+      payload: { content: 'Work while Nexus is closed' },
+    });
+    assert.equal(detached.statusCode, 501);
+    assert.match(detached.json().error, /does not support background runs/);
+    assert.deepEqual(runCalls, [], 'never calls /v1/runs against an endpoint without it');
+    const runs = db.prepare('SELECT COUNT(*) c FROM assistant_runs').get() as any;
+    assert.equal(runs.c, 0, 'no ledger row for a refused handoff');
+
+    const detail = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.equal(detail.statusCode, 200);
+    assert.deepEqual(detail.json().capabilities, { backgroundRuns: false, runStop: false });
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('sync settles leftover running runs as unknown when the Partner cannot run them', async () => {
+  const runCalls: string[] = [];
+  const fetchImpl = partnerChatMock({
+    capabilities: { run_submission: false, run_stop: false },
+    onOther: (url) => {
+      if (url.includes('/v1/runs')) runCalls.push(url);
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Leftover' } });
+    const sessionId = created.json().id;
+    // A Hermes-era row: handed off before the endpoint changed, never reconciled.
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO assistant_runs (id, session_id, kind, status, input, output, remote_run_id, started_at, updated_at)
+       VALUES ('run-old', ?, 'overnight', 'running', 'old work', '', 'remote-old', ?, ?)`,
+    ).run(sessionId, now, now);
+    db.prepare("UPDATE assistant_sessions SET status = 'running', last_run_id = 'run-old' WHERE id = ?").run(sessionId);
+
+    const stop = await app.inject({ method: 'POST', url: '/api/assistant/runs/run-old/stop' });
+    assert.equal(stop.statusCode, 501);
+
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(sync.statusCode, 200);
+    assert.equal(sync.json().updated, 1);
+    const run = db.prepare('SELECT status, error FROM assistant_runs WHERE id = ?').get('run-old') as any;
+    assert.equal(run.status, 'unknown');
+    assert.match(run.error, /does not support background runs/);
+    const session = db.prepare('SELECT status FROM assistant_sessions WHERE id = ?').get(sessionId) as any;
+    assert.equal(session.status, 'unknown');
+    assert.deepEqual(runCalls, []);
+
+    // Settled rows are not touched again.
+    const again = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(again.json().updated, 0);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('unreadable capabilities refuse a handoff with 503 and leave running runs alone', async () => {
+  const fetchImpl = partnerChatMock({ capabilities: 'unreachable' });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const caps = await app.inject({ method: 'GET', url: '/api/assistant/capabilities' });
+    assert.deepEqual(caps.json(), { configured: true, reachable: false, capabilities: { backgroundRuns: false, runStop: false } });
+
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Blip' } });
+    const sessionId = created.json().id;
+    const detached = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/runs`,
+      payload: { content: 'try' },
+    });
+    assert.equal(detached.statusCode, 503);
+    assert.match(detached.json().error, /Could not read the assistant capabilities/);
+
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO assistant_runs (id, session_id, kind, status, input, output, remote_run_id, started_at, updated_at)
+       VALUES ('run-live', ?, 'overnight', 'running', 'work', '', 'remote-live', ?, ?)`,
+    ).run(sessionId, now, now);
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(sync.json().updated, 0);
+    const run = db.prepare('SELECT status FROM assistant_runs WHERE id = ?').get('run-live') as any;
+    assert.equal(run.status, 'running', 'a transient capabilities failure does not settle the ledger');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('capabilities are read once per minute, not per request', async () => {
+  let capabilityCalls = 0;
+  const fetchImpl = partnerChatMock({
+    onOther: (url) => {
+      if (url.endsWith('/v1/capabilities')) capabilityCalls += 1;
+      return undefined;
+    },
+  });
+  // partnerChatMock answers /v1/capabilities before onOther; count via a wrapper instead.
+  const counted: PartnerFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/capabilities')) capabilityCalls += 1;
+    return fetchImpl(url, init);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl: counted });
+  try {
+    for (let i = 0; i < 3; i += 1) {
+      const res = await app.inject({ method: 'GET', url: '/api/assistant/capabilities' });
+      assert.equal(res.json().capabilities.backgroundRuns, true);
+    }
+    assert.equal(capabilityCalls, 1);
   } finally {
     await cleanup(app, db, dir);
   }

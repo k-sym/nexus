@@ -179,10 +179,35 @@ public struct AssistantSessionsResponse: Decodable, Sendable {
 
 /// `GET /api/assistant/sessions/:id` and `POST /api/assistant/sessions/import`
 /// share this `{session, messages, latestRun}` shape.
+/// What the configured assistant endpoint can do, as the backend read it from the
+/// endpoint's `/v1/capabilities`. The Partner assistant-api cannot run detached
+/// background work, so `backgroundRuns` is false there and the composer hides
+/// handoff. Absent on pre-gate backends (decodes as all-false).
+public struct AssistantCapabilities: Decodable, Sendable, Equatable {
+    public let backgroundRuns: Bool
+    public let runStop: Bool
+
+    public init(backgroundRuns: Bool = false, runStop: Bool = false) {
+        self.backgroundRuns = backgroundRuns
+        self.runStop = runStop
+    }
+
+    enum CodingKeys: String, CodingKey { case backgroundRuns, runStop }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        backgroundRuns = try c.decodeIfPresent(Bool.self, forKey: .backgroundRuns) ?? false
+        runStop = try c.decodeIfPresent(Bool.self, forKey: .runStop) ?? false
+    }
+}
+
 public struct AssistantSessionDetail: Decodable, Sendable {
     public let session: AssistantSession
     public let messages: [AssistantMessage]
     public let latestRun: AssistantRun?
+    /// Endpoint capabilities the backend reports with the detail; nil on
+    /// backends that predate the gate (treat as no background runs).
+    public let capabilities: AssistantCapabilities?
     /// Model-picker seed (#75): the adapter session's persisted model as a
     /// `partner/<alias>` key. Absent on Partner rows and pre-#75 backends.
     public let lastModelKey: String?
@@ -192,7 +217,7 @@ public struct AssistantSessionDetail: Decodable, Sendable {
     public let contextUsage: JSONValue?
 
     enum CodingKeys: String, CodingKey {
-        case session, messages, latestRun, lastModelKey, contextUsage
+        case session, messages, latestRun, capabilities, lastModelKey, contextUsage
     }
 
     public init(from decoder: Decoder) throws {
@@ -200,6 +225,7 @@ public struct AssistantSessionDetail: Decodable, Sendable {
         session = try c.decode(AssistantSession.self, forKey: .session)
         messages = try c.decodeIfPresent([AssistantMessage].self, forKey: .messages) ?? []
         latestRun = try c.decodeIfPresent(AssistantRun.self, forKey: .latestRun)
+        capabilities = try c.decodeIfPresent(AssistantCapabilities.self, forKey: .capabilities)
         lastModelKey = try c.decodeIfPresent(String.self, forKey: .lastModelKey)
         contextUsage = try c.decodeIfPresent(JSONValue.self, forKey: .contextUsage)
     }
