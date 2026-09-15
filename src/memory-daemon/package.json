@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Standalone local memory daemon for Nexus + OpenClaw. Markdown-canonical vault, rebuildable SQLite index (sqlite-vec + FTS5), local llama retrieval stack.",
+  "description": "Standalone local memory daemon for Nexus. Markdown-canonical vault, rebuildable SQLite index (sqlite-vec + FTS5), local llama retrieval stack.",
   "bin": {
     "nexus-memory": "./dist/src/index.js",
     "nexus-memory-mcp": "./dist/src/mcp/stdio.js"

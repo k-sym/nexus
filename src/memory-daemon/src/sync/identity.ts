@@ -33,7 +33,6 @@ export interface Scope {
 
 const NAMESPACE_BY_TOP: Record<string, string> = {
   Nexus: "nexus",
-  OpenClaw: "openclaw",
   Memories: "global",
 };
 
