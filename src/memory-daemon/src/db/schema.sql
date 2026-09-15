@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(namespace, project, category);
 CREATE INDEX IF NOT EXISTS idx_memories_live  ON memories(deleted_at);
 
--- ── Chunks (300-word windows, 80-word overlap) ────────────────────────────────
+-- ── Chunks (heading-aligned sections, breadcrumbed, ≤180 words, no overlap) ──────
 CREATE TABLE IF NOT EXISTS chunks (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   memory_id  TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,

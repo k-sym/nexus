@@ -67,6 +67,41 @@ test("forced rebuild preserves markdown and refreshes unchanged memory", async (
   }
 });
 
+test("forced rebuild replaces window chunks with breadcrumbed heading sections", async () => {
+  const f = fixture();
+  try {
+    const stored = await storeMemory(f.ctx, {
+      namespace: "nexus",
+      project: "test",
+      source: "test",
+      title: "Roll-up",
+      body: "## Summary\n\nWe met about chunking.\n\n## Decisions\n\nDrop the overlap. Keep the cap.",
+    });
+    // Simulate an index built by the old sliding-window chunker.
+    f.ctx.db.prepare("DELETE FROM chunks WHERE memory_id = ?").run(stored.id);
+    f.ctx.db
+      .prepare("INSERT INTO chunks (memory_id, ord, text, seg_hash, embedded) VALUES (?, 0, ?, 'old', 1)")
+      .run(stored.id, "## Summary We met about chunking. ## Decisions Drop the overlap. Keep the cap.");
+
+    await reindexAll(f.ctx, { force: true });
+
+    const chunks = f.ctx.db
+      .prepare("SELECT text FROM chunks WHERE memory_id = ? ORDER BY ord")
+      .all(stored.id) as Array<{ text: string }>;
+    assert.deepEqual(
+      chunks.map((c) => c.text),
+      ["Roll-up › Summary\n\nWe met about chunking.", "Roll-up › Decisions\n\nDrop the overlap. Keep the cap."],
+    );
+    const sentences = f.ctx.db
+      .prepare("SELECT text FROM sentences WHERE memory_id = ? ORDER BY ord")
+      .all(stored.id) as Array<{ text: string }>;
+    assert.ok(sentences.length >= 3);
+    assert.ok(sentences.every((s) => !s.text.includes("›")), JSON.stringify(sentences));
+  } finally {
+    f.close();
+  }
+});
+
 test("forced rebuild clears stale knowledge graph facts before re-extraction", async () => {
   const f = fixture();
   try {
