@@ -175,7 +175,9 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       reply.code(400);
       return { error: 'Question timeout must be between 1 and 1440 minutes' };
     }
-    const rolesError = validateRolesConfig(merged.roles);
+    // New role selections must be registered models; a selection already on
+    // disk that the catalog no longer knows stays, visible as unavailable.
+    const rolesError = validateRolesConfig(merged.roles, (fastify as any).engines, current.roles);
     if (rolesError) return reply.code(400).send({ error: rolesError });
     const bridgeConfigError = validateAgentBridgeConfig(merged.agent_bridge);
     if (bridgeConfigError) {

@@ -215,7 +215,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     const { threadId } = request.params as { threadId: string };
     const row = db.prepare("SELECT role_models FROM chat_threads WHERE id = ?").get(threadId) as { role_models: string | null } | undefined;
     if (!row) return reply.code(404).send({ error: "Thread not found" });
-    return roleView(roleConfig, readOverrides(row.role_models), engines);
+    return roleView(roleConfig, readOverrides(row.role_models, `thread ${threadId}`), engines);
   });
   fastify.put("/api/threads/:threadId/roles", async (request, reply) => {
     const { threadId } = request.params as { threadId: string };
@@ -223,7 +223,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     if (!row) return reply.code(404).send({ error: "Thread not found" });
     try {
       validateRoleOverrides(request.body, engines);
-      const next = { ...readOverrides(row.role_models), ...(request.body as object) };
+      const next = { ...readOverrides(row.role_models, `thread ${threadId}`), ...(request.body as object) };
       for (const key of Object.keys(next)) if (next[key as keyof typeof next] === null) delete next[key as keyof typeof next];
       db.prepare("UPDATE chat_threads SET role_models = ? WHERE id = ?").run(JSON.stringify(next), threadId);
       return roleView(roleConfig, next, engines);

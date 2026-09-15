@@ -5,13 +5,13 @@ import { QuestionBroker } from '../pi/questions.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Database from 'better-sqlite3';
-import { DEFAULT_ROLE_MODELS } from '@nexus/shared';
+import { DEFAULT_ROLE_MODELS, ROLE_NAMES, type RoleModels } from '@nexus/shared';
 import { RoleRunner } from '../roles/runner.js';
 import { allowsRoleTool, restrictedFactories } from '../roles/definitions.js';
 import { ConcurrencyTracker } from '../pi/concurrency.js';
 import { EngineRegistry } from '../engines/registry.js';
 import { collectPiTools } from '../engines/claude/pi-tools-bridge.js';
-import { roleView, validateRoleOverrides, validateRolesConfig } from '../roles/config.js';
+import { readOverrides, roleView, validateRoleOverrides, validateRolesConfig } from '../roles/config.js';
 import type { EngineSession, ChatEngine } from '../engines/types.js';
 const config = { enabled: true, models: { ...DEFAULT_ROLE_MODELS, scout: 'fake/model' }, max_turns: 30, max_minutes: 20, max_tokens: 400000 };
 function setup(action: (emit: (event: any) => void) => Promise<void>, limits = {}) {
@@ -85,6 +85,15 @@ test('configuration rejects bad roles and unavailable selections fail without fa
     assert.throws(() => validateRoleOverrides({ scout: 'fake/missing' }, s.engines), /Unknown model/);
     assert.deepEqual(validateRoleOverrides({ scout: null }, s.engines), {});
     assert.match(validateRolesConfig({ ...config, max_turns: 0 })!, /max_turns/);
+    const fakeModels = Object.fromEntries(ROLE_NAMES.map(r => [r, 'fake/model'])) as RoleModels;
+    assert.equal(validateRolesConfig({ ...config, models: fakeModels }, s.engines), undefined);
+    assert.match(validateRolesConfig({ ...config, models: { ...fakeModels, scout: 'fake/missing' } }, s.engines)!, /Unknown model for scout: fake\/missing/);
+    // A saved selection survives its model leaving the catalog (visible as unavailable); only a new pick must be registered.
+    const saved = { ...config, models: { ...fakeModels, scout: 'fake/missing' } };
+    assert.equal(validateRolesConfig(saved, s.engines, saved), undefined);
+    assert.match(validateRolesConfig({ ...saved, models: { ...saved.models, builder: 'fake/other' } }, s.engines, saved)!, /Unknown model for builder/);
+    assert.equal(validateRolesConfig(saved), undefined, 'without a registry only the shape is checked');
+    assert.match(validateRolesConfig({ ...saved, models: { ...saved.models, refuter: 'no-slash' } })!, /provider\/model/);
     assert.equal(roleView(config, {}, s.engines).available.refuter, false);
     const tools = await collectPiTools(s.runner.factories('t'));
     await assert.rejects(tools.find(t => t.name === 'refute')!.execute('call', { brief: 'Review' }, undefined, undefined, {} as any), /unavailable/);
@@ -133,10 +142,46 @@ test('child brokers keep parent routing and label human interactions', async () 
   signal.abort(); await pending; await question;
   assert.equal(approvals.listPending().length, 0); assert.equal(questions.listPending().length, 0);
 });
+const publicHost = async () => [{ address: '93.184.216.34', family: 4 }];
 test('research document reads reject credentials and binary data and bound response size', async () => {
   await assert.rejects(readWebDocument('file:///etc/passwd'), /HTTP/);
   await assert.rejects(readWebDocument('https://user:password@example.com'), /credentials/);
-  await assert.rejects(readWebDocument('https://example.com', undefined, (async () => new Response('x', { headers: { 'content-type': 'application/pdf' } })) as typeof fetch), /Unsupported/);
-  const result = await readWebDocument('https://example.com', undefined, (async () => new Response('x'.repeat(200000))) as typeof fetch);
+  await assert.rejects(readWebDocument('https://example.com', undefined, (async () => new Response('x', { headers: { 'content-type': 'application/pdf' } })) as typeof fetch, publicHost), /Unsupported/);
+  const result = await readWebDocument('https://example.com', undefined, (async () => new Response('x'.repeat(200000))) as typeof fetch, publicHost);
   assert.match(result, /truncated/); assert.ok(result.length < 128200);
+});
+test('research document reads refuse private, loopback, link-local and Tailscale hosts on every hop', async () => {
+  const never = (async () => { throw new Error('fetch must not be called'); }) as typeof fetch;
+  const literal = async (hostname: string) => [{ address: hostname, family: hostname.includes(':') ? 6 : 4 }];
+  for (const host of ['127.0.0.1', '10.0.0.5', '172.16.9.9', '192.168.1.1', '169.254.169.254', '100.64.0.1', '100.127.255.254', '0.0.0.0', '[::1]', '[::ffff:127.0.0.1]', '[::ffff:7f00:1]', '[fe80::1]', '[fd00::1]']) {
+    await assert.rejects(readWebDocument(`http://${host}:4100/`, undefined, never, literal), /private, loopback/, host);
+  }
+  await assert.rejects(readWebDocument('http://localhost:4173/api/health', undefined, never, async () => [{ address: '127.0.0.1', family: 4 }]), /private, loopback/);
+  // A public name with even one private record is refused; a name that does not resolve is refused.
+  await assert.rejects(readWebDocument('http://mixed.example', undefined, never, async () => [{ address: '93.184.216.34', family: 4 }, { address: '10.0.0.1', family: 4 }]), /private, loopback/);
+  await assert.rejects(readWebDocument('http://unknown.example', undefined, never, async () => { throw new Error('ENOTFOUND'); }), /Could not resolve/);
+  assert.equal(await readWebDocument('http://[2606:4700::1111]/', undefined, (async () => new Response('v6 ok')) as typeof fetch, literal).then(text => text.includes('v6 ok')), true);
+  // Redirects are followed by hand and re-checked: public → private stops before the second fetch, public → public is read.
+  const hops: string[] = [];
+  const resolver = async (hostname: string) => [{ address: hostname.endsWith('.example') ? '93.184.216.34' : hostname, family: 4 }];
+  const toPrivate = (async (input: URL) => { hops.push(input.href); return new Response(null, { status: 302, headers: { location: 'http://127.0.0.1:8899/' } }); }) as typeof fetch;
+  await assert.rejects(readWebDocument('http://start.example/doc', undefined, toPrivate, resolver), /private, loopback/);
+  assert.deepEqual(hops, ['http://start.example/doc']);
+  const toPublic = (async (input: URL, init: RequestInit) => {
+    assert.equal(init.redirect, 'manual'); hops.push(input.href);
+    return input.hostname === 'start.example' ? new Response(null, { status: 301, headers: { location: '//end.example/final' } }) : new Response('moved here');
+  }) as typeof fetch;
+  hops.length = 0;
+  const followed = await readWebDocument('http://start.example/doc', undefined, toPublic, resolver);
+  assert.deepEqual(hops, ['http://start.example/doc', 'http://end.example/final']); assert.match(followed, /Source: http:\/\/end\.example\/final\nmoved here/);
+  const loop = (async (input: URL) => new Response(null, { status: 307, headers: { location: input.href } })) as typeof fetch;
+  await assert.rejects(readWebDocument('http://start.example/loop', undefined, loop, resolver), /Too many redirects/);
+});
+test('corrupt per-thread role overrides are dropped with a log line', () => {
+  const lines: string[] = [];
+  assert.deepEqual(readOverrides('{not json', 'thread t', line => lines.push(line)), {});
+  assert.equal(lines.length, 1); assert.match(lines[0], /corrupt role_models for thread t/);
+  assert.deepEqual(readOverrides(null, 'thread t', line => lines.push(line)), {});
+  assert.deepEqual(readOverrides('{"scout":"fake/model","bogus":1,"builder":3}', 'thread t', line => lines.push(line)), { scout: 'fake/model' });
+  assert.equal(lines.length, 1, 'only unparseable JSON is logged');
 });
