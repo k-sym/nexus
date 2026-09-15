@@ -499,7 +499,7 @@ export interface NexusConfig {
     next_message: string;
   };
   assistant: {
-    /** OpenAI-compatible remote assistant endpoint, e.g. Hermes/OpenClaw. */
+    /** Partner assistant-api base URL (baker-internal, FastAPI on 127.0.0.1:8788). */
     url: string;
     /** Supports ${ASSISTANT_API_KEY}; raw values are masked by settings routes. */
     api_key: string;

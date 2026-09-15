@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
-import { createHermesClient, type HermesFetch } from '../hermes/client.js';
+import { createPartnerClient, type PartnerFetch } from '../partner/client.js';
 import type { NexusConfig } from '@nexus/shared';
 
 interface DraftsRoutesOptions {
-  fetchImpl?: HermesFetch;
+  fetchImpl?: PartnerFetch;
 }
 
 // Proxy over the partner adapter's outbound draft queue (baker-internal#42) —
@@ -23,17 +23,17 @@ export function createDraftsRoutes(load: () => NexusConfig = loadConfig, options
       const url = resolveEnvVars(config.assistant.url || '').trim();
       const key = resolveAssistantKey(config);
       if (!url || !key) return undefined;
-      return createHermesClient({ url, key, fetchImpl: options.fetchImpl });
+      return createPartnerClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
     // Reads fail soft, like the routines card: an unreachable adapter renders an
     // empty state rather than breaking the dashboard.
     fastify.get('/api/drafts', async (request) => {
       const { status } = request.query as { status?: string };
-      const hermes = client();
-      if (!hermes) return { configured: false, drafts: [], pending: 0 };
+      const partner = client();
+      if (!partner) return { configured: false, drafts: [], pending: 0 };
       try {
-        const body = (await hermes.listDrafts(status)) as Record<string, unknown>;
+        const body = (await partner.listDrafts(status)) as Record<string, unknown>;
         return { configured: true, drafts: [], pending: 0, ...body };
       } catch (err: any) {
         return { configured: true, drafts: [], pending: 0, error: err?.message || 'Draft fetch failed.' };
@@ -42,13 +42,13 @@ export function createDraftsRoutes(load: () => NexusConfig = loadConfig, options
 
     fastify.get('/api/drafts/:id', async (request, reply) => {
       const { id } = request.params as { id: string };
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.getDraft(id);
+        return await partner.getDraft(id);
       } catch (err: any) {
         reply.code(err?.status === 404 ? 404 : 502);
         return { error: err?.message || 'Draft fetch failed.' };
@@ -63,15 +63,15 @@ export function createDraftsRoutes(load: () => NexusConfig = loadConfig, options
         const { id } = request.params as { id: string };
         const body = (request.body ?? {}) as { by?: string; note?: string };
         const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim().slice(0, 40) : 'nexus';
-        const hermes = client();
-        if (!hermes) {
+        const partner = client();
+        if (!partner) {
           reply.code(400);
           return { error: 'Assistant URL and key must be configured in Settings.' };
         }
         try {
           return action === 'approve'
-            ? await hermes.approveDraft(id, by)
-            : await hermes.rejectDraft(id, by, body.note);
+            ? await partner.approveDraft(id, by)
+            : await partner.rejectDraft(id, by, body.note);
         } catch (err: any) {
           const status = typeof err?.status === 'number' ? err.status : 502;
           reply.code(status === 404 || status === 409 ? status : 502);
@@ -91,13 +91,13 @@ export function createDraftsRoutes(load: () => NexusConfig = loadConfig, options
         return { error: 'body (string) is required' };
       }
       const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim().slice(0, 40) : 'nexus';
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.editDraft(id, body.body, by);
+        return await partner.editDraft(id, body.body, by);
       } catch (err: any) {
         const status = typeof err?.status === 'number' ? err.status : 502;
         reply.code(status === 404 || status === 409 || status === 400 ? status : 502);

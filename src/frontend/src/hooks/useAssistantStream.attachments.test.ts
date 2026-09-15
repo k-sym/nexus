@@ -11,7 +11,7 @@ function res(body: unknown, ok = true): Response {
 }
 
 // End-to-end through the hook: a sent image is cached and re-attached to the
-// user turn after the transcript reloads TEXT-ONLY (as the real Hermes-backed
+// user turn after the transcript reloads TEXT-ONLY (as the real Partner-backed
 // transcript does).
 describe('useAssistantStream attachment persistence', () => {
   it('re-attaches a sent image after a text-only reload', async () => {

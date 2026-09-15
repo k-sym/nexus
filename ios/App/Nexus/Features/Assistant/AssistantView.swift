@@ -95,7 +95,7 @@ struct NewAssistantSession: Hashable, Identifiable {
     let title: String
 }
 
-/// The Assistant surface: a merged list of local + adoptable-remote Hermes
+/// The Assistant surface: a merged list of local + adoptable-remote Partner
 /// sessions, feeding the shared streaming chat via `AssistantChatEndpoint`.
 struct AssistantView: View {
     private let api: APIClient
@@ -300,7 +300,7 @@ struct AssistantRunningDot: View {
     }
 }
 
-/// Adopts a remote-only Hermes session (import → local), then hands off to the
+/// Adopts a remote-only Partner session (import → local), then hands off to the
 /// shared chat. Tolerates a slow/failed import with a spinner and retry.
 struct AssistantAdoptingView: View {
     let api: APIClient

@@ -1,4 +1,4 @@
-{"kind":"run_start","run":{"runId":"r1","threadId":"s1","startedAt":"2026-07-28T12:00:00.000Z","provider":"assistant","model":"hermes-agent"}}
+{"kind":"run_start","run":{"runId":"r1","threadId":"s1","startedAt":"2026-07-28T12:00:00.000Z","provider":"assistant","model":"partner"}}
 {"kind":"session_title","sessionId":"s1","title":"Weather check"}
 {"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Let me check the weather."}}
 {"type":"tool_execution_start","toolCallId":"t0","toolName":"web_search","args":{"query":"weather today","max_results":3}}

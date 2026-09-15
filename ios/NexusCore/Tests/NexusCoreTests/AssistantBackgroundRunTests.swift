@@ -12,7 +12,7 @@ final class AssistantBackgroundRunTests: XCTestCase {
         // POST …/runs and GET /runs/:id both return the fuller publicRun shape;
         // only id + status are modelled, extra keys are ignored.
         let json = Data("""
-        { "run": { "id": "r1", "session_id": "s1", "remote_run_id": "hermes-9",
+        { "run": { "id": "r1", "session_id": "s1", "remote_run_id": "partner-9",
                    "kind": "overnight", "status": "running", "input": "do the thing",
                    "output": "", "error": null, "usage": null,
                    "started_at": "2026-07-28T12:00:00.000Z", "completed_at": null,

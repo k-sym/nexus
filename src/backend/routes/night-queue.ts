@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
-import { createHermesClient, type HermesFetch } from '../hermes/client.js';
+import { createPartnerClient, type PartnerFetch } from '../partner/client.js';
 import type { NexusConfig } from '@nexus/shared';
 
 interface NightQueueRoutesOptions {
-  fetchImpl?: HermesFetch;
+  fetchImpl?: PartnerFetch;
 }
 
 // Read-only proxy over the partner adapter's night-queue board (`GET
@@ -22,7 +22,7 @@ export function createNightQueueRoutes(
       const url = resolveEnvVars(config.assistant.url || '').trim();
       const key = resolveAssistantKey(config);
       if (!url || !key) return undefined;
-      return createHermesClient({ url, key, fetchImpl: options.fetchImpl });
+      return createPartnerClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
     // Fail-soft like /api/routines: an unconfigured or unreachable adapter
@@ -31,12 +31,12 @@ export function createNightQueueRoutes(
     // the card distinguishes "nothing has happened" from "I cannot tell".
     fastify.get('/api/night-queue', async (request) => {
       const { nights } = request.query as { nights?: string };
-      const hermes = client();
+      const partner = client();
       const empty = { nights: [], queue: [], open_prs: [] };
-      if (!hermes) return { configured: false, available: false, ...empty };
+      if (!partner) return { configured: false, available: false, ...empty };
       try {
         const parsed = Number(nights);
-        const report = (await hermes.listNightQueue(
+        const report = (await partner.listNightQueue(
           Number.isFinite(parsed) && parsed > 0 ? parsed : undefined,
         )) as Record<string, unknown>;
         return { configured: true, available: false, ...empty, ...report };
@@ -52,13 +52,13 @@ export function createNightQueueRoutes(
 
     fastify.get('/api/night-queue/nights/:nightId', async (request, reply) => {
       const { nightId } = request.params as { nightId: string };
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       try {
-        return await hermes.getNight(nightId);
+        return await partner.getNight(nightId);
       } catch (err: any) {
         const message: string = err?.message || 'Night fetch failed.';
         reply.code(/not found/i.test(message) ? 404 : 502);

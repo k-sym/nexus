@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createHermesClient,
-  normalizeHermesBaseUrl,
+  createPartnerClient,
+  normalizePartnerBaseUrl,
   parseResponsesEvent,
   parseChatStreamFrame,
-  type HermesFetch,
-} from '../hermes/client';
+  type PartnerFetch,
+} from '../partner/client';
 
 function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -33,26 +33,26 @@ async function collect<T>(it: AsyncIterable<T>): Promise<T[]> {
   return out;
 }
 
-test('normalizeHermesBaseUrl accepts root, /v1, and /v1/chat/completions URLs', () => {
-  assert.equal(normalizeHermesBaseUrl('http://127.0.0.1:8642'), 'http://127.0.0.1:8642');
-  assert.equal(normalizeHermesBaseUrl('http://127.0.0.1:8642/v1'), 'http://127.0.0.1:8642');
+test('normalizePartnerBaseUrl accepts root, /v1, and /v1/chat/completions URLs', () => {
+  assert.equal(normalizePartnerBaseUrl('http://127.0.0.1:8642'), 'http://127.0.0.1:8642');
+  assert.equal(normalizePartnerBaseUrl('http://127.0.0.1:8642/v1'), 'http://127.0.0.1:8642');
   assert.equal(
-    normalizeHermesBaseUrl('http://127.0.0.1:8642/v1/chat/completions'),
+    normalizePartnerBaseUrl('http://127.0.0.1:8642/v1/chat/completions'),
     'http://127.0.0.1:8642',
   );
-  assert.equal(normalizeHermesBaseUrl(' http://127.0.0.1:8642/v1/ '), 'http://127.0.0.1:8642');
+  assert.equal(normalizePartnerBaseUrl(' http://127.0.0.1:8642/v1/ '), 'http://127.0.0.1:8642');
 });
 
 test('startRun posts to /v1/runs with bearer auth and session correlation', async () => {
   let requestedUrl = '';
   let requestedInit: RequestInit | undefined;
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     requestedUrl = String(url);
     requestedInit = init;
     return jsonResponse({ run_id: 'run-123', status: 'started' });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642/v1', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642/v1', key: 'secret', fetchImpl });
   const run = await client.startRun({
     input: 'Do this overnight',
     sessionId: 'session-1',
@@ -71,8 +71,8 @@ test('startRun posts to /v1/runs with bearer auth and session correlation', asyn
   });
 });
 
-test('getRun maps Hermes run status output and usage', async () => {
-  const fetchImpl: HermesFetch = async (url, init) => {
+test('getRun maps Partner run status output and usage', async () => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     assert.equal(String(url), 'http://127.0.0.1:8642/v1/runs/run-123');
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer secret');
     return jsonResponse({
@@ -80,43 +80,43 @@ test('getRun maps Hermes run status output and usage', async () => {
       run_id: 'run-123',
       status: 'completed',
       session_id: 'session-1',
-      model: 'hermes-agent',
+      model: 'partner',
       output: 'Done.',
       usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
     });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   assert.deepEqual(await client.getRun('run-123'), {
     runId: 'run-123',
     status: 'completed',
     sessionId: 'session-1',
-    model: 'hermes-agent',
+    model: 'partner',
     output: 'Done.',
     usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
   });
 });
 
-test('stopRun posts to the Hermes stop endpoint', async () => {
+test('stopRun posts to the Partner stop endpoint', async () => {
   let requestedUrl = '';
   let requestedMethod = '';
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     requestedUrl = String(url);
     requestedMethod = init?.method ?? '';
     return jsonResponse({ status: 'stopping' });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   await client.stopRun('run-123');
 
   assert.equal(requestedUrl, 'http://127.0.0.1:8642/v1/runs/run-123/stop');
   assert.equal(requestedMethod, 'POST');
 });
 
-test('sessionChat posts multimodal input to a Hermes persisted session', async () => {
+test('sessionChat posts multimodal input to a Partner persisted session', async () => {
   let requestedUrl = '';
   let requestedInit: RequestInit | undefined;
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     requestedUrl = String(url);
     requestedInit = init;
     return jsonResponse({
@@ -127,7 +127,7 @@ test('sessionChat posts multimodal input to a Hermes persisted session', async (
     });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   const result = await client.sessionChat({
     sessionId: 'session-1',
     sessionKey: 'nexus:assistant:session-1',
@@ -153,9 +153,9 @@ test('sessionChat posts multimodal input to a Hermes persisted session', async (
   });
 });
 
-test('createSession and deleteSession call Hermes session control endpoints', async () => {
+test('createSession and deleteSession call Partner session control endpoints', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     calls.push({ url: String(url), init });
     if (init?.method === 'POST') {
       return jsonResponse({ object: 'hermes.session', session: { id: 'session-1' } }, { status: 201 });
@@ -163,7 +163,7 @@ test('createSession and deleteSession call Hermes session control endpoints', as
     return jsonResponse({ object: 'hermes.session.deleted', id: 'session-1', deleted: true });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   assert.deepEqual(await client.createSession({ sessionId: 'session-1', title: 'Vision' }), { sessionId: 'session-1' });
   await client.deleteSession('session-1');
 
@@ -180,13 +180,13 @@ test('streamChatCompletions extracts OpenAI-compatible streamed text deltas', as
     'data: {"choices":[{"delta":{"content":"lo"}}]}\n\n',
     'data: [DONE]\n\n',
   ].join('');
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     assert.equal(String(url), 'http://127.0.0.1:8642/v1/chat/completions');
     assert.deepEqual(JSON.parse(String(init?.body)).messages, [{ role: 'user', content: 'Hi' }]);
     return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642/v1/chat/completions', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642/v1/chat/completions', key: 'secret', fetchImpl });
   const deltas: string[] = [];
   for await (const delta of client.streamChatCompletions([{ role: 'user', content: 'Hi' }])) {
     deltas.push(delta);
@@ -197,7 +197,7 @@ test('streamChatCompletions extracts OpenAI-compatible streamed text deltas', as
 
 test('streamResponses parses text deltas, function calls, outputs, and completion', async () => {
   let captured: { url: string; body: any } | null = null;
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     captured = { url: String(url), body: JSON.parse(String(init?.body)) };
     return sseResponse([
       'data: {"type":"response.created","response":{"id":"resp_1"}}\n\n',
@@ -209,7 +209,7 @@ test('streamResponses parses text deltas, function calls, outputs, and completio
       'data: [DONE]\n\n',
     ]);
   };
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   const events = await collect(client.streamResponses({ input: 'hi', sessionId: 's1', sessionKey: 'nexus:assistant:s1' }));
 
   assert.equal(captured!.url, 'http://127.0.0.1:8642/v1/responses');
@@ -227,11 +227,11 @@ test('streamResponses parses text deltas, function calls, outputs, and completio
 });
 
 test('streamResponses maps a failed response to a failed event', async () => {
-  const fetchImpl: HermesFetch = async () => sseResponse([
+  const fetchImpl: PartnerFetch = async () => sseResponse([
     'data: {"type":"response.failed","response":{"error":{"message":"boom"}}}\n\n',
     'data: [DONE]\n\n',
   ]);
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'k', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'k', fetchImpl });
   const events = await collect(client.streamResponses({ input: 'x' }));
   assert.deepEqual(events, [{ kind: 'failed', error: 'boom' }]);
 });
@@ -239,19 +239,19 @@ test('streamResponses maps a failed response to a failed event', async () => {
 test('streamResponses forwards the provided AbortSignal to fetchImpl', async () => {
   const controller = new AbortController();
   let capturedSignal: AbortSignal | null | undefined;
-  const fetchImpl: HermesFetch = async (_url, init) => {
+  const fetchImpl: PartnerFetch = async (_url, init) => {
     capturedSignal = init?.signal;
     return sseResponse(['data: [DONE]\n\n']);
   };
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   await collect(client.streamResponses({ input: 'hi', signal: controller.signal }));
 
   assert.equal(capturedSignal, controller.signal);
 });
 
-test('listSessions calls Hermes sessions API with source filtering', async () => {
+test('listSessions calls Partner sessions API with source filtering', async () => {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     calls.push({ url: String(url), init });
     return jsonResponse({
       sessions: [
@@ -261,7 +261,7 @@ test('listSessions calls Hermes sessions API with source filtering', async () =>
     });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642/v1', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642/v1', key: 'secret', fetchImpl });
   const result = await client.listSessions({ limit: 50, offset: 0, source: 'api_server', includeChildren: false });
 
   assert.equal(calls[0].url, 'http://127.0.0.1:8642/api/sessions?limit=50&offset=0&source=api_server&include_children=false');
@@ -272,8 +272,8 @@ test('listSessions calls Hermes sessions API with source filtering', async () =>
   assert.equal(result.nextOffset, null);
 });
 
-test('getSessionMessages maps Hermes message history', async () => {
-  const fetchImpl: HermesFetch = async (url, init) => {
+test('getSessionMessages maps Partner message history', async () => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     assert.equal(String(url), 'http://127.0.0.1:8642/api/sessions/remote-api-1/messages');
     assert.equal((init?.headers as Record<string, string>).Authorization, 'Bearer secret');
     return jsonResponse({
@@ -284,30 +284,30 @@ test('getSessionMessages maps Hermes message history', async () => {
     });
   };
 
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   assert.deepEqual(await client.getSessionMessages('remote-api-1'), [
     { id: 'hm1', role: 'user', content: 'resume this', created_at: '2026-07-02T10:01:00.000Z' },
     { id: 'hm2', role: 'assistant', content: 'ready', created_at: '2026-07-02T10:02:00.000Z' },
   ]);
 });
 
-test('listSessions parses Hermes {object:"list", data:[...]} response shape', async () => {
-  const fetchImpl: HermesFetch = async () => jsonResponse({
+test('listSessions parses Partner {object:"list", data:[...]} response shape', async () => {
+  const fetchImpl: PartnerFetch = async () => jsonResponse({
     object: 'list',
     data: [{ id: 'api-1', source: 'api_server', title: null }],
   });
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   const result = await client.listSessions({ source: 'api_server' });
   assert.deepEqual(result.sessions, [{ id: 'api-1', source: 'api_server', title: null }]);
 });
 
 test('streamResponses sends previous_response_id when provided', async () => {
   let sentBody: any = null;
-  const fetchImpl: HermesFetch = async (_url, init) => {
+  const fetchImpl: PartnerFetch = async (_url, init) => {
     sentBody = JSON.parse(String(init?.body));
     return sseResponse(['data: [DONE]\n\n']);
   };
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   for await (const _ of client.streamResponses({ input: 'hi', previousResponseId: 'resp_prev' })) { /* drain */ }
   assert.equal(sentBody.previous_response_id, 'resp_prev');
 });
@@ -343,7 +343,7 @@ test('sessionChatStream posts message body + session key header and parses split
   let calledUrl = '';
   let sentBody: any = null;
   let authKey = '';
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     calledUrl = String(url);
     sentBody = JSON.parse(String(init?.body));
     authKey = (init?.headers as Record<string, string>)['X-Hermes-Session-Key'];
@@ -358,7 +358,7 @@ test('sessionChatStream posts message body + session key header and parses split
       'event: done\ndata: {}\n\n',
     ]);
   };
-  const client = createHermesClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8642', key: 'secret', fetchImpl });
   const events = await collect(client.sessionChatStream({ sessionId: 's1', sessionKey: 'nexus:assistant:s1', input: 'go' }));
 
   assert.equal(calledUrl, 'http://127.0.0.1:8642/api/sessions/s1/chat/stream');
@@ -390,7 +390,7 @@ test('parseChatStreamFrame surfaces model/usage/context on an enriched run.compl
 test('sessionChatStream and sessionChat pass the model alias through (#75)', async () => {
   let streamBody: any = null;
   let chatBody: any = null;
-  const fetchImpl: HermesFetch = async (url, init) => {
+  const fetchImpl: PartnerFetch = async (url, init) => {
     const u = String(url);
     if (u.endsWith('/chat/stream')) {
       streamBody = JSON.parse(String(init?.body));
@@ -405,7 +405,7 @@ test('sessionChatStream and sessionChat pass the model alias through (#75)', asy
       context: { used: 135, limit: 200000, model: 'haiku' },
     });
   };
-  const client = createHermesClient({ url: 'http://127.0.0.1:8788', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8788', key: 'secret', fetchImpl });
   await collect(client.sessionChatStream({ sessionId: 's1', input: 'go', model: 'opus' }));
   assert.equal(streamBody.model, 'opus');
   // No model given → the field stays off the wire (adapter default applies).
@@ -419,7 +419,7 @@ test('sessionChatStream and sessionChat pass the model alias through (#75)', asy
 });
 
 test('listModels returns the adapter catalog and tolerates junk (#75)', async () => {
-  const fetchImpl: HermesFetch = async (url) => {
+  const fetchImpl: PartnerFetch = async (url) => {
     assert.equal(String(url), 'http://127.0.0.1:8788/v1/models');
     return jsonResponse({
       models: [
@@ -429,13 +429,13 @@ test('listModels returns the adapter catalog and tolerates junk (#75)', async ()
       default: 'sonnet',
     });
   };
-  const client = createHermesClient({ url: 'http://127.0.0.1:8788', key: 'secret', fetchImpl });
+  const client = createPartnerClient({ url: 'http://127.0.0.1:8788', key: 'secret', fetchImpl });
   const catalog = await client.listModels();
   assert.equal(catalog.default, 'sonnet');
   assert.equal(catalog.models.length, 2);
   assert.equal(catalog.models[0].id, 'sonnet');
 
-  const junkClient = createHermesClient({
+  const junkClient = createPartnerClient({
     url: 'http://127.0.0.1:8788',
     key: 'secret',
     fetchImpl: async () => jsonResponse({ nope: true }),

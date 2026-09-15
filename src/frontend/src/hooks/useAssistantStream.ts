@@ -154,7 +154,7 @@ export function useAssistantStream() {
     ));
   }, []);
 
-  // Adopt a remote-only Hermes session into Nexus: import its metadata + transcript,
+  // Adopt a remote-only Partner session into Nexus: import its metadata + transcript,
   // then treat it as a normal local session for the rest of the UI.
   const importRemoteSession = useCallback(async (session: AssistantSession): Promise<boolean> => {
     setError(null);

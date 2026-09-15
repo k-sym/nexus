@@ -15,11 +15,11 @@ public struct AssistantSession: Decodable, Identifiable, Hashable, Sendable {
     public let id: String
     public let title: String
     public let status: String
-    /// True for adoptable remote-only Hermes rows (not yet a local session).
+    /// True for adoptable remote-only Partner rows (not yet a local session).
     public let remoteOnly: Bool
     /// Only present on remote rows: `api_server` | `tui` | `cli`.
     public let source: String?
-    /// The un-prefixed Hermes session id (remote rows) or the local pointer to it.
+    /// The un-prefixed Partner session id (remote rows) or the local pointer to it.
     public let remoteSessionId: String?
     public let updatedAt: String?
     public let latestRun: AssistantRun?
@@ -59,7 +59,7 @@ public struct AssistantSession: Decodable, Identifiable, Hashable, Sendable {
         self.latestRun = latestRun
     }
 
-    /// The Hermes session id to POST to `/import`. Remote rows carry it directly;
+    /// The Partner session id to POST to `/import`. Remote rows carry it directly;
     /// otherwise strip the synthetic `remote:` prefix off the id as a fallback.
     public var adoptableRemoteId: String {
         if let remoteSessionId, !remoteSessionId.isEmpty { return remoteSessionId }
@@ -104,13 +104,13 @@ public struct AssistantRun: Decodable, Hashable, Sendable {
 }
 
 /// A message from `GET /api/assistant/sessions/:id` (or `/import`). Renders from
-/// Hermes `/messages` via `hermesMessagesToTranscript`, whose `id` is **optional**
+/// Partner `/messages` via `partnerMessagesToTranscript`, whose `id` is **optional**
 /// — so this tolerant type keeps `id` optional and synthesizes an index-based id
 /// when mapping into the shared, non-optional `PersistedMessage`. (Loosening
 /// `PersistedMessage.id` would break the thread-chat path that depends on it.)
 ///
 /// `id` also arrives as a **number** on the local-store fallback path (the
-/// `assistant_session_messages` PK is an integer, surfaced whenever the Hermes
+/// `assistant_session_messages` PK is an integer, surfaced whenever the Partner
 /// `/messages` transport is skipped) — decoding that into `String?` would throw
 /// and surface as "The server sent an unexpected response", so `init(from:)`
 /// tolerates a String, an Int, or an absent id.
@@ -156,7 +156,7 @@ public struct AssistantMessage: Decodable, Sendable {
 
     /// Project onto the shared `PersistedMessage` so the existing
     /// `TranscriptReducer.loadPersisted` renders it unchanged. `index` seeds a
-    /// stable id for rows Hermes emitted without one.
+    /// stable id for rows Partner emitted without one.
     func asPersisted(index: Int) -> PersistedMessage {
         PersistedMessage(
             id: id ?? "assistant-\(index)",
@@ -184,7 +184,7 @@ public struct AssistantSessionDetail: Decodable, Sendable {
     public let messages: [AssistantMessage]
     public let latestRun: AssistantRun?
     /// Model-picker seed (#75): the adapter session's persisted model as a
-    /// `partner/<alias>` key. Absent on Hermes rows and pre-#75 backends.
+    /// `partner/<alias>` key. Absent on Partner rows and pre-#75 backends.
     public let lastModelKey: String?
     /// Context-meter seed (#75): `{tokens, contextWindow, percent}`, kept as raw
     /// JSON so `ContextUsage.init?(_:)` applies the same validation it applies
@@ -204,7 +204,7 @@ public struct AssistantSessionDetail: Decodable, Sendable {
         contextUsage = try c.decodeIfPresent(JSONValue.self, forKey: .contextUsage)
     }
 
-    /// The transcript-ready messages (synthesizing ids for id-less Hermes rows).
+    /// The transcript-ready messages (synthesizing ids for id-less Partner rows).
     public var persistedMessages: [PersistedMessage] {
         messages.enumerated().map { $0.element.asPersisted(index: $0.offset) }
     }

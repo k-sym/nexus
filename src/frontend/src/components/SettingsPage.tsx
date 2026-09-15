@@ -306,7 +306,7 @@ export default function SettingsPage() {
                 className="w-full surface-panel border border-subtle rounded-sm px-3 py-2 text-sm font-mono text-primary placeholder:text-faint focus:outline-hidden focus:border-strong"
               />
               <p className="text-[10px] text-faint mt-1">
-                Remote OpenAI-compatible assistant endpoint (e.g. Hermes, OpenClaw).
+                Partner assistant-api base URL (baker-internal, headless Claude on 127.0.0.1:8788).
               </p>
             </Field>
             <Field label="Key">
