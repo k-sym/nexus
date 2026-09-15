@@ -1,3 +1,4 @@
+import { validateRoleOverrides } from '../roles/config.js';
 /**
  * Tickets — a disposable mirror of Jira tickets assigned to the user.
  *
@@ -205,6 +206,8 @@ export async function registerTicketRoutes(fastify: FastifyInstance, opts: Ticke
     const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId) as { id: string; name: string } | undefined;
     if (!project) throw httpError(404, 'Project not found');
 
+    let roleModels;
+    try { roleModels = body.roleModels ? validateRoleOverrides(body.roleModels, (fastify as any).engines) : undefined; } catch (error) { throw httpError(400, (error as Error).message); }
     const now = new Date().toISOString();
     const title = `${row.key} ${row.summary}`.trim().slice(0, 120) || NEW_THREAD_TITLE;
     const thread: ChatThread = {
@@ -219,6 +222,7 @@ export async function registerTicketRoutes(fastify: FastifyInstance, opts: Ticke
     db.prepare(
       'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at, ticket_key) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ).run(thread.id, thread.project_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at, thread.ticket_key);
+    if (roleModels) db.prepare("UPDATE chat_threads SET role_models = ? WHERE id = ?").run(JSON.stringify(roleModels), thread.id);
     // The only record of which project a ticket session was opened in, beside
     // the thread row itself; the log line makes a wrong pick diagnosable later.
     console.log(`[ticket-session] ${row.key} → project ${project.id} (${project.name}) thread ${thread.id} branch ${branchName}`);

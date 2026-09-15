@@ -62,6 +62,7 @@ public struct Model: Decodable, Identifiable, Hashable, Sendable {
 /// `GET /api/models` → curated (`models`) + full catalog. iOS uses the curated
 /// `models` as the pickable set.
 public struct ModelsResponse: Decodable, Sendable {
+    public let allModels: [Model]?
     public let models: [Model]
 }
 

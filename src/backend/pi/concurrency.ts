@@ -23,6 +23,15 @@ export interface ProjectRun {
 }
 
 export class ConcurrencyTracker {
+  private readonly children = new Map<string, symbol>();
+
+  async runAsChild<T>(projectId: string, owner: symbol, fn: () => Promise<T>): Promise<T> {
+    if (this.projectActive.get(projectId)?.owner !== owner) throw new Error("Parent no longer owns the project");
+    if (this.children.has(projectId)) throw new Error("A role is already running; children must run sequentially");
+    this.children.set(projectId, owner);
+    try { return await fn(); } finally { this.children.delete(projectId); }
+  }
+
   private readonly projectActive = new Map<string, ProjectRun & { owner: symbol }>();
   private readonly observedProjectOwners = new WeakMap<ProjectRun, symbol>();
   private readonly projectReleaseWaiters = new Map<string, Set<() => void>>();
@@ -72,7 +81,7 @@ export class ConcurrencyTracker {
 
   releaseProject(projectId: string, owner: symbol): boolean {
     const run = this.projectActive.get(projectId);
-    if (!run || run.owner !== owner) return false;
+    if (!run || run.owner !== owner || this.children.has(projectId)) return false;
     this.projectActive.delete(projectId);
     for (const resolve of this.projectReleaseWaiters.get(projectId) ?? []) resolve();
     this.projectReleaseWaiters.delete(projectId);

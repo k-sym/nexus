@@ -62,3 +62,22 @@ final class TicketSessionDecodingTests: XCTestCase {
         XCTAssertEqual(OperationKind.ticketDraft.label, "Ticket draft")
     }
 }
+
+extension TicketSessionDecodingTests {
+    func testRoleModelsRemainOptionalAndEncodeWhenChosen() throws {
+        let old = TicketSessionRequest(projectId: "p", problem: "Fix", branchName: "fix/test")
+        let oldJSON = try JSONSerialization.jsonObject(with: JSONEncoder().encode(old)) as! [String: Any]
+        XCTAssertNil(oldJSON["roleModels"])
+        let selected = TicketSessionRequest(projectId: "p", problem: "Fix", branchName: "fix/test", roleModels: ["refuter": "openai/gpt-5.6-sol"])
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(selected)) as! [String: Any]
+        XCTAssertEqual((json["roleModels"] as? [String: String])?["refuter"], "openai/gpt-5.6-sol")
+    }
+    func testRolesDecodeAndNullResetEncodes() throws {
+        let json = #"{"enabled":true,"defaults":{"scout":"claude-code/claude-haiku-4-5"},"overrides":{},"effective":{"scout":"claude-code/claude-haiku-4-5"},"available":{"scout":false}}"#
+        let roles = try JSONDecoder().decode(ThreadRoles.self, from: Data(json.utf8))
+        XCTAssertFalse(roles.available["scout"]!)
+        let patch: [String: String?] = ["scout": nil]
+        let encoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(patch)) as! [String: Any]
+        XCTAssertTrue(encoded["scout"] is NSNull)
+    }
+}

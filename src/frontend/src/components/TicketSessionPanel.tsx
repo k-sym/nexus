@@ -1,3 +1,5 @@
+import RolePicker from './RolePicker';
+import type { RoleOverrides } from '@nexus/shared';
 /**
  * TicketSessionPanel — the part of the Tickets sidebar that turns a ticket into
  * a session (#432): Draft with Agent, pick a project and a model, edit the
@@ -14,6 +16,7 @@ import { useModels, modelKey as makeModelKey } from '../hooks/useModels';
 import SelectMenu from './SelectMenu';
 
 export interface TicketGoInput {
+  roleModels?: RoleOverrides;
   projectId: string;
   problem: string;
   branchName: string;
@@ -35,6 +38,7 @@ function withBranchType(branchName: string, type: TicketBranchType): string {
 
 export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSession }: Props) {
   const { models, activeModelId } = useModels();
+  const [roleModels, setRoleModels] = useState<RoleOverrides>({});
   const [drafting, setDrafting] = useState(false);
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draft, setDraft] = useState<TicketDraft | null>(null);
@@ -53,6 +57,7 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
 
   // Reset when the selected ticket changes; keep the model pick, it is a preference.
   useEffect(() => {
+    setRoleModels({});
     setDraft(null);
     setDraftError(null);
     setGoError(null);
@@ -101,7 +106,7 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
     setGoing(true);
     setGoError(null);
     try {
-      await onGo(ticket, { projectId, problem: problem.trim(), branchName: branchName.trim(), modelKey });
+      await onGo(ticket, { projectId, problem: problem.trim(), branchName: branchName.trim(), modelKey, ...(Object.keys(roleModels).length ? { roleModels } : {}) });
     } catch (err) {
       setGoError((err as Error).message || 'Could not start the session');
       setGoing(false);
@@ -167,6 +172,8 @@ export default function TicketSessionPanel({ ticket, projects, onGo, onOpenSessi
           onChange={setModelKey}
         />
       </div>
+
+      <RolePicker value={roleModels} onChange={setRoleModels} />
 
       <div className="flex gap-2">
         <div className="text-xs text-zinc-500 w-28 shrink-0">

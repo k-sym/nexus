@@ -1,7 +1,7 @@
 import type { PiRuntime } from '../pi/runtime.js';
-import type { ChatEngine, EngineModel, EngineSession } from './types.js';
+import type { ChatEngine, EngineModel, EngineSession, ChildSessionOptions } from './types.js';
 
-type PiRuntimeSurface = Pick<PiRuntime, 'models' | 'sessionFor' | 'hasSession' | 'dropSession'>;
+type PiRuntimeSurface = Pick<PiRuntime, 'models' | 'sessionFor' | 'hasSession' | 'dropSession' | 'createChildSession'>;
 
 export interface PiEngineOptions {
   /** Models to withhold from the catalog and from lookup (e.g. Pi's Anthropic
@@ -33,6 +33,8 @@ export class PiEngine implements ChatEngine {
   sessionFor(threadId: string, cwd: string): Promise<EngineSession> {
     return this.pi.sessionFor(threadId, cwd) as Promise<EngineSession>;
   }
+
+  createChildSession(options: ChildSessionOptions) { return this.pi.createChildSession(options); }
 
   hasSession(threadId: string, cwd: string): boolean {
     return this.pi.hasSession(threadId, cwd);

@@ -1,3 +1,4 @@
+import type { ThreadRoles, RoleName } from '@nexus/shared';
 import type { AgentBridgeReply, AgentBridgeProjectPolicy, AgentBridgeProjectScope, AgentBridgeTrust } from '@nexus/shared';
 /**
  * Frontend API client.
@@ -755,6 +756,10 @@ export const api = {
         method: 'POST',
         body: JSON.stringify(data),
       }),
+  },
+  roles: {
+    get: (threadId?: string) => fetchJson<ThreadRoles>(threadId ? `/api/threads/${encodeURIComponent(threadId)}/roles` : "/api/roles"),
+    update: (threadId: string, patch: Partial<Record<RoleName, string | null>>) => fetchJson<ThreadRoles>(`/api/threads/${encodeURIComponent(threadId)}/roles`, { method: "PUT", body: JSON.stringify(patch) }),
   },
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`/api/projects/${projectId}/threads`),

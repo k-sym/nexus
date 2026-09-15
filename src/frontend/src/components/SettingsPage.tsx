@@ -1,3 +1,5 @@
+import { RoleRoster } from './RolePicker';
+import { DEFAULT_ROLE_MODELS } from '@nexus/shared';
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import { apiFetch } from '../api-base';
@@ -687,6 +689,12 @@ export default function SettingsPage() {
             </p>
           </Section>
 
+          <Section title="Roles">
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={config.roles?.enabled ?? false} onChange={event => update(['roles', 'enabled'], event.target.checked)} />Enable child roles</label>
+            <p className="text-xs text-faint">Save changes and restart the backend to apply role defaults and limits.</p>
+            <RoleRoster value={config.roles?.models ?? DEFAULT_ROLE_MODELS} onChange={models => update(['roles', 'models'], { ...DEFAULT_ROLE_MODELS, ...models })} />
+            {([['max_turns', 'Maximum turns', 30, 1000], ['max_minutes', 'Maximum minutes', 20, 1440], ['max_tokens', 'Maximum tokens', 400000, 10000000]] as const).map(([key, label, fallback, max]) => <label key={key} className="block text-xs text-muted">{label}<input aria-label={`Role ${label.toLowerCase()}`} type="number" min={1} max={max} value={config.roles?.[key] ?? fallback} onChange={event => update(['roles', key], Number(event.target.value))} className="block min-h-11 surface-panel border border-subtle rounded-sm px-3 text-primary" /></label>)}
+          </Section>
           <Section title="Agent Bridge">
             <p className="text-xs text-faint">
               Receive thread-addressed messages from other agent harnesses over one durable backend connection.

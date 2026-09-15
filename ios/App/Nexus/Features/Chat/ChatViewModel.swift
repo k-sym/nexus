@@ -32,6 +32,17 @@ final class ChatViewModel {
     private(set) var supervised = false
     /// Curated models for the picker; `selectedModelKey` is `provider/id`
     /// (nil ⇒ backend default).
+    private(set) var roles: ThreadRoles?
+    private(set) var roleModels: [Model] = []
+    private(set) var savingRole = false
+    func selectRole(_ role: String, model: String?) async {
+        guard !savingRole else { return }
+        savingRole = true
+        defer { savingRole = false }
+        do { roles = try await endpoint.updateRoles([role: model]) }
+        catch { errorBanner = error.localizedDescription }
+    }
+
     private(set) var availableModels: [Model] = []
     var selectedModelKey: String?
 
@@ -126,6 +137,8 @@ final class ChatViewModel {
         } catch {
             historyState = .failed((error as? APIError)?.errorDescription ?? error.localizedDescription)
         }
+        roles = try? await endpoint.roles()
+        if roles?.enabled == true { roleModels = (try? await endpoint.roleModels()) ?? [] }
         // Model list for the picker — best-effort, only where the endpoint has one.
         if supportsModelPicker, availableModels.isEmpty {
             availableModels = (try? await endpoint.models()) ?? []

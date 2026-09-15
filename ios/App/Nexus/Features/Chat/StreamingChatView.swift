@@ -248,6 +248,18 @@ struct StreamingChatView: View {
     private var modelPicker: some View {
         @Bindable var vm = vm
         return Menu {
+            if let roles = vm.roles, roles.enabled {
+                Menu("Roles") {
+                    ForEach(nexusRoleNames, id: \.self) { role in
+                        Menu("\(role.capitalized): \(roles.effective[role] ?? "Unavailable")") {
+                            Button("Default — \(roles.defaults[role] ?? "")") { Task { await vm.selectRole(role, model: nil) } }
+                            ForEach(vm.roleModels) { model in
+                                Button("\(model.name) · \(model.provider)\(model.configured == false ? " (unavailable)" : "")") { Task { await vm.selectRole(role, model: model.modelKey) } }
+                            }
+                        }.disabled(vm.savingRole)
+                    }
+                }
+            }
             Picker("Model", selection: $vm.selectedModelKey) {
                 Text("Default").tag(String?.none)
                 ForEach(vm.availableModels) { model in
