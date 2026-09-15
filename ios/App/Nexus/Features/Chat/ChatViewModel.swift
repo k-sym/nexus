@@ -248,7 +248,7 @@ final class ChatViewModel {
     }
 
     /// Poll `sync` + reload every 5s while a background run is in flight, then
-    /// stop. Reloading pulls the freshened Hermes transcript, so incremental
+    /// stop. Reloading pulls the freshened Partner transcript, so incremental
     /// progress (new assistant text, tool cards) appears as the run advances.
     private func startSyncLoop() {
         syncTask?.cancel()

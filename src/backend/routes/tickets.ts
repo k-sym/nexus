@@ -2,7 +2,7 @@ import { validateRoleOverrides } from '../roles/config.js';
 /**
  * Tickets — a disposable mirror of Jira tickets assigned to the user.
  *
- * `POST /api/jira/sync` is the push path (the legacy OpenClaw "Nigel" cron). The
+ * `POST /api/jira/sync` is the push path (the retired OpenClaw-era "Nigel" cron). The
  * native poll (jira/poll.ts) shares the same syncTickets() upsert. Jira stays
  * canonical; Nexus never writes back.
  *

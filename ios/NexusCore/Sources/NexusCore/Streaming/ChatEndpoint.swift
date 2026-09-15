@@ -58,7 +58,7 @@ public protocol ChatEndpoint: Sendable {
     /// Whether the composer offers a Supervise toggle (threads: yes, assistant: no).
     var supportsSupervise: Bool { get }
     /// Whether the composer offers "hand off to a background run" (assistant only).
-    /// A background turn runs server-side against Hermes and outlives the app, so
+    /// A background turn runs server-side against Partner and outlives the app, so
     /// progress is polled via `syncBackgroundRuns()` + `loadDetail()` rather than
     /// streamed. Threads have no equivalent. This is the static answer; a
     /// `ChatDetail.supportsBackgroundHandoff` from the server overrides it.

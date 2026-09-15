@@ -13,15 +13,15 @@ import {
 } from '../pi/assistant-session.js';
 import type { NexusConfig } from '@nexus/shared';
 import {
-  createHermesClient,
-  type HermesClient,
-  type HermesContentPart,
-  type HermesContextUsage,
-  type HermesFetch,
-  type HermesListedSession,
-  type HermesRunStatus,
-} from '../hermes/client.js';
-import { hermesMessagesToTranscript } from '../hermes/transcript.js';
+  createPartnerClient,
+  type PartnerClient,
+  type PartnerContentPart,
+  type PartnerContextUsage,
+  type PartnerFetch,
+  type PartnerListedSession,
+  type PartnerRunStatus,
+} from '../partner/client.js';
+import { partnerMessagesToTranscript } from '../partner/transcript.js';
 import { autoTitleSession, NEW_ASSISTANT_SESSION_TITLE } from '../sessions/auto-title.js';
 import { parseRepoShorthand } from '../github/repo.js';
 import { flattenEntries } from './chat.js';
@@ -96,7 +96,7 @@ interface AssistantRun {
 }
 
 interface AssistantRoutesOptions {
-  fetchImpl?: HermesFetch;
+  fetchImpl?: PartnerFetch;
   uploadRoot?: string;
   assistantSessionDir?: string;
 }
@@ -144,7 +144,7 @@ interface RunSupport {
   runStop: boolean;
 }
 
-// Hermes tags every session with a `source`. The Assistant rail surfaces
+// Partner tags every session with a `source`. The Assistant rail surfaces
 // human-driven sessions — those started from the API server (Nexus's own path),
 // the TUI, or the CLI — and hides machine sources (cron, job, scheduled) and
 // platform bridges (telegram, dashboard) that must not appear as adoptable chats.
@@ -153,20 +153,20 @@ interface RunSupport {
 // (it has no multi-source/exclude support and would otherwise let ~hundreds of
 // cron rows crowd the human sources out of any capped window), so the list
 // handler fetches one query per source below and merges the results.
-const HERMES_ASSISTANT_SOURCES = ['api_server', 'tui', 'cli'] as const;
-const HERMES_ASSISTANT_SOURCE_SET = new Set<string>(HERMES_ASSISTANT_SOURCES);
+const PARTNER_ASSISTANT_SOURCES = ['api_server', 'tui', 'cli'] as const;
+const PARTNER_ASSISTANT_SOURCE_SET = new Set<string>(PARTNER_ASSISTANT_SOURCES);
 
 // Reject source-less rows and any source outside the allow-list above.
 function isAdoptableRemoteSource(source: string | undefined): boolean {
-  return source !== undefined && HERMES_ASSISTANT_SOURCE_SET.has(source);
+  return source !== undefined && PARTNER_ASSISTANT_SOURCE_SET.has(source);
 }
 
 function remoteSyntheticId(remoteSessionId: string): string {
   return `remote:${remoteSessionId}`;
 }
 
-// Hermes api_server rows use epoch-second timestamps; the rail sorts and renders
-// on ISO strings. Tolerate ISO input too (other Hermes surfaces) and bad values.
+// Partner api_server rows use epoch-second timestamps; the rail sorts and renders
+// on ISO strings. Tolerate ISO input too (other Partner surfaces) and bad values.
 function epochToIso(value: number | string | undefined | null): string | undefined {
   if (typeof value === 'string') return value.trim() || undefined;
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
@@ -175,7 +175,7 @@ function epochToIso(value: number | string | undefined | null): string | undefin
   return Number.isNaN(Date.parse(iso)) ? undefined : iso;
 }
 
-function publicRemoteSession(remote: HermesListedSession) {
+function publicRemoteSession(remote: PartnerListedSession) {
   // api_server rows carry started_at/last_active (epoch) and often a null title,
   // so fall back through preview → generic label, and derive timestamps from the
   // epoch fields when the ISO created_at/updated_at aren't present.
@@ -183,7 +183,7 @@ function publicRemoteSession(remote: HermesListedSession) {
   const createdAt = epochToIso(remote.created_at ?? remote.started_at);
   return {
     id: remoteSyntheticId(remote.id),
-    title: remote.title?.trim() || remote.preview?.trim() || 'Remote Hermes Session',
+    title: remote.title?.trim() || remote.preview?.trim() || 'Remote Partner Session',
     remote_session_id: remote.id,
     status: 'remote',
     remoteOnly: true,
@@ -256,23 +256,23 @@ async function assistantMessages(db: FastifyInstance['db'], sessionId: string, s
   return flattenEntries(entries, ASSISTANT_CWD, {});
 }
 
-// Render a session's transcript. Hermes-backed sessions (anything with a
+// Render a session's transcript. Partner-backed sessions (anything with a
 // remote_session_id — every session becomes one on first send, plus adopted
 // TUI/CLI rows) render straight from `/api/sessions/{id}/messages`: the single
 // source of truth, always fresh, tool-aware. Only legacy sessions that never
-// reached Hermes fall back to the local pi store.
+// reached Partner fall back to the local pi store.
 async function renderSessionMessages(
   db: FastifyInstance['db'],
   session: AssistantSession,
   sessionDir: string,
-  hermes: HermesClient | undefined,
+  partner: PartnerClient | undefined,
 ): Promise<unknown[]> {
-  if (session.remote_session_id && hermes) {
+  if (session.remote_session_id && partner) {
     try {
-      const remote = await hermes.getSessionMessages(session.remote_session_id);
-      return hermesMessagesToTranscript(remote);
+      const remote = await partner.getSessionMessages(session.remote_session_id);
+      return partnerMessagesToTranscript(remote);
     } catch {
-      // Hermes unreachable → empty rather than a stale local mirror.
+      // Partner unreachable → empty rather than a stale local mirror.
       return [];
     }
   }
@@ -281,14 +281,14 @@ async function renderSessionMessages(
 
 // Seeds for a session-detail payload (#75): the partner adapter's session row
 // carries the persisted model alias and last-turn context tokens. Fail-soft —
-// plain Hermes rows and pre-#75 adapters simply lack the fields.
+// rows from the retired Partner server and pre-#75 adapters simply lack the fields.
 async function remoteSessionSeeds(
   session: AssistantSession,
-  hermes: HermesClient | undefined,
+  partner: PartnerClient | undefined,
 ): Promise<{ lastModelKey?: string; contextUsage?: Record<string, unknown> }> {
-  if (!session.remote_session_id || !hermes) return {};
+  if (!session.remote_session_id || !partner) return {};
   try {
-    const remote = await hermes.getSession(session.remote_session_id);
+    const remote = await partner.getSession(session.remote_session_id);
     if (!remote) return {};
     const seeds: { lastModelKey?: string; contextUsage?: Record<string, unknown> } = {};
     if (typeof remote.model === 'string' && remote.model) seeds.lastModelKey = `partner/${remote.model}`;
@@ -358,7 +358,7 @@ function updateRunRemote(db: FastifyInstance['db'], runId: string, remoteRunId: 
 function completeRun(
   db: FastifyInstance['db'],
   run: AssistantRun,
-  remote: HermesRunStatus,
+  remote: PartnerRunStatus,
 ): AssistantRun {
   const now = new Date().toISOString();
   const status = mapRemoteStatus(remote.status);
@@ -549,7 +549,7 @@ function assistantModelFromKey(modelKey: unknown): string | undefined {
 // Map the adapter's `{used, limit}` context onto the `context_usage` frame shape
 // the shared iOS/web chat meter already renders (`{tokens, contextWindow, percent}`,
 // mirroring normalizeContextUsage in usePiStream.ts).
-function contextUsagePayload(context: HermesContextUsage | undefined): Record<string, unknown> | null {
+function contextUsagePayload(context: PartnerContextUsage | undefined): Record<string, unknown> | null {
   if (!context) return null;
   const tokens = typeof context.used === 'number' && Number.isFinite(context.used) ? context.used : undefined;
   const contextWindow = typeof context.limit === 'number' && Number.isFinite(context.limit) ? context.limit : undefined;
@@ -557,8 +557,8 @@ function contextUsagePayload(context: HermesContextUsage | undefined): Record<st
   return { tokens, contextWindow, percent: Math.round((tokens / contextWindow) * 100) };
 }
 
-function hermesInlineImageInput(content: string, attachments: AssistantAttachment[]): HermesContentPart[] {
-  const parts: HermesContentPart[] = [];
+function partnerInlineImageInput(content: string, attachments: AssistantAttachment[]): PartnerContentPart[] {
+  const parts: PartnerContentPart[] = [];
   if (content.trim()) parts.push({ type: 'text', text: content });
   for (const attachment of attachments) {
     if (attachment.type !== 'image') continue;
@@ -585,11 +585,11 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     const client = () => {
       const { url, key } = configuredAssistant(load);
       if (!url || !key) return undefined;
-      return createHermesClient({ url, key, fetchImpl: options.fetchImpl });
+      return createPartnerClient({ url, key, fetchImpl: options.fetchImpl });
     };
 
     const capabilityCache = new Map<string, { support: RunSupport; expiresAt: number }>();
-    const runSupport = async (hermes: ReturnType<typeof createHermesClient>): Promise<RunSupport> => {
+    const runSupport = async (partner: ReturnType<typeof createPartnerClient>): Promise<RunSupport> => {
       const { url } = configuredAssistant(load);
       const now = Date.now();
       const cached = capabilityCache.get(url);
@@ -597,7 +597,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let support: RunSupport;
       let ttl = CAPABILITIES_TTL_MS;
       try {
-        const caps = await hermes.capabilities();
+        const caps = await partner.capabilities();
         support = { runs: caps.runs, runStop: caps.runStop };
       } catch {
         support = { runs: false, runStop: false };
@@ -608,17 +608,17 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     };
     // Session-detail payloads carry this so clients (iOS) offer Background
     // Handoff only when the adapter can honour it.
-    const assistantCapabilities = async (hermes: ReturnType<typeof createHermesClient> | undefined) => ({
-      backgroundHandoff: hermes ? (await runSupport(hermes)).runs : false,
+    const assistantCapabilities = async (partner: ReturnType<typeof createPartnerClient> | undefined) => ({
+      backgroundHandoff: partner ? (await runSupport(partner)).runs : false,
     });
 
     const ensureRemoteSession = async (
-      hermes: ReturnType<typeof createHermesClient>,
+      partner: ReturnType<typeof createPartnerClient>,
       session: AssistantSession,
     ): Promise<string> => {
       const remoteSessionId = session.remote_session_id ?? session.id;
       try {
-        await hermes.createSession({
+        await partner.createSession({
           sessionId: remoteSessionId,
           sessionKey: `nexus:assistant:${session.id}`,
           title: session.title,
@@ -659,8 +659,8 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       const attachmentsResult = validateAssistantAttachments(attachmentsInput);
       if (!attachmentsResult.ok) { reply.code(400); return { error: attachmentsResult.error }; }
       if (!trimmed && attachmentsResult.attachments.length === 0) { reply.code(400); return { error: 'Message content is required.' }; }
-      const hermes = client();
-      if (!hermes) { reply.code(400); return { error: 'Assistant URL and key must be configured in Settings.' }; }
+      const partner = client();
+      if (!partner) { reply.code(400); return { error: 'Assistant URL and key must be configured in Settings.' }; }
       const session = getSession(db, sessionId);
       if (!session) { reply.code(404); return { error: 'Assistant session not found' }; }
       const ideaScope = ideaAttachmentScope(session);
@@ -704,16 +704,16 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let abortSource: string | undefined;
       const sessionKey = `nexus:assistant:${session.id}`;
       try {
-        // Both paths run against the session-scoped Hermes endpoints, which persist
+        // Both paths run against the session-scoped Partner endpoints, which persist
         // the full turn (user + assistant + tool rows) to SessionDB. Nexus keeps no
         // local transcript mirror — history reloads from /messages (the single
-        // source of truth). The session must exist in Hermes first (/chat/stream
+        // source of truth). The session must exist in Partner first (/chat/stream
         // 404s otherwise), so ensure it before either call.
-        const remoteSessionId = await ensureRemoteSession(hermes, session);
+        const remoteSessionId = await ensureRemoteSession(partner, session);
 
         if (hasImageAttachments(savedAttachments)) {
           // Vision path stays non-streaming: one sessionChat call, surfaced as a text delta.
-          const result = await hermes.sessionChat({ sessionId: remoteSessionId, sessionKey, input: hermesInlineImageInput(promptContent, savedAttachments), model });
+          const result = await partner.sessionChat({ sessionId: remoteSessionId, sessionKey, input: partnerInlineImageInput(promptContent, savedAttachments), model });
           accumulated = result.output ?? '';
           if (accumulated) write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: accumulated } });
           const visionUsage = contextUsagePayload(result.context);
@@ -730,7 +730,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           let streamUsage: unknown;
           const pendingTools: Array<{ name: string; id: string }> = [];
           try {
-            for await (const ev of hermes.sessionChatStream({ sessionId: remoteSessionId, sessionKey, input: promptContent, model, signal: ac.signal })) {
+            for await (const ev of partner.sessionChatStream({ sessionId: remoteSessionId, sessionKey, input: promptContent, model, signal: ac.signal })) {
               if (ev.kind === 'text_delta') { accumulated += ev.delta; write({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: ev.delta } }); }
               else if (ev.kind === 'reasoning_delta') { write({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: ev.delta } }); }
               else if (ev.kind === 'tool_started') {
@@ -812,11 +812,11 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           latestRun: publicRun(latestRun(db, session.id)),
         }));
 
-      // Local-first: only augment with adoptable remote Hermes sessions when the
+      // Local-first: only augment with adoptable remote Partner sessions when the
       // assistant is configured and listing succeeds. Any failure falls back to locals.
       const remoteRows: ReturnType<typeof publicRemoteSession>[] = [];
-      const hermes = client();
-      if (hermes) {
+      const partner = client();
+      if (partner) {
         const claimed = new Set<string>();
         for (const session of localSessions) {
           claimed.add(session.id);
@@ -826,11 +826,11 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         // at a time). Each fetch is isolated so one failing/unavailable source
         // still lets the others render; total failure just leaves locals.
         const perSource = await Promise.all(
-          HERMES_ASSISTANT_SOURCES.map((source) =>
-            hermes
+          PARTNER_ASSISTANT_SOURCES.map((source) =>
+            partner
               .listSessions({ limit: 50, offset: 0, source, includeChildren: false })
               .then((result) => result.sessions)
-              .catch(() => [] as HermesListedSession[]),
+              .catch(() => [] as PartnerListedSession[]),
           ),
         );
         for (const remote of perSource.flat()) {
@@ -856,14 +856,14 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     // Bind (or re-find) a local row for a remote session — adoption is just a
     // local pointer at the remote session; transcripts render live.
     const adoptRemoteSession = async (
-      hermes: ReturnType<typeof createHermesClient>,
+      partner: ReturnType<typeof createPartnerClient>,
       remoteSessionId: string,
       knownTitle?: string,
     ): Promise<AssistantSession> => {
       let remoteTitle = knownTitle?.trim() || undefined;
       if (!remoteTitle) {
         try {
-          const detail = await hermes.getSession(remoteSessionId);
+          const detail = await partner.getSession(remoteSessionId);
           remoteTitle = detail?.title?.trim() || undefined;
         } catch {
           // Tolerate a missing detail endpoint; adoption still proceeds with a fallback title.
@@ -879,7 +879,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           `INSERT INTO assistant_sessions
             (id, title, remote_session_id, status, created_at, updated_at, archived_at)
            VALUES (?, ?, ?, 'idle', ?, ?, NULL)`,
-        ).run(id, remoteTitle || 'Remote Hermes Session', remoteSessionId, now, now);
+        ).run(id, remoteTitle || 'Remote Partner Session', remoteSessionId, now, now);
         session = db.prepare('SELECT * FROM assistant_sessions WHERE id = ?').get(id) as AssistantSession;
       } else if (remoteTitle && remoteTitle !== session.title) {
         db.prepare('UPDATE assistant_sessions SET title = ?, updated_at = ? WHERE id = ?').run(remoteTitle, now, session.id);
@@ -895,22 +895,22 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: 'remoteSessionId is required' };
       }
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
 
-      const session = await adoptRemoteSession(hermes, remoteSessionId);
+      const session = await adoptRemoteSession(partner, remoteSessionId);
 
       // Adoption is now just a local pointer at the remote session — no message
       // copy. History renders live from `/api/sessions/{id}/messages`, so the
-      // adopted transcript is always fresh and never drifts from Hermes.
+      // adopted transcript is always fresh and never drifts from Partner.
       return {
         session,
-        messages: await renderSessionMessages(db, session, assistantSessionDir, hermes),
+        messages: await renderSessionMessages(db, session, assistantSessionDir, partner),
         latestRun: publicRun(latestRun(db, session.id)),
-        ...(await remoteSessionSeeds(session, hermes)),
+        ...(await remoteSessionSeeds(session, partner)),
       };
     });
 
@@ -919,8 +919,8 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     // chooses sessions. Without a configured assistant, fall back to a local
     // session so the view stays usable.
     const currentPayload = async (rotate: boolean, reply: any) => {
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         const session = rotate ? createSession(db, 'Partner') : ensureDefaultSession(db);
         return {
           session,
@@ -931,7 +931,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       let remote;
       try {
-        remote = rotate ? await hermes.rotateCurrentSession() : await hermes.currentSession();
+        remote = rotate ? await partner.rotateCurrentSession() : await partner.currentSession();
       } catch (err) {
         reply.code(502);
         return { error: `Assistant current-session failed: ${errorMessage(err)}` };
@@ -940,13 +940,13 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(502);
         return { error: 'Assistant returned no current session.' };
       }
-      const session = await adoptRemoteSession(hermes, String(remote.id), remote.title ?? 'Partner');
+      const session = await adoptRemoteSession(partner, String(remote.id), remote.title ?? 'Partner');
       return {
         session,
-        messages: await renderSessionMessages(db, session, assistantSessionDir, hermes),
+        messages: await renderSessionMessages(db, session, assistantSessionDir, partner),
         latestRun: publicRun(latestRun(db, session.id)),
-        capabilities: await assistantCapabilities(hermes),
-        ...(await remoteSessionSeeds(session, hermes)),
+        capabilities: await assistantCapabilities(partner),
+        ...(await remoteSessionSeeds(session, partner)),
       };
     };
 
@@ -961,13 +961,13 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
-      const hermes = client();
+      const partner = client();
       return {
         session,
-        messages: await renderSessionMessages(db, session, assistantSessionDir, hermes),
+        messages: await renderSessionMessages(db, session, assistantSessionDir, partner),
         latestRun: publicRun(latestRun(db, id)),
-        capabilities: await assistantCapabilities(hermes),
-        ...(await remoteSessionSeeds(session, hermes)),
+        capabilities: await assistantCapabilities(partner),
+        ...(await remoteSessionSeeds(session, partner)),
       };
     });
 
@@ -995,20 +995,20 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant session not found' };
       }
-      const hermes = client();
+      const partner = client();
       const runningRuns = db
         .prepare('SELECT * FROM assistant_runs WHERE session_id = ? AND remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(id, ...Array.from(RUNNING_STATUSES)) as AssistantRun[];
-      if (hermes) {
+      if (partner) {
         for (const run of runningRuns) {
           if (!run.remote_run_id) continue;
-          await hermes.stopRun(run.remote_run_id).catch(() => undefined);
+          await partner.stopRun(run.remote_run_id).catch(() => undefined);
         }
         const hasRemoteWork = Boolean(session.remote_session_id) || Boolean(
           db.prepare('SELECT id FROM assistant_runs WHERE session_id = ? LIMIT 1').get(id),
         );
         if (hasRemoteWork) {
-          await hermes.deleteSession(session.remote_session_id ?? session.id).catch(() => undefined);
+          await partner.deleteSession(session.remote_session_id ?? session.id).catch(() => undefined);
         }
       }
       db.prepare('DELETE FROM assistant_sessions WHERE id = ?').run(id);
@@ -1027,10 +1027,10 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     // adapter's /v1/models; fail-soft to an empty list (the picker then only
     // offers "Default") when the adapter predates #75 or is unreachable.
     fastify.get('/api/assistant/models', async () => {
-      const hermes = client();
-      if (!hermes) return { models: [] };
+      const partner = client();
+      if (!partner) return { models: [] };
       try {
-        const catalog = await hermes.listModels();
+        const catalog = await partner.listModels();
         return {
           models: catalog.models
             .filter((m) => m && typeof m.id === 'string' && m.id)
@@ -1066,8 +1066,8 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: 'Message content is required.' };
       }
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
@@ -1078,7 +1078,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       // Refuse before any attachment or run row is written: the Partner has no
       // /v1/runs, so nothing downstream could complete this turn.
-      if (!(await runSupport(hermes)).runs) {
+      if (!(await runSupport(partner)).runs) {
         reply.code(400);
         return { error: BACKGROUND_HANDOFF_UNSUPPORTED };
       }
@@ -1089,13 +1089,13 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       }
       const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot, ideaScope.subdir);
       const promptContent = promptWithFileReferences(content, savedAttachments);
-      // The background run executes against its Hermes session (the run agent is
-      // created with session_id), so the whole turn persists to Hermes SessionDB
+      // The background run executes against its Partner session (the run agent is
+      // created with session_id), so the whole turn persists to Partner SessionDB
       // and renders from /messages — no local mirror. Ensure the session exists in
-      // Hermes (and its remote_session_id is recorded) before handing off.
-      const remoteSessionId = await ensureRemoteSession(hermes, session);
+      // Partner (and its remote_session_id is recorded) before handing off.
+      const remoteSessionId = await ensureRemoteSession(partner, session);
       const run = createRun(db, session.id, 'overnight', promptContent);
-      const remote = await hermes.startRun({
+      const remote = await partner.startRun({
         input: promptContent,
         sessionId: remoteSessionId,
         sessionKey: `nexus:assistant:${session.id}`,
@@ -1121,17 +1121,17 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(404);
         return { error: 'Assistant run not found' };
       }
-      const hermes = client();
-      if (!hermes) {
+      const partner = client();
+      if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
       if (run.remote_run_id) {
-        if (!(await runSupport(hermes)).runStop) {
+        if (!(await runSupport(partner)).runStop) {
           reply.code(400);
           return { error: BACKGROUND_STOP_UNSUPPORTED };
         }
-        await hermes.stopRun(run.remote_run_id);
+        await partner.stopRun(run.remote_run_id);
       }
       const now = new Date().toISOString();
       db.prepare('UPDATE assistant_runs SET status = ?, updated_at = ? WHERE id = ?').run('cancelling', now, run.id);
@@ -1139,11 +1139,11 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     });
 
     fastify.post('/api/assistant/sync', async () => {
-      const hermes = client();
-      if (!hermes) return { updated: 0 };
+      const partner = client();
+      if (!partner) return { updated: 0 };
       // Nothing to reconcile against an adapter with no /v1/runs; polling it
       // would only mark every stale row unknown.
-      if (!(await runSupport(hermes)).runs) return { updated: 0 };
+      if (!(await runSupport(partner)).runs) return { updated: 0 };
       const runs = db
         .prepare('SELECT * FROM assistant_runs WHERE remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(...Array.from(RUNNING_STATUSES)) as AssistantRun[];
@@ -1151,12 +1151,12 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       for (const run of runs) {
         if (!run.remote_run_id) continue;
         try {
-          const remote = await hermes.getRun(run.remote_run_id);
+          const remote = await partner.getRun(run.remote_run_id);
           const completed = completeRun(db, run, remote);
           if (completed.status !== run.status) updated += 1;
-          // No transcript write here: a background run executes against its Hermes
+          // No transcript write here: a background run executes against its Partner
           // session (`_create_agent(session_id=…)`), so the user + assistant + tool
-          // rows already persist to Hermes SessionDB and render from /messages.
+          // rows already persist to Partner SessionDB and render from /messages.
           // /sync only reconciles run *status*.
         } catch (err) {
           markRunUnknown(db, run, errorMessage(err));
@@ -1189,9 +1189,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         .prepare("SELECT * FROM assistant_runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1")
         .get() as AssistantRun | undefined;
       if (!latest) return { ok: false, reason: 'no_run' };
-      const hermes = client();
+      const partner = client();
       const remoteRunId = latest.remote_run_id || activeRemoteRuns.get(latest.id);
-      if (hermes && remoteRunId) await hermes.stopRun(remoteRunId);
+      if (partner && remoteRunId) await partner.stopRun(remoteRunId);
       activeStreamControllers.get(latest.id)?.abort();
       const now = new Date().toISOString();
       db.prepare('UPDATE assistant_runs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?').run(
