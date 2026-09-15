@@ -92,14 +92,40 @@ final class AssistantBackgroundRunTests: XCTestCase {
 
     // MARK: ChatEndpoint background-handoff capability defaults
 
-    func testAssistantEndpointOptsIntoBackgroundHandoff() {
-        // Direct dispatch check: the concrete conformer must win over the
-        // protocol-extension default (false) when read through the existential.
+    func testAssistantEndpointDefersBackgroundHandoffToTheServer() {
+        // The static answer is "hidden": the backend gates handoff on the
+        // adapter's /v1/capabilities (the Partner has no /v1/runs) and reports it
+        // on session detail; a hard-coded `true` showed a control that only failed.
         let endpoint: ChatEndpoint = AssistantChatEndpoint(api: APIClient(), sessionId: "s1")
-        XCTAssertTrue(endpoint.supportsBackgroundHandoff)
-        // And a thread endpoint keeps the default.
+        XCTAssertFalse(endpoint.supportsBackgroundHandoff)
         let thread: ChatEndpoint = ThreadChatEndpoint(api: APIClient(), threadId: "t1")
         XCTAssertFalse(thread.supportsBackgroundHandoff)
+    }
+
+    // MARK: Session-detail capabilities → ChatDetail override
+
+    func testSessionDetailDecodesBackgroundHandoffCapability() throws {
+        let on = Data(#"{ "session": { "id": "s1", "title": "T" }, "messages": [], "capabilities": { "backgroundHandoff": true } }"#.utf8)
+        XCTAssertEqual(try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: on).capabilities?.backgroundHandoff, true)
+
+        let off = Data(#"{ "session": { "id": "s1", "title": "T" }, "messages": [], "capabilities": { "backgroundHandoff": false } }"#.utf8)
+        XCTAssertEqual(try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: off).capabilities?.backgroundHandoff, false)
+
+        // Pre-gate backends omit the field entirely: decode still succeeds and
+        // the caller falls back to hidden.
+        let absent = Data(#"{ "session": { "id": "s1", "title": "T" }, "messages": [] }"#.utf8)
+        XCTAssertNil(try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: absent).capabilities)
+
+        // A capabilities object without the key reads as hidden, not a decode error.
+        let empty = Data(#"{ "session": { "id": "s1", "title": "T" }, "messages": [], "capabilities": {} }"#.utf8)
+        XCTAssertEqual(try JSONDecoder.nexusCamel.decode(AssistantSessionDetail.self, from: empty).capabilities?.backgroundHandoff, false)
+    }
+
+    func testChatDetailBackgroundHandoffDefaultsToNil() {
+        // Threads (and any conformer that doesn't set it) leave the server answer
+        // unset so the view model uses the endpoint's static flag.
+        XCTAssertNil(ChatDetail(messages: []).supportsBackgroundHandoff)
+        XCTAssertEqual(ChatDetail(messages: [], supportsBackgroundHandoff: true).supportsBackgroundHandoff, true)
     }
 
     func testEndpointBackgroundHandoffDefaultsAreNoOps() async throws {

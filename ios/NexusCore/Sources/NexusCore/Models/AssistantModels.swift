@@ -177,12 +177,33 @@ public struct AssistantSessionsResponse: Decodable, Sendable {
     public let sessions: [AssistantSession]
 }
 
+/// What the backend's assistant adapter can do, as reported on session detail.
+/// The backend derives it from the adapter's `/v1/capabilities` (the Partner
+/// has no background runs); clients offer a control only when this says so.
+public struct AssistantCapabilities: Decodable, Hashable, Sendable {
+    public let backgroundHandoff: Bool
+
+    public init(backgroundHandoff: Bool) {
+        self.backgroundHandoff = backgroundHandoff
+    }
+
+    enum CodingKeys: String, CodingKey { case backgroundHandoff }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        backgroundHandoff = try c.decodeIfPresent(Bool.self, forKey: .backgroundHandoff) ?? false
+    }
+}
+
 /// `GET /api/assistant/sessions/:id` and `POST /api/assistant/sessions/import`
 /// share this `{session, messages, latestRun}` shape.
 public struct AssistantSessionDetail: Decodable, Sendable {
     public let session: AssistantSession
     public let messages: [AssistantMessage]
     public let latestRun: AssistantRun?
+    /// Adapter capabilities (`{backgroundHandoff}`). Absent on backends that
+    /// predate the capability gate — treated as "no background handoff".
+    public let capabilities: AssistantCapabilities?
     /// Model-picker seed (#75): the adapter session's persisted model as a
     /// `partner/<alias>` key. Absent on Hermes rows and pre-#75 backends.
     public let lastModelKey: String?
@@ -192,7 +213,7 @@ public struct AssistantSessionDetail: Decodable, Sendable {
     public let contextUsage: JSONValue?
 
     enum CodingKeys: String, CodingKey {
-        case session, messages, latestRun, lastModelKey, contextUsage
+        case session, messages, latestRun, capabilities, lastModelKey, contextUsage
     }
 
     public init(from decoder: Decoder) throws {
@@ -200,6 +221,7 @@ public struct AssistantSessionDetail: Decodable, Sendable {
         session = try c.decode(AssistantSession.self, forKey: .session)
         messages = try c.decodeIfPresent([AssistantMessage].self, forKey: .messages) ?? []
         latestRun = try c.decodeIfPresent(AssistantRun.self, forKey: .latestRun)
+        capabilities = try c.decodeIfPresent(AssistantCapabilities.self, forKey: .capabilities)
         lastModelKey = try c.decodeIfPresent(String.self, forKey: .lastModelKey)
         contextUsage = try c.decodeIfPresent(JSONValue.self, forKey: .contextUsage)
     }

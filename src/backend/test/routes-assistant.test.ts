@@ -29,6 +29,12 @@ function jsonRes(body: unknown): Response {
   return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
 }
 
+/** `GET /v1/capabilities` as the adapter reports it. The Partner says
+ * `run_submission=false`; the Hermes-era tests below opt into runs. */
+function capabilitiesRes(features: { run_submission?: boolean; run_stop?: boolean } = { run_submission: true, run_stop: true }): Response {
+  return jsonRes({ features: { session_create: true, ...features }, endpoints: { session_chat_stream: true } });
+}
+
 /**
  * Mock the session-scoped Hermes surface the Assistant now uses:
  * `POST /api/sessions` (ensureRemoteSession), `POST /api/sessions/{id}/chat/stream`
@@ -39,11 +45,14 @@ function jsonRes(body: unknown): Response {
 function hermesChatMock(opts: {
   frames?: string[];
   messages?: any[];
+  /** `/v1/capabilities` features; defaults to a runs-capable (Hermes-era) adapter. */
+  capabilities?: { run_submission?: boolean; run_stop?: boolean };
   onChatStream?: (url: string, init?: RequestInit) => Response | Promise<Response>;
   onOther?: (url: string, init?: RequestInit) => Response | Promise<Response> | undefined;
 }): HermesFetch {
   return async (url, init) => {
     const u = String(url);
+    if (u.endsWith('/v1/capabilities')) return capabilitiesRes(opts.capabilities);
     if (/\/api\/sessions\/[^/]+\/chat\/stream$/.test(u)) {
       if (opts.onChatStream) return opts.onChatStream(u, init);
       return sseResponse(opts.frames ?? ['event: run.completed\ndata: {}\n\n', 'event: done\ndata: {}\n\n']);
@@ -768,6 +777,124 @@ test('Assistant background handoff rejects image attachments instead of dropping
   }
 });
 
+// The Partner assistant-api has no /v1/runs (capabilities: run_submission=false,
+// verified live 2026-09-15). The run routes ask before they write anything.
+test('Background handoff is refused with a clear 400 when the adapter does not advertise run_submission', async () => {
+  const requested: string[] = [];
+  const fetchImpl = hermesChatMock({
+    capabilities: { run_submission: false, run_stop: false },
+    onOther: (url) => { requested.push(url); return undefined; },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Partner' } });
+    const sessionId = created.json().id;
+    const response = await app.inject({
+      method: 'POST',
+      url: `/api/assistant/sessions/${sessionId}/runs`,
+      payload: { content: 'Work while Nexus is closed' },
+    });
+    assert.equal(response.statusCode, 400);
+    assert.match(response.json().error, /Background Handoff is not available/);
+    assert.ok(!requested.some((u) => u.includes('/v1/runs')), 'never calls /v1/runs');
+    const rows = db.prepare('SELECT COUNT(*) AS count FROM assistant_runs WHERE session_id = ?').get(sessionId) as { count: number };
+    assert.equal(rows.count, 0, 'no local run row for a refused handoff');
+    assert.equal(db.prepare('SELECT status FROM assistant_sessions WHERE id = ?').get(sessionId)!.status, 'idle');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Session detail reports capabilities.backgroundHandoff from /v1/capabilities and caches the answer', async () => {
+  let capabilityCalls = 0;
+  const fetchImpl: HermesFetch = async (url, init) => {
+    if (String(url).endsWith('/v1/capabilities')) { capabilityCalls += 1; return capabilitiesRes({ run_submission: true, run_stop: true }); }
+    return hermesChatMock({})(url, init);
+  };
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Caps' } });
+    const sessionId = created.json().id;
+    const first = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.equal(first.statusCode, 200);
+    assert.deepEqual(first.json().capabilities, { backgroundHandoff: true });
+    const second = await app.inject({ method: 'GET', url: `/api/assistant/sessions/${sessionId}` });
+    assert.deepEqual(second.json().capabilities, { backgroundHandoff: true });
+    assert.equal(capabilityCalls, 1, 'one capabilities fetch per configured URL');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Session detail hides background handoff for the Partner, an unreadable capabilities document, and no assistant', async () => {
+  const partner = makeApp({ fetchImpl: hermesChatMock({ capabilities: { run_submission: false } }) });
+  try {
+    const created = await partner.app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Partner' } });
+    const detail = await partner.app.inject({ method: 'GET', url: `/api/assistant/sessions/${created.json().id}` });
+    assert.deepEqual(detail.json().capabilities, { backgroundHandoff: false });
+  } finally {
+    await cleanup(partner.app, partner.db, partner.dir);
+  }
+
+  // Fail closed: a 500 on /v1/capabilities must not break the detail route.
+  const broken = makeApp({
+    fetchImpl: async (url, init) => {
+      if (String(url).endsWith('/v1/capabilities')) return new Response('boom', { status: 500 });
+      return hermesChatMock({})(url, init);
+    },
+  });
+  try {
+    const created = await broken.app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Broken' } });
+    const detail = await broken.app.inject({ method: 'GET', url: `/api/assistant/sessions/${created.json().id}` });
+    assert.equal(detail.statusCode, 200);
+    assert.deepEqual(detail.json().capabilities, { backgroundHandoff: false });
+  } finally {
+    await cleanup(broken.app, broken.db, broken.dir);
+  }
+
+  const unconfigured = makeApp({ config: { ...loadConfig(), assistant: { url: '', api_key: '' } } });
+  try {
+    const created = await unconfigured.app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Local' } });
+    const detail = await unconfigured.app.inject({ method: 'GET', url: `/api/assistant/sessions/${created.json().id}` });
+    assert.deepEqual(detail.json().capabilities, { backgroundHandoff: false });
+    const current = await unconfigured.app.inject({ method: 'GET', url: '/api/assistant/current' });
+    assert.deepEqual(current.json().capabilities, { backgroundHandoff: false });
+  } finally {
+    await cleanup(unconfigured.app, unconfigured.db, unconfigured.dir);
+  }
+});
+
+test('Sync and stop skip /v1/runs when the adapter cannot run or stop background runs', async () => {
+  const requested: string[] = [];
+  const fetchImpl = hermesChatMock({
+    capabilities: { run_submission: false, run_stop: false },
+    onOther: (url) => { requested.push(url); return undefined; },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Stale' } });
+    const sessionId = created.json().id;
+    // A Hermes-era row left behind with a remote id the Partner cannot resolve.
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO assistant_runs (id, session_id, remote_run_id, kind, status, input, output, started_at, updated_at)
+       VALUES ('stale-run', ?, 'remote-stale', 'overnight', 'running', 'old work', '', ?, ?)`,
+    ).run(sessionId, now, now);
+
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(sync.statusCode, 200);
+    assert.deepEqual(sync.json(), { updated: 0 });
+
+    const stop = await app.inject({ method: 'POST', url: '/api/assistant/runs/stale-run/stop' });
+    assert.equal(stop.statusCode, 400);
+    assert.match(stop.json().error, /Stopping a background run is not available/);
+    assert.equal(db.prepare('SELECT status FROM assistant_runs WHERE id = ?').get('stale-run')!.status, 'running', 'no optimistic cancelling');
+    assert.ok(!requested.some((u) => u.includes('/v1/runs')), 'never calls /v1/runs');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
 test('Assistant sync isolates stale Hermes run_not_found failures and continues other runs', async () => {
   const fetchImpl = hermesChatMock({
     messages: [
@@ -840,6 +967,7 @@ test('deleting an Assistant session best-effort stops its running Hermes runs wi
         headers: { 'content-type': 'application/json' },
       });
     }
+    if (String(url).endsWith('/v1/capabilities')) return capabilitiesRes();
     if (String(url).endsWith('/v1/runs') && init?.method === 'POST') {
       return new Response(JSON.stringify({ run_id: 'remote-delete-running', status: 'started' }), {
         status: 200,

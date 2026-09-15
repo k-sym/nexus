@@ -16,6 +16,11 @@ public struct ChatDetail: Sendable {
     public let contextUsage: ContextUsage?
     /// When the thread's transcript is shared with the Claude Desktop app (threads only).
     public let desktopSharedAt: String?
+    /// The server's answer on Background Handoff (assistant only): the backend
+    /// reads the adapter's capabilities and the Partner has no background runs.
+    /// `nil` (threads, or a backend without the field) defers to the endpoint's
+    /// static `supportsBackgroundHandoff`.
+    public let supportsBackgroundHandoff: Bool?
 
     public init(
         messages: [PersistedMessage],
@@ -24,7 +29,8 @@ public struct ChatDetail: Sendable {
         lastModelKey: String? = nil,
         latestRun: AssistantRun? = nil,
         contextUsage: ContextUsage? = nil,
-        desktopSharedAt: String? = nil
+        desktopSharedAt: String? = nil,
+        supportsBackgroundHandoff: Bool? = nil
     ) {
         self.messages = messages
         self.title = title
@@ -33,6 +39,7 @@ public struct ChatDetail: Sendable {
         self.latestRun = latestRun
         self.contextUsage = contextUsage
         self.desktopSharedAt = desktopSharedAt
+        self.supportsBackgroundHandoff = supportsBackgroundHandoff
     }
 }
 
@@ -53,7 +60,8 @@ public protocol ChatEndpoint: Sendable {
     /// Whether the composer offers "hand off to a background run" (assistant only).
     /// A background turn runs server-side against Hermes and outlives the app, so
     /// progress is polled via `syncBackgroundRuns()` + `loadDetail()` rather than
-    /// streamed. Threads have no equivalent.
+    /// streamed. Threads have no equivalent. This is the static answer; a
+    /// `ChatDetail.supportsBackgroundHandoff` from the server overrides it.
     var supportsBackgroundHandoff: Bool { get }
     /// Whether the composer offers attachments (assistant only). Images route
     /// through the backend's vision path; threads don't accept attachments here.
@@ -184,7 +192,10 @@ public struct AssistantChatEndpoint: ChatEndpoint {
 
     public var supportsModelPicker: Bool { true }
     public var supportsSupervise: Bool { false }
-    public var supportsBackgroundHandoff: Bool { true }
+    /// Hidden until session detail says the adapter can run in the background:
+    /// the Partner reports `run_submission=false`, so a hard-coded `true` showed
+    /// a control that could only fail. Fails closed on older backends too.
+    public var supportsBackgroundHandoff: Bool { false }
     public var supportsAttachments: Bool { true }
     public var attachmentScopeId: String? { sessionId }
 
@@ -196,7 +207,8 @@ public struct AssistantChatEndpoint: ChatEndpoint {
             supervised: nil,
             lastModelKey: detail.lastModelKey,
             latestRun: detail.latestRun,
-            contextUsage: ContextUsage(detail.contextUsage))
+            contextUsage: ContextUsage(detail.contextUsage),
+            supportsBackgroundHandoff: detail.capabilities?.backgroundHandoff ?? false)
     }
 
     public func stream(content: String, modelKey: String?, confirmCancel: Bool, attachments: [AssistantAttachment]) async throws -> AsyncThrowingStream<JSONValue, Error> {
