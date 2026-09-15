@@ -864,7 +864,7 @@ test('Session detail hides background handoff for the Partner, an unreadable cap
   }
 });
 
-test('Sync and stop skip /v1/runs when the adapter cannot run or stop background runs', async () => {
+test('Sync settles stale running rows as unknown, and stop is refused, when the adapter cannot run background runs', async () => {
   const requested: string[] = [];
   const fetchImpl = partnerChatMock({
     capabilities: { run_submission: false, run_stop: false },
@@ -881,15 +881,49 @@ test('Sync and stop skip /v1/runs when the adapter cannot run or stop background
        VALUES ('stale-run', ?, 'remote-stale', 'overnight', 'running', 'old work', '', ?, ?)`,
     ).run(sessionId, now, now);
 
-    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
-    assert.equal(sync.statusCode, 200);
-    assert.deepEqual(sync.json(), { updated: 0 });
+    db.prepare("UPDATE assistant_sessions SET status = 'running', last_run_id = 'stale-run' WHERE id = ?").run(sessionId);
 
     const stop = await app.inject({ method: 'POST', url: '/api/assistant/runs/stale-run/stop' });
     assert.equal(stop.statusCode, 400);
     assert.match(stop.json().error, /Stopping a background run is not available/);
     assert.equal(db.prepare('SELECT status FROM assistant_runs WHERE id = ?').get('stale-run')!.status, 'running', 'no optimistic cancelling');
+
+    // Nothing will ever finish the row against this adapter, so sync settles it
+    // once: the session stops reading as running and clients stop polling.
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.equal(sync.statusCode, 200);
+    assert.deepEqual(sync.json(), { updated: 1 });
+    const settled = db.prepare('SELECT status, error FROM assistant_runs WHERE id = ?').get('stale-run') as any;
+    assert.equal(settled.status, 'unknown');
+    assert.match(settled.error, /does not support background runs/);
+    assert.equal((db.prepare('SELECT status FROM assistant_sessions WHERE id = ?').get(sessionId) as any).status, 'unknown');
+    const again = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.deepEqual(again.json(), { updated: 0 }, 'a settled row is not touched again');
     assert.ok(!requested.some((u) => u.includes('/v1/runs')), 'never calls /v1/runs');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Sync leaves running rows alone while the capabilities document is unreadable', async () => {
+  // Fail-closed hides handoff, but a blip must not settle the ledger: the row is
+  // reconciled on a later sync once the adapter answers again.
+  const base = partnerChatMock({});
+  const fetchImpl: PartnerFetch = async (url, init) =>
+    String(url).endsWith('/v1/capabilities') ? new Response('down', { status: 503 }) : base(url, init);
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const created = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Blip' } });
+    const sessionId = created.json().id;
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO assistant_runs (id, session_id, remote_run_id, kind, status, input, output, started_at, updated_at)
+       VALUES ('live-run', ?, 'remote-live', 'overnight', 'running', 'work', '', ?, ?)`,
+    ).run(sessionId, now, now);
+
+    const sync = await app.inject({ method: 'POST', url: '/api/assistant/sync' });
+    assert.deepEqual(sync.json(), { updated: 0 });
+    assert.equal(db.prepare('SELECT status FROM assistant_runs WHERE id = ?').get('live-run')!.status, 'running');
   } finally {
     await cleanup(app, db, dir);
   }
