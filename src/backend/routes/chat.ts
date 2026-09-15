@@ -1,3 +1,5 @@
+import { RoleRunner } from '../roles/runner.js';
+import { readOverrides, roleView, validateRoleOverrides } from '../roles/config.js';
 /**
  * Chat routes — thin transport over the pi runtime.
  *
@@ -204,6 +206,29 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
   // the full one in index.ts.
   const engines: EngineRegistry = (fastify as any).engines ?? new EngineRegistry([new PiEngine(pi as any)]);
   const concurrency = fastify.chatConcurrency;
+  const roleConfig = loadConfig().roles;
+  const roles = new RoleRunner({ db, engines, concurrency, config: roleConfig, bus: fastify.activity?.bus });
+  pi.roleBusy = (threadId: string) => roles.isBusy(threadId);
+  pi.roleFactories = (threadId: string) => roles.factories(threadId);
+  fastify.get("/api/roles", async () => roleView(roleConfig, {}, engines));
+  fastify.get("/api/threads/:threadId/roles", async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    const row = db.prepare("SELECT role_models FROM chat_threads WHERE id = ?").get(threadId) as { role_models: string | null } | undefined;
+    if (!row) return reply.code(404).send({ error: "Thread not found" });
+    return roleView(roleConfig, readOverrides(row.role_models), engines);
+  });
+  fastify.put("/api/threads/:threadId/roles", async (request, reply) => {
+    const { threadId } = request.params as { threadId: string };
+    const row = db.prepare("SELECT role_models FROM chat_threads WHERE id = ?").get(threadId) as { role_models: string | null } | undefined;
+    if (!row) return reply.code(404).send({ error: "Thread not found" });
+    try {
+      validateRoleOverrides(request.body, engines);
+      const next = { ...readOverrides(row.role_models), ...(request.body as object) };
+      for (const key of Object.keys(next)) if (next[key as keyof typeof next] === null) delete next[key as keyof typeof next];
+      db.prepare("UPDATE chat_threads SET role_models = ? WHERE id = ?").run(JSON.stringify(next), threadId);
+      return roleView(roleConfig, next, engines);
+    } catch (error) { return reply.code(400).send({ error: (error as Error).message }); }
+  });
   const detectGitBranch = options.detectGitBranch ?? detectProjectGitBranch;
   const threadRunClaims = new Map<string, ThreadRunClaim>();
   const questionDeadlines = new Map<string, Map<string, number>>();
@@ -567,6 +592,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     }
     const releaseProjectClaim = () => concurrency.releaseProject(thread.project_id, projectClaimOwner);
     let session: ChatSession | undefined;
+    let finishRoles: (() => Promise<void>) | undefined;
     let responseCompleted = false;
     let clientDisconnected = false;
     let lastEventType = '(none)';
@@ -718,6 +744,10 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         if (title) write({ kind: 'thread_title', threadId, title });
       });
       if (session) {
+        finishRoles = roles.bind({ threadId, projectId: thread.project_id, cwd, runId, owner: projectClaimOwner, onQuestion: event => {
+          session?.sessionManager?.appendCustomEntry("nexus-role-question", { ...event, timestamp: Date.now() });
+          write(event);
+        } }, session);
         activeStreams.set(threadId, { session, runId });
         const runStartMs = Date.parse(startEvent.startedAt);
         const configuredMinutes = loadConfig().server.question_timeout_minutes ?? 30;
@@ -871,6 +901,8 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         abortSource = 'runtime';
       }
     } finally {
+      await finishRoles?.();
+      finishRoles = undefined;
       responseCompleted = true;
       if (questionExpired) {
         terminalStatus = 'interrupted';
@@ -915,6 +947,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
       responseCompleted = true;
       reply.raw.removeListener('close', abortOnResponseClose);
       request.raw.removeListener('aborted', abortOnResponseClose);
+      await finishRoles?.();
       // Release the shared working tree, then the in-process thread claim.
       releaseProjectClaim();
       releaseThreadClaim();
@@ -1126,7 +1159,13 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
   // Gate decisions recorded into the session log (#374), attached to their
   // tool call below so the transcript shows who allowed or denied it.
   const approvalsByToolCall = new Map<string, ApprovalDecisionEvent>();
-  const sourceEntries = entries as any[];
+  const sourceEntries = (entries as any[]).map(entry => {
+    if (entry?.type !== 'custom' || entry.customType !== 'nexus-role-question') return entry;
+    const event = entry.data;
+    if (event?.type === 'tool_execution_start') return { ...entry, type: 'message', message: { role: 'assistant', timestamp: event.timestamp, content: [{ type: 'toolCall', id: event.toolCallId, name: 'question', arguments: event.args }] } };
+    if (event?.type === 'tool_execution_end') return { ...entry, type: 'message', message: { role: 'toolResult', toolCallId: event.toolCallId, content: event.result?.content ?? [], details: event.result?.details, isError: event.isError, timestamp: event.timestamp } };
+    return entry;
+  });
   for (const [index, entry] of sourceEntries.entries()) {
     const message = entry?.type === 'message' ? entry.message : undefined;
     if (message?.role === 'toolResult' && message.toolCallId) {

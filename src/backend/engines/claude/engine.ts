@@ -1,3 +1,4 @@
+import { labelledApprovals } from '../../roles/brokers.js';
 /**
  * The Claude engine: sessions backed by the Claude Agent SDK, sharing the Pi
  * runtime's brokers, policy, audit sink, session directory and tool set.
@@ -7,7 +8,7 @@ import { join } from 'node:path';
 import { deleteSession } from '@anthropic-ai/claude-agent-sdk';
 import { ENGINE_SESSION_CUSTOM_TYPE, type EngineSessionRecord } from '@nexus/shared';
 import { openSessionManagerFor, type PiRuntime } from '../../pi/runtime.js';
-import type { ChatEngine, EngineModel, EngineSession } from '../types.js';
+import type { ChatEngine, EngineModel, EngineSession, ChildSessionOptions } from '../types.js';
 import { CLAUDE_CODE_MODELS, CLAUDE_CODE_PROVIDER, findClaudeModel } from './models.js';
 import { collectPiTools } from './pi-tools-bridge.js';
 import { projectContextAppendix } from './context-files.js';
@@ -127,12 +128,16 @@ export class ClaudeEngine implements ChatEngine {
     }
   }
 
-  private async createSession(threadId: string, cwd: string): Promise<ClaudeEngineSession> {
+  async createChildSession(options: ChildSessionOptions): Promise<ClaudeEngineSession> {
+    return this.createSession(options.id, options.cwd, options);
+  }
+
+  private async createSession(threadId: string, cwd: string, child?: ChildSessionOptions): Promise<ClaudeEngineSession> {
     const pi = this.deps.pi;
     const sessionDir = pi.sessionDirFor(cwd);
     if (!existsSync(sessionDir)) mkdirSync(sessionDir, { recursive: true });
     const sessionManager = await openSessionManagerFor(threadId, cwd, sessionDir);
-    const tools = await collectPiTools(pi.extensionFactoriesFor(threadId, cwd));
+    const tools = await collectPiTools(pi.extensionFactoriesFor(child?.parentThreadId ?? threadId, cwd, child));
     const cfg = this.deps.config();
     const { settingSources, skills } = normalizeClaudeEngineConfig(cfg);
     const systemPromptAppendix = [
@@ -140,18 +145,20 @@ export class ClaudeEngine implements ChatEngine {
       projectContextAppendix(cwd, pi.paths.sessionsDir, settingSources),
     ].filter(Boolean).join('\n\n');
     return new ClaudeEngineSession({
-      threadId,
+      threadId: child?.parentThreadId ?? threadId,
+      role: child?.role,
+      blockedByChild: child ? undefined : () => pi.roleBusy?.(threadId) ?? false,
       cwd,
       sessionManager,
       model: CLAUDE_CODE_MODELS[0],
       tools,
-      systemPromptAppendix,
-      policy: pi.policyFor(threadId, cwd),
-      approvals: pi.approvals,
+      systemPromptAppendix: child?.prompt ?? systemPromptAppendix,
+      policy: pi.policyFor(child?.parentThreadId ?? threadId, cwd),
+      approvals: child ? labelledApprovals(pi.approvals, child.role) : pi.approvals,
       audit: pi.auditSink,
       env: resolveClaudeAuthEnv(cfg),
-      settingSources,
-      skills: skills === 'none' ? [] : skills,
+      settingSources: child ? [] : settingSources,
+      skills: child ? [] : skills === 'none' ? [] : skills,
       executablePath: cfg.executable_path?.trim() || undefined,
       queryFn: this.deps.queryFn,
       isShared: () => this.deps.isTranscriptShared?.(threadId, cwd) ?? false,

@@ -479,6 +479,7 @@ export default function App() {
    */
   const handleTicketGo = async (ticket: Ticket, input: TicketGoInput) => {
     const { thread, firstTurn } = await api.tickets.createSession(ticket.key, {
+      roleModels: input.roleModels,
       projectId: input.projectId,
       problem: input.problem,
       branchName: input.branchName,

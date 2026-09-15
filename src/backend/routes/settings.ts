@@ -1,3 +1,4 @@
+import { validateRolesConfig } from '../roles/config.js';
 /**
  * Settings / config API.
  *
@@ -124,6 +125,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       },
       jira: incoming.jira ?? current.jira,
       github: incoming.github ?? current.github,
+      roles: { ...current.roles, ...incoming.roles, models: { ...current.roles.models, ...incoming.roles?.models } },
       agent_bridge: {
         ...current.agent_bridge,
         ...incoming.agent_bridge,
@@ -160,6 +162,8 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       reply.code(400);
       return { error: 'Question timeout must be between 1 and 1440 minutes' };
     }
+    const rolesError = validateRolesConfig(merged.roles);
+    if (rolesError) return reply.code(400).send({ error: rolesError });
     const bridgeConfigError = validateAgentBridgeConfig(merged.agent_bridge);
     if (bridgeConfigError) {
       reply.code(400);

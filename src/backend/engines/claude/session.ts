@@ -1,3 +1,5 @@
+import type { RoleName } from '@nexus/shared';
+import { allowsRoleTool } from '../../roles/definitions.js';
 /**
  * A chat session backed by the Claude Agent SDK. One `query()` per turn,
  * resumed through the SDK session id recorded in the thread's JSONL.
@@ -44,6 +46,8 @@ export type QueryFn = typeof sdkQuery;
 const INTERRUPT_GRACE_MS = 2_000;
 
 export interface ClaudeSessionDeps {
+  role?: RoleName;
+  blockedByChild?: () => boolean;
   threadId: string;
   cwd: string;
   sessionManager: SessionManager;
@@ -279,7 +283,7 @@ export class ClaudeEngineSession implements EngineSession {
       // thread's model, unrendered (events.ts drops parent_tool_use_id traffic)
       // and outside Nexus's role picker. Nexus-owned roles replace it — #454
       // decision 4.
-      disallowedTools: ['AskUserQuestion', 'Agent'],
+      disallowedTools: ['AskUserQuestion', 'Agent', ...(this.deps.role ? ['Task', 'Skill', 'ToolSearch', ...['Read', 'Grep', 'Glob', 'LS', 'Bash', 'Edit', 'MultiEdit', 'Write', 'NotebookEdit', 'WebSearch', 'WebFetch'].filter(name => !allowsRoleTool(this.deps.role!, name))] : [])],
       mcpServers: { [NEXUS_MCP_SERVER]: mcp },
       canUseTool: this.gate(controller.signal),
       hooks: { PreToolUse: [{ hooks: [preToolUseHook(correlator)] }] },
@@ -330,6 +334,8 @@ export class ClaudeEngineSession implements EngineSession {
 
   private gate(turnSignal: AbortSignal): CanUseTool {
     return async (toolName, input, opts) => {
+      if (this.deps.blockedByChild?.()) return { behavior: "deny", message: "Wait for the active role before using parent tools" };
+      if (this.deps.role && !allowsRoleTool(this.deps.role, toolName)) return { behavior: "deny", message: `Tool unavailable to ${this.deps.role}` };
       const decision = await decideToolCall({
         threadId: this.deps.threadId,
         cwd: this.deps.cwd,

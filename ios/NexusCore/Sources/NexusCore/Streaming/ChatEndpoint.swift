@@ -42,6 +42,9 @@ public struct ChatDetail: Sendable {
 /// gate. Capability flags let the composer hide what an endpoint doesn't
 /// support; unsupported calls are cheap no-ops rather than errors.
 public protocol ChatEndpoint: Sendable {
+    func roles() async throws -> ThreadRoles?
+    func roleModels() async throws -> [Model]
+    func updateRoles(_ patch: [String: String?]) async throws -> ThreadRoles?
     /// Whether the composer offers a model picker (threads: pi catalog,
     /// assistant: the partner adapter's allowlist).
     var supportsModelPicker: Bool { get }
@@ -95,6 +98,9 @@ public protocol ChatEndpoint: Sendable {
 /// Threads (and any future endpoint) get the background-handoff and attachment
 /// surfaces for free as no-ops, so only assistant sessions implement them.
 public extension ChatEndpoint {
+    func roles() async throws -> ThreadRoles? { nil }
+    func roleModels() async throws -> [Model] { [] }
+    func updateRoles(_ patch: [String: String?]) async throws -> ThreadRoles? { nil }
     var supportsBackgroundHandoff: Bool { false }
     var supportsAttachments: Bool { false }
     /// A stable per-conversation key for caching sent-attachment thumbnails so
@@ -114,6 +120,9 @@ public extension ChatEndpoint {
 /// Project-thread chat. Wraps today's thread calls byte-for-byte so the existing
 /// chat (busy takeover, Supervise, model picker, context meter) does not regress.
 public struct ThreadChatEndpoint: ChatEndpoint {
+    public func roles() async throws -> ThreadRoles? { try await api.roles(threadId: threadId) }
+    public func roleModels() async throws -> [Model] { try await api.roleModels() }
+    public func updateRoles(_ patch: [String: String?]) async throws -> ThreadRoles? { try await api.updateRoles(threadId: threadId, patch: patch) }
     private let api: APIClient
     private let threadId: String
 

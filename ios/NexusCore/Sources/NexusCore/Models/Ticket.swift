@@ -59,7 +59,10 @@ public struct TicketSessionRequest: Encodable, Sendable {
     public let problem: String
     public let branchName: String
 
-    public init(projectId: String, problem: String, branchName: String) {
+    public let roleModels: [String: String]?
+
+    public init(projectId: String, problem: String, branchName: String, roleModels: [String: String]? = nil) {
+        self.roleModels = roleModels
         self.projectId = projectId
         self.problem = problem
         self.branchName = branchName
@@ -87,4 +90,14 @@ public func ticketBranchName(type: String, replacingPrefixOf branch: String) -> 
         break
     }
     return "\(type)/\(rest)"
+}
+
+
+public let nexusRoleNames = ["scout", "researcher", "builder", "refuter", "debugger"]
+public struct ThreadRoles: Decodable, Sendable {
+    public let enabled: Bool
+    public let defaults: [String: String]
+    public let overrides: [String: String]
+    public let effective: [String: String]
+    public let available: [String: Bool]
 }

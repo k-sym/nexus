@@ -1,3 +1,4 @@
+import { DEFAULT_ROLE_MODELS } from '@nexus/shared';
 /**
  * Config & filesystem bootstrap.
  *
@@ -119,6 +120,7 @@ function defaultConfig(): NexusConfig {
       // written before this block existed (deepMerge backfills it on load).
       enabled: true,
     },
+    roles: { enabled: false, models: { ...DEFAULT_ROLE_MODELS }, max_turns: 30, max_minutes: 20, max_tokens: 400000 },
     agent_bridge: {
       enabled: false,
       mode: 'notify_only',

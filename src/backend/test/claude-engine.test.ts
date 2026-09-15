@@ -198,3 +198,42 @@ test('CLAUDE.md is appended only when the SDK is not loading project settings it
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('Scout child enforces native tools, isolates transcript and retains parent policy routing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-child-engine-'));
+  try {
+    const pi = await makeRuntime(dir);
+    const recording = recordingQueryFn();
+    const engine = new ClaudeEngine({ pi, config: () => enabled, queryFn: recording.queryFn });
+    const child = await engine.createChildSession({ id: 'child-one', parentThreadId: 'parent', cwd: dir, role: 'scout', prompt: 'Scout only.' });
+    await child.prompt('Find callers');
+    const options = recording.calls[0].options;
+    assert.ok(options.disallowedTools.includes('Edit'));
+    assert.ok(options.disallowedTools.includes('Agent'));
+    assert.deepEqual(options.settingSources, []);
+    assert.deepEqual(options.skills, []);
+    const denial = await options.canUseTool('mcp__other__write', {}, { toolUseID: 'bad', signal: new AbortController().signal });
+    assert.equal(denial.behavior, 'deny');
+    const entries = await pi.readMessages('child-one', dir);
+    assert.ok(entries.length > 0);
+    assert.equal((await pi.readMessages('parent', dir)).length, 0);
+    assert.equal(engine.hasSession('child-one', dir), false);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('Pi child exposes the Scout allowlist and disposal retains audit entries', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-pi-child-'));
+  try {
+    const pi = await makeRuntime(dir);
+    const session = await pi.createChildSession({ id: 'child-pi', parentThreadId: 'parent', cwd: dir, role: 'scout', prompt: 'Scout only.' });
+    assert.deepEqual(session.getActiveToolNames().sort(), ['find', 'grep', 'ls', 'read']);
+    session.sessionManager.appendMessage({ role: 'user', content: [{ type: 'text', text: 'Scout' }] } as any);
+    session.sessionManager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Evidence retained' }] } as any);
+    session.dispose();
+    assert.ok((await pi.readMessages('child-pi', dir)).some((entry: any) => entry.message?.content?.[0]?.text === 'Evidence retained'));
+    assert.equal(pi.hasSession('child-pi', dir), false);
+    assert.ok(pi.models.find('openai', 'gpt-5.6-sol'));
+    assert.ok(pi.models.find('openrouter', 'z-ai/glm-5.2'));
+    assert.ok(pi.models.getAll().filter(m => m.provider === 'openai').length > 1);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

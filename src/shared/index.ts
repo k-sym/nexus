@@ -221,6 +221,7 @@ export type TicketBranchType = (typeof TICKET_BRANCH_TYPES)[number];
 
 /** Body of `POST /api/tickets/:key/session`. */
 export interface TicketSessionRequest {
+  roleModels?: RoleOverrides;
   projectId: string;
   problem: string;
   branchName: string;
@@ -423,6 +424,7 @@ export interface AgentBridgeConfig {
 }
 
 export interface NexusConfig {
+  roles: RolesConfig;
   server: {
     /** Pending question deadline; 1–1440 minutes, default 30. */
     question_timeout_minutes?: number;
@@ -975,4 +977,28 @@ export interface AgentBridgeTrust {
   retention_days: number;
   reply_max_attempts: number;
   projects: AgentBridgeProjectScope[];
+}
+
+// Nexus-owned child roles; model choices belong to the human, not tool arguments.
+export const ROLE_NAMES = ['scout', 'researcher', 'builder', 'refuter', 'debugger'] as const;
+export type RoleName = typeof ROLE_NAMES[number];
+export type RoleModels = Record<RoleName, string>;
+export type RoleOverrides = Partial<RoleModels>;
+export interface RolesConfig {
+  enabled: boolean;
+  models: RoleModels;
+  max_turns: number;
+  max_minutes: number;
+  max_tokens: number;
+}
+export const DEFAULT_ROLE_MODELS: RoleModels = {
+  scout: 'claude-code/claude-haiku-4-5', researcher: 'claude-code/claude-sonnet-5',
+  builder: 'claude-code/claude-sonnet-5', refuter: 'claude-code/claude-opus-5', debugger: 'claude-code/claude-opus-5',
+};
+export interface ThreadRoles {
+  defaults: RoleModels;
+  enabled: boolean;
+  overrides: RoleOverrides;
+  effective: RoleModels;
+  available: Record<RoleName, boolean>;
 }

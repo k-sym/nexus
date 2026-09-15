@@ -13,6 +13,9 @@ final class TicketDetailViewModel {
     var description: LoadState<TicketDescription> = .idle
     var projects: [Project] = []
     var models: [Model] = []
+    var roleModels: [Model] = []
+    var roles: ThreadRoles?
+    var roleOverrides: [String: String] = [:]
 
     var drafting = false
     var draftError: String?
@@ -56,6 +59,8 @@ final class TicketDetailViewModel {
     private func loadLists() async {
         async let p = api.projects()
         async let m = api.models()
+        roles = try? await api.roles()
+        roleModels = (try? await api.roleModels()) ?? []
         projects = (try? await p) ?? []
         models = (try? await m) ?? []
         if projectId.isEmpty, let first = projects.first { projectId = first.id }
@@ -97,7 +102,7 @@ final class TicketDetailViewModel {
                 TicketSessionRequest(
                     projectId: projectId,
                     problem: problem.trimmingCharacters(in: .whitespacesAndNewlines),
-                    branchName: branchName.trimmingCharacters(in: .whitespacesAndNewlines)))
+                    branchName: branchName.trimmingCharacters(in: .whitespacesAndNewlines), roleModels: roleOverrides))
             return OpenThread(id: result.thread.id, title: result.thread.title, seed: ChatSeed(text: result.firstTurn, modelKey: modelKey))
         } catch {
             goError = (error as? APIError)?.errorDescription ?? error.localizedDescription
@@ -206,6 +211,18 @@ struct TicketDetailView: View {
 
             Picker("Project", selection: $vm.projectId) {
                 ForEach(vm.projects) { p in Text(p.name).tag(p.id) }
+            }
+            if let roles = vm.roles, roles.enabled {
+                DisclosureGroup("Roles") {
+                    ForEach(nexusRoleNames, id: \.self) { role in
+                        Picker(role.capitalized, selection: Binding(get: { vm.roleOverrides[role] ?? "" }, set: { value in
+                            if value.isEmpty { vm.roleOverrides.removeValue(forKey: role) } else { vm.roleOverrides[role] = value }
+                        })) {
+                            Text("Default — \(roles.defaults[role] ?? "Unavailable")").tag("")
+                            ForEach(vm.roleModels) { model in Text("\(model.name) · \(model.provider)\(model.configured == false ? " (unavailable)" : "")").tag(model.modelKey) }
+                        }
+                    }
+                }
             }
             Picker("Model", selection: $vm.modelKey) {
                 ForEach(vm.models) { m in Text(m.name).tag(m.modelKey) }

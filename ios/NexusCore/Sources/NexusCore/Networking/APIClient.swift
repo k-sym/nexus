@@ -180,6 +180,21 @@ public actor APIClient {
         return try await request(.createTicketSession(key, body: body), decoder: plainDecoder)
     }
 
+    public func roles(threadId: String? = nil) async throws -> ThreadRoles {
+        let path = threadId.map { "/api/threads/\($0)/roles" } ?? "/api/roles"
+        return try await request(Endpoint(path: path), decoder: plainDecoder)
+    }
+
+    public func updateRoles(threadId: String, patch: [String: String?]) async throws -> ThreadRoles {
+        let body = try JSONEncoder().encode(patch)
+        return try await request(Endpoint(path: "/api/threads/\(threadId)/roles", method: "PUT", body: body), decoder: plainDecoder)
+    }
+
+    public func roleModels() async throws -> [Model] {
+        let res: ModelsResponse = try await request(.models, decoder: plainDecoder)
+        return res.allModels ?? res.models
+    }
+
     public func activity() async throws -> ActivityResponse {
         try await request(.activity)
     }

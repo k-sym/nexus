@@ -183,3 +183,34 @@ test('confirm-cancel waits out a Claude turn interrupt grace instead of 409-ing'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('role routes validate atomically, persist overrides and reset to defaults', async () => {
+  const { app, db, dir } = await makeApp();
+  try {
+    db.exec('ALTER TABLE chat_threads ADD COLUMN role_models TEXT');
+    const url = '/api/threads/thread-1/roles';
+    let res = await app.inject({ method: 'PUT', url, payload: { scout: 'openrouter/m1' } });
+    assert.equal(res.statusCode, 200); assert.equal(res.json().overrides.scout, 'openrouter/m1');
+    res = await app.inject({ method: 'PUT', url, payload: { scout: 'claude-code/m1', refuter: 'missing/model' } });
+    assert.equal(res.statusCode, 400);
+    res = await app.inject({ method: 'GET', url }); assert.equal(res.json().overrides.scout, 'openrouter/m1');
+    res = await app.inject({ method: 'PUT', url, payload: { scout: null } });
+    assert.equal(res.json().overrides.scout, undefined); assert.equal(res.json().effective.scout, res.json().defaults.scout);
+    assert.equal((await app.inject({ method: 'GET', url: '/api/threads/missing/roles' })).statusCode, 404);
+  } finally { await app.close(); db.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('child questions survive transcript replay with their role label and answer', async () => {
+  const { flattenEntries } = await import('../routes/chat');
+  const { AGENT_RUN_CUSTOM_TYPE } = await import('@nexus/shared');
+  const entries = [
+    { type: 'custom', customType: AGENT_RUN_CUSTOM_TYPE, data: { event: 'start', runId: 'r', threadId: 't', startedAt: '2026-09-15T10:00:00Z', provider: 'p', model: 'm' } },
+    { type: 'message', id: 'parent-answer', message: { role: 'assistant', content: [{ type: 'text', text: 'Delegating' }], usage: { totalTokens: 7 }, timestamp: 1 } },
+    { type: 'custom', id: 'child-question', customType: 'nexus-role-question', data: { type: 'tool_execution_start', toolCallId: 'q', args: { questions: [{ id: 'q', header: 'Builder · Scope', question: 'Which files?', options: [] }] }, timestamp: 2 } },
+    { type: 'custom', customType: 'nexus-role-question', data: { type: 'tool_execution_end', toolCallId: 'q', isError: false, result: { content: [{ type: 'text', text: 'Selected files' }], details: { status: 'answered' } }, timestamp: 3 } },
+  ];
+  const messages = flattenEntries(entries, '/tmp', { activeRunIds: new Set(['r']) }) as any[];
+  const question = messages.flatMap(m => m.tool_calls ?? []).find(t => t.id === 'q');
+  assert.equal(question.args.questions[0].header, 'Builder · Scope');
+  assert.equal(question.status, 'succeeded'); assert.equal(question.details.status, 'answered');
+});

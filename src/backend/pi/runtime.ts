@@ -1,3 +1,8 @@
+import { createRoleWebFetch } from '../roles/web-fetch.js';
+import { labelledApprovals, labelledQuestions } from '../roles/brokers.js';
+import { registerRoleModels } from '../roles/models.js';
+import type { ChildSessionOptions } from '../engines/types.js';
+import { allowsRoleTool, restrictedFactories, ROLES_APPENDIX } from '../roles/definitions.js';
 /**
  * Pi runtime — the bridge between Fastify and @earendil-works/pi-coding-agent.
  *
@@ -286,6 +291,7 @@ export class PiRuntime {
     this.paths = paths;
     this.auth = modelRuntime;
     this.models = new ModelRegistry(modelRuntime);
+    registerRoleModels(this.models);
     this.recallMemories = deps.recallMemories;
     this.mondayContext = deps.mondayContext;
     this.mondayTools = deps.mondayTools;
@@ -414,12 +420,23 @@ export class PiRuntime {
    * Exposed so other engines can offer the identical Nexus tool set (the
    * Claude engine turns the registered tools into an MCP server).
    */
-  extensionFactoriesFor(threadId: string, cwd: string): ExtensionFactory[] {
-    return buildSessionExtensionFactories(
-      threadId, cwd, this.questions, this.approvals, this.policyFor(threadId, cwd),
+  roleBusy?: (threadId: string) => boolean;
+  roleFactories?: (threadId: string, cwd: string) => ExtensionFactory[];
+
+  extensionFactoriesFor(threadId: string, cwd: string, child?: ChildSessionOptions): ExtensionFactory[] {
+    const approvals = child ? labelledApprovals(this.approvals, child.role) : this.approvals;
+    const questions = child ? labelledQuestions(this.questions, child.role) : this.questions;
+    const factories = buildSessionExtensionFactories(
+      threadId, cwd, questions, approvals, this.policyFor(threadId, cwd),
       createSignalFilterExtension, this.recallMemories, this.mondayTools, this.dockerTools,
       this.browserTools, this.helpersTools, this.auditSink,
     );
+    if (child) return restrictedFactories([...factories, ...(child.role === "researcher" ? [createRoleWebFetch] : [])], child.role);
+    const guard: ExtensionFactory = api => { api.on('tool_call', async () => {
+      if (this.roleBusy?.(threadId)) return { block: true, reason: 'Wait for the active role before using parent tools' };
+    }); };
+    const roleFactories = this.roleFactories?.(threadId, cwd) ?? [];
+    return roleFactories.length ? [guard, ...factories, ...roleFactories] : factories;
   }
 
   /**
@@ -430,6 +447,7 @@ export class PiRuntime {
    */
   systemPromptAppendixFor(threadId: string, cwd: string): string {
     const parts: string[] = [];
+    if (this.roleFactories?.(threadId, cwd).length) parts.push(ROLES_APPENDIX);
     try {
       parts.push(buildOrientationBlock({
         hasMemory: !!this.recallMemories,
@@ -501,7 +519,11 @@ export class PiRuntime {
     }
   }
 
-  private async createSession(threadId: string, cwd: string): Promise<AgentSession> {
+  async createChildSession(options: ChildSessionOptions): Promise<AgentSession> {
+    return this.createSession(options.id, options.cwd, options);
+  }
+
+  private async createSession(threadId: string, cwd: string, child?: ChildSessionOptions): Promise<AgentSession> {
     // Dynamic import so the ESM-only pi package is loaded at call time
     // (avoids top-level CJS resolution failures in tsx when the workspace
     // doesn't set type:module).
@@ -523,7 +545,7 @@ export class PiRuntime {
       cwd,
       agentDir: this.paths.sessionsDir,
       settingsManager,
-      extensionFactories: this.extensionFactoriesFor(threadId, cwd),
+      extensionFactories: this.extensionFactoriesFor(child?.parentThreadId ?? threadId, cwd, child),
       // Re-evaluated on every session create AND resume, so a thread reopened
       // later reflects the capabilities and item state it has THEN, not a line
       // frozen at first creation. Two blocks are appended: the Nexus orientation
@@ -532,7 +554,7 @@ export class PiRuntime {
       // prompt always comes through, rather than a bad block failing the whole
       // session.
       systemPromptOverride: (base: string | undefined) => {
-        const appendix = this.systemPromptAppendixFor(threadId, cwd);
+        const appendix = child?.prompt ?? this.systemPromptAppendixFor(threadId, cwd);
         return [base, appendix].filter((part) => !!part).join('\n\n');
       },
     }) as ConstructorParameters<typeof DefaultResourceLoader>[0]);
@@ -543,7 +565,11 @@ export class PiRuntime {
       sessionManager,
       settingsManager,
       resourceLoader,
+      ...(child ? { tools: ["read", "bash", "edit", "write", "grep", "find", "ls"].filter(name => allowsRoleTool(child.role, name)) } : {}),
     });
+    if (child) {
+      session.setActiveToolsByName(session.getAllTools().map(tool => tool.name).filter(name => allowsRoleTool(child.role, name)));
+    }
     return session;
   }
 
@@ -673,7 +699,7 @@ export class PiRuntime {
     const sm = SessionManager.open(match.path, sessionDir, cwd);
     return sm.getEntries().filter((entry) =>
       entry.type === 'message'
-      || (entry.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE),
+      || (entry.type === 'custom' && (entry.customType === AGENT_RUN_CUSTOM_TYPE || entry.customType === 'nexus-role-question')),
     );
   }
 }

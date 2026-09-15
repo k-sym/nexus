@@ -1,3 +1,4 @@
+import type { RoleName } from '@nexus/shared';
 /**
  * Engine contracts.
  *
@@ -45,7 +46,12 @@ export type EngineSession = Pick<
   readonly engineSessionId?: string;
 };
 
+export interface ChildSessionOptions {
+  id: string; parentThreadId: string; cwd: string; role: RoleName; prompt: string;
+}
+
 export interface ChatEngine {
+  createChildSession?(options: ChildSessionOptions): Promise<EngineSession & { dispose?: () => void }>;
   readonly id: EngineId;
   listModels(): EngineModel[];
   findModel(provider: string, id: string): EngineModel | undefined;
