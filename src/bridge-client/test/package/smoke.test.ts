@@ -25,6 +25,10 @@ test('packed artifact installs outside the workspace, exposes the bin and starts
     writeFileSync(env.NEXUS_BRIDGE_CONFIG, 'instance_id: test\nsender_id: pack-test\n');
     const bin = join(root, 'node_modules/.bin/nexus-bridge');
     const who = await exec(bin, ['whoami'], { cwd: root, env }); assert.equal(JSON.parse(who.stdout).senderId, 'pack-test');
+    writeFileSync(join(root, 'config.yaml'), 'bridge_client:\n  instance_id: test\n  sender_id: chonk\n  url: tls://broker.example:4222\n  backend_url: https://nexus.example\n  token: broker-secret\n  backend_token: backend-secret\n');
+    const yamlWho = await exec(bin, ['whoami'], { cwd: root, env: { PATH: env.PATH, NEXUS_HOME: root } });
+    assert.equal(JSON.parse(yamlWho.stdout).senderId, 'chonk');
+    assert.equal(yamlWho.stdout.includes('secret'), false);
     mcp = new Client({ name: 'package-test', version: '1.0' });
     await mcp.connect(new StdioClientTransport({ command: bin, args: ['mcp'], cwd: root, env, stderr: 'pipe' }));
     assert.equal((await mcp.listTools()).tools.length, 2);

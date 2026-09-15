@@ -422,7 +422,17 @@ export interface AgentBridgeConfig {
   reply_max_attempts: number;
 }
 
+export interface BridgeClientConfig {
+  url?: string;
+  backend_url?: string;
+  instance_id?: string;
+  sender_id?: string;
+  token?: string;
+  backend_token?: string;
+}
+
 export interface NexusConfig {
+  bridge_client?: BridgeClientConfig;
   server: {
     /** Pending question deadline; 1–1440 minutes, default 30. */
     question_timeout_minutes?: number;
