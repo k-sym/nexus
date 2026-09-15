@@ -142,6 +142,9 @@ const BACKGROUND_STOP_UNSUPPORTED = 'Stopping a background run is not available:
 interface RunSupport {
   runs: boolean;
   runStop: boolean;
+  /** False when `/v1/capabilities` could not be read (the flags above are then a
+   * fail-closed guess, not the adapter's answer). */
+  readable: boolean;
 }
 
 // Partner tags every session with a `source`. The Assistant rail surfaces
@@ -598,9 +601,9 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       let ttl = CAPABILITIES_TTL_MS;
       try {
         const caps = await partner.capabilities();
-        support = { runs: caps.runs, runStop: caps.runStop };
+        support = { runs: caps.runs, runStop: caps.runStop, readable: true };
       } catch {
-        support = { runs: false, runStop: false };
+        support = { runs: false, runStop: false, readable: false };
         ttl = CAPABILITIES_FAILURE_TTL_MS;
       }
       capabilityCache.set(url, { support, expiresAt: now + ttl });
@@ -1141,13 +1144,25 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
     fastify.post('/api/assistant/sync', async () => {
       const partner = client();
       if (!partner) return { updated: 0 };
-      // Nothing to reconcile against an adapter with no /v1/runs; polling it
-      // would only mark every stale row unknown.
-      if (!(await runSupport(partner)).runs) return { updated: 0 };
       const runs = db
         .prepare('SELECT * FROM assistant_runs WHERE remote_run_id IS NOT NULL AND status IN (?, ?)')
         .all(...Array.from(RUNNING_STATUSES)) as AssistantRun[];
+      if (runs.length === 0) return { updated: 0 };
+      const support = await runSupport(partner);
       let updated = 0;
+      if (!support.runs) {
+        // An unreadable capabilities document is a blip, not an answer: leave the
+        // ledger alone rather than settle rows over it.
+        if (!support.readable) return { updated: 0 };
+        // The adapter has no /v1/runs, so nothing will ever finish these rows.
+        // Settle them as unknown once so the session stops reading as running
+        // and clients stop polling; a settled row is not selected again.
+        for (const run of runs) {
+          markRunUnknown(db, run, BACKGROUND_HANDOFF_UNSUPPORTED);
+          updated += 1;
+        }
+        return { updated };
+      }
       for (const run of runs) {
         if (!run.remote_run_id) continue;
         try {

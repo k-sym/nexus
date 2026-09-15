@@ -44,7 +44,7 @@ A personal agent orchestration platform. NEXUS lets you define projects, start s
 | **Board** | A session-first board per project: cards are chat sessions with their origin (GitHub issue, Monday item, Jira ticket, or plain chat), lanes are derived from live state (Inbox · Running · Needs you · Idle · Done) and never dragged. The Inbox lists open GitHub issues and Monday items with no session yet; one click drafts the problem with Sonnet and Go opens a session stamped with the origin. |
 | **Models & curation** | A model registry (the Pi runtime) knows every model reachable from your configured auth — API keys (OpenRouter, local servers) and OAuth (Anthropic, OpenAI/Codex, GitHub Copilot). You curate which models show up in the picker; per-thread model selection with image/document attachments. No more YAML "personas". |
 | **Multi-provider chat** | One runtime drives Claude Code, Codex, OpenCode, OpenRouter, local OpenAI-compatible servers (omlx, LM Studio, llama.cpp) — each reached through the Pi SDK's provider bridges — plus the Partner assistant-api behind the Assistant surface. |
-| **Assistant** | A separate, project-less Assistant surface backed by the Partner assistant-api (baker-internal, headless Claude) with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs that can be reconciled after restart. |
+| **Assistant** | A separate, project-less Assistant surface backed by the Partner assistant-api (baker-internal, headless Claude) with multiple local sessions, per-session transcripts, foreground streams, and detachable background runs (offered only when the endpoint's `/v1/capabilities` advertises them; the Partner assistant-api does not) that can be reconciled after restart. |
 | **Idea Watcher** | Park free-form ideas frictionlessly, then ripen each through a dialogue with the partner assistant — commission research into the thread, pull the findings apart, and graduate the idea into a new project or a detailed GitHub issue set (confirm-gated filing). |
 | **Activity console** | A unified operations console (running + recent) for chat turns, assistant streams, Jira/GitHub syncs, memory archive/index jobs — with abort, retry, and diagnostics per operation. |
 | **Memory** | Hybrid-retrieval memory served by a standalone daemon. The Obsidian vault is canonical; a rebuildable SQLite index (sqlite-vec + FTS5 + knowledge-graph) powers recall. Agents pull it on demand via a `memory_recall` tool; exposed over HTTP + MCP. |
@@ -989,14 +989,14 @@ The task board was replaced by the session-first board in #439. These routes sta
 | GET | `/api/assistant/sessions` | List non-archived Assistant sessions with latest run status, plus any filtered adoptable remote Partner API sessions (`remoteOnly: true`) |
 | POST | `/api/assistant/sessions` | Create an Assistant session |
 | POST | `/api/assistant/sessions/import` | Adopt a remote Partner session by `remoteSessionId`: upsert a local row, import its transcript, and map `remote_session_id` |
-| GET | `/api/assistant/sessions/:id` | Load one session, its transcript, and latest run |
+| GET | `/api/assistant/sessions/:id` | Load one session, its transcript, latest run, and `capabilities.backgroundHandoff` (whether the configured endpoint can run a background handoff, from its `/v1/capabilities`) |
 | PATCH | `/api/assistant/sessions/:id` | Rename or archive a session |
 | DELETE | `/api/assistant/sessions/:id` | Delete a local Assistant session |
 | POST | `/api/assistant/sessions/:id/messages/stream` | Send a foreground message; streams NDJSON (`run_start` / `text_delta` / `complete` / `error`) |
-| POST | `/api/assistant/sessions/:id/runs` | Start a detached Partner background run for a session |
+| POST | `/api/assistant/sessions/:id/runs` | Start a detached background run for a session. 400 before anything is written when the endpoint does not advertise `run_submission` (the Partner assistant-api does not) |
 | GET | `/api/assistant/runs/:runId` | Read local run state, refreshed from the Partner when possible |
-| POST | `/api/assistant/runs/:runId/stop` | Stop a remote Partner run |
-| POST | `/api/assistant/sync` | Poll running Assistant runs and append completed output |
+| POST | `/api/assistant/runs/:runId/stop` | Stop a remote run. 400 when the endpoint does not advertise `run_stop` |
+| POST | `/api/assistant/sync` | Reconcile running Assistant runs with the endpoint. Against an endpoint without background runs, leftover running rows settle as `unknown` once; while its capabilities cannot be read they are left alone |
 | GET | `/api/assistant/thread` | Compatibility wrapper over the newest/default Assistant session |
 | DELETE | `/api/assistant/thread` | Compatibility wrapper that clears the newest/default session |
 | POST | `/api/assistant/messages/stream` | Compatibility wrapper for foreground stream on the newest/default session |
