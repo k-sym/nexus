@@ -420,7 +420,13 @@ export interface AgentBridgeConfig {
   max_messages_per_minute: number;
   max_hops: number;
   retention_days: number;
+  /** Publish failures counted before a reply becomes a dead letter. Cycles
+   * spent waiting for an unavailable broker are not counted. */
   reply_max_attempts: number;
+  /** First retry delay after a publish failure; doubles per failure. */
+  reply_backoff_seconds: number;
+  /** Upper bound for the doubling retry delay. */
+  reply_backoff_max_seconds: number;
 }
 
 export interface BridgeClientConfig {
@@ -966,6 +972,8 @@ export interface AgentBridgeReply {
   payload: string;
   status: 'pending_approval' | 'queued' | 'sent' | 'dead_letter' | 'discarded';
   attempts: number;
+  /** Earliest time the next delivery attempt may run; null means immediately. */
+  next_attempt_at: string | null;
   discarded_at: string | null;
   discarded_by: string | null;
   error: string | null;

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentBridgeConfig } from '@nexus/shared';
 import { getDb } from '../db.js';
-import { AgentBridgeService } from '../agent-bridge/service.js';
+import { AgentBridgeService, type ReplyPublisher } from '../agent-bridge/service.js';
 import { bridgeSubject, validateAgentBridgeConfig, type AgentBridgeEnvelopeV1 } from '../agent-bridge/protocol.js';
 import { registerAgentBridgeRoutes } from '../routes/agent-bridge.js';
 import { defaultConfigForTests } from '../config.js';
@@ -30,6 +30,8 @@ function config(overrides: Partial<AgentBridgeConfig> = {}): AgentBridgeConfig {
     max_hops: 2,
     retention_days: 30,
     reply_max_attempts: 60,
+    reply_backoff_seconds: 5,
+    reply_backoff_max_seconds: 300,
     ...overrides,
   };
 }
@@ -300,20 +302,64 @@ test('retention protects unresolved work and unsent replies; sent/discarded repl
   db.close();
 });
 
-test('outage exhausts all queued reply budgets, persists restart, and guards retry/discard actions', async () => {
+/** Pretend the service holds a live broker connection so flushReplies reaches the publisher. */
+function pretendConnected(service: AgentBridgeService): AgentBridgeService {
+  (service as unknown as { nc: object; state: string }).nc = {};
+  (service as unknown as { nc: object; state: string }).state = 'connected';
+  return service;
+}
+
+test('broker outage defers approved replies without spending the retry budget', async () => {
   const { db } = fixture();
   const service = new AgentBridgeService(db, config({ reply_max_attempts: 2 }));
+  completedReply(service, 'first');
+  service.store.approveReply('first');
+  for (let cycle = 0; cycle < 5; cycle++) await service.flushReplies();
+  const reply = service.store.reply('first')!;
+  assert.equal(reply.status, 'queued');
+  assert.equal(reply.attempts, 0);
+  assert.equal(reply.next_attempt_at, null);
+  assert.match(reply.error!, /broker is unavailable/);
+  db.close();
+});
+
+test('publish failures back off with a cap, dead-letter at the limit, persist restart, and guard retry/discard actions', async () => {
+  const { db } = fixture();
+  let publishes = 0;
+  const failing: ReplyPublisher = async () => { publishes++; throw new Error('no responders'); };
+  const limits = { reply_max_attempts: 3, reply_backoff_seconds: 5, reply_backoff_max_seconds: 8 };
+  const service = pretendConnected(new AgentBridgeService(db, config(limits), failing));
   const first = completedReply(service, 'first');
   completedReply(service, 'second');
   service.store.approveReply('first'); service.store.approveReply('second');
-  await service.flushReplies();
-  assert.equal(service.store.reply('first')?.attempts, 1);
-  assert.equal(service.store.reply('second')?.attempts, 1);
-  const restarted = new AgentBridgeService(db, config({ reply_max_attempts: 2 }));
-  await restarted.flushReplies();
-  for (const id of ['first', 'second']) assert.equal(restarted.store.reply(id)?.status, 'dead_letter');
-  await restarted.flushReplies();
-  assert.equal(restarted.store.reply('first')?.attempts, 2);
+  const t0 = Date.parse('2026-09-15T00:00:00.000Z');
+  await service.flushReplies(t0);
+  assert.equal(publishes, 2);
+  for (const id of ['first', 'second']) {
+    const reply = service.store.reply(id)!;
+    assert.equal(reply.status, 'queued');
+    assert.equal(reply.attempts, 1);
+    assert.equal(reply.error, 'no responders');
+    assert.equal(reply.next_attempt_at, new Date(t0 + 5_000).toISOString(), 'first retry waits the initial backoff');
+  }
+  await service.flushReplies(t0 + 4_999);
+  assert.equal(publishes, 2, 'nothing is retried inside the backoff window');
+  await service.flushReplies(t0 + 5_000);
+  assert.equal(publishes, 4);
+  assert.equal(service.store.reply('first')?.attempts, 2);
+  assert.equal(service.store.reply('first')?.next_attempt_at, new Date(t0 + 5_000 + 8_000).toISOString(), 'doubling is capped at the maximum backoff');
+  const restarted = pretendConnected(new AgentBridgeService(db, config(limits), failing));
+  await restarted.flushReplies(t0 + 12_999);
+  assert.equal(publishes, 4, 'backoff survives a restart');
+  await restarted.flushReplies(t0 + 13_000);
+  assert.equal(publishes, 6);
+  for (const id of ['first', 'second']) {
+    assert.equal(restarted.store.reply(id)?.status, 'dead_letter');
+    assert.equal(restarted.store.reply(id)?.attempts, 3);
+    assert.equal(restarted.store.reply(id)?.next_attempt_at, null);
+  }
+  await restarted.flushReplies(t0 + 3_600_000);
+  assert.equal(publishes, 6, 'dead letters are never retried automatically');
   const app = Fastify(); app.decorate('db', db);
   await app.register(registerAgentBridgeRoutes, { service: restarted });
   const post = (id: string, action: string) => app.inject({ method: 'POST', url: `/api/agent-bridge/messages/${id}/reply/${action}` });
@@ -322,6 +368,7 @@ test('outage exhausts all queued reply budgets, persists restart, and guards ret
   const retried = await post('first', 'retry');
   assert.equal(retried.statusCode, 202);
   assert.equal(retried.json().attempts, 0);
+  assert.equal(retried.json().next_attempt_at, null, 'manual retry is not held back by the old backoff');
   assert.equal(restarted.store.reply('first')?.id, first.id);
   assert.equal(restarted.store.reply('first')?.payload, first.payload);
   assert.equal((await post('first', 'discard')).statusCode, 409);
@@ -347,7 +394,7 @@ test('additive upgrade retains existing inbox/reply data and defaults project sc
   service.store.approveReply('legacy');
   // Restore the pre-452 schema in this disposable fixture before reopening it.
   db.exec('DROP TABLE agent_bridge_project_policy');
-  for (const column of ['attempts', 'discarded_at', 'discarded_by']) db.exec(`ALTER TABLE agent_bridge_replies DROP COLUMN ${column}`);
+  for (const column of ['attempts', 'discarded_at', 'discarded_by', 'next_attempt_at']) db.exec(`ALTER TABLE agent_bridge_replies DROP COLUMN ${column}`);
   const inbox = service.store.get('legacy');
   db.close();
   for (let pass = 0; pass < 2; pass++) {
@@ -358,6 +405,7 @@ test('additive upgrade retains existing inbox/reply data and defaults project sc
     assert.equal(next.store.reply('legacy')?.payload, reply.payload);
     assert.equal(next.store.reply('legacy')?.status, 'queued');
     assert.equal(next.store.reply('legacy')?.attempts, 0);
+    assert.equal(next.store.reply('legacy')?.next_attempt_at, null);
     assert.equal(next.store.reply('legacy')?.discarded_at, null);
     assert.equal(next.store.projects()[0].enabled, false);
     upgraded.close();
@@ -383,6 +431,9 @@ test('retention runs at startup and hourly, and shutdown clears its timer', asyn
 test('retention and retry budget reject invalid configuration values', () => {
   for (const value of [0, -1, 1.5, NaN, 3651]) assert.match(validateAgentBridgeConfig(config({ retention_days: value }))!, /retention/);
   for (const value of [0, -1, 1.5, NaN, 10001]) assert.match(validateAgentBridgeConfig(config({ reply_max_attempts: value }))!, /attempts/);
+  for (const value of [0, -1, 1.5, NaN, 3601]) assert.match(validateAgentBridgeConfig(config({ reply_backoff_seconds: value }))!, /backoff/);
+  for (const value of [0, 4, 1.5, NaN, 86_401]) assert.match(validateAgentBridgeConfig(config({ reply_backoff_max_seconds: value }))!, /maximum reply backoff/);
+  assert.equal(validateAgentBridgeConfig(config({ reply_backoff_seconds: 5, reply_backoff_max_seconds: 5 })), null);
 });
 
 

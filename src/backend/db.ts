@@ -341,6 +341,7 @@ function runMigrations(db: Database.Database) {
     ['attempts', 'INTEGER NOT NULL DEFAULT 0'],
     ['discarded_at', 'TEXT'],
     ['discarded_by', 'TEXT'],
+    ['next_attempt_at', 'TEXT'],
   ]) {
     if (!bridgeReplyCols.some(column => column.name === name)) {
       db.exec(`ALTER TABLE agent_bridge_replies ADD COLUMN ${name} ${definition}`);

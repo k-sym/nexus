@@ -110,6 +110,10 @@ export async function buildTrustSnapshot(
       ? { configured: true, source: 'environment' }
       : { configured: false, source: 'absent' },
     agentBridge: configSecret(bridge.token ?? '', ['NEXUS_AGENT_BRIDGE_TOKEN']),
+    // Outbound bridge-client credentials (PR #468) live in the same
+    // config.yaml as plaintext by default; list them so the inventory is complete.
+    bridgeClient: configSecret(config.bridge_client?.token ?? '', ['NEXUS_AGENT_BRIDGE_TOKEN']),
+    bridgeClientBackend: configSecret(config.bridge_client?.backend_token ?? '', ['NEXUS_BRIDGE_BACKEND_TOKEN']),
   };
   const piProviderIds: string[] = [];
   try {

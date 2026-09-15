@@ -86,6 +86,12 @@ export function validateAgentBridgeConfig(config: AgentBridgeConfig): string | n
   if (!Number.isInteger(config.reply_max_attempts) || config.reply_max_attempts < 1 || config.reply_max_attempts > 10000) {
     return 'Agent Bridge reply attempts must be between 1 and 10000.';
   }
+  if (!Number.isInteger(config.reply_backoff_seconds) || config.reply_backoff_seconds < 1 || config.reply_backoff_seconds > 3600) {
+    return 'Agent Bridge reply backoff must be between 1 and 3600 seconds.';
+  }
+  if (!Number.isInteger(config.reply_backoff_max_seconds) || config.reply_backoff_max_seconds < config.reply_backoff_seconds || config.reply_backoff_max_seconds > 86_400) {
+    return 'Agent Bridge maximum reply backoff must be between the initial backoff and 86400 seconds.';
+  }
   return null;
 }
 

@@ -215,7 +215,7 @@ test('settings masks and preserves the Agent Bridge token and rejects unsafe rem
     assert.equal(loadConfig().agent_bridge.mode, 'queue_for_approval');
     assert.equal(loadConfig().agent_bridge.retention_days, 45);
     assert.equal(loadConfig().agent_bridge.reply_max_attempts, 12);
-    for (const invalid of [{ retention_days: 0 }, { reply_max_attempts: 1.5 }]) {
+    for (const invalid of [{ retention_days: 0 }, { reply_max_attempts: 1.5 }, { reply_backoff_seconds: 0 }, { reply_backoff_max_seconds: 1 }]) {
       const response = await app.inject({ method: 'PUT', url: '/api/settings', payload: {
         ...put.json(), agent_bridge: { ...put.json().agent_bridge, ...invalid },
       } });
@@ -493,5 +493,31 @@ test('settings masks and preserves both bridge client credentials', async () => 
     const put = await app.inject({ method: 'PUT', url: '/api/settings', payload: get.json() });
     assert.equal(put.statusCode, 200); assert.equal(put.body.includes('client-broker-secret'), false); assert.equal(put.body.includes('client-http-secret'), false);
     assert.equal(loadConfig().bridge_client?.token, 'client-broker-secret'); assert.equal(loadConfig().bridge_client?.backend_token, 'client-http-secret');
+  } finally { saveConfig(original); await app.close(); }
+});
+
+test('PUT /api/settings rejects non-string bridge client values before they reach config.yaml', async () => {
+  const original = loadConfig(); const app = makeApp();
+  try {
+    saveConfig({ ...original, bridge_client: { sender_id: 'chonk', token: 'client-broker-secret' } });
+    const base = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    for (const bridge_client of [
+      { ...base.bridge_client, token: 123 },
+      { ...base.bridge_client, backend_token: { nested: true } },
+      { ...base.bridge_client, url: ['tls://broker'] },
+      { ...base.bridge_client, sender_id: null },
+      'chonk',
+      ['chonk'],
+    ]) {
+      const response = await app.inject({ method: 'PUT', url: '/api/settings', payload: { ...base, bridge_client } });
+      assert.equal(response.statusCode, 400, JSON.stringify(bridge_client));
+      assert.match(response.json().error, /bridge_client/);
+    }
+    assert.equal(loadConfig().bridge_client?.token, 'client-broker-secret');
+    assert.equal(loadConfig().bridge_client?.sender_id, 'chonk');
+    const accepted = await app.inject({ method: 'PUT', url: '/api/settings', payload: { ...base, bridge_client: { ...base.bridge_client, backend_url: 'https://baker-pro.example:8444' } } });
+    assert.equal(accepted.statusCode, 200);
+    assert.equal(loadConfig().bridge_client?.backend_url, 'https://baker-pro.example:8444');
+    assert.equal(loadConfig().bridge_client?.token, 'client-broker-secret');
   } finally { saveConfig(original); await app.close(); }
 });
