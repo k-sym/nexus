@@ -32,6 +32,8 @@ vi.mock('../api', () => ({
           max_hops: 4,
           retention_days: 30,
           reply_max_attempts: 60,
+          reply_backoff_seconds: 5,
+          reply_backoff_max_seconds: 300,
         },
       })),
       update: vi.fn(async (config) => config),
@@ -180,6 +182,8 @@ describe('SettingsPage', () => {
           allowed_senders: ['claude-reviewer'],
           retention_days: 45,
           reply_max_attempts: 12,
+          reply_backoff_seconds: 5,
+          reply_backoff_max_seconds: 300,
         }),
       }));
     });

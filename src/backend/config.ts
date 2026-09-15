@@ -134,6 +134,8 @@ function defaultConfig(): NexusConfig {
       max_hops: 4,
       retention_days: 30,
       reply_max_attempts: 60,
+      reply_backoff_seconds: 5,
+      reply_backoff_max_seconds: 300,
     },
     browser: {
       // Off by default for the same reason as docker: an agent-driven browser

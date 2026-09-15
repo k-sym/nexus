@@ -63,7 +63,7 @@ describe('AgentBridgeInbox', () => {
   it('previews the exact completion reply and sends only on explicit confirmation', async () => {
     const user = userEvent.setup();
     const reply = { id: 'reply-1', message_id: pending.id, destination: 'nexus.bridge.v1.results.cmV2aWV3ZXI',
-      payload: JSON.stringify({ kind: 'result', content: 'Review complete' }), status: 'pending_approval' as const, error: null, sent_at: null, attempts: 0, discarded_at: null, discarded_by: null };
+      payload: JSON.stringify({ kind: 'result', content: 'Review complete' }), status: 'pending_approval' as const, error: null, sent_at: null, attempts: 0, next_attempt_at: null, discarded_at: null, discarded_by: null };
     vi.mocked(api.agentBridge.messages).mockResolvedValue({ messages: [{ ...pending, status: 'completed', reply }] });
     vi.mocked(api.agentBridge.sendReply).mockResolvedValue({ ...reply, status: 'queued' });
     render(<AgentBridgeInbox />);
@@ -79,7 +79,7 @@ describe('AgentBridgeInbox', () => {
 it('stops promising automatic retries and offers explicit Retry and Discard for dead letters', async () => {
   const user = userEvent.setup();
   const reply = { id: 'r', message_id: pending.id, destination: 'nexus.bridge.v1.results.test', payload: '{"content":"Ready"}',
-    status: 'dead_letter' as const, error: 'Broker unavailable', sent_at: null, attempts: 60, discarded_at: null, discarded_by: null };
+    status: 'dead_letter' as const, error: 'Broker unavailable', sent_at: null, attempts: 60, next_attempt_at: null, discarded_at: null, discarded_by: null };
   vi.mocked(api.agentBridge.status).mockResolvedValue({ enabled: true, state: 'error', mode: 'queue_for_approval', instanceId: 'test', subject: 'test', url: '', durable: true });
   vi.mocked(api.agentBridge.messages).mockResolvedValue({ messages: [{ ...pending, status: 'completed', reply }] });
   vi.mocked(api.agentBridge.retryReply).mockRejectedValueOnce(new Error('Still unavailable'));

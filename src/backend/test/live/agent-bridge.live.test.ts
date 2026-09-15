@@ -10,7 +10,7 @@ import { connect } from '@nats-io/transport-node';
 import { jetstream, jetstreamManager } from '@nats-io/jetstream';
 import { getDb } from '../../db.js';
 import { AgentBridgeService } from '../../agent-bridge/service.js';
-import { bridgeSubject, bridgeResultSubject, AGENT_BRIDGE_RESULTS_STREAM } from '../../agent-bridge/protocol.js';
+import { bridgeSubject, bridgeResultSubject, AGENT_BRIDGE_RESULTS_STREAM, AGENT_BRIDGE_RESULTS_PREFIX } from '../../agent-bridge/protocol.js';
 import { registerAgentBridgeRoutes, createManagedTurnRunner } from '../../routes/agent-bridge.js';
 import { registerChatRoutes } from '../../routes/chat.js';
 import { capabilitiesFromModel } from '../../pi/model-capabilities.js';
@@ -59,7 +59,7 @@ test('real broker → approval → managed chat → supervised work / expiry →
     for (const id of ['a', 'b']) db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, last_model_key) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, 'project', id, now, now, 'test/model');
     const config = { enabled: true, mode: 'queue_for_approval' as const, url: `nats://127.0.0.1:${port}`, instance_id: 'live',
-      allowed_senders: ['reviewer'], token: '', max_message_bytes: 4096, max_messages_per_minute: 30, max_hops: 4, retention_days: 30, reply_max_attempts: 60 };
+      allowed_senders: ['reviewer'], token: '', max_message_bytes: 4096, max_messages_per_minute: 30, max_hops: 4, retention_days: 30, reply_max_attempts: 60, reply_backoff_seconds: 5, reply_backoff_max_seconds: 300 };
     let service = new AgentBridgeService(db, config);
     service.store.setPolicy('project', { enabled: true, thread_ids: null });
     const questions = new QuestionBroker();
@@ -174,7 +174,7 @@ test('real broker → approval → managed chat → supervised work / expiry →
   }
 });
 
-test('broker outage reaches dead letter; restart preserves state; retry delivers original ID and discard stays local', { timeout: 60_000 }, async (t) => {
+test('broker outage defers replies; publish failures back off to dead letter; restart preserves state; retry delivers original ID and discard stays local', { timeout: 60_000 }, async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'nexus-bridge-outage-'));
   const port = await freePort();
   const url = `nats://127.0.0.1:${port}`;
@@ -209,26 +209,49 @@ test('broker outage reaches dead letter; restart preserves state; retry delivers
     db.prepare('INSERT INTO projects (id, slug, name, repo_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('p', 'p', 'Project', root, now, now);
     db.prepare('INSERT INTO chat_threads (id, project_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)').run('t', 'p', 'Thread', now, now);
     const config = { enabled: true, mode: 'queue_for_approval' as const, url, instance_id: 'outage', allowed_senders: ['reviewer'], token: '', max_message_bytes: 4096,
-      max_messages_per_minute: 30, max_hops: 4, retention_days: 30, reply_max_attempts: 2 };
+      max_messages_per_minute: 30, max_hops: 4, retention_days: 30, reply_max_attempts: 2, reply_backoff_seconds: 5, reply_backoff_max_seconds: 300 };
     service = new AgentBridgeService(db, config);
     service.store.setPolicy('p', { enabled: true, thread_ids: ['t'] });
     service.start(); await until(() => service!.status().state === 'connected', 'outage service connected');
-    for (const id of ['retry', 'discard']) {
+    for (const id of ['retry', 'discard', 'deferred']) {
       service.ingest({ version: 1, kind: 'message', id, sentAt: now, sender: { id: 'reviewer' }, target: { instanceId: 'outage', projectId: 'p', threadId: 't' }, content: 'Review' });
       const running = service.store.transition(id, 'pending_approval', 'running')!;
       service.store.complete(running, { completed: true, content: `Report ${id}` }, 'outage');
     }
     const original = service.store.reply('retry')!;
-    assert.equal((await (await jetstreamManager(nc!)).streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 0);
-    await nc!.close(); nc = undefined;
-    await kill();
-    await until(() => service!.status().state !== 'connected', 'disconnect observed');
+    const liveJsm = await jetstreamManager(nc!);
+    assert.equal((await liveJsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 0);
     for (const id of ['retry', 'discard']) service.store.approveReply(id);
-    await service.flushReplies(); await service.flushReplies();
+    // A publish that the broker actively rejects (no stream captures the
+    // subject) is a real delivery failure: it spends the budget with backoff.
+    await liveJsm.streams.delete(AGENT_BRIDGE_RESULTS_STREAM);
+    const t0 = Date.now();
+    await service.flushReplies(t0);
+    for (const id of ['retry', 'discard']) {
+      assert.equal(service.store.reply(id)?.status, 'queued');
+      assert.equal(service.store.reply(id)?.attempts, 1);
+      assert.equal(service.store.reply(id)?.next_attempt_at, new Date(t0 + 5_000).toISOString());
+    }
+    await service.flushReplies(t0 + 1_000);
+    assert.equal(service.store.reply('retry')?.attempts, 1, 'no retry inside the backoff window');
+    await service.flushReplies(t0 + 5_000);
     for (const id of ['retry', 'discard']) {
       assert.equal(service.store.reply(id)?.status, 'dead_letter');
       assert.equal(service.store.reply(id)?.attempts, 2);
     }
+    // Recreate the stream so the manual retry below has somewhere to land,
+    // then take the broker away: an outage must not touch dead letters or
+    // spend the budget of anything still queued.
+    await liveJsm.streams.add({ name: AGENT_BRIDGE_RESULTS_STREAM, subjects: [`${AGENT_BRIDGE_RESULTS_PREFIX}.*`] });
+    await nc!.close(); nc = undefined;
+    await kill();
+    await until(() => service!.status().state !== 'connected', 'disconnect observed');
+    service.store.approveReply('deferred');
+    for (let cycle = 0; cycle < 3; cycle++) await service.flushReplies();
+    assert.equal(service.store.reply('deferred')?.status, 'queued');
+    assert.equal(service.store.reply('deferred')?.attempts, 0, 'broker unavailability is not a delivery attempt');
+    assert.match(service.store.reply('deferred')?.error ?? '', /broker is unavailable/);
+    assert.equal(service.store.reply('retry')?.status, 'dead_letter');
     await service.stop();
     service = new AgentBridgeService(db, config);
     assert.equal(service.store.reply('retry')?.status, 'dead_letter');
@@ -241,17 +264,18 @@ test('broker outage reaches dead letter; restart preserves state; retry delivers
     }, 'broker restarted');
     service.start(); await until(() => service!.status().state === 'connected', 'service reconnected');
     const jsm = await jetstreamManager(nc!);
-    assert.equal((await jsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 0, 'dead letters do not resend on reconnect');
+    await until(() => service!.store.reply('deferred')?.status === 'sent', 'deferred reply delivered after the outage');
+    assert.equal((await jsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 1, 'dead letters do not resend on reconnect');
     assert.equal((await app.inject({ method: 'POST', url: '/api/agent-bridge/messages/retry/reply/retry' })).statusCode, 202);
     await until(() => service!.store.reply('retry')?.status === 'sent', 'manual retry sent');
-    const stored = await jsm.streams.getMessage(AGENT_BRIDGE_RESULTS_STREAM, { seq: 1 });
+    const stored = await jsm.streams.getMessage(AGENT_BRIDGE_RESULTS_STREAM, { seq: 2 });
     const result = JSON.parse(new TextDecoder().decode(stored.data));
     assert.equal(result.id, original.id);
     assert.equal(new TextDecoder().decode(stored.data), original.payload);
     assert.equal(service.store.reply('discard')?.status, 'discarded');
     assert.equal(service.store.reply('discard')?.discarded_by, 'user');
     await service.flushReplies();
-    assert.equal((await jsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 1);
+    assert.equal((await jsm.streams.info(AGENT_BRIDGE_RESULTS_STREAM)).state.messages, 2);
   } finally {
     await service?.stop(); await app.close(); await nc?.close(); await kill(); db.close();
     rmSync(root, { recursive: true, force: true });

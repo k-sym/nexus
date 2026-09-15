@@ -71,5 +71,7 @@ test('older Agent Bridge configuration gains retention and retry defaults on loa
     assert.equal(config.agent_bridge.max_hops, 2);
     assert.equal(config.agent_bridge.retention_days, 30);
     assert.equal(config.agent_bridge.reply_max_attempts, 60);
+    assert.equal(config.agent_bridge.reply_backoff_seconds, 5);
+    assert.equal(config.agent_bridge.reply_backoff_max_seconds, 300);
   } finally { writeFileSync(join(NEXUS_HOME, 'config.yaml'), original); }
 });

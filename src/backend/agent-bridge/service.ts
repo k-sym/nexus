@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3';
-import type { AgentBridgeConfig } from '@nexus/shared';
+import type { AgentBridgeConfig, AgentBridgeReply } from '@nexus/shared';
 import { connect, type NatsConnection } from '@nats-io/transport-node';
 import {
   AckPolicy,
@@ -25,7 +25,16 @@ import {
 import { AgentBridgeStore, type BridgeIngestResult } from './store.js';
 
 const RECONNECT_DELAY_MS = 5_000;
+const REPLY_FLUSH_INTERVAL_MS = 5_000;
 const STREAM_MAX_AGE_NS = 24 * 60 * 60 * 1_000_000_000;
+
+/** Publishes one approved reply to the broker; throws when delivery fails.
+ * Injectable so tests can exercise publish failures without a broker. */
+export type ReplyPublisher = (nc: NatsConnection, reply: AgentBridgeReply) => Promise<void>;
+
+const publishViaJetStream: ReplyPublisher = async (nc, reply) => {
+  await jetstream(nc).publish(reply.destination, new TextEncoder().encode(reply.payload), { msgID: reply.id });
+};
 
 export interface AgentBridgeStatus {
   enabled: boolean;
@@ -54,6 +63,7 @@ export class AgentBridgeService {
   constructor(
     private readonly db: Database.Database,
     readonly config: AgentBridgeConfig,
+    private readonly publishReply: ReplyPublisher = publishViaJetStream,
   ) {
     this.store = new AgentBridgeStore(db);
     this.store.recoverInterrupted();
@@ -88,7 +98,7 @@ export class AgentBridgeService {
       return;
     }
     this.state = 'connecting';
-    if (!this.replyTimer) this.replyTimer = setInterval(() => { void this.flushReplies(); }, 5000);
+    if (!this.replyTimer) this.replyTimer = setInterval(() => { void this.flushReplies(); }, REPLY_FLUSH_INTERVAL_MS);
     void this.connectOnce();
   }
 
@@ -128,19 +138,30 @@ export class AgentBridgeService {
     return result;
   }
 
-  flushReplies(): Promise<void> {
+  /** Deliver every queued reply whose backoff has elapsed at `nowMs`.
+   * Publish failures spend the reply's attempt budget and schedule the next
+   * try with doubling backoff; a broker outage only records the reason, so a
+   * long outage never dead-letters approved replies. */
+  flushReplies(nowMs = Date.now()): Promise<void> {
     if (this.replyFlush) return this.replyFlush;
     if (this.stopping || !this.config.enabled) return Promise.resolve();
     this.replyFlush = (async () => {
-      for (const reply of this.store.queuedReplies()) {
+      for (const reply of this.store.queuedReplies(nowMs)) {
         if (this.stopping) break;
+        const nc = this.nc;
+        if (!nc || this.state !== 'connected') {
+          this.store.markReplyDeferred(reply.id, 'Agent Bridge broker is unavailable');
+          continue;
+        }
         try {
-          if (!this.nc || this.state !== 'connected') throw new Error('Agent Bridge broker is unavailable');
-          const js = jetstream(this.nc);
-          await js.publish(reply.destination, new TextEncoder().encode(reply.payload), { msgID: reply.id });
+          await this.publishReply(nc, reply);
           this.store.markReplySent(reply.id);
         } catch (error) {
-          this.store.markReplyError(reply.id, error instanceof Error ? error.message : 'Reply delivery failed', this.config.reply_max_attempts);
+          this.store.markReplyError(reply.id, error instanceof Error ? error.message : 'Reply delivery failed', {
+            maxAttempts: this.config.reply_max_attempts,
+            backoff: { initialMs: this.config.reply_backoff_seconds * 1_000, maxMs: this.config.reply_backoff_max_seconds * 1_000 },
+            nowMs,
+          });
         }
       }
     })().finally(() => { this.replyFlush = null; });
