@@ -80,11 +80,25 @@ public enum AttentionSnoozePreset: String, Sendable, CaseIterable {
     }
 }
 
-/// Where an item points. The partner normalises `links` to exactly these keys.
+/// Where an item points. The partner normalises `links` to these keys (`url`
+/// arrives with slice 6b's producers; absent today).
 public struct AttentionLinks: Decodable, Sendable {
     public let draftId: String?
     public let vaultPage: String?
     public let proposalId: String?
+    public let url: String?
+}
+
+/// A vault page behind an item (`GET /api/attention/:id/page`): the memory the
+/// producer filed under the exact title in `links.vault_page`, as markdown.
+public struct AttentionPage: Decodable, Sendable, Identifiable {
+    public let title: String
+    public let body: String
+    public let memoryId: String?
+    public let itemId: String?
+
+    /// Stable enough to drive a `sheet(item:)`: the memory id, else the item's, else the title.
+    public var id: String { memoryId ?? itemId ?? title }
 }
 
 /// One resolve, as the partner recorded it. `result` is producer-shaped; the
@@ -131,6 +145,10 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
     public let verbs: [AttentionVerb]
     /// Subset of `verbs` the glasses may offer. Never contains `open`.
     public let lensVerbs: [AttentionVerb]?
+    /// `notice` | `action` once the producer sets it (slice 6b); absent = action.
+    public let category: String?
+    /// Project slug or badge the producer suggests for "file as a to-do" (6b); absent today.
+    public let suggestedProject: String?
     public let producer: String?
     public let createdAt: Int?
     public let updatedAt: Int?
@@ -146,6 +164,7 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
         case id, status, title, why, body, source, links, verbs, producer, seq, resolution, events
         case kindName = "kind"
         case proposedVerb, lensVerbs, createdAt, updatedAt, snoozedUntil, expiresAt, alertSeq
+        case category, suggestedProject
     }
 
     public init(from decoder: Decoder) throws {
@@ -161,6 +180,8 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
         proposedVerb = try c.decodeIfPresent(AttentionVerb.self, forKey: .proposedVerb)
         verbs = try c.decodeIfPresent([AttentionVerb].self, forKey: .verbs) ?? []
         lensVerbs = try c.decodeIfPresent([AttentionVerb].self, forKey: .lensVerbs)
+        category = try c.decodeIfPresent(String.self, forKey: .category)
+        suggestedProject = try c.decodeIfPresent(String.self, forKey: .suggestedProject)
         producer = try c.decodeIfPresent(String.self, forKey: .producer)
         createdAt = try c.decodeIfPresent(Int.self, forKey: .createdAt)
         updatedAt = try c.decodeIfPresent(Int.self, forKey: .updatedAt)
@@ -173,6 +194,10 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
     }
 
     public var kind: AttentionKind { AttentionKind(rawValue: kindName) ?? .unknown }
+
+    /// A notice wants "seen" or "file as a to-do", never a push and never a badge
+    /// count (design D19/D22a). Absent category = action.
+    public var isNotice: Bool { category == "notice" }
 
     /// The partner accepts a verb only while the item is `open` or `snoozed`;
     /// it stores `verbs` on the item and never strips them, so a client must

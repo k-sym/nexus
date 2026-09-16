@@ -33,10 +33,17 @@ final class LiveHub {
 
     var pendingCount: Int { pending.count }
 
-    /// Open attention items store-wide, or 0 while unknown/unconfigured/unreachable.
+    /// Open *actions* — a notice never counts (design D22a) — or 0 while
+    /// unknown/unconfigured/unreachable. Counted from the live list so the
+    /// category is honoured; the partner's store-wide `open` cannot tell them apart.
     var attentionOpen: Int {
         guard case .loaded(let response) = attention, response.configured != false, response.error == nil else { return 0 }
-        return response.open ?? 0
+        return response.items.filter { $0.status == .open && !$0.isNotice }.count
+    }
+
+    /// Live notices (seen-or-file items), for the section header.
+    var attentionNotices: Int {
+        attention.value?.items.filter { $0.isNotice }.count ?? 0
     }
 
     /// Items the Pulse card shows: the `live` list (open + snoozed + resolving).

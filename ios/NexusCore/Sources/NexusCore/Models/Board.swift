@@ -73,6 +73,8 @@ public enum BoardOrigin: Hashable, Sendable {
     case ticket(key: String, url: String?)
     case github(number: Int, url: String)
     case monday(itemId: String, name: String, url: String?)
+    /// Filed from a partner attention item (#477 slice 6a).
+    case attention(itemId: String, itemKind: String, title: String)
     case chat
     case unknown(String)
 
@@ -83,6 +85,7 @@ public enum BoardOrigin: Hashable, Sendable {
         case .ticket: return "ticket"
         case .github: return "github"
         case .monday: return "monday"
+        case .attention: return "attention"
         case .chat: return "chat"
         case .unknown(let k): return k
         }
@@ -94,15 +97,16 @@ public enum BoardOrigin: Hashable, Sendable {
         case .ticket(_, let url): return url
         case .github(_, let url): return url
         case .monday(_, _, let url): return url
-        case .chat, .unknown: return nil
+        case .attention, .chat, .unknown: return nil
         }
     }
 }
 
 extension BoardOrigin: Decodable {
     private enum CodingKeys: String, CodingKey {
-        case kind, key, url, number, name
+        case kind, key, url, number, name, title
         case itemId = "item_id"
+        case itemKind = "item_kind"
     }
 
     public init(from decoder: Decoder) throws {
@@ -122,6 +126,11 @@ extension BoardOrigin: Decodable {
                 itemId: try c.decode(String.self, forKey: .itemId),
                 name: try c.decode(String.self, forKey: .name),
                 url: try c.decodeIfPresent(String.self, forKey: .url))
+        case "attention":
+            self = .attention(
+                itemId: try c.decode(String.self, forKey: .itemId),
+                itemKind: try c.decodeIfPresent(String.self, forKey: .itemKind) ?? "unknown",
+                title: try c.decodeIfPresent(String.self, forKey: .title) ?? "")
         case "chat":
             self = .chat
         default:

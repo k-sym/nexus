@@ -337,6 +337,19 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/attention/\(id)")
     }
 
+    /// The vault page behind an item → `AttentionPage` (404 when it has none).
+    public static func attentionPage(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/attention/\(id)/page")
+    }
+
+    /// "File as a to-do": the item becomes a Board session → `OriginSessionResult`.
+    public static func fileAttention(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/attention/\(id)/file", method: "POST", body: body)
+    }
+
+    /// The partner's one current conversation (adopted locally) → `AssistantCurrentResponse`.
+    public static let assistantCurrent = Endpoint(path: "/api/assistant/current")
+
     /// Apply a verb. `conflictIsBusy: false`: a 409 here is the partner saying
     /// the item's state refuses the verb, and its sentence is shown verbatim.
     /// The reply may be 202 (a `draft` verb has started; the item is `resolving`).

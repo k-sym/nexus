@@ -317,6 +317,9 @@ export interface ChatThread {
   ticket_key?: string | null;
   /** GitHub issue number when the thread was started from the board's Inbox (#439). */
   github_issue?: number | null;
+  /** JSON `{ id, kind, title }` of the partner attention item this thread was filed
+   *  from (#477 slice 6a); the board shows it as the card's origin. */
+  attention_item?: string | null;
   /** `provider/id` of the model last used on this thread; restored by the picker. */
   last_model_key?: string | null;
   /** The Claude Code session id behind a Claude-engine thread, once a turn has run (or the thread was imported). */
@@ -858,6 +861,8 @@ export type BoardOrigin =
   | { kind: 'ticket'; key: string; url: string | null }
   | { kind: 'github'; number: number; url: string }
   | { kind: 'monday'; item_id: string; name: string; url: string | null }
+  /** Filed from a partner attention item (#477 slice 6a): the phone's "file as a to-do". */
+  | { kind: 'attention'; item_id: string; item_kind: string; title: string }
   | { kind: 'chat' };
 
 export interface BoardCard {

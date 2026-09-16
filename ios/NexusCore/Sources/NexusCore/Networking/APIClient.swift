@@ -549,6 +549,27 @@ public actor APIClient {
         return try await request(.resolveAttention(id, body: body))
     }
 
+    /// The markdown page behind an item (its `links.vault_page`), rendered by the
+    /// phone. Throws `.server(status: 404, …)` when the item has no page.
+    public func attentionPage(id: String) async throws -> AttentionPage {
+        try await request(.attentionPage(id))
+    }
+
+    /// File an item as a to-do: a Board session on `projectId`, stamped with the
+    /// item as its origin, plus the composed first turn to seed the chat with.
+    /// The item is dismissed on the partner as part of the same call.
+    public func fileAttention(id: String, projectId: String, by: String = "ios", surface: String = "phone") async throws -> OriginSessionResult {
+        let body = try JSONSerialization.data(withJSONObject: ["project_id": projectId, "by": by, "surface": surface])
+        return try await request(.fileAttention(id, body: body), decoder: plainDecoder)
+    }
+
+    /// The partner's current conversation as a local session — the target for
+    /// "Ask the partner" from an attention item.
+    public func assistantCurrent() async throws -> AssistantSession {
+        let res: AssistantCurrentResponse = try await request(.assistantCurrent, decoder: plainDecoder)
+        return res.session
+    }
+
     // MARK: Assistant (M6)
 
     /// Merged local + adoptable-remote Partner sessions. Mixed snake/camel keys →

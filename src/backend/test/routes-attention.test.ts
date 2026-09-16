@@ -1,7 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
+import { getDb } from '../db';
 import { createAttentionRoutes } from '../routes/attention';
+import { buildAttentionFirstTurn, attentionThreadTitle } from '../attention/file';
+import { parseAttentionOrigin } from '../routes/board';
 import type { PartnerFetch } from '../partner/client';
 import type { NexusConfig } from '@nexus/shared';
 
@@ -36,11 +39,47 @@ function jsonRes(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
-async function appWith(load: () => NexusConfig, fetchImpl?: PartnerFetch) {
+async function appWith(load: () => NexusConfig, fetchImpl?: PartnerFetch, options: { searchPages?: (t: string) => Promise<any[]>; db?: ReturnType<typeof getDb> } = {}) {
   const app = Fastify({ logger: false });
-  app.register(createAttentionRoutes(load, { fetchImpl }));
+  if (options.db) app.decorate('db', options.db);
+  app.register(createAttentionRoutes(load, { fetchImpl, searchPages: options.searchPages }));
   await app.ready();
   return app;
+}
+
+const MEETING = {
+  ...ITEM,
+  id: 'att_meet',
+  kind: 'meeting.prep',
+  title: 'IT Standup and Review — Thu 17 Sep 09:30',
+  why: 'Tomorrow 09:30, 5 others — prep pack in the vault; anything to tweak?',
+  proposed_verb: 'open',
+  verbs: ['open', 'snooze', 'dismiss'],
+  lens_verbs: ['dismiss'],
+  links: { draft_id: null, vault_page: 'Meeting prep: IT Standup and Review (2026-09-17)', proposal_id: null },
+};
+
+const PAGE = { id: '01M2HW', title: 'Meeting prep: IT Standup and Review (2026-09-17)', body: '# Meeting prep\n\n*WHO*\nJon Austin — …' };
+
+/** A partner stub that answers the detail call for MEETING and records resolves. */
+function partnerFor(item: Record<string, unknown>, resolves: unknown[] = []): PartnerFetch {
+  return async (url, init) => {
+    const u = String(url);
+    if (u.endsWith('/resolve')) {
+      resolves.push(init?.body && JSON.parse(String(init.body)));
+      return jsonRes({ ...item, status: 'resolved' });
+    }
+    if (u.endsWith(`/v1/attention/${item.id}`)) return jsonRes(item);
+    return jsonRes({ detail: 'unknown item' }, 404);
+  };
+}
+
+function dbWithProject(id = 'proj-1') {
+  const db = getDb(':memory:');
+  const now = new Date().toISOString();
+  db.prepare('INSERT INTO projects (id, slug, name, description, repo_path, config_json, sort_order, git_remote, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(id, 'ssuk', 'SSUK', '', '/tmp/ssuk', '{}', 0, '', now, now);
+  return db;
 }
 
 test('GET /api/attention proxies the live list with the bearer', async () => {
@@ -205,3 +244,93 @@ test('an unconfigured adapter refuses a write with 400', async () => {
   assert.equal(res.statusCode, 400);
   await app.close();
 });
+
+// -- slice 6a: Show the page ------------------------------------------------
+
+test('GET /api/attention/:id/page returns the vault page matched by exact title', async () => {
+  const asked: string[] = [];
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), partnerFor(MEETING), {
+    searchPages: async (t) => { asked.push(t); return [{ id: 'x', title: 'Meeting prep: IT Standup (2026-09-01)', body: 'older' }, PAGE]; },
+  });
+  const res = await app.inject({ method: 'GET', url: '/api/attention/att_meet/page' });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().title, PAGE.title);
+  assert.equal(res.json().body, PAGE.body);
+  assert.equal(res.json().memory_id, '01M2HW');
+  assert.deepEqual(asked, [MEETING.links.vault_page]);
+  await app.close();
+});
+
+test('a page lookup says so when the item has no page, when the vault lacks it, and when the daemon is down', async () => {
+  const noLink = await appWith(loadWith('http://adapter:8788', 'k1'), partnerFor(ITEM), { searchPages: async () => [PAGE] });
+  const a = await noLink.inject({ method: 'GET', url: '/api/attention/att_01/page' });
+  assert.equal(a.statusCode, 404);
+  assert.match(a.json().error, /no page/);
+  await noLink.close();
+
+  const missing = await appWith(loadWith('http://adapter:8788', 'k1'), partnerFor(MEETING), { searchPages: async () => [{ id: 'y', title: 'Something else', body: 'no' }] });
+  const b = await missing.inject({ method: 'GET', url: '/api/attention/att_meet/page' });
+  assert.equal(b.statusCode, 404);
+  assert.match(b.json().error, /No page titled/);
+  await missing.close();
+
+  const down = await appWith(loadWith('http://adapter:8788', 'k1'), partnerFor(MEETING), { searchPages: async () => { throw new Error('connect ECONNREFUSED 4100'); } });
+  const c = await down.inject({ method: 'GET', url: '/api/attention/att_meet/page' });
+  assert.equal(c.statusCode, 502);
+  assert.match(c.json().error, /daemon unavailable/);
+  await down.close();
+});
+
+// -- slice 6a: File as a to-do -----------------------------------------------
+
+test('POST /api/attention/:id/file creates a Board session with the item as its origin and dismisses the item', async () => {
+  const resolves: any[] = [];
+  const db = dbWithProject();
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), partnerFor(MEETING, resolves), { db });
+  const res = await app.inject({ method: 'POST', url: '/api/attention/att_meet/file', payload: { project_id: 'proj-1', by: 'ios', surface: 'phone' } });
+  assert.equal(res.statusCode, 200);
+  const body = res.json();
+  assert.equal(body.thread.project_id, 'proj-1');
+  assert.equal(body.thread.title, 'IT Standup and Review — Thu 17 Sep 09:30');
+  assert.match(body.firstTurn, /^IT Standup and Review — Thu 17 Sep 09:30\n\nTomorrow 09:30/);
+  assert.match(body.firstTurn, /Source: partner attention item att_meet — meeting prep \(account ssuk\); vault page "Meeting prep: IT Standup and Review \(2026-09-17\)"\. Filed from the phone as a to-do\./);
+  assert.match(body.firstTurn, /Do not send mail, write to GitHub, Monday or Jira/);
+
+  const row = db.prepare('SELECT title, attention_item FROM chat_threads WHERE id = ?').get(body.thread.id) as { title: string; attention_item: string };
+  assert.deepEqual(JSON.parse(row.attention_item), { id: 'att_meet', kind: 'meeting.prep', title: 'IT Standup and Review — Thu 17 Sep 09:30' });
+  assert.deepEqual(parseAttentionOrigin(row.attention_item), { kind: 'attention', item_id: 'att_meet', item_kind: 'meeting.prep', title: 'IT Standup and Review — Thu 17 Sep 09:30' });
+  assert.deepEqual(resolves, [{ verb: 'dismiss', by: 'ios', surface: 'phone' }]);
+  await app.close();
+  db.close();
+});
+
+test('filing refuses a missing project_id or an unknown project before touching the partner, and survives a refused dismiss', async () => {
+  const db = dbWithProject();
+  let partnerCalls = 0;
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (url, init) => {
+    partnerCalls += 1;
+    if (String(url).endsWith('/resolve')) return jsonRes({ detail: 'item is resolved' }, 409);
+    return jsonRes(MEETING);
+  }, { db });
+  const noProject = await app.inject({ method: 'POST', url: '/api/attention/att_meet/file', payload: {} });
+  assert.equal(noProject.statusCode, 400);
+  const unknown = await app.inject({ method: 'POST', url: '/api/attention/att_meet/file', payload: { project_id: 'nope' } });
+  assert.equal(unknown.statusCode, 404);
+  assert.equal(partnerCalls, 0);
+
+  const filed = await app.inject({ method: 'POST', url: '/api/attention/att_meet/file', payload: { project_id: 'proj-1' } });
+  assert.equal(filed.statusCode, 200, 'a 409 on the dismiss does not undo the filing');
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM chat_threads').get() as { c: number }).c, 1);
+  await app.close();
+  db.close();
+});
+
+test('the to-do first turn and title degrade gracefully for a bare item', () => {
+  const bare = { id: 'x', kind: 'future.kind', title: '  ' };
+  assert.equal(attentionThreadTitle(bare), 'Needs you: future.kind');
+  const turn = buildAttentionFirstTurn(bare);
+  assert.match(turn, /^Needs you: future.kind\n\nSource: partner attention item x — future.kind\. Filed from the phone as a to-do\./);
+  assert.equal(parseAttentionOrigin('not json'), null);
+  assert.equal(parseAttentionOrigin('{"kind":"x"}'), null);
+});
+
