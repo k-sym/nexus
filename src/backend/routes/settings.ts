@@ -154,6 +154,7 @@ export async function registerSettingsRoutes(fastify: FastifyInstance) {
       },
       jira: incoming.jira ?? current.jira,
       github: incoming.github ?? current.github,
+      attention: incoming.attention ?? current.attention,
       roles: { ...current.roles, ...incoming.roles, models: { ...current.roles.models, ...incoming.roles?.models } },
       agent_bridge: {
         ...current.agent_bridge,

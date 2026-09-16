@@ -195,6 +195,12 @@ function defaultConfig(): NexusConfig {
       key_path: '',
       key: '${APNS_KEY}',
     },
+    attention: {
+      // Pushes on by default: the poller is inert anyway until the assistant
+      // and APNs are configured. deepMerge backfills this block onto older configs.
+      push: true,
+      poll_minutes: 1,
+    },
   };
 }
 

@@ -210,6 +210,14 @@ export interface PartnerCapabilities {
   sessionKeyHeader?: string;
 }
 
+export interface PartnerAttentionResolveBody {
+  verb: string;
+  by: string;
+  surface?: string;
+  until?: number;
+  preset?: string;
+}
+
 export interface PartnerClient {
   capabilities(): Promise<PartnerCapabilities>;
   startRun(input: PartnerRunInput): Promise<PartnerRunStart>;
@@ -251,6 +259,13 @@ export interface PartnerClient {
   /** Edit-before-send (baker-internal#97): replaces the body and returns the
    * draft to pending, so a prior approval can never be inherited. */
   editDraft(id: string, body: string, by: string): Promise<unknown>;
+  /** Partner attention items — the "Needs you" collection (baker-internal#140,
+   * k-sym/nexus#477). Passed through untyped like drafts. `resolveAttention`
+   * carries the upstream status because the partner answers 202 while a
+   * `draft` verb is still running, and the phone must tell "started" from "done". */
+  listAttention(status?: string, sinceSeq?: number): Promise<unknown>;
+  getAttention(id: string): Promise<unknown>;
+  resolveAttention(id: string, body: PartnerAttentionResolveBody): Promise<{ status: number; body: unknown }>;
   createSession(input: PartnerSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
   listSessions(input?: PartnerListSessionsInput): Promise<PartnerListSessionsResult>;
@@ -291,7 +306,10 @@ export function createPartnerClient(options: CreatePartnerClientOptions): Partne
     ...extra,
   });
 
-  async function requestJson(path: string, init: RequestInit = {}): Promise<unknown> {
+  // Every 2xx looks alike to callers of requestJson. The attention resolve
+  // route needs the distinction (202 = a draft is still being written), so the
+  // status-carrying variant is the primitive and requestJson wraps it.
+  async function requestJsonWithStatus(path: string, init: RequestInit = {}): Promise<{ status: number; body: unknown }> {
     const response = await fetchImpl(`${baseUrl}${path}`, {
       ...init,
       headers: {
@@ -311,8 +329,12 @@ export function createPartnerClient(options: CreatePartnerClientOptions): Partne
       error.status = response.status;
       throw error;
     }
-    if (response.status === 204) return {};
-    return response.json().catch(() => ({}));
+    if (response.status === 204) return { status: 204, body: {} };
+    return { status: response.status, body: await response.json().catch(() => ({})) };
+  }
+
+  async function requestJson(path: string, init: RequestInit = {}): Promise<unknown> {
+    return (await requestJsonWithStatus(path, init)).body;
   }
 
   return {
@@ -436,6 +458,27 @@ export function createPartnerClient(options: CreatePartnerClientOptions): Partne
       return requestJson(`/v1/drafts/${encodeURIComponent(id)}/reject`, {
         method: 'POST',
         body: JSON.stringify({ by, ...(note ? { note } : {}) }),
+      });
+    },
+
+    // Attention items (baker-internal#140). The partner owns the closed verb
+    // set and every state check; these are passthroughs.
+    async listAttention(status?: string, sinceSeq?: number): Promise<unknown> {
+      const params = new URLSearchParams();
+      if (status) params.set('status', status);
+      if (sinceSeq != null) params.set('since_seq', String(sinceSeq));
+      const q = params.size ? `?${params}` : '';
+      return requestJson(`/v1/attention${q}`);
+    },
+
+    async getAttention(id: string): Promise<unknown> {
+      return requestJson(`/v1/attention/${encodeURIComponent(id)}`);
+    },
+
+    async resolveAttention(id: string, body: PartnerAttentionResolveBody): Promise<{ status: number; body: unknown }> {
+      return requestJsonWithStatus(`/v1/attention/${encodeURIComponent(id)}/resolve`, {
+        method: 'POST',
+        body: JSON.stringify(body),
       });
     },
 

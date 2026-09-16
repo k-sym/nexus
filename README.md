@@ -679,6 +679,10 @@ helpers:                         # optional external API helpers; each off by de
     api_key: "${CONTEXT7_API_KEY}"
   search_default: exa            # which backend web_search prefers when Brave AND Exa are both on
 
+attention:                       # partner "Needs you" items (#477): proxied at /api/attention and
+  push: true                     #   pushed to iOS once per item whose alert_seq moves. false keeps
+  poll_minutes: 1                #   the poll (badge count, cursor) but never pushes. Floor 1 minute.
+
 tool_policy:                     # optional per-tool approval policy (omit ⇒ built-in defaults:
                                  #   read-only allowed, `services` (Docker) confirmed). Read live —
                                  #   an edit lands on the next tool call, no restart.
@@ -842,6 +846,10 @@ On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `g
 
 A project-less Assistant surface against the Partner assistant-api (baker-internal `apps/partner/assistant-api`, FastAPI on 127.0.0.1:8788, headless Claude) at the configured endpoint (`assistant.url` + `assistant.api_key` in `config.yaml`). It is independent of project sessions and stores its own local Assistant sessions, transcripts, and run ledger in `assistant_sessions`, `assistant_session_messages`, and `assistant_runs`. Each session can be reopened from the Assistant rail, foreground turns stream over NDJSON, and detached background runs store the remote Partner run ID so Nexus can poll `/api/assistant/sync` after restart. When the Partner exposes session listing, the Assistant rail can also show filtered remote API sessions; selecting one adopts it into Nexus, imports message history, and resumes future turns against the mapped Partner `remote_session_id`. The legacy single-thread Assistant endpoints remain as wrappers over the newest/default session for compatibility.
 
+### Needs you — partner attention items
+
+The partner's routines post **attention items** (baker-internal#140): what needs Keith — waiting mail, a pending draft, a meeting pack, an autonomy proposal, quiz prep — with a one-line why, the proposed next action and the verbs each surface may offer. Nexus stores nothing about them except a push cursor; the partner is canonical and the client never invents a verb. The backend proxies them at `/api/attention` (see the API table) and `src/backend/attention/poll.ts` lists the `open` items every `attention.poll_minutes`, sending one APNs push per item whose `alert_seq` moved past the cursor in `attention_push_cursor` — deep link `attention:<id>`, notification thread `attention:<kind>`, badge = pending approvals + open items (the same sum the approval and run-finished pushes now carry). The first tick after a fresh database, and any tick where the partner's counter is below the cursor (a wiped partner store), seed the cursor silently rather than pushing the backlog. A partner outage logs one line per distinct message. `attention.push: false` keeps the tick (badge count, cursor) and only stops the notify. The phone card, the web Partner-view card and the glasses hero that consume this are later slices of k-sym/nexus#477.
+
 ### Idea Watcher
 
 Successor to the old Braindump (#352): capture stays frictionless (type a title, Enter, it's **parked**), but instead of a passive list each idea ripens through a **dialogue** with the partner assistant before it's categorised. An idea's thread *is* an assistant session (created lazily on first discussion, hidden from the Assistant rail); from it you can commission research — a canned, editable brief plus a model pick, dispatched as a turn — and pull the findings apart in the same thread.
@@ -1000,6 +1008,13 @@ The task board was replaced by the session-first board in #439. These routes sta
 | GET | `/api/assistant/thread` | Compatibility wrapper over the newest/default Assistant session |
 | DELETE | `/api/assistant/thread` | Compatibility wrapper that clears the newest/default session |
 | POST | `/api/assistant/messages/stream` | Compatibility wrapper for foreground stream on the newest/default session |
+
+### Attention (partner "Needs you" items, #477)
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/attention?status=&since_seq=` | Proxy of the partner's `/v1/attention`. Fails soft: `{ configured: false, items: [], open: 0, seq: 0, alert_seq: 0 }` unconfigured, the partner body spread over those defaults when configured, plus `error` when the partner is unreachable (never 5xx). `status` defaults to the partner's `live` (open + snoozed + resolving) |
+| GET | `/api/attention/:id` | One item with its append-only `events`. 404 passes through; anything else is 502 |
+| POST | `/api/attention/:id/resolve` | `{ verb, by?, surface?, until?, preset? }`. `verb` required (400 before any upstream call). Answers with the partner's status: 200 done, **202 a `draft` is still being written** (item `resolving`, poll the detail), 400/404/409 with the partner's sentence as `error`. The verb set is the partner's closed set (`draft`, `open`, `snooze`, `dismiss`); there is no approve or send |
 | POST | `/api/assistant/abort` | Abort the latest active Assistant run when possible |
 
 ### Idea Watcher
