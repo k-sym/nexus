@@ -4,7 +4,7 @@
 // and skips HubFeed so nothing overwrites the seed. Drive the rendered HUD with
 // the evenhub-simulator automation API (scripts/sim.sh) to capture screenshots.
 import { store } from '../store'
-import type { Approval, SessionSummary } from '../types'
+import type { Approval, AttentionItem, SessionSummary } from '../types'
 
 const now = Date.now()
 
@@ -145,6 +145,19 @@ export function applyFixture(name: string): boolean {
         cwd: '/Users/dev/nexus', title: 'Deploy', createdAt: now, decision: null,
       }
       store.set({ sessions: [s], approvals: [approval], activeSessionId: null, activeEvents: [] })
+      return true
+    }
+    // A partner attention item with no session behind it (#477): the hero's second
+    // source. The footer reads "● Draft   ●● Dismiss" — the item's lens verbs.
+    case 'attention': {
+      const item: AttentionItem = {
+        id: 'att_mail', kind: 'mail.waiting', status: 'open',
+        title: 'Re: Method statement for the Colchester refit',
+        why: 'waiting 3.2d from jane.holloway',
+        proposed_verb: 'draft', verbs: ['draft', 'open', 'snooze', 'dismiss'], lens_verbs: ['draft', 'snooze', 'dismiss'],
+        alert_seq: 4, created_at: Math.floor(now / 1000) - 3600 * 5, snoozed_until: null,
+      }
+      store.set({ sessions: [], approvals: [], attention: [item], connection: 'ok', activeSessionId: null, activeEvents: [], dismissedAttentionKey: null })
       return true
     }
     default:

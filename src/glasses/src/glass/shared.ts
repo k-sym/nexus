@@ -1,4 +1,4 @@
-import type { Approval, ConnectionStatus, SessionSummary, TranscriptEvent } from '../types'
+import type { Approval, AttentionItem, AttentionVerb, ConnectionStatus, SessionSummary, TranscriptEvent } from '../types'
 
 // Immutable snapshot of the cockpit state the glasses render. Built from the
 // shared store on every change (see AppGlasses.tsx). Identity changes only when
@@ -8,6 +8,7 @@ export interface GlassSnapshot {
   armed: boolean
   sessions: SessionSummary[]
   approvals: Approval[]          // pending only; a non-empty queue takes over the HUD
+  attention?: AttentionItem[]    // partner items (#477); open ones join the needs-you hero. Optional so prototype snapshot builders need no change.
   activeSessionId: string | null // set => detail screen
   activeEvents: TranscriptEvent[]
   detailPage: number             // Phase 2: page of the latest reply shown on the detail card
@@ -30,4 +31,7 @@ export interface GlassActions {
   allow(id: string): void
   deny(id: string): void
   dismissInterrupt(key: string): void
+  /** A lens verb on a partner attention item (#477): the first `lens_verbs`
+   *  entry on tap, `dismiss` on double-tap. Fire-and-acknowledge. */
+  resolveAttention(id: string, verb: AttentionVerb): void
 }

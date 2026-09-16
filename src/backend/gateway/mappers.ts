@@ -5,7 +5,7 @@
  */
 import type { QuestionRequest, QuestionAnswer, PendingQuestionView } from '../pi/questions.js';
 import type { PendingApprovalView } from '../pi/approvals.js';
-import type { Approval, TranscriptEvent, Attention } from './types.js';
+import type { LensAttentionItem, Approval, TranscriptEvent, Attention } from './types.js';
 
 /** Coerce a pi timestamp (ISO string or epoch ms) to epoch ms. */
 export function toMs(ts: unknown): number | undefined {
@@ -167,3 +167,28 @@ export function translateGlassesAnswer(
   });
   return { answers };
 }
+
+const str = (v: unknown, fallback = ''): string => (typeof v === 'string' ? v : fallback);
+const strs = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+const num = (v: unknown, fallback = 0): number => (typeof v === 'number' && Number.isFinite(v) ? v : fallback);
+
+/** Project a partner attention row (#477) onto the lens shape: only what the
+ *  hero shows and the verbs it may offer. Defensive — a partial row from a
+ *  future producer yields a renderable item, never a throw. */
+export function toLensAttentionItem(row: Record<string, unknown>): LensAttentionItem {
+  const snoozed = row.snoozed_until;
+  return {
+    id: str(row.id),
+    kind: str(row.kind, 'unknown'),
+    title: str(row.title),
+    why: str(row.why),
+    status: str(row.status, 'unknown'),
+    proposed_verb: str(row.proposed_verb),
+    verbs: strs(row.verbs),
+    lens_verbs: strs(row.lens_verbs),
+    alert_seq: num(row.alert_seq),
+    created_at: num(row.created_at),
+    snoozed_until: typeof snoozed === 'number' ? snoozed : null,
+  };
+}
+

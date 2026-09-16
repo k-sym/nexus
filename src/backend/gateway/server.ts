@@ -18,7 +18,7 @@ import type { ServerResponse } from 'node:http';
 import type { PiRuntime } from '../pi/runtime.js';
 import { buildDetail, buildSessions, resolveSession, type Scope } from './sessions.js';
 import { questionToApproval, toolCallToApproval, translateGlassesAnswer } from './mappers.js';
-import type { Approval, SseEvent } from './types.js';
+import type { Approval, LensAttentionItem, SseEvent } from './types.js';
 
 interface Db {
   prepare(sql: string): { get(...args: unknown[]): any; all(...args: unknown[]): any; run(...args: unknown[]): any };
@@ -48,6 +48,19 @@ export interface GatewayDependencies {
    *  those pass the backend's auth gate. Empty ⇒ backend is dev-open. */
   mainToken?: string;
   config: GatewayConfig;
+  /** Partner attention items for the lens (#477). Absent ⇒ the list is empty
+   *  and a resolve is refused with 400 — tests, or no assistant configured. */
+  attention?: GatewayAttentionSource;
+}
+
+export interface GatewayAttentionSource {
+  /** The partner's `open` items, already projected to the lens shape. */
+  list(): Promise<LensAttentionItem[]>;
+  /** Apply a lens verb. The implementation stamps `by: 'glasses'`,
+   *  `surface: 'lens'`; the partner enforces its own lens subset (409). Returns
+   *  the upstream status so a 202 (`draft` running) survives. Throws a
+   *  status-bearing Error on refusal. */
+  resolve(id: string, body: { verb: string; preset?: string }): Promise<{ status: number; body: unknown }>;
 }
 
 export interface GatewayHandle {
@@ -72,7 +85,7 @@ function scopeFromQuery(query: Record<string, unknown> | undefined): Scope {
 }
 
 export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
-  const { pi, db, mainPort, mainToken, config } = deps;
+  const { pi, db, mainPort, mainToken, config, attention } = deps;
   const app = Fastify({ logger: false });
 
   // ── in-memory gateway state ────────────────────────────────────────────────
@@ -223,6 +236,46 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
   });
 
   app.get('/api/approvals', async () => ({ approvals: currentApprovals() }));
+
+  // Partner attention items for the lens (#477, design D13). Reads fail soft:
+  // a partner blip leaves the hero to the thread-born gates. The glasses fetch
+  // this beside sessions on their light poll.
+  app.get('/api/attention', async () => {
+    if (!attention) return { items: [] as LensAttentionItem[] };
+    try {
+      return { items: await attention.list() };
+    } catch (err) {
+      return { items: [] as LensAttentionItem[], error: (err as Error)?.message || 'Attention fetch failed.' };
+    }
+  });
+
+  // A lens verb. Nothing here approves or sends: the partner's closed verb set
+  // has no such verb, and its lens subset is enforced upstream (409 passes
+  // through with the partner's sentence, as does a 202 for a running draft).
+  app.post('/api/attention/:id/resolve', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { verb?: unknown; preset?: unknown };
+    if (typeof body.verb !== 'string' || !body.verb.trim()) {
+      reply.code(400);
+      return { error: 'verb (string) is required' };
+    }
+    if (!attention) {
+      reply.code(400);
+      return { error: 'Assistant URL and key must be configured in Settings.' };
+    }
+    try {
+      const result = await attention.resolve(id, {
+        verb: body.verb.trim(),
+        ...(typeof body.preset === 'string' && body.preset.trim() ? { preset: body.preset.trim() } : {}),
+      });
+      reply.code(result.status);
+      return result.body;
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 502;
+      reply.code(status === 400 || status === 404 || status === 409 ? status : 502);
+      return { error: extractDetail(err?.message) || 'Attention resolve failed.' };
+    }
+  });
 
   // Client bootstrap config: the glasses read STT here so the key lives in
   // Nexus config (~/.nexus/config.yaml), not the client bundle or a URL param.
@@ -446,3 +499,17 @@ export async function startGateway(deps: GatewayDependencies): Promise<GatewayHa
   console.log(`NEXUS glasses gateway on http://0.0.0.0:${deps.config.port} (${auth})`);
   return handle;
 }
+
+// The partner answers FastAPI-style `{"detail": "..."}`; the lens shows the
+// sentence, not the JSON.
+function extractDetail(message?: string): string | undefined {
+  if (!message) return undefined;
+  try {
+    const parsed = JSON.parse(message);
+    if (parsed && typeof parsed.detail === 'string') return parsed.detail;
+  } catch {
+    /* not JSON — use as-is */
+  }
+  return message;
+}
+

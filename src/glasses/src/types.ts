@@ -89,3 +89,23 @@ export type SseEvent =
   | { type: 'steerFocus'; session_id: string | null }
 
 export type ConnectionStatus = 'unknown' | 'connecting' | 'ok' | 'error'
+
+// Nexus extension (#477): a partner attention item as the gateway serves it for
+// the lens — what the hero shows and the verbs it may offer. `lens_verbs` is the
+// partner's per-surface contract; the glasses render it and add nothing.
+export type AttentionVerb = 'draft' | 'open' | 'snooze' | 'dismiss'
+
+export interface AttentionItem {
+  id: string
+  kind: string
+  title: string
+  why: string
+  status: string
+  proposed_verb: string
+  verbs: string[]
+  lens_verbs: string[]
+  alert_seq: number
+  created_at: number
+  snoozed_until: number | null
+}
+

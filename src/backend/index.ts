@@ -15,6 +15,7 @@ import websocket from '@fastify/websocket';
 import { getDb } from './db.js';
 import { loadConfig, getDbPath, getNexusDir, resolveOpenRouterKey, resolveEnvVars, expandHome } from './config.js';
 import { startGateway } from './gateway/server.js';
+import { toLensAttentionItem } from './gateway/mappers.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerChatRoutes } from './routes/chat.js';
 import { registerBoardRoutes } from './routes/board.js';
@@ -415,6 +416,23 @@ async function main() {
       // backend; when the backend token is set those internal calls must carry
       // it too, else the glasses silently 401.
       mainToken: backendToken,
+      // Partner attention items for the lens (#477). Per-call client so a
+      // Settings change needs no restart; the partner enforces the lens subset.
+      attention: {
+        list: async () => {
+          const partner = partnerFromConfig();
+          if (!partner) return [];
+          const body = (await partner.listAttention('open')) as { items?: unknown[] } | undefined;
+          return (Array.isArray(body?.items) ? body!.items : [])
+            .filter((row): row is Record<string, unknown> => !!row && typeof row === 'object')
+            .map(toLensAttentionItem);
+        },
+        resolve: async (id, body) => {
+          const partner = partnerFromConfig();
+          if (!partner) throw Object.assign(new Error('Assistant URL and key must be configured in Settings.'), { status: 400 });
+          return partner.resolveAttention(id, { ...body, by: 'glasses', surface: 'lens' });
+        },
+      },
       config: {
         enabled: config.gateway.enabled,
         port: config.gateway.port,

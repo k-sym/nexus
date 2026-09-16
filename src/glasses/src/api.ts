@@ -1,5 +1,5 @@
 import { store } from './store'
-import type { Approval, SessionDetail, SessionSummary, SseEvent } from './types'
+import type { Approval, AttentionItem, AttentionVerb, SessionDetail, SessionSummary, SseEvent } from './types'
 
 function creds() {
   const { baseUrl, token } = store.getState()
@@ -52,6 +52,28 @@ export async function getPending(): Promise<Approval[]> {
   const res = await api('/api/approvals')
   if (!res.ok) throw new Error(`getPending: ${res.status}`)
   return (await res.json() as { approvals: Approval[] }).approvals
+}
+
+/** Partner attention items for the lens (#477): the gateway's `open` set. An
+ *  older gateway without the route throws (404) — callers leave the hero to the
+ *  thread-born gates. */
+export async function getAttention(): Promise<AttentionItem[]> {
+  const res = await api('/api/attention')
+  if (!res.ok) throw new Error(`getAttention: ${res.status}`)
+  return (await res.json() as { items?: AttentionItem[] }).items ?? []
+}
+
+/** Apply a lens verb. The gateway stamps `by: glasses`, `surface: lens`; the
+ *  partner enforces its lens subset and answers with its own sentence on refusal. */
+export async function resolveAttention(id: string, verb: AttentionVerb, preset?: 'later' | 'tomorrow' | 'next_week'): Promise<void> {
+  const res = await api(`/api/attention/${encodeURIComponent(id)}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({ verb, ...(preset ? { preset } : {}) }),
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string }
+    throw new Error(body.error || `resolveAttention: ${res.status}`)
+  }
 }
 
 /** STT (voice) config Nexus serves from ~/.nexus/config.yaml gateway.stt. */

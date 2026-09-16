@@ -96,3 +96,21 @@ export interface NotifyRecord {
   needsAttention: boolean;
   at: number;
 }
+
+/** Nexus extension (#477): a partner attention item as the lens needs it — the
+ *  fields the hero shows and the verbs it may offer. `lens_verbs` is the
+ *  partner's per-surface contract; the glasses add nothing to it. */
+export interface LensAttentionItem {
+  id: string;
+  kind: string;
+  title: string;
+  why: string;
+  status: string;
+  proposed_verb: string;
+  verbs: string[];
+  lens_verbs: string[];
+  alert_seq: number;
+  created_at: number;
+  snoozed_until: number | null;
+}
+
