@@ -41,6 +41,13 @@ struct RootShellView: View {
                         }
                 }
             }
+            // An attention push (#477) opens its item over whatever tab is
+            // showing; the router cleared any thread cover first (D8).
+            .sheet(item: $router.openAttention) { ref in
+                AttentionItemSheet(api: api, itemId: ref.id) {
+                    Task { await liveHub.refreshAttention() }
+                }
+            }
             .task {
                 liveHub.start()
                 pushManager.enable()

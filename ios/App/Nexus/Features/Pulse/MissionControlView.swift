@@ -43,9 +43,13 @@ struct MissionControlView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     memoryCard(status.memory)
+                    // First: what needs Keith, with its verbs (#477). A thing
+                    // awaiting a tap outranks status; hides itself when empty.
+                    AttentionCard(api: api)
                     // Above the fleet card: a draft waiting on a tap is more
                     // urgent than routine health, and it hides itself when the
-                    // queue is empty (baker-internal#42).
+                    // queue is empty (baker-internal#42). Kept beside the
+                    // attention card for the shadow window (design D9).
                     DraftsCard(api: api)
                     RoutinesCard(api: api)
                     // What the overnight runner did, what is queued, and which

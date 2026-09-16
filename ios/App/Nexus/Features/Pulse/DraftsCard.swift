@@ -133,9 +133,17 @@ struct DraftRow: View {
 
 /// Full-body review. Send is only reachable from here, and only after `detail`
 /// has loaded.
+///
+/// Two ways in: the Drafts card hands over the list row it already has; the
+/// attention item sheet (#477) has only a `draft_id`, so it opens by id and the
+/// header renders from the detail once fetched. Both are presented as sheets —
+/// this view owns a `NavigationStack`, so it must never be pushed.
 struct DraftReviewSheet: View {
     private let api: APIClient
-    private let draft: OutboundDraft
+    private let draftId: String
+    /// The list row, when the caller has one. Header fields fall back to it
+    /// until `detail` arrives; with an id-only open they wait for the detail.
+    private let seed: OutboundDraft?
     private let onDecided: () -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -152,31 +160,79 @@ struct DraftReviewSheet: View {
 
     init(api: APIClient, draft: OutboundDraft, onDecided: @escaping () -> Void) {
         self.api = api
-        self.draft = draft
+        self.draftId = draft.id
+        self.seed = draft
         self.onDecided = onDecided
     }
+
+    /// Open by id alone (from an attention item). The header fills in from the
+    /// detail; Send stays unreachable until it has loaded, as always.
+    init(api: APIClient, draftId: String, onDecided: @escaping () -> Void) {
+        self.api = api
+        self.draftId = draftId
+        self.seed = nil
+        self.onDecided = onDecided
+    }
+
+    /// Header facts from whichever source is present: the fetched detail first,
+    /// the list row it was opened from otherwise.
+    private struct Header {
+        let account: String
+        let isMeeting: Bool
+        let subject: String
+        let replyTo: String?
+        let to: [String]
+        let rationale: String?
+        let start: String?
+        let end: String?
+        let attendees: [String]?
+        let online: Bool?
+
+        init(_ d: OutboundDraftDetail) {
+            account = d.account; isMeeting = d.kind == "meeting"; subject = d.subject; replyTo = d.replyTo
+            to = d.to; rationale = d.rationale; start = d.start; end = d.end; attendees = d.attendees; online = d.online
+        }
+
+        init(_ d: OutboundDraft) {
+            account = d.account; isMeeting = d.isMeeting; subject = d.subject; replyTo = d.replyTo
+            to = d.to; rationale = d.rationale; start = d.start; end = d.end; attendees = d.attendees; online = d.online
+        }
+    }
+
+    private var header: Header? {
+        if let detail { return Header(detail) }
+        if let seed { return Header(seed) }
+        return nil
+    }
+
+    private var isMeeting: Bool { header?.isMeeting ?? false }
+    private var account: String { header?.account ?? "…" }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    LabeledContent("From", value: draft.account)
-                    if draft.isMeeting {
-                        LabeledContent("When", value: "\(draft.start ?? "?") → \(draft.end?.split(separator: "T").last.map(String.init) ?? "?")")
-                        LabeledContent("Invites", value: (draft.attendees?.isEmpty ?? true)
-                            ? "(none — just you)" : draft.attendees!.joined(separator: ", "))
-                        if draft.online == true {
-                            LabeledContent("Teams", value: "meeting link attached on booking")
+                    if let draft = header {
+                        LabeledContent("From", value: draft.account)
+                        if draft.isMeeting {
+                            LabeledContent("When", value: "\(draft.start ?? "?") → \(draft.end?.split(separator: "T").last.map(String.init) ?? "?")")
+                            LabeledContent("Invites", value: (draft.attendees?.isEmpty ?? true)
+                                ? "(none — just you)" : draft.attendees!.joined(separator: ", "))
+                            if draft.online == true {
+                                LabeledContent("Teams", value: "meeting link attached on booking")
+                            }
                         }
-                    }
-                    if let replyTo = draft.replyTo {
-                        LabeledContent("Reply to", value: replyTo)
-                    } else if !draft.to.isEmpty {
-                        LabeledContent("To", value: draft.to.joined(separator: ", "))
-                    }
-                    LabeledContent("Subject", value: draft.subject)
-                    if let rationale = draft.rationale, !rationale.isEmpty {
-                        LabeledContent("Why", value: rationale)
+                        if let replyTo = draft.replyTo {
+                            LabeledContent("Reply to", value: replyTo)
+                        } else if !draft.to.isEmpty {
+                            LabeledContent("To", value: draft.to.joined(separator: ", "))
+                        }
+                        LabeledContent("Subject", value: draft.subject)
+                        if let rationale = draft.rationale, !rationale.isEmpty {
+                            LabeledContent("Why", value: rationale)
+                        }
+                    } else if loadError == nil {
+                        LabeledContent("Draft", value: draftId)
                     }
                 }
 
@@ -262,7 +318,7 @@ struct DraftReviewSheet: View {
                             }
                             .disabled(busy)
                         } footer: {
-                            Text(draft.isMeeting
+                            Text(isMeeting
                                  ? "Booking creates the event and sends the invites immediately."
                                  : "Sending is immediate and cannot be undone.")
                         }
@@ -277,12 +333,12 @@ struct DraftReviewSheet: View {
                 }
             }
             .confirmationDialog(
-                draft.isMeeting ? "Book this meeting and send the invites?"
-                                : "Send this reply from \(draft.account)?",
+                isMeeting ? "Book this meeting and send the invites?"
+                          : "Send this reply from \(account)?",
                 isPresented: $confirmingSend,
                 titleVisibility: .visible
             ) {
-                Button(draft.isMeeting ? "Book now" : "Send now", role: .destructive) {
+                Button(isMeeting ? "Book now" : "Send now", role: .destructive) {
                     Task { await decide(approve: true) }
                 }
                 Button("Cancel", role: .cancel) {}
@@ -293,7 +349,7 @@ struct DraftReviewSheet: View {
 
     private func load() async {
         do {
-            detail = try await api.draftDetail(id: draft.id)
+            detail = try await api.draftDetail(id: draftId)
         } catch {
             loadError = LoadState<OutboundDraftDetail>.message(for: error)
         }
@@ -305,7 +361,7 @@ struct DraftReviewSheet: View {
         actionError = nil
         defer { busy = false }
         do {
-            detail = try await api.editDraft(id: draft.id, body: newBody)
+            detail = try await api.editDraft(id: draftId, body: newBody)
             editText = nil  // read mode — Send is reachable again
             onDecided()     // the list's preview is stale now; let it refresh
         } catch {
@@ -319,12 +375,12 @@ struct DraftReviewSheet: View {
         defer { busy = false }
         do {
             if approve {
-                let decision = try await api.approveDraft(id: draft.id)
+                let decision = try await api.approveDraft(id: draftId)
                 result = decision.booked == true ? "Booked — invites are out."
                        : decision.sent == true ? "Sent." : "Approved."
             } else {
-                _ = try await api.rejectDraft(id: draft.id)
-                result = draft.isMeeting ? "Rejected — nothing booked." : "Rejected — nothing sent."
+                _ = try await api.rejectDraft(id: draftId)
+                result = isMeeting ? "Rejected — nothing booked." : "Rejected — nothing sent."
             }
             onDecided()
         } catch {

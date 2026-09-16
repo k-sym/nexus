@@ -324,6 +324,27 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/drafts/\(id)/reject", method: "POST", body: body)
     }
 
+    // MARK: Attention (partner "Needs you" items, #477)
+
+    /// The attention list → `AttentionResponse`. `live` = open + snoozed +
+    /// resolving, which is what the card shows (a drafting item stays visible).
+    public static func attention(status: String = "live") -> Endpoint {
+        Endpoint(path: "/api/attention?status=\(status)")
+    }
+
+    /// One item with its events → `AttentionItem`.
+    public static func attentionDetail(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/attention/\(id)")
+    }
+
+    /// Apply a verb. `conflictIsBusy: false`: a 409 here is the partner saying
+    /// the item's state refuses the verb, and its sentence is shown verbatim.
+    /// The reply may be 202 (a `draft` verb has started; the item is `resolving`).
+    public static func resolveAttention(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/attention/\(id)/resolve", method: "POST", body: body,
+                 conflictIsBusy: false)
+    }
+
     // MARK: M6 assistant
 
     /// Merged local + adoptable-remote Partner sessions → `AssistantSessionsResponse`.

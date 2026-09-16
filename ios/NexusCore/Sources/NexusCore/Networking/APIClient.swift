@@ -523,6 +523,32 @@ public actor APIClient {
         return try await request(.rejectDraft(id, body: body))
     }
 
+    // MARK: Attention (partner "Needs you" items, #477)
+
+    /// The attention collection. Fail-soft shapes (`configured: false`, `error`)
+    /// come through as data; a backend without the route throws
+    /// `APIError.server(status: 404, …)`, which callers treat as "hidden".
+    public func attention(status: String = "live") async throws -> AttentionResponse {
+        try await request(.attention(status: status))
+    }
+
+    public func attentionDetail(id: String) async throws -> AttentionItem {
+        try await request(.attentionDetail(id))
+    }
+
+    /// Apply one of the item's verbs. Returns the item as the partner now holds
+    /// it: `resolving` after `draft` (poll `attentionDetail` until it leaves),
+    /// `snoozed`, or `resolved`. Throws with the partner's sentence on refusal.
+    @discardableResult
+    public func resolveAttention(id: String, verb: AttentionVerb, preset: AttentionSnoozePreset? = nil,
+                                 until: Int? = nil, by: String = "ios", surface: String = "phone") async throws -> AttentionItem {
+        var payload: [String: Any] = ["verb": verb.rawValue, "by": by, "surface": surface]
+        if let preset { payload["preset"] = preset.rawValue }
+        if let until { payload["until"] = until }
+        let body = try JSONSerialization.data(withJSONObject: payload)
+        return try await request(.resolveAttention(id, body: body))
+    }
+
     // MARK: Assistant (M6)
 
     /// Merged local + adoptable-remote Partner sessions. Mixed snake/camel keys →
