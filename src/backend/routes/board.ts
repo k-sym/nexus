@@ -150,6 +150,9 @@ export async function registerBoardRoutes(fastify: FastifyInstance, opts: BoardR
       else if (mondayItemId) {
         const item = getItem(db, mondayItemId);
         origin = { kind: 'monday', item_id: mondayItemId, name: item?.name ?? mondayItemId, url: item?.url ?? null };
+      } else if (thread.attention_item) {
+        const filed = parseAttentionOrigin(thread.attention_item);
+        if (filed) origin = filed;
       }
       return {
         thread,
@@ -302,3 +305,21 @@ export async function registerBoardRoutes(fastify: FastifyInstance, opts: BoardR
 }
 
 export { originLabel };
+
+/** The `attention_item` column is JSON `{ id, kind, title }` written by the
+ *  attention file route (#477 slice 6a); a malformed value degrades to `chat`. */
+export function parseAttentionOrigin(raw: string): BoardOrigin | null {
+  try {
+    const parsed = JSON.parse(raw) as { id?: unknown; kind?: unknown; title?: unknown };
+    if (typeof parsed?.id !== 'string' || !parsed.id) return null;
+    return {
+      kind: 'attention',
+      item_id: parsed.id,
+      item_kind: typeof parsed.kind === 'string' ? parsed.kind : 'unknown',
+      title: typeof parsed.title === 'string' ? parsed.title : '',
+    };
+  } catch {
+    return null;
+  }
+}
+

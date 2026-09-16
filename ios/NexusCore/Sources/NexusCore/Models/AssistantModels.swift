@@ -337,3 +337,11 @@ public struct AssistantSyncResponse: Decodable, Sendable {
         updated = try c.decodeIfPresent(Int.self, forKey: .updated) ?? 0
     }
 }
+
+/// `GET /api/assistant/current` — the partner's pointer session, adopted as a
+/// local row. Only the session is decoded here; the transcript comes from the
+/// chat endpoint once the view opens.
+public struct AssistantCurrentResponse: Decodable, Sendable {
+    public let session: AssistantSession
+}
+

@@ -36,6 +36,16 @@ struct AttentionRow: View {
     /// snoozed one, that it is snoozed.
     @ViewBuilder
     private var trailing: some View {
+        if item.isNotice {
+            Text("notice")
+                .font(.caption2).foregroundStyle(.secondary)
+        } else {
+            actionTrailing
+        }
+    }
+
+    @ViewBuilder
+    private var actionTrailing: some View {
         switch item.status {
         case .resolving:
             HStack(spacing: 4) {

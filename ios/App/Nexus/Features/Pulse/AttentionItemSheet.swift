@@ -27,8 +27,32 @@ struct AttentionItemSheet: View {
     @State private var draftTimedOut = false
     @State private var reviewDraft: DraftRef?
     @State private var pollTask: Task<Void, Never>?
+    /// "Show the page": the vault page behind the item, rendered as markdown.
+    @State private var page: AttentionPage?
+    @State private var loadingPage = false
+    /// "File as a to-do": the project picker, then the created session is pushed.
+    @State private var pickingProject = false
+    @State private var projects: [Project] = []
+    @State private var filing = false
+    /// A chat pushed inside this sheet's own stack — the partner's current
+    /// conversation (Ask the partner) or the just-filed to-do session.
+    @State private var chat: ChatTarget?
 
     struct DraftRef: Identifiable { let id: String }
+
+    /// Where a push lands. Both are `StreamingChatView`s; only the endpoint differs.
+    struct ChatTarget: Identifiable, Hashable {
+        enum Kind: Hashable { case assistant(sessionId: String), thread(threadId: String) }
+        let kind: Kind
+        let title: String
+        let seedText: String?
+        var id: String {
+            switch kind {
+            case .assistant(let s): return "assistant:\(s)"
+            case .thread(let t): return "thread:\(t)"
+            }
+        }
+    }
 
     init(api: APIClient, itemId: String, seed: AttentionItem? = nil, onChanged: @escaping () -> Void) {
         self.api = api
@@ -51,6 +75,9 @@ struct AttentionItemSheet: View {
                 if let item, item.isActionable, !drafting {
                     verbsSection(for: item)
                 }
+                if let item {
+                    followUpSection(for: item)
+                }
                 if let actionError {
                     Section {
                         Label(actionError, systemImage: "exclamationmark.triangle")
@@ -70,6 +97,100 @@ struct AttentionItemSheet: View {
             .sheet(item: $reviewDraft) { ref in
                 DraftReviewSheet(api: api, draftId: ref.id) { onChanged() }
             }
+            .sheet(item: $page) { page in
+                AttentionPageSheet(page: page)
+            }
+            .sheet(isPresented: $pickingProject) {
+                projectPicker
+            }
+            .navigationDestination(item: $chat) { target in
+                switch target.kind {
+                case .assistant(let sessionId):
+                    StreamingChatView(endpoint: AssistantChatEndpoint(api: api, sessionId: sessionId), title: target.title,
+                                      seed: target.seedText.map { ChatSeed(text: $0, modelKey: nil) })
+                case .thread(let threadId):
+                    StreamingChatView(api: api, threadId: threadId, title: target.title,
+                                      seed: target.seedText.map { ChatSeed(text: $0, modelKey: nil) })
+                }
+            }
+        }
+    }
+
+    // MARK: Follow-ups (design D20/D21) — client affordances, not partner verbs.
+    // Every item, whatever its state, can be talked over with the partner; an
+    // item still open can be filed as a to-do (a Board session on a project).
+
+    @ViewBuilder
+    private func followUpSection(for item: AttentionItem) -> some View {
+        Section {
+            Button {
+                Task { await askPartner(about: item) }
+            } label: {
+                Label(busy ? "Opening…" : "Ask the partner", systemImage: "bubble.left.and.text.bubble.right")
+            }
+            .disabled(busy)
+            if item.isActionable {
+                Button {
+                    Task { await openProjectPicker() }
+                } label: {
+                    Label(filing ? "Filing…" : "File as a to-do", systemImage: "tray.and.arrow.down")
+                }
+                .disabled(busy || filing)
+            }
+        } header: {
+            Text("Follow up")
+        } footer: {
+            Text(item.isActionable
+                 ? "Ask opens the partner's conversation with this item as the first message. File starts a Board session on a project and marks the item seen."
+                 : "Ask opens the partner's conversation with this item as the first message.")
+        }
+    }
+
+    /// The project picker for "file as a to-do": the producer's suggestion (slice
+    /// 6b) first when it names a known slug or badge; otherwise the rail order.
+    private var projectPicker: some View {
+        NavigationStack {
+            List {
+                if projects.isEmpty {
+                    ProgressView()
+                } else {
+                    ForEach(orderedProjects) { project in
+                        Button {
+                            pickingProject = false
+                            Task { await file(to: project) }
+                        } label: {
+                            HStack(spacing: 10) {
+                                Text(project.badge)
+                                    .font(.caption2.weight(.bold)).tracking(0.5)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                                    .background(.thinMaterial, in: Capsule())
+                                Text(project.name)
+                                if project.slug == item?.suggestedProject || project.badge == item?.suggestedProject {
+                                    Spacer()
+                                    Text("suggested").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("File to…")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { pickingProject = false }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var orderedProjects: [Project] {
+        guard let hint = item?.suggestedProject, !hint.isEmpty else { return projects }
+        return projects.sorted { a, b in
+            let aHit = a.slug == hint || a.badge == hint
+            let bHit = b.slug == hint || b.badge == hint
+            return aHit && !bHit
         }
     }
 
@@ -212,6 +333,63 @@ struct AttentionItemSheet: View {
         }
     }
 
+    /// "Show the page" (D21): the vault page behind the item, fetched by title
+    /// through the backend and rendered as markdown.
+    private func showPage(for item: AttentionItem) async {
+        loadingPage = true
+        defer { loadingPage = false }
+        do {
+            page = try await api.attentionPage(id: item.id)
+        } catch {
+            actionError = LoadState<AttentionPage>.message(for: error)
+        }
+    }
+
+    /// "Ask the partner" (D21): the partner's current conversation, seeded with
+    /// the item so the first message is already the question.
+    private func askPartner(about item: AttentionItem) async {
+        busy = true
+        actionError = nil
+        defer { busy = false }
+        do {
+            let session = try await api.assistantCurrent()
+            var seed = item.title
+            if let why = item.why, !why.isEmpty { seed += " — \(why)" }
+            if item.links?.vaultPage != nil { seed += ". Show me the prep pack and tell me anything worth tweaking." }
+            else if item.links?.draftId != nil { seed += ". Walk me through the draft." }
+            else { seed += ". What is the next step here?" }
+            chat = ChatTarget(kind: .assistant(sessionId: session.id), title: session.title, seedText: seed)
+        } catch {
+            actionError = LoadState<AssistantSession>.message(for: error)
+        }
+    }
+
+    private func openProjectPicker() async {
+        if projects.isEmpty {
+            do { projects = try await api.projects() } catch {
+                actionError = LoadState<[Project]>.message(for: error)
+                return
+            }
+        }
+        pickingProject = true
+    }
+
+    /// "File as a to-do" (D20): a Board session on the project, seeded with the
+    /// composed first turn; the item is dismissed on the partner by the same call.
+    private func file(to project: Project) async {
+        guard let item else { return }
+        filing = true
+        actionError = nil
+        defer { filing = false }
+        do {
+            let result = try await api.fileAttention(id: item.id, projectId: project.id)
+            onChanged()
+            chat = ChatTarget(kind: .thread(threadId: result.thread.id), title: result.thread.title, seedText: result.firstTurn)
+        } catch {
+            actionError = LoadState<OriginSessionResult>.message(for: error)
+        }
+    }
+
     private func openLabel(for item: AttentionItem) -> String {
         if item.links?.draftId != nil { return "Review the draft" }
         if item.links?.vaultPage != nil { return "Show the page" }
@@ -292,7 +470,7 @@ struct AttentionItemSheet: View {
         if let draftId = item.links?.draftId {
             reviewDraft = DraftRef(id: draftId)
         } else if item.links?.vaultPage != nil {
-            actionError = "\(item.links?.vaultPage ?? "The page") lives in the vault — ask the partner for it from the Assistant tab; there is no vault viewer on the phone yet."
+            await showPage(for: item)
         } else if item.links?.proposalId != nil {
             actionError = "Autonomy proposals are decided from the terminal or the web Partner view."
         }
@@ -317,3 +495,27 @@ struct AttentionItemSheet: View {
         Date(timeIntervalSince1970: TimeInterval(epoch)).formatted(date: .abbreviated, time: .shortened)
     }
 }
+
+/// The vault page behind an item, as the phone can show it: the markdown the
+/// producer filed, rendered with the chat's own renderer. Read-only.
+struct AttentionPageSheet: View {
+    let page: AttentionPage
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                MarkdownText(text: page.body)
+                    .padding()
+            }
+            .navigationTitle(page.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+}
+

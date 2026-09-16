@@ -226,8 +226,11 @@ struct AssistantView: View {
                     HStack {
                         Text("Needs you")
                         Spacer()
-                        if liveHub.attentionOpen > 0 {
-                            Text("\(liveHub.attentionOpen) open").foregroundStyle(.secondary)
+                        if liveHub.attentionOpen > 0 || liveHub.attentionNotices > 0 {
+                            Text([liveHub.attentionOpen > 0 ? "\(liveHub.attentionOpen) to action" : nil,
+                                  liveHub.attentionNotices > 0 ? "\(liveHub.attentionNotices) to see" : nil]
+                                .compactMap { $0 }.joined(separator: " · "))
+                                .foregroundStyle(.secondary)
                         }
                     }
                 } footer: {
@@ -300,7 +303,9 @@ struct AssistantView: View {
                     Label("Nothing needs you right now.", systemImage: "checkmark.circle")
                         .font(.callout).foregroundStyle(.secondary)
                 } else {
-                    ForEach(response.items) { item in
+                    // Actions first, notices after (design D19): the two fail
+                    // differently, and the list should say which is which.
+                    ForEach(response.items.filter { !$0.isNotice } + response.items.filter { $0.isNotice }) { item in
                         Button { selectedItem = item } label: { AttentionRow(item: item) }
                             .buttonStyle(.plain)
                     }

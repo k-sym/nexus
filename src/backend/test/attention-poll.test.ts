@@ -112,6 +112,21 @@ test('an item whose alert_seq moved past the cursor gets exactly one push, badge
   db.close();
 });
 
+test('a notice never pushes and never counts on the badge (D22a); absent category is an action', async () => {
+  const db = getDb(':memory:');
+  writeCursor(db, 4);
+  const h = harness({
+    approvals: 1,
+    list: () => ({ items: [item('act', 5), item('note', 6, { kind: 'brief.morning', category: 'notice' }), item('old', 2)], open: 3, seq: 12, alert_seq: 6 }),
+  });
+  const tick = await runAttentionPollOnce(db, h.deps);
+  assert.deepEqual(tick, { seeded: false, pushed: 1, open: 2, cursor: 6 });
+  assert.equal(h.pushes.length, 1);
+  assert.equal(h.pushes[0].deepLink, 'attention:act');
+  assert.equal(h.pushes[0].badge, 3, 'approvals (1) + open actions (2), the notice excluded');
+  db.close();
+});
+
 test('a renotify of the same item is a second push', async () => {
   const db = getDb(':memory:');
   writeCursor(db, 5);
@@ -163,7 +178,7 @@ test('a partner counter below the cursor re-seeds silently instead of muting pus
 test('push: false still moves the cursor and the open count but never notifies', async () => {
   const db = getDb(':memory:');
   writeCursor(db, 4);
-  const h = harness({ push: false, list: () => ({ items: [item('new', 5)], open: 3, seq: 12, alert_seq: 5 }) });
+  const h = harness({ push: false, list: () => ({ items: [item('new', 5), item('a', 1), item('b', 2)], open: 3, seq: 12, alert_seq: 5 }) });
   const tick = await runAttentionPollOnce(db, h.deps);
   assert.deepEqual(tick, { seeded: false, pushed: 0, open: 3, cursor: 5 });
   assert.equal(readCursor(db), 5);
@@ -197,13 +212,18 @@ test('an unconfigured assistant is dormant: one tick returns null, start logs on
 test('startAttentionPoll ticks immediately and remembers the open count for the badge', async () => {
   const db = getDb(':memory:');
   writeCursor(db, 1);
-  const h = harness({ list: () => ({ items: [], open: 7, seq: 3, alert_seq: 1 }) });
+  // Open actions come from the items themselves (a notice never counts, D22a),
+  // not the partner's store-wide `open`.
+  const h = harness({ list: () => ({ items: [item('a', 1), item('b', 1), item('n', 1, { category: 'notice' })], open: 7, seq: 3, alert_seq: 1 }) });
   const poll = startAttentionPoll(db, h.deps);
-  // The first tick is async; give it a turn of the loop.
-  await new Promise((r) => setImmediate(r));
-  assert.equal(h.listCalls, 1);
-  assert.equal(poll.openCount(), 7);
-  assert.match(h.logs[0], /poll started — every 1m, push on/);
-  poll.stop();
-  db.close();
+  try {
+    // The first tick is async; give it a turn of the loop.
+    await new Promise((r) => setImmediate(r));
+    assert.equal(h.listCalls, 1);
+    assert.equal(poll.openCount(), 2);
+    assert.match(h.logs[0], /poll started — every 1m, push on/);
+  } finally {
+    poll.stop(); // always: a live timer would keep the test process alive
+    db.close();
+  }
 });

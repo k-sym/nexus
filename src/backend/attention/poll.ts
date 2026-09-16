@@ -31,6 +31,16 @@ interface AttentionItem {
   why?: string;
   proposed_verb?: string;
   alert_seq: number;
+  /** 'notice' | 'action' once the producer sets it (#477 slice 6b); absent = action. */
+  category?: string;
+  status?: string;
+}
+
+/** A notice is, by definition, not an interruption: it never pushes and never
+ *  counts on the badge (design D22a). Absent category = action, so today's
+ *  producers are unaffected until they say otherwise. */
+export function isNotice(item: Pick<AttentionItem, 'category'>): boolean {
+  return item.category === 'notice';
 }
 
 interface AttentionList {
@@ -149,20 +159,23 @@ export async function runAttentionPollOnce(db: Database.Database, deps: Attentio
     log(cursor == null
       ? `[attention] cursor seeded at alert_seq ${list.alert_seq} — no pushes for the existing backlog`
       : `[attention] partner alert_seq ${list.alert_seq} is below the cursor ${cursor} — counter reset, re-seeded`);
-    return { seeded: true, pushed: 0, open: list.open, cursor: list.alert_seq };
+    return { seeded: true, pushed: 0, open: list.items.filter((item) => !isNotice(item)).length, cursor: list.alert_seq };
   }
 
+  // The badge and the pushes count actions only (D22a). The list is `open`
+  // items, so open actions = the items minus notices.
+  const openActions = list.items.filter((item) => !isNotice(item)).length;
   let pushed = 0;
   if (cfg.push && deps.apns.configured) {
-    const badge = deps.pendingApprovals() + list.open;
-    const due = list.items.filter((item) => typeof item.alert_seq === 'number' && item.alert_seq > cursor);
+    const badge = deps.pendingApprovals() + openActions;
+    const due = list.items.filter((item) => typeof item.alert_seq === 'number' && item.alert_seq > cursor && !isNotice(item));
     for (const item of due) {
       await deps.apns.notify(pushFor(item, badge));
       pushed += 1;
     }
   }
   writeCursor(db, list.alert_seq);
-  return { seeded: false, pushed, open: list.open, cursor: list.alert_seq };
+  return { seeded: false, pushed, open: openActions, cursor: list.alert_seq };
 }
 
 export interface AttentionPoll {

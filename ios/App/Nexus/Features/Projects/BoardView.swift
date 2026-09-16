@@ -250,6 +250,8 @@ private struct CardRow: View {
         case .ticket(let key, _): return (key, .blue)
         case .github(let number, _): return ("#\(number)", .purple)
         case .monday(_, let name, _): return (name, .pink)
+        // Filed from a partner attention item (#477 slice 6a): the bell says so.
+        case .attention: return ("Needs you", .orange)
         case .chat: return nil
         case .unknown(let kind): return (kind.capitalized, .secondary)
         }

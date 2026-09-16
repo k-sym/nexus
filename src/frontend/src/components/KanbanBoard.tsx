@@ -62,6 +62,7 @@ function originLabel(origin: BoardOrigin): string | null {
     case 'ticket': return origin.key;
     case 'github': return `#${origin.number}`;
     case 'monday': return origin.name;
+    case 'attention': return origin.title || 'Needs you';
     default: return null;
   }
 }
@@ -71,6 +72,7 @@ function originTitle(origin: BoardOrigin): string | undefined {
     case 'ticket': return `Jira ticket ${origin.key}`;
     case 'github': return `GitHub issue #${origin.number}`;
     case 'monday': return `Monday item ${origin.name}`;
+    case 'attention': return `Filed from a partner attention item (${origin.item_kind})`;
     default: return undefined;
   }
 }
