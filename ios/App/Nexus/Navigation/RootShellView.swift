@@ -117,6 +117,9 @@ struct RootShellView: View {
         return TabView(selection: $router.selectedTab) {
             NavigationStack { destination(for: .assistant) }
                 .tabItem { Label(AppSection.assistant.title, systemImage: AppSection.assistant.systemImage) }
+                // Open partner attention items (#477): the tab's "Needs you"
+                // section is where they are acted on.
+                .badge(liveHub.attentionOpen)
                 .tag("assistant")
 
             NavigationStack { destination(for: .projects) }
