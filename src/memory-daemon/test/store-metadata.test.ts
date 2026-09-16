@@ -51,6 +51,26 @@ function frontmatterOf(ctx: AppContext, id: string): Record<string, unknown> {
   return JSON.parse(row.frontmatter_json);
 }
 
+test("storeMemory without a title derives a clean one and breadcrumbs chunks with it", async () => {
+  const f = fixture();
+  try {
+    const stored = await storeMemory(f.ctx, {
+      namespace: "nexus",
+      project: "demo",
+      category: "session_archive",
+      source: "nexus:session-archive",
+      body: "**Project:** Nexus\n**Session:** Change Active Project Status Badge Color\n\nWe changed the badge.",
+    });
+    const row = f.ctx.db.prepare("SELECT title FROM memories WHERE id = ?").get(stored.id) as { title: string };
+    assert.equal(row.title, "Change Active Project Status Badge Color");
+    assert.equal(frontmatterOf(f.ctx, stored.id).title, undefined);
+    const chunk = f.ctx.db.prepare("SELECT text FROM chunks WHERE memory_id = ? ORDER BY ord LIMIT 1").get(stored.id) as { text: string };
+    assert.ok(chunk.text.startsWith("Change Active Project Status Badge Color\n\n"), chunk.text);
+  } finally {
+    f.close();
+  }
+});
+
 test("storeMemory persists caller metadata as frontmatter (file + index)", async () => {
   const f = fixture();
   try {
