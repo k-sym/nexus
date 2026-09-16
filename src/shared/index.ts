@@ -677,6 +677,16 @@ export interface NexusConfig {
      *  key_path is empty. Masked by the settings route; never returned raw. */
     key: string;
   };
+  /** Partner attention items — the "Needs you" collection (#477). Nexus proxies
+   *  the partner's `/v1/attention` at `/api/attention` and a poller pushes one
+   *  APNs notification per item whose `alert_seq` moved. No secret here; the
+   *  partner URL/key come from `assistant`. deepMerge backfills this block. */
+  attention: {
+    /** When false the poller still ticks (badge count, cursor) but never pushes. */
+    push: boolean;
+    /** Poll cadence in minutes while Nexus is running (floor 1). */
+    poll_minutes: number;
+  };
 }
 
 /** Which roll-up bucket each Kanban column contributes to. */

@@ -25,6 +25,8 @@ import { registerMemoryRoutes } from './routes/memory.js';
 import { registerSettingsRoutes } from './routes/settings.js';
 import { registerStatusRoutes } from './routes/status.js';
 import { registerDraftsRoutes } from './routes/drafts.js';
+import { registerAttentionRoutes } from './routes/attention.js';
+import { startAttentionPoll, partnerFromConfig } from './attention/poll.js';
 import { registerNightQueueRoutes } from './routes/night-queue.js';
 import { registerWorkshopRoutes } from './routes/night-queue-workshop.js';
 import { registerRoutinesRoutes } from './routes/routines.js';
@@ -208,6 +210,17 @@ async function main() {
   // ping — it blocks the run), and a long run finishing. Listeners live for the
   // process; a throwing push can't wedge the broker (both buses isolate them).
   const apns = new ApnsSender(db);
+  // One push per partner attention item whose alert_seq moved (#477). Re-reads
+  // config each tick; dormant with one log line when the assistant is unset.
+  const attentionPoll = startAttentionPoll(db, {
+    partner: () => partnerFromConfig(),
+    apns,
+    pendingApprovals: () => pi.approvals.listPending().length,
+  });
+  // Badge = gates awaiting a decision + open partner attention items. One
+  // number, agreed with the phone's LiveHub, or the badge is noise. Before the
+  // poller's first tick the count is approvals only.
+  const badgeCount = () => pi.approvals.listPending().length + attentionPoll.openCount();
   pi.approvals.subscribe((event) => {
     if (event.type !== 'pending') return;
     const view = event.view;
@@ -231,8 +244,7 @@ async function main() {
       body: summary ? `${summary} · ${project?.name ?? 'a thread'}` : `${view.toolName} wants to run in ${where}.`,
       deepLink: `approval:${view.toolCallId}`,
       threadId: view.threadId,
-      // Badge = total gates awaiting a decision across all threads.
-      badge: pi.approvals.listPending().length,
+      badge: badgeCount(),
     });
   });
   activityManager.bus.subscribe((event) => {
@@ -247,7 +259,7 @@ async function main() {
       deepLink: event.threadId ? `thread:${event.threadId}` : 'open:',
       threadId: event.threadId ?? undefined,
       // Keep the badge in sync with any still-pending approvals.
-      badge: pi.approvals.listPending().length,
+      badge: badgeCount(),
     });
   });
 
@@ -307,6 +319,7 @@ async function main() {
   app.register(registerNightQueueRoutes);
   app.register(registerWorkshopRoutes);
   app.register(registerDraftsRoutes);
+  app.register(registerAttentionRoutes);
   app.register(registerTicketRoutes);
   app.register(registerIdeaRoutes);
   app.register(registerNotificationRoutes);

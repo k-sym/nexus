@@ -166,6 +166,15 @@ function runMigrations(db: Database.Database) {
       pending_json   TEXT NOT NULL DEFAULT '[]'
     );
 
+    -- Push cursor for partner attention items (attention/poll.ts, #477): the
+    -- partner's alert_seq as of the last tick. One row. A wipe re-seeds
+    -- silently on the next tick and never re-pushes the backlog.
+    CREATE TABLE IF NOT EXISTS attention_push_cursor (
+      id             INTEGER PRIMARY KEY CHECK (id = 1),
+      last_alert_seq INTEGER NOT NULL,
+      updated_at     TEXT NOT NULL
+    );
+
     -- Idea Watcher (#352). An idea's dialogue lives in the assistant session
     -- referenced by session_id; this row is just the metadata. Successor to
     -- braindump_ideas, whose table is retained (not dropped) in existing DBs
