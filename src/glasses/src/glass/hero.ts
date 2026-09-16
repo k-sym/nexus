@@ -73,9 +73,15 @@ function drawDots(ctx: CanvasRenderingContext2D, x: number, cy: number, n: numbe
   return cur
 }
 
+/** The two gesture labels drawn into the footer. Sessions keep Review / Dismiss;
+ *  a partner attention item (#477) brings its first lens verb and Dismiss (or
+ *  Later when the lens may not dismiss it). */
+export interface HeroFooter { tap: string; doubleTap: string }
+export const DEFAULT_FOOTER: HeroFooter = { tap: 'Review', doubleTap: 'Dismiss' }
+
 // The gesture footer, drawn INTO the bitmap: "● Review    ●● Dismiss". No words
 // like "tap" — the dot count is the gesture (1 = tap, 2 = double-tap).
-function drawGestureFooter(ctx: CanvasRenderingContext2D, cx: number, baseY: number) {
+function drawGestureFooter(ctx: CanvasRenderingContext2D, cx: number, baseY: number, footer: HeroFooter) {
   ctx.save()
   ctx.textAlign = 'left'
   ctx.textBaseline = 'alphabetic'
@@ -84,15 +90,15 @@ function drawGestureFooter(ctx: CanvasRenderingContext2D, cx: number, baseY: num
   const r = 3, dotGap = 7, groupGap = 26
   const w1 = 2 * r                 // one dot
   const w2 = 2 * r + 3 + 2 * r     // two dots
-  const wReview = ctx.measureText('Review').width
-  const wDismiss = ctx.measureText('Dismiss').width
-  const total = w1 + dotGap + wReview + groupGap + w2 + dotGap + wDismiss
+  const wTap = ctx.measureText(footer.tap).width
+  const wDouble = ctx.measureText(footer.doubleTap).width
+  const total = w1 + dotGap + wTap + groupGap + w2 + dotGap + wDouble
   const cy = baseY - 5
   let x = cx - total / 2
   x = drawDots(ctx, x, cy, 1, r) + dotGap
-  ctx.fillText('Review', x, baseY); x += wReview + groupGap
+  ctx.fillText(footer.tap, x, baseY); x += wTap + groupGap
   x = drawDots(ctx, x, cy, 2, r) + dotGap
-  ctx.fillText('Dismiss', x, baseY)
+  ctx.fillText(footer.doubleTap, x, baseY)
   ctx.restore()
 }
 
@@ -103,7 +109,7 @@ function drawGestureFooter(ctx: CanvasRenderingContext2D, cx: number, baseY: num
  * this screen too — it needs the pixels, not the encoded BLE tiles. The band is
  * drawn at the canvas origin; the caller places it (on the lens it sits at BAND_Y).
  */
-export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reason: string): void {
+export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reason: string, footer: HeroFooter = DEFAULT_FOOTER): void {
   canvas.width = COLS * TW  // 600
   canvas.height = TH        // 144
   const ctx = canvas.getContext('2d')!
@@ -125,16 +131,16 @@ export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reas
   ctx.font = "500 14px system-ui, -apple-system, 'Segoe UI', sans-serif"
   ctx.fillText(`${clip(name, 30)}  ·  ${reason}`, cx, 116)
 
-  drawGestureFooter(ctx, cx, 138)
+  drawGestureFooter(ctx, cx, 138, footer)
 }
 
 /** The hero band's on-lens geometry, so a preview can place it as the firmware does. */
 export const HERO_BAND = { y: BAND_Y, w: COLS * TW, h: TH }
 
 /** Render the interrupt hero and return positioned, encoded image tiles. */
-export function renderInterruptHero(name: string, reason: string): HeroTile[] {
+export function renderInterruptHero(name: string, reason: string, footer: HeroFooter = DEFAULT_FOOTER): HeroTile[] {
   const canvas = document.createElement('canvas')
-  paintInterruptHero(canvas, name, reason)
+  paintInterruptHero(canvas, name, reason, footer)
 
   const tiles: HeroTile[] = []
   for (let i = 0; i < COLS; i++) {

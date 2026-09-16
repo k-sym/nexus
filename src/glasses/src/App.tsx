@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { Connect } from './screens/Connect'
 import { store, useStore } from './store'
-import { answer, connectEvents, decide, getCockpitConfig, getPending, getSession, getSessions, sendSteer, setArmed } from './api'
+import { answer, connectEvents, decide, getCockpitConfig, getPending, getSession, getSessions, sendSteer, setArmed, getAttention } from './api'
 import type { Approval, AskUserQuestionInput, SseEvent } from './types'
 
 const Lab = lazy(() => import('./sim/Lab').then(module => ({ default: module.Lab })))
@@ -19,6 +19,12 @@ function LoadingView() {
  *  attention state. Fire-and-forget; a stale fetch just loses to the next one. */
 function refreshSessions() {
   getSessions('active').then(sessions => store.set({ sessions })).catch(() => {})
+}
+
+// Partner attention items (#477) join the needs-you hero. An older gateway without
+// the route (404) or a partner blip leaves the hero to the thread-born gates.
+function refreshAttention() {
+  getAttention().then(attention => store.set({ attention })).catch(() => {})
 }
 
 function applyEvent(e: SseEvent) {
@@ -69,6 +75,7 @@ function HubFeed() {
       try {
         const [sessions, pending] = await Promise.all([getSessions('active'), getPending()])
         store.set({ sessions, approvals: pending, connection: 'ok' })
+        refreshAttention()
       } catch (err) {
         store.set({ connection: 'error', connectionError: String(err) })
       }
@@ -88,7 +95,7 @@ function HubFeed() {
       }
       stop = connectEvents(applyEvent, ok => store.set({ connection: ok ? 'ok' : 'error' }))
       // light poll to keep session recency/attention fresh
-      poll = setInterval(() => { getSessions('active').then(sessions => store.set({ sessions })).catch(() => {}) }, 10000)
+      poll = setInterval(() => { refreshSessions(); refreshAttention() }, 10000)
       // refresh the OPEN session's transcript so the detail view updates live —
       // steers and their replies appear without leaving + re-entering the session.
       // Skipped while dictating so a background refresh can't disrupt the mic UI.

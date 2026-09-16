@@ -16,8 +16,9 @@ import {
 import { STTEngine } from 'even-toolkit/stt'
 import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
-import { answer, decide, getSession, sendSteer, setSteerFocus } from '../api'
-import { attentionSessions, isInterruptActive, reason } from './screens/interrupt'
+import { answer, decide, getSession, sendSteer, setSteerFocus, resolveAttention } from '../api'
+import { attentionEntriesOf, attentionKey, entryName, entryReason, isInterruptActive } from './screens/interrupt'
+import { tapPlan, verbToast } from './attention'
 import { renderInterruptHero, iconReady } from './hero'
 import { matchAnswer, sttConfig } from './stt'
 import { toGlassText } from './markdown'
@@ -285,7 +286,7 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
   if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${latestActivity(s.activeEvents) ?? ''}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${s.pendingSteer ? `P${s.pendingSteer.text.length}:${s.pendingSteer.baseReply.length}` : ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
   if (scr === 'question') { const a = questions(s)[0]; const q = a ? currentQuestion(a, s) : null; return `q|${a?.id}|${q ? `${q.idx}/${q.total}` : ''}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}|${q?.allowOther ? 'O' : ''}` }
-  return `intr|${attentionSessions(s).map((a) => a.id).join(',')}`
+  return `intr|${attentionKey(attentionEntriesOf(s))}`
 }
 
 export function AppGlasses3c() {
@@ -420,7 +421,17 @@ export function AppGlasses3c() {
           startSteer()                                // tap on detail = dictate a steer (self-guards on STT)
           break
         }
-        case 'interrupt': { const a = attentionSessions(s)[0]; if (a) { store.dismissInterrupt(intrKey(store.getState())); openSession(a.id) } break }
+        case 'interrupt': {
+          // One hero, two sources (#477): a session reviews; a partner item runs its
+          // first lens verb (never one the client invents). Either way the current
+          // attention set is acknowledged first so the hero does not re-raise itself.
+          const entry = attentionEntriesOf(s)[0]
+          if (!entry) break
+          store.dismissInterrupt(intrKey(store.getState()))
+          if (entry.kind === 'session') openSession(entry.id)
+          else { const plan = tapPlan(entry); if (plan.tapVerb) resolveLens(entry.id, plan.tapVerb) }
+          break
+        }
       }
     }
     const onBack = () => {
@@ -442,7 +453,13 @@ export function AppGlasses3c() {
           if (s.listening) { cancelListen(); break }   // 2tap while listening = stop, keep the question
           const a = questions(s)[0]; if (a) deny(a.id); break // 2tap = cancel the question
         }
-        case 'interrupt': store.dismissInterrupt(intrKey(store.getState())); break
+        case 'interrupt': {
+          // 2tap: acknowledge; for a partner item also `dismiss` when the lens may.
+          const entry = attentionEntriesOf(s)[0]
+          store.dismissInterrupt(intrKey(store.getState()))
+          if (entry?.kind === 'item') { const plan = tapPlan(entry); if (plan.doubleTapVerb) resolveLens(entry.id, plan.doubleTapVerb) }
+          break
+        }
       }
     }
 
@@ -505,7 +522,7 @@ export function AppGlasses3c() {
 export function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
   return {
     connection: st.connection, armed: st.armed, sessions: st.sessions,
-    approvals: st.approvals, activeSessionId: st.activeSessionId,
+    approvals: st.approvals, attention: st.attention, activeSessionId: st.activeSessionId,
     activeEvents: st.activeEvents, detailPage: st.detailPage, error: st.glassError,
     dismissedAttentionKey: st.dismissedAttentionKey,
     listening: st.glassListening, steering: st.glassSteering, interim: st.glassInterim,
@@ -514,7 +531,17 @@ export function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
   }
 }
 function intrKey(st: ReturnType<typeof store.getState>): string {
-  return attentionSessions(glass(st)).map((a) => a.id).sort().join(',')
+  return attentionKey(attentionEntriesOf(glass(st)))
+}
+
+// A lens verb on a partner attention item (#477, design D15): fire-and-acknowledge.
+// The item leaves the hero now; the next poll is the truth; one line says what was
+// sent, or the partner's sentence when it refused (it enforces its own lens subset).
+function resolveLens(id: string, verb: Parameters<typeof resolveAttention>[1]) {
+  store.removeAttention(id)
+  resolveAttention(id, verb, verb === 'snooze' ? 'tomorrow' : undefined)
+    .then(() => store.setGlassError(verbToast(verb)))
+    .catch((e) => store.setGlassError(`${verb} failed: ${e instanceof Error ? e.message : e}`))
 }
 
 // Compose the page for the active screen and push it to the glasses.
@@ -698,9 +725,13 @@ export function composeCockpitPage(
 // raw bridge. Mirrors even-toolkit's showHomePage recipe (overlay id 1, tiles 2-4).
 async function renderInterrupt(s: GlassSnapshot) {
   const raw = await GlassesSdk.getRawBridge()
-  const a = attentionSessions(s)[0]
-  const name = a ? a.title || a.project || a.id.slice(0, 8) : 'session'
-  const tiles = renderInterruptHero(name, a ? reason(a) : '')
+  const entry = attentionEntriesOf(s)[0]
+  const plan = entry ? tapPlan(entry) : null
+  const tiles = renderInterruptHero(
+    entry ? entryName(entry) : 'session',
+    entry ? entryReason(entry) : '',
+    plan ? { tap: plan.tapLabel, doubleTap: plan.doubleTapLabel } : undefined,
+  )
 
   const overlay = new TextContainerProperty({
     containerID: 1, containerName: 'overlay',

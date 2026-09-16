@@ -1,6 +1,6 @@
 import { useSyncExternalStore } from 'react'
 import { storageSetRaw } from 'even-toolkit/storage'
-import type { Approval, ConnectionStatus, SessionSummary, TranscriptEvent } from './types'
+import type { Approval, AttentionItem, ConnectionStatus, SessionSummary, TranscriptEvent } from './types'
 
 export interface State {
   baseUrl: string
@@ -10,6 +10,7 @@ export interface State {
   armed: boolean
   sessions: SessionSummary[]
   approvals: Approval[] // pending only
+  attention: AttentionItem[] // partner "Needs you" items, open only (#477) — a second hero source
   error: string | null
   forceConnect: boolean // user asked to re-open the Connect screen (change hub), even though a baseUrl is saved
 
@@ -49,6 +50,7 @@ let state: State = {
   armed: false,
   sessions: [],
   approvals: [],
+  attention: [],
   error: null,
   forceConnect: false,
   activeSessionId: null,
@@ -111,6 +113,11 @@ export const store = {
   },
   dismissInterrupt(key: string) {
     state = { ...state, dismissedAttentionKey: key }
+    emit()
+  },
+  /** Optimistic: a lens verb was sent; the next poll is the truth. */
+  removeAttention(id: string) {
+    state = { ...state, attention: state.attention.filter(i => i.id !== id) }
     emit()
   },
   closeDetail() {
