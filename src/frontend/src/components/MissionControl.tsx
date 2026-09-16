@@ -1,6 +1,7 @@
 import { Gauge } from '@phosphor-icons/react';
 import { MissionStatus } from '../api';
 import DraftsCard from './DraftsCard';
+import NeedsYouCard from './NeedsYouCard';
 import NightQueueCard from './NightQueueCard';
 import RoutinesCard from './RoutinesCard';
 
@@ -200,8 +201,13 @@ export default function MissionControl({ status, loading, onRefresh, onSelectAge
             </Card>
           </div>
 
+          {/* What needs Keith, with its verbs (#477) — first: a thing awaiting a
+              decision outranks status. Renders nothing when empty. */}
+          <NeedsYouCard />
+
           {/* Drafts the partner wants sent — renders nothing when the queue is
-              empty, which is the normal state (baker-internal#42) */}
+              empty, which is the normal state (baker-internal#42). Kept beside
+              the attention card for the shadow window (design D9). */}
           <DraftsCard />
 
           {/* Partner routine fleet (self-polling; independent of /api/mission-control) */}

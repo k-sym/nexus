@@ -705,6 +705,87 @@ export interface DraftDecision extends OutboundDraft {
   booked?: boolean;
 }
 
+// Partner attention items — the "Needs you" collection (baker-internal#140,
+// k-sym/nexus#477), proxied from the partner's /v1/attention. The partner is
+// canonical: the closed verb set, the lens subset and every state check live in
+// its store. The client renders exactly the verbs an item lists and never
+// invents one — there is no approve or send here by construction. Mirror of
+// `Models/Attention.swift` in ios/NexusCore.
+export type AttentionStatus = 'open' | 'snoozed' | 'resolving' | 'resolved' | 'expired';
+export type AttentionVerb = 'draft' | 'open' | 'snooze' | 'dismiss';
+export type AttentionSnoozePreset = 'later' | 'tomorrow' | 'next_week';
+/** Kinds the producers post today; a future kind arrives as a plain string. */
+export type AttentionKind =
+  | 'mail.waiting' | 'mail.urgent' | 'draft.pending' | 'meeting.prep'
+  | 'quiz.prep' | 'quiz.harvest' | 'autonomy.proposal' | (string & {});
+
+export interface AttentionResolution {
+  verb: AttentionVerb | string;
+  by: string;
+  surface: string;
+  at: number;
+  /** Producer-shaped; a finished `draft` verb writes `draft_id` here. */
+  result: Record<string, unknown> | null;
+}
+
+/** Append-only ledger row from the detail call. `verb` includes producer-side
+ *  verbs (post, renotify, expire, reconcile, error) beyond the client set. */
+export interface AttentionEvent {
+  verb: string;
+  by: string;
+  surface: string;
+  ts: number;
+  result: Record<string, unknown> | null;
+}
+
+export interface AttentionItem {
+  id: string;
+  kind: AttentionKind;
+  status: AttentionStatus | (string & {});
+  title: string;
+  /** One line: why this needs a person. */
+  why: string;
+  body: string | null;
+  /** Producer-shaped reference (account, conversation, …). */
+  source: Record<string, unknown>;
+  /** The partner normalises links to exactly these three keys. */
+  links: { draft_id: string | null; vault_page: string | null; proposal_id: string | null };
+  proposed_verb: AttentionVerb | (string & {});
+  /** Verbs the item allows. Stored on the item and never stripped: the partner
+   *  answers 409 unless the status is open or snoozed, so gate on status too. */
+  verbs: Array<AttentionVerb | (string & {})>;
+  /** Subset of `verbs` the glasses may offer. Never contains `open`. */
+  lens_verbs: Array<AttentionVerb | (string & {})>;
+  producer?: string;
+  created_at: number;
+  updated_at: number;
+  snoozed_until: number | null;
+  expires_at: number | null;
+  seq: number;
+  alert_seq: number;
+  resolution: AttentionResolution | null;
+  /** Only on the detail call. */
+  events?: AttentionEvent[];
+}
+
+export interface AttentionResponse {
+  configured?: boolean;
+  items: AttentionItem[];
+  /** Items in `open` status store-wide, regardless of the list filter. */
+  open: number;
+  seq: number;
+  alert_seq: number;
+  generated_at?: number;
+  /** Set (with an empty `items`) when the partner was unreachable. */
+  error?: string;
+}
+
+export interface AttentionResolveInput {
+  verb: AttentionVerb;
+  preset?: AttentionSnoozePreset;
+  until?: number;
+}
+
 // Idea Watcher (#352) — one created GitHub issue of a graduation set.
 export interface CreatedIssue {
   number: number;
@@ -862,6 +943,21 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ by, ...(note ? { note } : {}) }),
+      }),
+  },
+  attention: {
+    /** `live` = open + snoozed + resolving: what the card shows (a drafting item stays visible). */
+    list: (status = 'live') => fetchJson<AttentionResponse>(`/api/attention?status=${encodeURIComponent(status)}`),
+    get: (id: string) => fetchJson<AttentionItem>(`/api/attention/${encodeURIComponent(id)}`),
+    /** Apply one of the item's verbs. Resolves to the item as the partner now
+     *  holds it: `resolving` after `draft` (the proxy passes the partner's 202
+     *  through; poll `get` until it leaves), `snoozed`, or `resolved`. Rejects
+     *  with the partner's sentence on a 409 (state refuses the verb). */
+    resolve: (id: string, input: AttentionResolveInput, by = 'web', surface = 'desktop') =>
+      fetchJson<AttentionItem>(`/api/attention/${encodeURIComponent(id)}/resolve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ by, surface, ...input }),
       }),
   },
   routines: {
