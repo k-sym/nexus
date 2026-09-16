@@ -102,6 +102,34 @@ test("forced rebuild replaces window chunks with breadcrumbed heading sections",
   }
 });
 
+test("forced rebuild re-derives a fallback title and its breadcrumbs from the unchanged file", async () => {
+  const f = fixture();
+  try {
+    const stored = await storeMemory(f.ctx, {
+      namespace: "nexus",
+      project: "test",
+      source: "test",
+      body: "**Project:** Nexus\n**Session:** Fix the badge colour\n\nWe changed the badge.",
+    });
+    const filePath = (f.ctx.db.prepare("SELECT file_path FROM memories WHERE id = ?").get(stored.id) as { file_path: string }).file_path;
+    const before = readFileSync(filePath, "utf8");
+    // Simulate an index written by the old first-line derivation.
+    f.ctx.db.prepare("UPDATE memories SET title = ? WHERE id = ?").run("**Project:** Nexus", stored.id);
+    f.ctx.db.prepare("UPDATE chunks SET text = ? WHERE memory_id = ?").run("**Project:** Nexus\n\nold", stored.id);
+
+    await reindexAll(f.ctx, { force: true });
+
+    assert.equal(readFileSync(filePath, "utf8"), before);
+    const title = (f.ctx.db.prepare("SELECT title FROM memories WHERE id = ?").get(stored.id) as { title: string }).title;
+    assert.equal(title, "Fix the badge colour");
+    const chunks = f.ctx.db.prepare("SELECT text FROM chunks WHERE memory_id = ? ORDER BY ord").all(stored.id) as Array<{ text: string }>;
+    assert.ok(chunks.length >= 1);
+    assert.ok(chunks.every((c) => c.text.startsWith("Fix the badge colour\n\n")), JSON.stringify(chunks));
+  } finally {
+    f.close();
+  }
+});
+
 test("forced rebuild clears stale knowledge graph facts before re-extraction", async () => {
   const f = fixture();
   try {

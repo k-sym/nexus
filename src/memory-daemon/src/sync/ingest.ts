@@ -2,7 +2,7 @@
 // Used by the watcher (external edits) and by reindex (full scan). Idempotent:
 // re-ingesting unchanged content is a no-op (no redundant reindex jobs).
 import { readFileSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import { ulid } from "ulid";
 import type { AppContext } from "../context.js";
 import { oplog } from "../db/index.js";
@@ -10,19 +10,12 @@ import { enqueue } from "../jobs/queue.js";
 import { contentHash } from "./hash.js";
 import { parseMarkdown, deriveScope, type Scope } from "./identity.js";
 import { writeMemoryFile } from "./writer.js";
+import { deriveTitle } from "./title.js";
 import { buildSegments, embedPending } from "../index/indexer.js";
 import { deleteFts } from "../index/fts.js";
 import { dropVectors } from "../index/embed.js";
 
 export type IngestAction = "insert" | "update" | "noop";
-
-function deriveTitle(body: string, filePath: string): string {
-  const heading = body.match(/^\s*#\s+(.+)$/m);
-  if (heading) return heading[1].trim();
-  const firstLine = body.split("\n").map((l) => l.trim()).find((l) => l.length > 0);
-  if (firstLine) return firstLine.slice(0, 120);
-  return basename(filePath).replace(/\.md$/i, "");
-}
 
 export interface IngestResult {
   id: string;
