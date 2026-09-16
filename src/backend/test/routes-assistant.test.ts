@@ -1563,7 +1563,9 @@ test('GET /api/assistant/current adopts the remote pointer session and re-finds 
     assert.equal(first.statusCode, 200);
     const firstBody = first.json() as any;
     assert.equal(firstBody.session.remote_session_id, 'partner-123-abc');
-    assert.equal(firstBody.session.title, 'Partner');
+    // The partner names its pointer session literally "Partner"; that is a
+    // process name, not a conversation name, so the semantic fallback applies.
+    assert.equal(firstBody.session.title, 'Partner conversation');
     assert.equal(firstBody.messages.at(-1)?.content, 'hello from the partner');
 
     // Same pointer again → the SAME local row, never a duplicate adoption.
@@ -1637,5 +1639,40 @@ test('an untitled remote partner session is named for what it is, not which proc
   assert.equal(remoteSessionTitle({ title: null, preview: '', source: 'tui' }), 'Partner conversation · TUI');
   assert.equal(remoteSessionTitle({ source: 'api_server' }), 'Partner conversation · API');
   assert.equal(remoteSessionTitle({}), 'Partner conversation');
+  // Generic titles are treated as untitled — the partner's own pointer session
+  // is literally called "Partner", and older local rows carry the old fallbacks.
+  assert.equal(remoteSessionTitle({ title: 'Partner', preview: null, source: 'api_server' }), 'Partner conversation · API');
+  assert.equal(remoteSessionTitle({ title: 'Remote Partner Session', preview: 'Re: the Colchester refit' }), 'Re: the Colchester refit');
+  assert.equal(remoteSessionTitle({ title: 'partner ' }), 'Partner conversation');
+});
+
+test('re-finding the current session refreshes a stored generic title', async () => {
+  const fetchImpl = partnerChatMock({
+    messages: [],
+    onOther: (u, init) => {
+      if (u.endsWith('/v1/current-session') && (!init?.method || init.method === 'GET')) {
+        return jsonRes({ session: { id: 'partner-gen-1', title: 'Partner', source: 'api_server' } });
+      }
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    // An older adoption stored the partner's literal name.
+    const now = new Date().toISOString();
+    db.prepare(`INSERT INTO assistant_sessions (id, title, remote_session_id, status, created_at, updated_at, archived_at)
+                VALUES ('local-gen', 'Partner', 'partner-gen-1', 'idle', ?, ?, NULL)`).run(now, now);
+    const res = await app.inject({ method: 'GET', url: '/api/assistant/current' });
+    assert.equal(res.statusCode, 200);
+    const body = res.json() as any;
+    assert.equal(body.session.id, 'local-gen', 'the same local row, never a duplicate');
+    assert.equal(body.session.title, 'Partner conversation · API');
+    const stored = db.prepare('SELECT title FROM assistant_sessions WHERE id = ?').get('local-gen') as { title: string };
+    assert.equal(stored.title, 'Partner conversation · API');
+  } finally {
+    await app.close();
+    db.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 

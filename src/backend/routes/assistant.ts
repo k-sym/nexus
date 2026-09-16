@@ -181,9 +181,19 @@ function epochToIso(value: number | string | undefined | null): string | undefin
 /** A remote partner session's display name (design D18): its own title, else
  *  its preview, else a semantic label — what the conversation is and where it
  *  runs, never which process holds it ("Remote Partner Session" said nothing). */
+/** Titles that name a process, not a conversation. The partner calls its one
+ *  pointer session literally "Partner", and older rows carry the previous
+ *  fallbacks; none of them tells Keith what the conversation is about. */
+const GENERIC_SESSION_TITLES = new Set(['partner', 'remote partner session', 'new session', 'untitled', 'assistant']);
+
+export function isGenericSessionTitle(title: string | null | undefined): boolean {
+  const t = title?.trim().toLowerCase();
+  return !t || GENERIC_SESSION_TITLES.has(t);
+}
+
 export function remoteSessionTitle(remote: { title?: string | null; preview?: string | null; source?: string | null }): string {
   const own = remote.title?.trim();
-  if (own) return own;
+  if (own && !isGenericSessionTitle(own)) return own;
   const preview = remote.preview?.trim();
   if (preview) return preview;
   const source = remote.source === 'tui' ? 'TUI' : remote.source === 'cli' ? 'CLI' : remote.source === 'api_server' ? 'API' : undefined;
@@ -875,11 +885,15 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       remoteSessionId: string,
       knownTitle?: string,
     ): Promise<AssistantSession> => {
+      // The semantic name (design D18): a caller that already has the remote
+      // row passes it through remoteSessionTitle(); otherwise ask the partner
+      // for the detail and apply the same rule, so a generic "Partner" never
+      // lands (or stays) as a local title.
       let remoteTitle = knownTitle?.trim() || undefined;
       if (!remoteTitle) {
         try {
           const detail = await partner.getSession(remoteSessionId);
-          remoteTitle = detail?.title?.trim() || undefined;
+          remoteTitle = remoteSessionTitle(detail ?? {});
         } catch {
           // Tolerate a missing detail endpoint; adoption still proceeds with a fallback title.
         }
@@ -894,7 +908,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
           `INSERT INTO assistant_sessions
             (id, title, remote_session_id, status, created_at, updated_at, archived_at)
            VALUES (?, ?, ?, 'idle', ?, ?, NULL)`,
-        ).run(id, remoteTitle || 'Remote Partner Session', remoteSessionId, now, now);
+        ).run(id, remoteTitle || remoteSessionTitle({}), remoteSessionId, now, now);
         session = db.prepare('SELECT * FROM assistant_sessions WHERE id = ?').get(id) as AssistantSession;
       } else if (remoteTitle && remoteTitle !== session.title) {
         db.prepare('UPDATE assistant_sessions SET title = ?, updated_at = ? WHERE id = ?').run(remoteTitle, now, session.id);
