@@ -178,6 +178,18 @@ function epochToIso(value: number | string | undefined | null): string | undefin
   return Number.isNaN(Date.parse(iso)) ? undefined : iso;
 }
 
+/** A remote partner session's display name (design D18): its own title, else
+ *  its preview, else a semantic label — what the conversation is and where it
+ *  runs, never which process holds it ("Remote Partner Session" said nothing). */
+export function remoteSessionTitle(remote: { title?: string | null; preview?: string | null; source?: string | null }): string {
+  const own = remote.title?.trim();
+  if (own) return own;
+  const preview = remote.preview?.trim();
+  if (preview) return preview;
+  const source = remote.source === 'tui' ? 'TUI' : remote.source === 'cli' ? 'CLI' : remote.source === 'api_server' ? 'API' : undefined;
+  return source ? `Partner conversation · ${source}` : 'Partner conversation';
+}
+
 function publicRemoteSession(remote: PartnerListedSession) {
   // api_server rows carry started_at/last_active (epoch) and often a null title,
   // so fall back through preview → generic label, and derive timestamps from the
@@ -186,7 +198,7 @@ function publicRemoteSession(remote: PartnerListedSession) {
   const createdAt = epochToIso(remote.created_at ?? remote.started_at);
   return {
     id: remoteSyntheticId(remote.id),
-    title: remote.title?.trim() || remote.preview?.trim() || 'Remote Partner Session',
+    title: remoteSessionTitle(remote),
     remote_session_id: remote.id,
     status: 'remote',
     remoteOnly: true,
@@ -943,7 +955,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(502);
         return { error: 'Assistant returned no current session.' };
       }
-      const session = await adoptRemoteSession(partner, String(remote.id), remote.title ?? 'Partner');
+      const session = await adoptRemoteSession(partner, String(remote.id), remoteSessionTitle(remote));
       return {
         session,
         messages: await renderSessionMessages(db, session, assistantSessionDir, partner),

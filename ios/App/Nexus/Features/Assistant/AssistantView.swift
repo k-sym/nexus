@@ -95,11 +95,17 @@ struct NewAssistantSession: Hashable, Identifiable {
     let title: String
 }
 
-/// The Assistant surface: a merged list of local + adoptable-remote Partner
-/// sessions, feeding the shared streaming chat via `AssistantChatEndpoint`.
+/// The Assistant surface (design D17): two sections in one list — **Sessions**,
+/// the merged local + adoptable-remote Partner conversations feeding the shared
+/// streaming chat via `AssistantChatEndpoint`; and **Needs you**, the partner's
+/// live attention items (#477), each row opening the item sheet where its verbs
+/// run. `LiveHub` owns the items (and the tab badge); this view only reads them.
 struct AssistantView: View {
     private let api: APIClient
+    @Environment(LiveHub.self) private var liveHub
     @State private var vm: AssistantSessionsViewModel
+    /// Tapped attention item; drives the sheet.
+    @State private var selectedItem: AttentionItem?
     /// Set by the Delete swipe action; drives the confirmation dialog.
     @State private var pendingDelete: AssistantSession?
     /// Set by the Rename swipe action; drives the rename alert.
@@ -135,6 +141,11 @@ struct AssistantView: View {
                     endpoint: AssistantChatEndpoint(api: api, sessionId: session.id), title: session.title)
             }
             .task { if vm.state.value == nil { await vm.refresh() } }
+            .sheet(item: $selectedItem) { item in
+                AttentionItemSheet(api: api, itemId: item.id, seed: item) {
+                    Task { await liveHub.refreshAttention() }
+                }
+            }
             .confirmationDialog(
                 "Delete this session?",
                 isPresented: deleteDialogBinding,
@@ -192,52 +203,109 @@ struct AssistantView: View {
         case .idle, .loading:
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         case .loaded(let sessions):
-            if sessions.isEmpty {
-                ContentUnavailableView {
-                    Label("No assistant sessions", systemImage: "bubble.left.and.text.bubble.right")
-                } description: {
-                    Text("Start one with the compose button.")
-                }
-            } else {
-                List(sessions) { session in
-                    NavigationLink {
-                        rowDestination(session)
-                    } label: {
-                        AssistantSessionRow(session: session)
+            List {
+                Section {
+                    if sessions.isEmpty {
+                        Label("No sessions yet — start one with the compose button.", systemImage: "bubble.left.and.text.bubble.right")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
-                    // Session actions apply to local rows only — a remote-only
-                    // row isn't a local session until it's adopted (on tap).
-                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                        if !session.remoteOnly {
-                            Button(role: .destructive) {
-                                pendingDelete = session
-                            } label: {
-                                Label("Delete", systemImage: "trash")
-                            }
-                            Button {
-                                Task { await vm.archive(session) }
-                            } label: {
-                                Label("Archive", systemImage: "archivebox")
-                            }
-                            .tint(.orange)
+                    ForEach(sessions) { session in
+                        sessionRow(session)
+                    }
+                } header: {
+                    Text("Sessions")
+                }
+
+                // The partner's live attention items (#477). Rows only; the
+                // verbs run in the sheet. Empty is the normal state and says so
+                // quietly rather than hiding the section — this is their home.
+                Section {
+                    needsYouRows
+                } header: {
+                    HStack {
+                        Text("Needs you")
+                        Spacer()
+                        if liveHub.attentionOpen > 0 {
+                            Text("\(liveHub.attentionOpen) open").foregroundStyle(.secondary)
                         }
                     }
-                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                        if !session.remoteOnly {
-                            Button {
-                                renameText = session.title
-                                pendingRename = session
-                            } label: {
-                                Label("Rename", systemImage: "pencil")
-                            }
-                            .tint(.blue)
-                        }
+                } footer: {
+                    if let error = liveHub.attention.value?.error {
+                        Text("Adapter unreachable — \(error)")
                     }
                 }
-                .refreshable { await vm.refresh() }
+            }
+            .listStyle(.insetGrouped)
+            .refreshable {
+                await vm.refresh()
+                await liveHub.refreshAttention()
             }
         case .failed(let message):
             ErrorStateView(message: message) { Task { await vm.refresh() } }
+        }
+    }
+
+    @ViewBuilder
+    private func sessionRow(_ session: AssistantSession) -> some View {
+        NavigationLink {
+            rowDestination(session)
+        } label: {
+            AssistantSessionRow(session: session)
+        }
+        // Session actions apply to local rows only — a remote-only
+        // row isn't a local session until it's adopted (on tap).
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+            if !session.remoteOnly {
+                Button(role: .destructive) {
+                    pendingDelete = session
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                Button {
+                    Task { await vm.archive(session) }
+                } label: {
+                    Label("Archive", systemImage: "archivebox")
+                }
+                .tint(.orange)
+            }
+        }
+        .swipeActions(edge: .leading, allowsFullSwipe: true) {
+            if !session.remoteOnly {
+                Button {
+                    renameText = session.title
+                    pendingRename = session
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                .tint(.blue)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var needsYouRows: some View {
+        if liveHub.attentionRouteMissing || liveHub.attention.value?.configured == false {
+            Label("The partner's attention items are not available from this backend.", systemImage: "bell.slash")
+                .font(.callout).foregroundStyle(.secondary)
+        } else {
+            switch liveHub.attention {
+            case .idle, .loading:
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Checking…").foregroundStyle(.secondary) }
+                    .font(.callout)
+            case .failed(let message):
+                Label(message, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.red)
+            case .loaded(let response):
+                if response.items.isEmpty {
+                    Label("Nothing needs you right now.", systemImage: "checkmark.circle")
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    ForEach(response.items) { item in
+                        Button { selectedItem = item } label: { AttentionRow(item: item) }
+                            .buttonStyle(.plain)
+                    }
+                }
+            }
         }
     }
 }

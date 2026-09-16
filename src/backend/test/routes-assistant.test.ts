@@ -4,7 +4,7 @@ import Fastify from 'fastify';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createAssistantRoutes } from '../routes/assistant';
+import { createAssistantRoutes, remoteSessionTitle } from '../routes/assistant';
 import { loadConfig } from '../config';
 import { getDb } from '../db';
 import type { PartnerFetch } from '../partner/client';
@@ -1628,3 +1628,14 @@ test('GET /api/assistant/current surfaces adapter failure as 502, not a crash', 
     await cleanup(app, db, dir);
   }
 });
+
+// -- semantic session names (design D18, #477 slice 5) ----------------------
+
+test('an untitled remote partner session is named for what it is, not which process holds it', () => {
+  assert.equal(remoteSessionTitle({ title: '  Colchester refit  ' }), 'Colchester refit');
+  assert.equal(remoteSessionTitle({ title: null, preview: 'Thursday works for me' }), 'Thursday works for me');
+  assert.equal(remoteSessionTitle({ title: null, preview: '', source: 'tui' }), 'Partner conversation · TUI');
+  assert.equal(remoteSessionTitle({ source: 'api_server' }), 'Partner conversation · API');
+  assert.equal(remoteSessionTitle({}), 'Partner conversation');
+});
+
