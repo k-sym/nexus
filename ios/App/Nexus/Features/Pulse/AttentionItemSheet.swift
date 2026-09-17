@@ -44,6 +44,13 @@ struct AttentionItemSheet: View {
     /// A chat pushed inside this sheet's own stack — the partner's current
     /// conversation (Ask the partner) or the just-filed to-do session.
     @State private var chat: ChatTarget?
+    /// The latest message behind a mail item (6d, design D42): fetched once on
+    /// open, shown for a person to read. `.failed` carries the partner's
+    /// sentence (a mailbox it cannot read today); `threadHidden` is an older
+    /// backend or partner without the route.
+    @State private var thread: LoadState<AttentionThread> = .idle
+    @State private var threadHidden = false
+    @State private var threadExpanded = false
 
     struct DraftRef: Identifiable { let id: String }
 
@@ -77,6 +84,9 @@ struct AttentionItemSheet: View {
                     Section("Details") {
                         Text(body).font(.callout).textSelection(.enabled)
                     }
+                }
+                if let item, item.isMail, !threadHidden {
+                    threadSection
                 }
                 stateSection
                 if let item, item.isActionable, !drafting {
@@ -136,6 +146,60 @@ struct AttentionItemSheet: View {
                                       seed: target.seedText.map { ChatSeed(text: $0, modelKey: nil) })
                 }
             }
+        }
+    }
+
+    // MARK: The latest message (6d, design D41/D42) — read-only, never a verb.
+
+    @ViewBuilder
+    private var threadSection: some View {
+        Section {
+            switch thread {
+            case .idle, .loading:
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading the thread…").foregroundStyle(.secondary) }
+                    .font(.callout)
+            case .failed(let why):
+                // The partner's own sentence (a Google mailbox today), not an error banner.
+                Text("Not readable from here — \(why)")
+                    .font(.callout).foregroundStyle(.secondary)
+            case .loaded(let t):
+                if let m = t.latest {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(m.senderLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            Spacer(minLength: 8)
+                            if let at = m.sentAt {
+                                Text(Self.relative(Int(at.timeIntervalSince1970))).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Text(m.body)
+                            .font(.callout)
+                            .textSelection(.enabled)
+                            .lineLimit(threadExpanded ? nil : 12)
+                        if !threadExpanded, m.body.count > 480 {
+                            Button("More") { threadExpanded = true }.font(.caption)
+                        }
+                    }
+                } else {
+                    Text("No message to show.").font(.callout).foregroundStyle(.secondary)
+                }
+            }
+        } header: {
+            Text("Latest message")
+        }
+    }
+
+    /// Fetch once per open (D42): one read per sheet, none from the list poll.
+    private func loadThread(for item: AttentionItem) async {
+        guard item.isMail, case .idle = thread else { return }
+        thread = .loading
+        do {
+            thread = .loaded(try await api.attentionThread(id: item.id))
+        } catch APIError.server(let status, _) where status == 404 {
+            threadHidden = true
+            thread = .idle
+        } catch {
+            thread = .failed(LoadState<AttentionThread>.message(for: error))
         }
     }
 
@@ -442,6 +506,12 @@ struct AttentionItemSheet: View {
             if let why = item.why, !why.isEmpty { seed += " — \(why)" }
             if item.links?.vaultPage != nil { seed += ". Show me the prep pack and tell me anything worth tweaking." }
             else if item.links?.draftId != nil { seed += ". Walk me through the draft." }
+            else if item.isMail {
+                // D43: name the message, never paste it — the partner screens
+                // thread bodies before a model sees them, and so must the phone.
+                let who = thread.value?.latest?.fromName ?? item.sourceAccount.map { "the \($0) mailbox" } ?? "the sender"
+                seed += ". The latest message from \(who) is in the thread — read it before answering. What is the next step here?"
+            }
             else { seed += ". What is the next step here?" }
             chat = ChatTarget(kind: .assistant(sessionId: session.id), title: session.title, seedText: seed)
         } catch {
@@ -491,6 +561,7 @@ struct AttentionItemSheet: View {
             item = try await api.attentionDetail(id: itemId)
             loadError = nil
             if item?.status == .resolving { startPolling() }
+            if let item { await loadThread(for: item) }
         } catch {
             loadError = LoadState<AttentionItem>.message(for: error)
         }

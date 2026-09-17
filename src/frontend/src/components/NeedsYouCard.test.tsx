@@ -1,7 +1,7 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import NeedsYouCard, { offeredVerbs, openLabel, isCleanupApproval } from './NeedsYouCard';
+import NeedsYouCard, { offeredVerbs, openLabel, isCleanupApproval, isMail } from './NeedsYouCard';
 import { api, AttentionItem } from '../api';
 import { confirmDialog } from '../lib/confirm';
 
@@ -58,6 +58,8 @@ function stubList(items = [MAIL]) {
     configured: true, items, open: items.filter((i) => i.status === 'open').length, seq: 12, alert_seq: 4,
   });
   vi.spyOn(api.attention, 'get').mockImplementation(async (id) => ({ ...items.find((i) => i.id === id)!, events: [] }));
+  // An older backend without the thread route unless a test says otherwise (6d, D41).
+  vi.spyOn(api.attention, 'thread').mockRejectedValue(new Error('Route GET:/api/attention/x/thread not found'));
 }
 
 afterEach(() => {
@@ -322,5 +324,53 @@ describe('NeedsYouCard (6c)', () => {
     expect(await screen.findByText(/cleanup approved/)).toBeVisible();
     // Never an approve verb sent as a verb: the payload is a dismiss.
     expect(resolve.mock.calls.every(([, input]) => input.verb !== ('approve' as never))).toBe(true);
+  });
+});
+
+// Slice 6d (design D40–D43): the latest message behind a mail item.
+const MESSAGE = {
+  account: 'ssuk', id: 'AAMk-msg', thread: 'AAMk01', from: 'jane.holloway@contractor-example.co.uk', from_name: 'Jane Holloway',
+  subject: 'Re: Method statement for the Colchester refit', date: '2026-09-16T12:48:21Z',
+  body: 'Hi Keith, There seems to be a few subcontractors still missing from the new App. Any news?',
+};
+
+describe('NeedsYouCard (6d)', () => {
+  it('a mail row reads the latest message once on expand and shows it; the list poll never does', async () => {
+    stubList([MAIL, PR]);
+    const thread = vi.spyOn(api.attention, 'thread').mockResolvedValue({ item_id: 'att_mail', messages: [MESSAGE] });
+    const user = userEvent.setup();
+    render(<NeedsYouCard />);
+    await screen.findByText(/Colchester refit/);
+    expect(thread).not.toHaveBeenCalled();
+    await user.click(screen.getByText(/Colchester refit/));
+    expect(await screen.findByText(/Jane Holloway <jane.holloway@contractor-example.co.uk>/)).toBeVisible();
+    expect(screen.getByText(/subcontractors still missing/)).toBeVisible();
+    expect(thread).toHaveBeenCalledTimes(1);
+    expect(thread).toHaveBeenCalledWith('att_mail');
+    await user.click(screen.getByText(/Colchester refit/));
+    await user.click(screen.getByText(/Colchester refit/));
+    expect(thread).toHaveBeenCalledTimes(1);
+    // A PR item has no conversation: no read.
+    await user.click(screen.getByText(/Tighten the poll/));
+    await screen.findByRole('button', { name: 'Close PR' });
+    expect(thread).toHaveBeenCalledTimes(1);
+    expect(isMail(PR)).toBe(false);
+  });
+
+  it("the partner's refusal is a footer sentence with the verbs intact; a missing route hides the block", async () => {
+    stubList([MAIL]);
+    vi.spyOn(api.attention, 'thread').mockRejectedValue(new Error("thread is Graph-only today; 'resolve-google' is google"));
+    const user = userEvent.setup();
+    const first = render(<NeedsYouCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    expect(await screen.findByText(/Not readable from here — thread is Graph-only today/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Draft a reply' })).toBeVisible();
+    first.unmount();
+
+    stubList([MAIL]); // the default stub: route not found
+    render(<NeedsYouCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    await screen.findByRole('button', { name: 'Draft a reply' });
+    expect(screen.queryByTestId('attention-thread')).not.toBeInTheDocument();
   });
 });

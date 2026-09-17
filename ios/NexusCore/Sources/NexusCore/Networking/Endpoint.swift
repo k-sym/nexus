@@ -342,6 +342,13 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/attention/\(id)/page")
     }
 
+    /// The latest message behind a mail item → `AttentionThread` (6d). A 409 is
+    /// the partner's sentence (not a mail item; a mailbox it cannot read), not
+    /// "busy"; a 404 is an item or a route that does not exist.
+    public static func attentionThread(_ id: String) -> Endpoint {
+        Endpoint(path: "/api/attention/\(id)/thread", conflictIsBusy: false)
+    }
+
     /// "File as a to-do": the item becomes a Board session → `OriginSessionResult`.
     public static func fileAttention(_ id: String, body: Data) -> Endpoint {
         Endpoint(path: "/api/attention/\(id)/file", method: "POST", body: body)

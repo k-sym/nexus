@@ -115,6 +115,60 @@ public struct AttentionPage: Decodable, Sendable, Identifiable {
     public var id: String { memoryId ?? itemId ?? title }
 }
 
+/// The latest message behind a `mail.*` item (`GET /api/attention/:id/thread`,
+/// slice 6d): what the partner's `mail thread` returns — plain text, HTML
+/// stripped, clipped by the partner. Display-only on the phone: the body is
+/// never put into a seed or a prompt (design D43).
+public struct AttentionThreadMessage: Decodable, Sendable, Identifiable {
+    public let id: String
+    public let account: String?
+    public let thread: String?
+    public let from: String?
+    public let fromName: String?
+    public let subject: String?
+    /// ISO-8601 as Graph writes it (`2026-09-16T12:48:21Z`); see `sentAt`.
+    public let date: String?
+    public let body: String
+
+    enum CodingKeys: String, CodingKey { case id, account, thread, from, fromName, subject, date, body }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        account = try c.decodeIfPresent(String.self, forKey: .account)
+        thread = try c.decodeIfPresent(String.self, forKey: .thread)
+        from = try c.decodeIfPresent(String.self, forKey: .from)
+        fromName = try c.decodeIfPresent(String.self, forKey: .fromName)
+        subject = try c.decodeIfPresent(String.self, forKey: .subject)
+        date = try c.decodeIfPresent(String.self, forKey: .date)
+        body = try c.decodeIfPresent(String.self, forKey: .body) ?? ""
+    }
+
+    /// "Jane Holloway <jane@…>" when the name is known, else the address.
+    public var senderLine: String {
+        let address = from ?? ""
+        if let name = fromName, !name.isEmpty { return address.isEmpty ? name : "\(name) <\(address)>" }
+        return address
+    }
+
+    public var sentAt: Date? {
+        guard let date, !date.isEmpty else { return nil }
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: date) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: date)
+    }
+}
+
+public struct AttentionThread: Decodable, Sendable {
+    public let itemId: String?
+    /// One element today: the partner serves the latest message only.
+    public let messages: [AttentionThreadMessage]
+
+    public var latest: AttentionThreadMessage? { messages.first }
+}
+
 /// Epoch seconds as the partner writes them: item columns are `int(now)`, but
 /// the event ledger (and anything else stamped straight from `time.time()`)
 /// is a float such as `1789574428.059785`. Foundation's `Int` decode rejects a
@@ -273,6 +327,10 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
     /// The draft this item reaches: recorded by a finished `draft` verb, or
     /// linked by the producer (a `draft.pending` item).
     public var draftId: String? { resolution?.draftId ?? links?.draftId }
+
+    /// A mail item has a conversation behind it the partner can read (6d):
+    /// the sheet fetches the latest message once on open.
+    public var isMail: Bool { kindName.hasPrefix("mail.") }
 
     /// The slow verb this item can be running while `resolving` (D38): a
     /// `pr.review` can only be closing; everything else can only be drafting.

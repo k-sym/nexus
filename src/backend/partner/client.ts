@@ -267,6 +267,10 @@ export interface PartnerClient {
    * `draft` verb is still running, and the phone must tell "started" from "done". */
   listAttention(status?: string, sinceSeq?: number): Promise<unknown>;
   getAttention(id: string): Promise<unknown>;
+  /** The latest message behind a `mail.*` item (baker-internal PR #152): read-only,
+   * `{ item_id, messages: [ … ] }`. Throws with `status` 404/409 carrying the
+   * partner's sentence (not a mail item; a mailbox it cannot read). */
+  getAttentionThread(id: string): Promise<unknown>;
   resolveAttention(id: string, body: PartnerAttentionResolveBody): Promise<{ status: number; body: unknown }>;
   createSession(input: PartnerSessionInput): Promise<{ sessionId: string }>;
   deleteSession(sessionId: string): Promise<void>;
@@ -475,6 +479,10 @@ export function createPartnerClient(options: CreatePartnerClientOptions): Partne
 
     async getAttention(id: string): Promise<unknown> {
       return requestJson(`/v1/attention/${encodeURIComponent(id)}`);
+    },
+
+    async getAttentionThread(id: string): Promise<unknown> {
+      return requestJson(`/v1/attention/${encodeURIComponent(id)}/thread`);
     },
 
     async resolveAttention(id: string, body: PartnerAttentionResolveBody): Promise<{ status: number; body: unknown }> {

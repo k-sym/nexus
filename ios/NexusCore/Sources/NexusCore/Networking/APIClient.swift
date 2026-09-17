@@ -559,6 +559,14 @@ public actor APIClient {
         try await request(.attentionPage(id))
     }
 
+    /// The latest message behind a mail item (6d). Read-only on the partner's
+    /// side; throws `.server(status: 409, …)` with the partner's sentence when
+    /// it cannot read the mailbox today, `.server(status: 404, …)` when the
+    /// route or the item is missing.
+    public func attentionThread(id: String) async throws -> AttentionThread {
+        try await request(.attentionThread(id))
+    }
+
     /// File an item as a to-do: a Board session on `projectId`, stamped with the
     /// item as its origin, plus the composed first turn to seed the chat with.
     /// The item is dismissed on the partner as part of the same call.
