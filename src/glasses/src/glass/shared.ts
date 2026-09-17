@@ -8,12 +8,11 @@ export interface GlassSnapshot {
   armed: boolean
   sessions: SessionSummary[]
   approvals: Approval[]          // pending only; a non-empty queue takes over the HUD
-  attention?: AttentionItem[]    // partner items (#477); open ones join the needs-you hero. Optional so prototype snapshot builders need no change.
+  attention?: AttentionItem[]    // partner items (#477); open ones join the Needs-you list (slice 7). Optional so prototype snapshot builders need no change.
   activeSessionId: string | null // set => detail screen
   activeEvents: TranscriptEvent[]
   detailPage: number             // Phase 2: page of the latest reply shown on the detail card
   error: string | null
-  dismissedAttentionKey: string | null // attention set the user already acknowledged
   listening: boolean                   // Phase 4b: mic open for a voice answer
   steering: boolean                    // Phase 4c: mic open for a free-text steer (detail screen)
   interim: string                      // live transcript while listening/steering
@@ -30,8 +29,7 @@ export interface GlassActions {
   closeDetail(): void
   allow(id: string): void
   deny(id: string): void
-  dismissInterrupt(key: string): void
-  /** A lens verb on a partner attention item (#477): the first `lens_verbs`
-   *  entry on tap, `dismiss` on double-tap. Fire-and-acknowledge. */
+  /** A lens verb on a partner attention item (#477): one of its `lens_verbs`,
+   *  chosen on the item card (slice 7). Fire-and-acknowledge. */
   resolveAttention(id: string, verb: AttentionVerb): void
 }

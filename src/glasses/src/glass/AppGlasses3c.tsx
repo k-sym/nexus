@@ -3,37 +3,33 @@
 // of useGlasses' fixed text-page modes. Replaces <AppGlasses/>. Renders nothing to
 // the DOM; the web dashboard is the companion view.
 //
-// v1: the session LIST is a full native card (rail + bordered list + selection);
-// approval / detail / interrupt are functional bordered-text placeholders, ported
-// to rich compositions next. The bitmap interrupt hero (image container) is the
-// known follow-up — GlassesPage composes text+list only.
+// Screens: projects › sessions › detail (the drill-down), approval / question (the
+// takeovers), and since slice 7 the Needs-you list + item card — attention items and
+// sessions waiting on a human in one list, no pushed hero (design D51–D55).
 import { useEffect, useRef } from 'react'
 import { GlassesSdk, type GlassesPage } from 'even-toolkit/sdk-wrapper'
-import {
-  CreateStartUpPageContainer, RebuildPageContainer,
-  TextContainerProperty, ImageContainerProperty, ImageRawDataUpdate,
-} from '@evenrealities/even_hub_sdk'
 import { STTEngine } from 'even-toolkit/stt'
 import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
 import { answer, decide, getSession, sendSteer, setSteerFocus, resolveAttention } from '../api'
-import { attentionEntriesOf, attentionKey, entryName, entryReason, isInterruptActive } from './screens/interrupt'
-import { heroHeadline, isNoticeItem, tapPlan, verbToast } from './attention'
-import { renderInterruptHero, iconReady } from './hero'
+import { attentionEntriesOf } from './screens/needs'
+import { cardVerbRows, isNoticeItem, kindLabel, landsOnNeeds, needsCounts, needsRow, needsTitle, verbToast } from './attention'
 import { matchAnswer, sttConfig } from './stt'
 import { toGlassText } from './markdown'
 import type { GlassSnapshot } from './shared'
 import type { Approval, AskUserQuestionInput, SessionSummary, TranscriptEvent } from '../types'
 
 // Phase 3 nav: the flat session list is replaced by a projects → sessions drill-down
-// (the locked firmware-text design). approval / question / interrupt still hard-take
-// over the HUD from wherever you are; detail is a session opened from the sessions list.
-export type Screen = 'approval' | 'question' | 'interrupt' | 'detail' | 'projects' | 'sessions'
+// (the locked firmware-text design). approval / question still hard-take over the HUD
+// from wherever you are; detail is a session opened from the sessions list; `needs` is
+// the Needs-you list (a third home) and `item` its card (slice 7).
+export type Screen = 'approval' | 'question' | 'detail' | 'projects' | 'sessions' | 'needs' | 'item'
 
 // Where the "home" nav sits when nothing is taking over the HUD. `detail` is not
 // stored here — it's implied by store.activeSessionId (so it survives store updates
-// and reuses the existing steer/paging machinery).
-export interface Nav { home: 'projects' | 'sessions'; projIdx: number }
+// and reuses the existing steer/paging machinery). `itemId` is the open item card.
+export interface Nav { home: 'projects' | 'sessions' | 'needs'; projIdx: number; itemId: string | null }
+const NEEDS_DOOR = '__needs__' // the Projects list's first row when something needs you (D55)
 
 const BORDER = 0xffffff as never // maps to green on the monochrome lens
 // Sentinel row id for the "speak your answer" option on the question screen.
@@ -138,9 +134,9 @@ function submitOrAdvance(a: Approval, value: string) {
 export function pickScreen(s: GlassSnapshot, nav: Nav): Screen {
   if (gates(s).length > 0) return 'approval'
   if (questions(s).length > 0) return 'question'
-  if (isInterruptActive(s)) return 'interrupt'
+  if (nav.itemId) return 'item'
   if (s.activeSessionId) return 'detail'
-  return nav.home // 'projects' (home) | 'sessions' (drilled into a project)
+  return nav.home // 'projects' (home) | 'sessions' (drilled into a project) | 'needs' (the list)
 }
 
 // Resolve a spoken transcript into an answer and post it. Module-level so both the STT
@@ -218,6 +214,16 @@ function sessionsLayout(groups: ProjGroup[]): { railW: number; listX: number; ro
 }
 const PROJECT_ROW_W = 536
 const PROJECT_NAME_W = PROJECT_ROW_W - 24
+// Needs-you list rows share the Projects geometry; the card's left rail matches the
+// question screen's prompt rail.
+const NEEDS_GLYPH_ROW = '★'
+const ITEM_RAIL_W = 214
+
+/** Needs-you row label: glyph · name · meta, the name fitted to what the fixed parts leave. */
+function needsRowLabel(r: { glyph: string; name: string; meta: string }): string {
+  const budget = PROJECT_NAME_W - Math.ceil(getTextWidth(`${r.glyph}     ·   ${r.meta}`))
+  return `${r.glyph}  ${fitToWidth(r.name, budget)}   ·   ${r.meta}`
+}
 
 // A firmware LIST item is a single text run, so the only lever for lining the name
 // column up is padding the badge. NBSP rather than a plain space because trailing
@@ -286,7 +292,9 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
   if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${latestActivity(s.activeEvents) ?? ''}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${s.pendingSteer ? `P${s.pendingSteer.text.length}:${s.pendingSteer.baseReply.length}` : ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
   if (scr === 'question') { const a = questions(s)[0]; const q = a ? currentQuestion(a, s) : null; return `q|${a?.id}|${q ? `${q.idx}/${q.total}` : ''}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}|${q?.allowOther ? 'O' : ''}` }
-  return `intr|${attentionKey(attentionEntriesOf(s))}`
+  if (scr === 'needs') return `needs|${s.connection}|${attentionEntriesOf(s).map((e) => { const r = needsRow(e); return `${r.id}${r.meta}${r.name}` }).join('~')}`
+  const it = s.attention?.find((i) => i.id === nav.itemId)
+  return `item|${nav.itemId}|${it ? `${it.title}|${it.why}|${cardVerbRows(it).map((r) => r.verb).join(',')}` : 'gone'}|${s.error ?? ''}`
 }
 
 export function AppGlasses3c() {
@@ -297,7 +305,10 @@ export function AppGlasses3c() {
   const sigRef = useRef<string>('')
   // Home nav position (projects list, or drilled into one project's sessions). Detail
   // is implied by store.activeSessionId, so it isn't tracked here.
-  const navRef = useRef<Nav>({ home: 'projects', projIdx: 0 })
+  const navRef = useRef<Nav>({ home: 'projects', projIdx: 0, itemId: null })
+  // Landing (D54): once, on the first connected snapshot, open on the Needs-you list
+  // when something is actionable; otherwise Projects. Never re-evaluated after.
+  const landedRef = useRef(false)
 
   useEffect(() => {
     const sdk = new GlassesSdk()
@@ -316,9 +327,9 @@ export function AppGlasses3c() {
     // --- actions (mirror the old GlassActions, against store + hub) ---
     const openSession = async (id: string) => {
       // Point the home nav at this session's project, so 2-tap back from detail lands
-      // on the owning project's sessions list (matters when opened from the interrupt).
+      // on the owning project's sessions list (matters when opened from the Needs-you list).
       const gi = groupProjects(store.getState().sessions).findIndex((g) => g.sessions.some((y) => y.id === id))
-      if (gi >= 0) navRef.current = { home: 'sessions', projIdx: gi }
+      if (gi >= 0) navRef.current = { ...navRef.current, home: 'sessions', projIdx: gi }
       try {
         store.openDetail(id, (await getSession(id)).events)
         // Opening a session on the glasses = arm THIS session to park for steering.
@@ -402,9 +413,33 @@ export function AppGlasses3c() {
       const s = glass(store.getState())
       switch (screenRef.current) {
         case 'projects': {
-          // Drill into the tapped project's sessions (skip empty groups).
+          // The first row is the Needs-you door when something needs you (D55); the
+          // rest drill into the tapped project's sessions (skip empty groups).
+          const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined
+          if (r?.id === NEEDS_DOOR) { navRef.current = { ...navRef.current, home: 'needs' }; render(); break }
           const groups = groupProjects(s.sessions)
-          if (typeof idx === 'number' && groups[idx]?.sessions.length) { navRef.current = { home: 'sessions', projIdx: idx }; render() }
+          const gi = rowsRef.current[0]?.id === NEEDS_DOOR && typeof idx === 'number' ? idx - 1 : idx
+          if (typeof gi === 'number' && groups[gi]?.sessions.length) { navRef.current = { ...navRef.current, home: 'sessions', projIdx: gi }; render() }
+          break
+        }
+        case 'needs': {
+          // A session row opens its detail; an item row opens the card (D52) — no verb
+          // runs from the list.
+          const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined
+          if (!r?.id) break
+          if (r.id.startsWith('session:')) openSession(r.id.slice('session:'.length))
+          else if (r.id.startsWith('item:')) { navRef.current = { ...navRef.current, itemId: r.id.slice('item:'.length) }; render() }
+          break
+        }
+        case 'item': {
+          // The selected row is one of the item's lens verbs: run it and return to the list.
+          const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined
+          const id = navRef.current.itemId
+          const it = id ? s.attention?.find((i) => i.id === id) : undefined
+          if (!r?.id || !it) break
+          resolveLens(it.id, r.id as Parameters<typeof resolveLens>[1], isNoticeItem(it))
+          navRef.current = { ...navRef.current, itemId: null }
+          render()
           break
         }
         case 'sessions': { const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined; if (r?.id) openSession(r.id); break }
@@ -421,17 +456,6 @@ export function AppGlasses3c() {
           startSteer()                                // tap on detail = dictate a steer (self-guards on STT)
           break
         }
-        case 'interrupt': {
-          // One hero, two sources (#477): a session reviews; a partner item runs its
-          // first lens verb (never one the client invents). Either way the current
-          // attention set is acknowledged first so the hero does not re-raise itself.
-          const entry = attentionEntriesOf(s)[0]
-          if (!entry) break
-          store.dismissInterrupt(intrKey(store.getState()))
-          if (entry.kind === 'session') openSession(entry.id)
-          else { const plan = tapPlan(entry); if (plan.tapVerb) resolveLens(entry.id, plan.tapVerb, isNoticeItem(entry.item)) }
-          break
-        }
       }
     }
     const onBack = () => {
@@ -446,19 +470,14 @@ export function AppGlasses3c() {
             .catch(() => { /* no bridge (browser/sim) — stay where we are */ })
           break
         }
-        case 'sessions': { navRef.current = { home: 'projects', projIdx: navRef.current.projIdx }; render(); break } // back to projects home
+        case 'sessions': { navRef.current = { ...navRef.current, home: 'projects' }; render(); break } // back to projects home
+        case 'needs': { navRef.current = { ...navRef.current, home: 'projects' }; render(); break }    // back to projects home
+        case 'item': { navRef.current = { ...navRef.current, itemId: null }; render(); break }         // back to the list
         case 'detail': { if (s.steering) { cancelSteer(); break } closeSession(); break } // 2tap: stop steering, else leave
         case 'approval': { const a = gates(s)[0]; if (a) deny(a.id); break }
         case 'question': {
           if (s.listening) { cancelListen(); break }   // 2tap while listening = stop, keep the question
           const a = questions(s)[0]; if (a) deny(a.id); break // 2tap = cancel the question
-        }
-        case 'interrupt': {
-          // 2tap: acknowledge; for a partner item also `dismiss` when the lens may.
-          const entry = attentionEntriesOf(s)[0]
-          store.dismissInterrupt(intrKey(store.getState()))
-          if (entry?.kind === 'item') { const plan = tapPlan(entry); if (plan.doubleTapVerb) resolveLens(entry.id, plan.doubleTapVerb, isNoticeItem(entry.item)) }
-          break
         }
       }
     }
@@ -498,6 +517,13 @@ export function AppGlasses3c() {
       const groups = groupProjects(s.sessions)
       // A drilled-into project can vanish (session ended, list refreshed) — fall home.
       if (nav.home === 'sessions' && !groups[nav.projIdx]) { nav.home = 'projects'; nav.projIdx = 0 }
+      // An open card whose item left the store (resolved elsewhere, expired) — fall back to the list.
+      if (nav.itemId && !s.attention?.some((i) => i.id === nav.itemId)) nav.itemId = null
+      // Landing (D54): the first connected snapshot decides the home once.
+      if (!landedRef.current && s.connection === 'ok') {
+        landedRef.current = true
+        if (landsOnNeeds(attentionEntriesOf(s))) nav.home = 'needs'
+      }
       const scr = pickScreen(s, nav)
       const sig = signature(s, scr, nav, groups)
       if (sig === sigRef.current) return
@@ -508,9 +534,6 @@ export function AppGlasses3c() {
     }
 
     render()
-    // The interrupt hero's Even icon sprite rasterises async; force one re-render
-    // when it's ready so the first interrupt shows the real bell, not the fallback.
-    iconReady.finally(() => { sigRef.current = ''; render() })
     const unsub = store.subscribe(render)
     return () => { if (tapTimer) clearTimeout(tapTimer); unsub(); sdk.removeEventListener(onEvent); disposeEngine() }
   }, [])
@@ -524,18 +547,14 @@ export function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
     connection: st.connection, armed: st.armed, sessions: st.sessions,
     approvals: st.approvals, attention: st.attention, activeSessionId: st.activeSessionId,
     activeEvents: st.activeEvents, detailPage: st.detailPage, error: st.glassError,
-    dismissedAttentionKey: st.dismissedAttentionKey,
     listening: st.glassListening, steering: st.glassSteering, interim: st.glassInterim,
     pendingSteer: st.glassPendingSteer,
     questionId: st.glassQuestionId, questionIdx: st.glassQuestionIdx,
   }
 }
-function intrKey(st: ReturnType<typeof store.getState>): string {
-  return attentionKey(attentionEntriesOf(glass(st)))
-}
 
-// A lens verb on a partner attention item (#477, design D15): fire-and-acknowledge.
-// The item leaves the hero now; the next poll is the truth; one line says what was
+// A lens verb on a partner attention item (#477, design D15/D52): fire-and-acknowledge.
+// The item leaves the list now; the next poll is the truth; one line says what was
 // sent, or the partner's sentence when it refused (it enforces its own lens subset).
 function resolveLens(id: string, verb: Parameters<typeof resolveAttention>[1], notice = false) {
   store.removeAttention(id)
@@ -549,11 +568,7 @@ async function buildAndRender(
   sdk: GlassesSdk, scr: Screen, s: GlassSnapshot, nav: Nav, groups: ProjGroup[],
   rowsRef: { current: { id: string; label: string }[] },
 ) {
-  const page = composeCockpitPage(sdk, scr, s, nav, groups, rowsRef)
-  // The interrupt is a bitmap hero — GlassesPage composes text+list only, so it's
-  // rendered directly via the raw bridge (image containers + an event-capture overlay).
-  if (!page) return renderInterrupt(s)
-  await page.render()
+  await composeCockpitPage(sdk, scr, s, nav, groups, rowsRef).render()
 }
 
 /**
@@ -563,15 +578,11 @@ async function buildAndRender(
  * very same composition the glasses receive — same element coordinates, same text,
  * same measured widths — instead of a hand-maintained mockup that drifts. A
  * GlassesPage is inert until render(), which is the only part that needs the bridge.
- *
- * Returns null for `interrupt`, which is not a GlassesPage at all (see above).
  */
 export function composeCockpitPage(
   sdk: GlassesSdk, scr: Screen, s: GlassSnapshot, nav: Nav, groups: ProjGroup[],
   rowsRef: { current: { id: string; label: string }[] },
-): GlassesPage | null {
-  if (scr === 'interrupt') { rowsRef.current = []; return null }
-
+): GlassesPage {
   const page = sdk.createPage(`cockpit-${scr}`)
 
   if (scr === 'projects') {
@@ -589,6 +600,9 @@ export function composeCockpitPage(
     const rows = groups.length
       ? groups.map((g) => ({ id: g.key, label: projectRow(g, badgeW) }))
       : [{ id: '', label: s.connection === 'ok' ? '(no active sessions)' : s.connection === 'error' ? '(disconnected)' : '(connecting…)' }]
+    // The Needs-you door (D55): first row whenever something needs you.
+    const counts = needsCounts(attentionEntriesOf(s))
+    if (counts.actions + counts.notices > 0) rows.unshift({ id: NEEDS_DOOR, label: `${NEEDS_GLYPH_ROW}  Needs you   ·   ${needsTitle(counts)}` })
     rowsRef.current = rows
     const list = page.addListElement(rows.map((r) => r.label))
     list.setItemWidth(PROJECT_ROW_W)
@@ -671,6 +685,46 @@ export function composeCockpitPage(
       list.setPosition((p) => { p.setX(236).setY(BODY_Y) })
       list.setSize((z) => { z.setWidth(330).setHeight(BODY_H) })
     }
+  } else if (scr === 'needs') {
+    // The Needs-you list (D51): sessions waiting on a human, then open actions, then
+    // notices — one native list under frameless chrome, like Projects. Tap opens a
+    // session or an item card; nothing runs from a row.
+    const entries = attentionEntriesOf(s)
+    const state = s.connection === 'ok' ? needsTitle(needsCounts(entries)) : s.connection === 'error' ? 'disconnected' : 'connecting…'
+    addNavChrome(page, `NEEDS YOU   ·   ${state}`, '• open   •• projects')
+    const rows = entries.length
+      ? entries.map((e) => { const r = needsRow(e); return { id: r.id, label: needsRowLabel(r) } })
+      : [{ id: '', label: s.connection === 'ok' ? '(nothing needs you)' : s.connection === 'error' ? '(disconnected)' : '(connecting…)' }]
+    rowsRef.current = rows
+    const list = page.addListElement(rows.map((r) => r.label))
+    list.setItemWidth(PROJECT_ROW_W)
+    list.setIsItemSelectBorderEn(true)
+    list.markAsEventCaptureElement()
+    list.setPosition((p) => { p.setX(18).setY(NAV_LIST_Y) })
+    list.setSize((z) => { z.setWidth(PROJECT_ROW_W + 4).setHeight(NAV_LIST_H) })
+  } else if (scr === 'item') {
+    // The item card (D52), in the question screen's shape: the kind in the header bar,
+    // the title and why on the left rail, the item's lens verbs as a native list on the
+    // right. Scroll selects, tap runs the selected verb, 2tap goes back to the list.
+    const it = s.attention?.find((i) => i.id === nav.itemId)
+    addHeaderBar(page, `‹ ${it ? kindLabel(it.kind) : 'item'}`, '• choose   •• back')
+    const err = s.error ? `\n\n! ${s.error}` : ''
+    const railText = it
+      ? [...wrapToWidth(it.title, ITEM_RAIL_W).slice(0, 3), '', ...wrapToWidth(it.why || '', ITEM_RAIL_W).slice(0, 3)].join('\n')
+      : '(this item is gone)'
+    const rail = page.addTextElement(`${railText}${err}`)
+    rail.setPosition((p) => { p.setX(HEADER_X + 2).setY(BODY_Y) })
+    rail.setSize((z) => { z.setWidth(ITEM_RAIL_W + 8).setHeight(BODY_H) })
+
+    const verbs = it ? cardVerbRows(it) : []
+    const rows = verbs.length ? verbs.map((v) => ({ id: v.verb, label: `› ${v.label}` })) : [{ id: '', label: '(no lens verbs — use the phone)' }]
+    rowsRef.current = rows
+    const list = page.addListElement(rows.map((r) => r.label))
+    list.setItemWidth(320)
+    list.setIsItemSelectBorderEn(true)
+    list.markAsEventCaptureElement()
+    list.setPosition((p) => { p.setX(236).setY(BODY_Y) })
+    list.setSize((z) => { z.setWidth(330).setHeight(BODY_H) })
   } else {
     // detail = the focused session, in the locked header-bar layout:
     //   • header bar (the ONE deliberate border): session name left, page k/N inline.
@@ -718,43 +772,6 @@ export function composeCockpitPage(
   }
 
   return page
-}
-
-// Interrupt hero: rendered outside GlassesPage (which has no image element) —
-// a full-screen event-capture overlay + the 3 hero image tiles, pushed via the
-// raw bridge. Mirrors even-toolkit's showHomePage recipe (overlay id 1, tiles 2-4).
-async function renderInterrupt(s: GlassSnapshot) {
-  const raw = await GlassesSdk.getRawBridge()
-  const entry = attentionEntriesOf(s)[0]
-  const plan = entry ? tapPlan(entry) : null
-  const tiles = renderInterruptHero(
-    entry ? entryName(entry) : 'session',
-    entry ? entryReason(entry) : '',
-    plan ? { tap: plan.tapLabel, doubleTap: plan.doubleTapLabel } : undefined,
-    heroHeadline(entry),
-  )
-
-  const overlay = new TextContainerProperty({
-    containerID: 1, containerName: 'overlay',
-    xPosition: 0, yPosition: 0, width: 576, height: 288,
-    borderWidth: 0, borderColor: 0, paddingLength: 0, content: '', isEventCapture: 1,
-  })
-  const imageObject = tiles.map((t) => new ImageContainerProperty({
-    containerID: t.id, containerName: t.name,
-    xPosition: t.x, yPosition: t.y, width: t.w, height: t.h,
-  }))
-  const fields = { containerTotalNum: 1 + tiles.length, textObject: [overlay], imageObject }
-
-  // GlassesSdk tracks the current page in shared global state; honour create-vs-rebuild
-  // and keep it in sync so the next GlassesPage render rebuilds cleanly.
-  const shared = (globalThis as Record<string, any>).__glassesToolkitSharedState
-  if (!shared || shared.currentPageId == null) await raw.createStartUpPageContainer(new CreateStartUpPageContainer(fields))
-  else await raw.rebuildPageContainer(new RebuildPageContainer(fields))
-  if (shared) shared.currentPageId = 'cockpit-interrupt'
-
-  for (const t of tiles) {
-    await raw.updateImageRawData(new ImageRawDataUpdate({ containerID: t.id, containerName: t.name, imageData: t.bytes }))
-  }
 }
 
 // The approval card body. Acts on approvals[0]; when several are queued the count

@@ -17,9 +17,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import { getTextWidth, G2_TEXT_LINE_HEIGHT } from 'even-toolkit/pretext'
 import { composeCockpitPage, glass, groupProjects, pickScreen, type Nav, type Screen } from '../glass/AppGlasses3c'
-import { HERO_BAND, paintInterruptHero } from '../glass/hero'
-import { attentionEntriesOf, entryName, entryReason } from '../glass/screens/interrupt'
-import { tapPlan, heroHeadline } from '../glass/attention'
+import { attentionEntriesOf } from '../glass/screens/needs'
+import { landsOnNeeds } from '../glass/attention'
 import { applyFixture } from './fixtures'
 import { store } from '../store'
 
@@ -30,10 +29,10 @@ const DIM = 'rgba(99, 255, 155, 0.55)'
 const FONT_PX = 21 // pairs with the 27px LVGL line height
 
 const FIXTURES = [
-  'list', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention', 'notice',
+  'list', 'needs', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention', 'notice',
 ] as const
 
-const SCREENS: Screen[] = ['projects', 'sessions', 'detail', 'approval', 'question', 'interrupt']
+const SCREENS: Screen[] = ['projects', 'sessions', 'needs', 'item', 'detail', 'approval', 'question']
 
 /** Serialized element shape — the subset of the SDK payload the preview draws. */
 interface Painted {
@@ -82,19 +81,13 @@ function drawLine(ctx: CanvasRenderingContext2D, line: string, x: number, y: num
   }
 }
 
-function paint(ctx: CanvasRenderingContext2D, els: Painted[], hero: HTMLCanvasElement | null) {
+function paint(ctx: CanvasRenderingContext2D, els: Painted[]) {
   ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0)
   ctx.fillStyle = '#000'
   ctx.fillRect(0, 0, W, H)
   ctx.font = `${FONT_PX}px "Helvetica Neue", Arial, sans-serif`
   ctx.textBaseline = 'top'
 
-  // The interrupt is a bitmap band, not composed elements — drawn where the firmware
-  // places it. Its own canvas is 600px wide; only the leftmost 576 reach the display.
-  if (hero) {
-    ctx.drawImage(hero, 0, 0, W, HERO_BAND.h, 0, HERO_BAND.y, W, HERO_BAND.h)
-    return
-  }
 
   for (const el of els) {
     if (el.borderWidth > 0) {
@@ -142,28 +135,27 @@ export function Preview() {
     setSeeded((n) => n + 1)
   }, [fixture])
 
-  const { els, screen, groups, error, hero } = useMemo<{
+  const { els, screen, groups, error } = useMemo<{
     els: Painted[]; screen: Screen; groups: ReturnType<typeof groupProjects>
-    error: string | null; hero?: HTMLCanvasElement
+    error: string | null
   }>(() => {
     void seeded // recompute after a re-seed
     try {
       const snap = glass(store.getState())
       const groups = groupProjects(snap.sessions)
-      const nav: Nav = { home: projIdx > 0 ? 'sessions' : 'projects', projIdx }
+      // Slice 7: `needs` is a home; `item` needs an open card — the preview opens the
+      // first partner item of the fixture.
+      const firstItem = attentionEntriesOf(snap).find((e) => e.kind === 'item')
+      const nav: Nav = {
+        home: override === 'needs' ? 'needs' : projIdx > 0 ? 'sessions' : 'projects',
+        projIdx,
+        itemId: override === 'item' && firstItem ? firstItem.id : null,
+      }
+      if (override === 'auto' && projIdx === 0 && landsOnNeeds(attentionEntriesOf(snap))) nav.home = 'needs' // the HUD's landing rule (D54)
       const screen = override === 'auto' ? pickScreen(snap, nav) : override
       const sdk = new GlassesSdk()
       const rowsRef = { current: [] as { id: string; label: string }[] }
       const page = composeCockpitPage(sdk, screen, snap, nav, groups, rowsRef)
-      if (!page) {
-        // interrupt: paint the hero band instead of composed elements.
-        const target = attentionEntriesOf(snap)[0]
-        const hero = document.createElement('canvas')
-        const plan = target ? tapPlan(target) : null
-        paintInterruptHero(hero, target ? entryName(target) : 'session', target ? entryReason(target) : 'needs you',
-          plan ? { tap: plan.tapLabel, doubleTap: plan.doubleTapLabel } : undefined, heroHeadline(target))
-        return { els: [], screen, groups, error: null, hero }
-      }
       const els: Painted[] = page.getElements().map((e) => {
         const j = e.toEvenSdkElement() as Record<string, unknown>
         const item = j.itemContainer as Record<string, unknown> | undefined
@@ -186,8 +178,8 @@ export function Preview() {
 
   useEffect(() => {
     const ctx = canvasRef.current?.getContext('2d')
-    if (ctx) paint(ctx, els, hero ?? null)
-  }, [els, hero])
+    if (ctx) paint(ctx, els)
+  }, [els])
 
   return (
     <div style={{ padding: 20, fontFamily: 'ui-monospace, monospace', color: '#cfe', background: '#0b0f10', minHeight: '100vh' }}>
@@ -228,9 +220,7 @@ export function Preview() {
       />
 
       <p style={{ fontSize: 11, opacity: 0.55, margin: '10px 0 6px' }}>
-        {hero
-          ? 'bitmap hero — image tiles pushed via the raw bridge, not a GlassesPage'
-          : `${els.length} element(s) — ${screen}`}
+        {`${els.length} element(s) — ${screen}`}
       </p>
       <table style={{ fontSize: 11, borderCollapse: 'collapse', opacity: 0.8 }}>
         <tbody>
