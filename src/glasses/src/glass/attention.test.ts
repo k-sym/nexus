@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { attentionEntries, attentionKey, lensVerbs, tapPlan, itemReason, kindLabel, heroHeadline, isNoticeItem } from './attention.ts'
+import { attentionEntries, attentionKey, lensVerbs, tapPlan, itemReason, kindLabel, heroHeadline, isNoticeItem, verbToast } from './attention.ts'
 import type { AttentionItem, SessionSummary } from '../types.ts'
 
 const session = (id: string, needsAttention: boolean): SessionSummary => ({
@@ -86,4 +86,10 @@ test('close is never a lens verb, even when lens_verbs lists it', () => {
   assert.equal(tapPlan({ kind: 'item', id: 'a', item: pr }).tapLabel, 'Dismiss')
   assert.equal(kindLabel('pr.review'), 'PR review')
   assert.equal(kindLabel('system.alert'), 'system alert')
+})
+
+test('the toast after a notice\'s dismiss says Seen, as the gesture did', () => {
+  assert.equal(verbToast('dismiss', true), 'Seen')
+  assert.equal(verbToast('dismiss'), 'Dismissed')
+  assert.equal(verbToast('snooze', true), 'Snoozed until tomorrow')
 })
