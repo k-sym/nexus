@@ -248,6 +248,43 @@ final class AttentionModelsTests: XCTestCase {
         XCTAssertFalse(filed.approved, "a filed_as is not approval")
     }
 
+    // Slice 6d: the latest message behind a mail item.
+    func testThreadDecodesAndAMailItemKnowsItIsOne() throws {
+        let thread = try JSONDecoder.nexusREST.decode(AttentionThread.self, from: """
+        {"item_id": "att_01", "messages": [{"account": "ssuk", "id": "AAMk-msg", "thread": "AAMk01",
+          "from": "jane.holloway@contractor-example.co.uk", "from_name": "Jane Holloway",
+          "subject": "Re: Method statement", "date": "2026-09-16T12:48:21Z",
+          "body": "Hi Keith, any news on the method statement?"}]}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(thread.itemId, "att_01")
+        let m = try XCTUnwrap(thread.latest)
+        XCTAssertEqual(m.senderLine, "Jane Holloway <jane.holloway@contractor-example.co.uk>")
+        XCTAssertEqual(m.sentAt?.timeIntervalSince1970, 1_789_562_901)
+        XCTAssertTrue(m.body.hasPrefix("Hi Keith"))
+        XCTAssertFalse(m.needsMore)
+        let manyLines = try JSONDecoder.nexusREST.decode(AttentionThread.self, from: """
+        {"item_id": "x", "messages": [{"from": "a@x.com", "body": "\(Array(repeating: "line", count: 14).joined(separator: "\\n"))"}]}
+        """.data(using: .utf8)!)
+        XCTAssertTrue(manyLines.latest?.needsMore == true, "13+ short lines still need More")
+        let longWrapped = try JSONDecoder.nexusREST.decode(AttentionThread.self, from: """
+        {"item_id": "x", "messages": [{"from": "a@x.com", "body": "\(String(repeating: "word ", count: 120))"}]}
+        """.data(using: .utf8)!)
+        XCTAssertTrue(longWrapped.latest?.needsMore == true)
+        let bare = try JSONDecoder.nexusREST.decode(AttentionThread.self, from: """
+        {"item_id": "x", "messages": [{"from": "someone@x.com", "body": "text"}]}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(bare.latest?.senderLine, "someone@x.com")
+        XCTAssertNil(bare.latest?.sentAt)
+
+        let list = try JSONDecoder.nexusREST.decode(AttentionResponse.self, from: """
+        {"items": [\(item)], "open": 1}
+        """.data(using: .utf8)!)
+        XCTAssertTrue(list.items[0].isMail)
+        XCTAssertFalse(try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+        {"id": "m", "kind": "meeting.prep", "status": "open", "title": "x"}
+        """.data(using: .utf8)!).isMail)
+    }
+
     func testSnoozePresetsMatchThePartner() {
         XCTAssertEqual(AttentionSnoozePreset.allCases.map(\.rawValue), ["later", "tomorrow", "next_week"])
     }

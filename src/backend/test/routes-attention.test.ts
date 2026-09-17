@@ -230,6 +230,61 @@ test('close passes through like draft: the partner 202 and 409 reach the client 
   await app.close();
 });
 
+// Slice 6d (design D40/D41): the message behind a mail item, read-only.
+const THREAD = {
+  item_id: 'att_01',
+  messages: [{ account: 'ssuk', id: 'AAMk-msg', thread: 'AAMk01', from: 'jane.holloway@contractor-example.co.uk', from_name: 'Jane Holloway',
+    subject: 'Re: Method statement for the Colchester refit', date: '2026-09-16T12:48:21Z', body: 'Hi Keith, any news on the method statement?' }],
+};
+
+test('GET /api/attention/:id/thread passes the partner message through untouched and records nothing', async () => {
+  const calls: string[] = [];
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (url, init) => {
+    calls.push(`${init?.method ?? 'GET'} ${String(url)}`);
+    return jsonRes(THREAD);
+  });
+  const res = await app.inject({ method: 'GET', url: '/api/attention/att_01/thread' });
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.json(), THREAD);
+  assert.deepEqual(calls, ['GET http://adapter:8788/v1/attention/att_01/thread'], 'one read, no resolve');
+  await app.close();
+});
+
+test('a thread the partner refuses or does not know passes through as 409 / 404 with its sentence; other failures are 502; unconfigured is 400', async () => {
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (url) => {
+    const u = String(url);
+    if (u.includes('/att_meet/')) return jsonRes({ detail: 'thread applies to mail items only' }, 409);
+    if (u.includes('/att_g/')) return jsonRes({ detail: "thread is Graph-only today; 'resolve-google' is google" }, 409);
+    if (u.includes('/nope/')) return jsonRes({ detail: 'unknown item nope' }, 404);
+    return jsonRes({ detail: 'thread read failed — timed out after 30s' }, 502);
+  });
+  const meet = await app.inject({ method: 'GET', url: '/api/attention/att_meet/thread' });
+  assert.equal(meet.statusCode, 409);
+  assert.equal(meet.json().error, 'thread applies to mail items only');
+  const g = await app.inject({ method: 'GET', url: '/api/attention/att_g/thread' });
+  assert.equal(g.statusCode, 409);
+  assert.match(g.json().error, /Graph-only/);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/attention/nope/thread' })).statusCode, 404);
+  assert.equal((await app.inject({ method: 'GET', url: '/api/attention/att_01/thread' })).statusCode, 502);
+  await app.close();
+  const bare = await appWith(loadWith('', ''));
+  assert.equal((await bare.inject({ method: 'GET', url: '/api/attention/att_01/thread' })).statusCode, 400);
+  await bare.close();
+});
+
+test('the to-do first turn names a mail item\'s conversation and never carries the message body (D43)', () => {
+  // The live partner writes `source.ref` (the conversation id) on mail items.
+  // The partner writes the message's first line onto a mail item's `body` (its
+  // snippet): that is message text and must not ride into the first turn either.
+  const turn = buildAttentionFirstTurn({ ...ITEM, body: 'Hi Keith, any news on the method statement?', source: { account: 'ssuk', ref: 'AAMk01' } } as any);
+  assert.match(turn, /mail conversation ssuk:AAMk01 \(read it with `partner mail thread ssuk:AAMk01`\)/);
+  assert.match(turn, /\(account ssuk\)/);
+  assert.doesNotMatch(turn, /any news on the method statement/);
+  assert.match(turn, /^Re: Method statement for the Colchester refit\n\nwaiting 3.2d/, 'title and why still lead');
+  const meeting = buildAttentionFirstTurn(MEETING as any);
+  assert.doesNotMatch(meeting, /mail conversation/, 'only mail items name a conversation');
+});
+
 test('a missing verb is a 400 before any upstream call', async () => {
   let called = false;
   const app = await appWith(loadWith('http://adapter:8788', 'k1'), async () => {

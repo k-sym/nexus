@@ -103,6 +103,30 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
       return { title: page.title ?? title, body: page.body, memory_id: page.id, item_id: id };
     });
 
+    // The message behind a mail item (#477 slice 6d, design D40/D41): the
+    // partner reads the latest message of the item's conversation with its
+    // own `mail thread` and hands it back for a person to read. Read-only;
+    // nothing is recorded on the item. 404 (no such item, or an older partner
+    // without the route) and 409 (not a mail item; a mailbox it cannot read)
+    // pass through with the partner's sentence — the client shows the
+    // sentence, never an error banner, and hides the section on 404. The body
+    // is never fed to a model from here (D43).
+    fastify.get('/api/attention/:id/thread', async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const partner = client();
+      if (!partner) {
+        reply.code(400);
+        return { error: 'Assistant URL and key must be configured in Settings.' };
+      }
+      try {
+        return await partner.getAttentionThread(id);
+      } catch (err: any) {
+        const status = typeof err?.status === 'number' ? err.status : 502;
+        reply.code(status === 404 || status === 409 ? status : 502);
+        return { error: extractDetail(err?.message) || 'Thread read failed.' };
+      }
+    });
+
     // "File as a to-do" (#477 slice 6a, design D20): the item becomes a Board
     // session on the chosen project — a thread stamped with the item as its
     // origin plus a composed first turn the client sends as the seed — and the

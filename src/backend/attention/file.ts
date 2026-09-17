@@ -56,18 +56,29 @@ export function buildAttentionFirstTurn(item: FiledAttentionItem): string {
     lines.push('');
     lines.push(item.why.trim());
   }
-  if (item.body?.trim()) {
+  // D43: a mail item's body is the partner's first line of the message (the
+  // snippet) — hostile input the partner screens before a model sees it, so
+  // it never rides into a session's first turn; the conversation is named
+  // below instead. Every other kind's body is the producer's own prose.
+  const isMail = item.kind.startsWith('mail.');
+  if (!isMail && item.body?.trim()) {
     lines.push('');
     lines.push(item.body.trim());
   }
   lines.push('');
   const refs: string[] = [];
+  // D43: a mail item names its conversation so the session's agent can read the
+  // latest message through the partner (`partner mail thread <account>:<ref>`);
+  // the text itself never rides along — the partner screens thread bodies.
+  const account = typeof item.source?.account === 'string' ? item.source.account : '';
+  const ref = typeof item.source?.ref === 'string' ? item.source.ref : '';
+  if (isMail && account && ref) refs.push(`mail conversation ${account}:${ref} (read it with \`partner mail thread ${account}:${ref}\`)`);
   if (item.links?.url) refs.push(`link ${item.links.url}`);
   if (item.links?.vault_page) refs.push(`vault page "${item.links.vault_page}"`);
   if (item.links?.draft_id) refs.push(`draft ${item.links.draft_id}`);
   if (item.links?.proposal_id) refs.push(`autonomy proposal ${item.links.proposal_id}`);
-  const account = typeof item.source?.account === 'string' ? ` (account ${item.source.account})` : '';
-  lines.push(`Source: partner attention item ${item.id} — ${what}${account}${refs.length ? `; ${refs.join(', ')}` : ''}. Filed from the phone as a to-do.`);
+  const accountNote = account ? ` (account ${account})` : '';
+  lines.push(`Source: partner attention item ${item.id} — ${what}${accountNote}${refs.length ? `; ${refs.join(', ')}` : ''}. Filed from the phone as a to-do.`);
   lines.push('');
   lines.push('How to work this:');
   lines.push('- Work out what is actually needed and propose the next concrete step before doing anything.');

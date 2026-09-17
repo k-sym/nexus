@@ -227,6 +227,8 @@ function qs(params: Record<string, string | number | undefined>): string {
 export interface FetchJsonError extends Error {
   code?: string;
   retryable?: boolean;
+  /** The HTTP status, so a caller can tell a 404 from a 409 without parsing the sentence. */
+  status?: number;
 }
 
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -240,6 +242,7 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err: FetchJsonError = new Error((body as any).error || res.statusText);
+    err.status = res.status;
     if (typeof (body as any).code === 'string') err.code = (body as any).code;
     if (typeof (body as any).retryable === 'boolean') err.retryable = (body as any).retryable;
     throw err;
@@ -793,6 +796,26 @@ export interface AttentionResponse {
   error?: string;
 }
 
+/** The latest message behind a `mail.*` item (slice 6d): what the partner's
+ *  `mail thread` returns — plain text, HTML stripped, clipped by the partner.
+ *  Display-only: never fed to a model from the desktop (design D43). */
+export interface AttentionThreadMessage {
+  account: string;
+  id: string;
+  thread: string | null;
+  from: string;
+  from_name?: string;
+  subject: string;
+  date: string;
+  body: string;
+}
+
+export interface AttentionThread {
+  item_id: string;
+  /** One element today (the partner serves the latest message only). */
+  messages: AttentionThreadMessage[];
+}
+
 export interface AttentionResolveInput {
   verb: AttentionVerb;
   preset?: AttentionSnoozePreset;
@@ -964,6 +987,9 @@ export const api = {
     /** `live` = open + snoozed + resolving: what the card shows (a drafting item stays visible). */
     list: (status = 'live') => fetchJson<AttentionResponse>(`/api/attention?status=${encodeURIComponent(status)}`),
     get: (id: string) => fetchJson<AttentionItem>(`/api/attention/${encodeURIComponent(id)}`),
+    /** The latest message behind a mail item. Rejects with the partner's sentence
+     *  on 409 (not a mail item; a mailbox it cannot read) and "not found" on 404. */
+    thread: (id: string) => fetchJson<AttentionThread>(`/api/attention/${encodeURIComponent(id)}/thread`),
     /** Apply one of the item's verbs. Resolves to the item as the partner now
      *  holds it: `resolving` after `draft` (the proxy passes the partner's 202
      *  through; poll `get` until it leaves), `snoozed`, or `resolved`. Rejects

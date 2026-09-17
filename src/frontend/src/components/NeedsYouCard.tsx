@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, AttentionItem, AttentionResponse, AttentionSnoozePreset, AttentionVerb } from '../api';
+import { api, AttentionItem, AttentionResponse, AttentionSnoozePreset, AttentionThreadMessage, AttentionVerb, FetchJsonError } from '../api';
 import { confirmDialog } from '../lib/confirm';
 
 // "Needs you" card (#477): the partner's attention items — what needs Keith,
@@ -24,6 +24,11 @@ import { confirmDialog } from '../lib/confirm';
 //      refused must never look like one that worked.
 //   5. Notices (category `notice`, slice 6b) rank after actions and want one
 //      thing: "Seen" — the same `dismiss` verb under its honest name (D36).
+//   6. A mail item shows the latest message of its thread (slice 6d), fetched
+//      once when the row expands — never from the list poll — and shown for a
+//      person to read: nothing here hands the body to a model (D42/D43). The
+//      partner's refusal is a footer sentence, not an error; a backend or
+//      partner without the route hides the block.
 const POLL_MS = 60_000;
 const SETTLE_POLL_MS = 3_000;
 const SETTLE_POLL_MAX = 100;
@@ -107,6 +112,11 @@ export function httpUrl(raw: unknown): string | null {
   }
 }
 
+/** A mail item has a conversation behind it the partner can read (6d). */
+export function isMail(item: Pick<AttentionItem, 'kind'>): boolean {
+  return item.kind.startsWith('mail.');
+}
+
 /** Verbs the desktop may offer right now, in the partner's canonical order. */
 export function offeredVerbs(item: AttentionItem): AttentionVerb[] {
   if (item.status !== 'open' && item.status !== 'snoozed') return [];
@@ -163,6 +173,11 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
   const [settling, setSettling] = useState(listed.status === 'resolving');
   const [settleTimedOut, setSettleTimedOut] = useState(false);
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // The latest message behind a mail item (6d): fetched once on expand.
+  const [thread, setThread] = useState<
+    | { state: 'idle' } | { state: 'loading' } | { state: 'loaded'; message: AttentionThreadMessage }
+    | { state: 'refused'; why: string } | { state: 'unavailable'; why: string } | { state: 'hidden' }
+  >({ state: 'idle' });
 
   // The list refreshes every minute; adopt its view of the item only when it
   // is newer than what this row holds. `seq` is the partner's write counter,
@@ -206,6 +221,24 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
     return stopPolling;
   }, [settling, pollUntilSettled, stopPolling]);
 
+  const loadThread = async () => {
+    setThread({ state: 'loading' });
+    try {
+      const t = await api.attention.thread(item.id);
+      const message = t.messages?.[0];
+      setThread(message?.body ? { state: 'loaded', message } : { state: 'hidden' });
+    } catch (err: any) {
+      const why = String(err?.message || '') || 'The message could not be read.';
+      const status = (err as FetchJsonError)?.status;
+      // 404 — an older backend or partner without the route, or no such item:
+      // hide (D41). 409 — the partner's own refusal (a mailbox it cannot read
+      // today): its sentence as a footer. Anything else is a blip, said as one.
+      if (status === 404 || (status == null && /not found/i.test(why))) setThread({ state: 'hidden' });
+      else if (status === 409) setThread({ state: 'refused', why });
+      else setThread({ state: 'unavailable', why });
+    }
+  };
+
   const toggle = async () => {
     const next = !expanded;
     setExpanded(next);
@@ -217,6 +250,7 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
         setError(err?.message || 'Failed to load the item.');
       }
     }
+    if (next && isMail(item) && thread.state === 'idle') void loadThread();
   };
 
   const run = async (verb: AttentionVerb, extra: { preset?: AttentionSnoozePreset; result?: Record<string, unknown> } = {}, busyAs: AttentionVerb | 'approve' = verb) => {
@@ -325,6 +359,25 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
             <pre className="text-[11px] leading-5 text-zinc-300 bg-[var(--surface-hover)] rounded-md p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
               {item.body}
             </pre>
+          )}
+          {isMail(item) && thread.state !== 'hidden' && thread.state !== 'idle' && (
+            <div data-testid="attention-thread" className="space-y-1">
+              <div className="text-[10px] uppercase tracking-wider text-faint font-medium">Latest message</div>
+              {thread.state === 'loading' && <div className="text-faint">Reading the thread…</div>}
+              {thread.state === 'refused' && <div className="text-faint">Not readable from here — {thread.why}</div>}
+              {thread.state === 'unavailable' && <div className="text-faint">Could not read the thread right now — {thread.why}</div>}
+              {thread.state === 'loaded' && (
+                <>
+                  <div className="text-faint">
+                    {thread.message.from_name ? `${thread.message.from_name} <${thread.message.from}>` : thread.message.from}
+                    {thread.message.date && <> · {new Date(thread.message.date).toLocaleString()}</>}
+                  </div>
+                  <pre className="text-[11px] leading-5 text-zinc-300 bg-[var(--surface-hover)] rounded-md p-2 overflow-x-auto max-h-64 overflow-y-auto whitespace-pre-wrap">
+                    {thread.message.body}
+                  </pre>
+                </>
+              )}
+            </div>
           )}
           {error && <div className="text-red-400">{error}</div>}
           {note && <div className="text-zinc-300">{note}</div>}
