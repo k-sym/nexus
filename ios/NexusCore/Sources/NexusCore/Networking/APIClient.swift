@@ -539,12 +539,16 @@ public actor APIClient {
     /// Apply one of the item's verbs. Returns the item as the partner now holds
     /// it: `resolving` after `draft` (poll `attentionDetail` until it leaves),
     /// `snoozed`, or `resolved`. Throws with the partner's sentence on refusal.
+    /// `result` (D34) rides on a dismiss to say what the item became — Approve
+    /// cleanup sends exactly `["approved": true]` (D35).
     @discardableResult
     public func resolveAttention(id: String, verb: AttentionVerb, preset: AttentionSnoozePreset? = nil,
-                                 until: Int? = nil, by: String = "ios", surface: String = "phone") async throws -> AttentionItem {
+                                 until: Int? = nil, result: [String: Any]? = nil,
+                                 by: String = "ios", surface: String = "phone") async throws -> AttentionItem {
         var payload: [String: Any] = ["verb": verb.rawValue, "by": by, "surface": surface]
         if let preset { payload["preset"] = preset.rawValue }
         if let until { payload["until"] = until }
+        if let result, !result.isEmpty { payload["result"] = result }
         let body = try JSONSerialization.data(withJSONObject: payload)
         return try await request(.resolveAttention(id, body: body))
     }

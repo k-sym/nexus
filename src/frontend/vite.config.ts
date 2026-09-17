@@ -19,7 +19,8 @@ export default defineConfig({
       // Object form with ws:true so the PTY WebSocket (/api/threads/:id/pty)
       // upgrade is proxied to the backend, not just plain HTTP requests.
       '/api': {
-        target: 'http://127.0.0.1:4173',
+        // NEXUS_DEV_API points the proxy at a stub backend for a UI walk.
+        target: process.env.NEXUS_DEV_API || 'http://127.0.0.1:4173',
         changeOrigin: true,
         ws: true,
         ...(process.env.NEXUS_DEV_TOKEN ? { headers: { Authorization: `Bearer ${process.env.NEXUS_DEV_TOKEN}` } } : {}),

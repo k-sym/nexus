@@ -19,7 +19,7 @@ import { getTextWidth, G2_TEXT_LINE_HEIGHT } from 'even-toolkit/pretext'
 import { composeCockpitPage, glass, groupProjects, pickScreen, type Nav, type Screen } from '../glass/AppGlasses3c'
 import { HERO_BAND, paintInterruptHero } from '../glass/hero'
 import { attentionEntriesOf, entryName, entryReason } from '../glass/screens/interrupt'
-import { tapPlan } from '../glass/attention'
+import { tapPlan, heroHeadline } from '../glass/attention'
 import { applyFixture } from './fixtures'
 import { store } from '../store'
 
@@ -30,7 +30,7 @@ const DIM = 'rgba(99, 255, 155, 0.55)'
 const FONT_PX = 21 // pairs with the 27px LVGL line height
 
 const FIXTURES = [
-  'list', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention',
+  'list', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention', 'notice',
 ] as const
 
 const SCREENS: Screen[] = ['projects', 'sessions', 'detail', 'approval', 'question', 'interrupt']
@@ -161,7 +161,7 @@ export function Preview() {
         const hero = document.createElement('canvas')
         const plan = target ? tapPlan(target) : null
         paintInterruptHero(hero, target ? entryName(target) : 'session', target ? entryReason(target) : 'needs you',
-          plan ? { tap: plan.tapLabel, doubleTap: plan.doubleTapLabel } : undefined)
+          plan ? { tap: plan.tapLabel, doubleTap: plan.doubleTapLabel } : undefined, heroHeadline(target))
         return { els: [], screen, groups, error: null, hero }
       }
       const els: Painted[] = page.getElements().map((e) => {

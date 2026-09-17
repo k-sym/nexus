@@ -60,7 +60,7 @@ test('toLensAttentionItem keeps only what the hero shows and tolerates a partial
   assert.deepEqual(lens, {
     id: 'att_01', kind: 'mail.waiting', title: ROW.title, why: ROW.why, status: 'open',
     proposed_verb: 'draft', verbs: ['draft', 'open', 'snooze', 'dismiss'], lens_verbs: ['draft', 'snooze', 'dismiss'],
-    alert_seq: 4, created_at: 1789470000, snoozed_until: null,
+    alert_seq: 4, created_at: 1789470000, snoozed_until: null, category: 'action',
   });
   assert.ok(!('body' in lens) && !('links' in lens) && !('source' in lens));
   const partial = toLensAttentionItem({ id: 'x', verbs: ['snooze', 7], lens_verbs: 'nope' });
@@ -68,6 +68,8 @@ test('toLensAttentionItem keeps only what the hero shows and tolerates a partial
   assert.deepEqual(partial.verbs, ['snooze']);
   assert.deepEqual(partial.lens_verbs, []);
   assert.equal(partial.alert_seq, 0);
+  assert.equal(partial.category, 'action', 'absent category = action');
+  assert.equal(toLensAttentionItem({ ...ROW, kind: 'night.summary', category: 'notice' }).category, 'notice');
 });
 
 test('GET /api/attention serves the source in lens shape and is empty without one', async () => {

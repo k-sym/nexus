@@ -216,6 +216,8 @@ export interface PartnerAttentionResolveBody {
   surface?: string;
   until?: number;
   preset?: string;
+  /** D26/D34: what a dismissed item became (`{ filed_as }`, `{ approved: true }`). A plain object or nothing. */
+  result?: Record<string, unknown>;
 }
 
 export interface PartnerClient {

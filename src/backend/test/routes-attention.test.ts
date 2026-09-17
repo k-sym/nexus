@@ -201,6 +201,35 @@ test('a bodiless-by resolve still names a decider and passes until through', asy
   await app.close();
 });
 
+test('a plain-object result rides along on a dismiss; arrays and scalars are dropped (D34/D35)', async () => {
+  const seen: any[] = [];
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (_url, init) => {
+    seen.push(JSON.parse(String(init?.body)));
+    return jsonRes({ ...ITEM, status: 'resolved' });
+  });
+  await app.inject({ method: 'POST', url: '/api/attention/att_01/resolve', payload: { verb: 'dismiss', result: { approved: true } } });
+  await app.inject({ method: 'POST', url: '/api/attention/att_01/resolve', payload: { verb: 'dismiss', result: [1] } });
+  await app.inject({ method: 'POST', url: '/api/attention/att_01/resolve', payload: { verb: 'dismiss', result: 'yes' } });
+  assert.deepEqual(seen[0], { verb: 'dismiss', by: 'nexus', result: { approved: true } });
+  assert.ok(!('result' in seen[1]) && !('result' in seen[2]));
+  await app.close();
+});
+
+test('close passes through like draft: the partner 202 and 409 reach the client unchanged', async () => {
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    if (body.surface === 'lens') return jsonRes({ detail: 'close is not allowed from the lens on this item' }, 409);
+    return jsonRes({ ...ITEM, kind: 'pr.review', status: 'resolving' }, 202);
+  });
+  const started = await app.inject({ method: 'POST', url: '/api/attention/att_01/resolve', payload: { verb: 'close', by: 'ios', surface: 'phone' } });
+  assert.equal(started.statusCode, 202);
+  assert.equal(started.json().status, 'resolving');
+  const lens = await app.inject({ method: 'POST', url: '/api/attention/att_01/resolve', payload: { verb: 'close', by: 'glasses', surface: 'lens' } });
+  assert.equal(lens.statusCode, 409);
+  assert.equal(lens.json().error, 'close is not allowed from the lens on this item');
+  await app.close();
+});
+
 test('a missing verb is a 400 before any upstream call', async () => {
   let called = false;
   const app = await appWith(loadWith('http://adapter:8788', 'k1'), async () => {
@@ -299,7 +328,7 @@ test('POST /api/attention/:id/file creates a Board session with the item as its 
   const row = db.prepare('SELECT title, attention_item FROM chat_threads WHERE id = ?').get(body.thread.id) as { title: string; attention_item: string };
   assert.deepEqual(JSON.parse(row.attention_item), { id: 'att_meet', kind: 'meeting.prep', title: 'IT Standup and Review — Thu 17 Sep 09:30' });
   assert.deepEqual(parseAttentionOrigin(row.attention_item), { kind: 'attention', item_id: 'att_meet', item_kind: 'meeting.prep', title: 'IT Standup and Review — Thu 17 Sep 09:30' });
-  assert.deepEqual(resolves, [{ verb: 'dismiss', by: 'ios', surface: 'phone' }]);
+  assert.deepEqual(resolves, [{ verb: 'dismiss', by: 'ios', surface: 'phone', result: { filed_as: body.thread.id } }], 'D34: the partner ledger records the thread the item became');
   await app.close();
   db.close();
 });

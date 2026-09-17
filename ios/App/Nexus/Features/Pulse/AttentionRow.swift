@@ -48,9 +48,10 @@ struct AttentionRow: View {
     private var actionTrailing: some View {
         switch item.status {
         case .resolving:
+            // Which slow verb is decided by kind (design D38): the list has no events.
             HStack(spacing: 4) {
                 ProgressView().controlSize(.mini)
-                Text("Drafting").font(.caption2).foregroundStyle(.secondary)
+                Text(item.slowVerb == .close ? "Closing" : "Drafting").font(.caption2).foregroundStyle(.secondary)
             }
         case .snoozed:
             Label("Snoozed", systemImage: "zzz")
@@ -92,6 +93,12 @@ struct AttentionKindGlyph: View {
         case .meetingPrep: "calendar"
         case .autonomyProposal: "arrow.up.circle"
         case .quizPrep, .quizHarvest: "music.mic"
+        case .prReview: "arrow.triangle.pull"
+        case .reconDecision, .reconUpdate: "checklist"
+        case .briefMorning: "sun.horizon"
+        case .eveningTriage: "moon.stars"
+        case .nightSummary: "moon.zzz"
+        case .systemAlert: "exclamationmark.triangle"
         case .unknown: "bell"
         }
     }
@@ -103,6 +110,10 @@ struct AttentionKindGlyph: View {
         case .meetingPrep: .purple
         case .autonomyProposal: .green
         case .quizPrep, .quizHarvest: .pink
+        case .prReview: .purple
+        case .reconDecision: .orange
+        case .systemAlert: .red
+        case .briefMorning, .eveningTriage, .nightSummary, .reconUpdate: .secondary
         case .unknown: .secondary
         }
     }
@@ -116,6 +127,13 @@ struct AttentionKindGlyph: View {
         case .autonomyProposal: "Autonomy proposal"
         case .quizPrep: "Quiz prep"
         case .quizHarvest: "Quiz harvest"
+        case .prReview: "PR review"
+        case .reconDecision: "Reconciliation decision"
+        case .briefMorning: "Morning brief"
+        case .eveningTriage: "Evening triage"
+        case .nightSummary: "Night summary"
+        case .reconUpdate: "Reconciliation update"
+        case .systemAlert: "System alert"
         case .unknown: raw.isEmpty ? "Attention item" : raw
         }
     }
@@ -129,6 +147,13 @@ struct AttentionKindGlyph: View {
         case .autonomyProposal: "an autonomy proposal"
         case .quizPrep: "quiz preparation"
         case .quizHarvest: "quiz harvest"
+        case .prReview: "a pull request review"
+        case .reconDecision: "a reconciliation decision"
+        case .briefMorning: "the morning brief"
+        case .eveningTriage: "the evening triage"
+        case .nightSummary: "the night summary"
+        case .reconUpdate: "a reconciliation update"
+        case .systemAlert: "a system alert"
         case .unknown: raw.isEmpty ? "attention item" : "attention item of kind \(raw)"
         }
     }
@@ -141,6 +166,7 @@ enum AttentionVerbLabel {
         switch verb {
         case .draft: "Draft"
         case .open: "Open"
+        case .close: "Close"
         case .snooze: "Snooze"
         case .dismiss: "Dismiss"
         case .unknown: "Unknown"

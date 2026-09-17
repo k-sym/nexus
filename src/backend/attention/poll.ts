@@ -98,6 +98,14 @@ const KIND_LABELS: Record<string, string> = {
   'quiz.prep': 'Quiz prep',
   'quiz.harvest': 'Quiz harvest',
   'autonomy.proposal': 'Autonomy proposal',
+  // Slice 6b kinds (baker-internal D23/D30).
+  'pr.review': 'PR review',
+  'recon.decision': 'Reconciliation decision',
+  'brief.morning': 'Morning brief',
+  'evening.triage': 'Evening triage',
+  'night.summary': 'Night summary',
+  'recon.update': 'Reconciliation update',
+  'system.alert': 'System alert',
 };
 
 const VERB_LABELS: Record<string, string> = {
@@ -105,6 +113,7 @@ const VERB_LABELS: Record<string, string> = {
   open: 'Open',
   snooze: 'Snooze',
   dismiss: 'Dismiss',
+  close: 'Close',
 };
 
 /** Lead with the verb and the thing (#391): the lock screen is where the decision

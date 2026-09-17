@@ -6,12 +6,15 @@ import NexusCore
 /// link (id only); either way it loads the detail by id, so a stale push still
 /// opens something honest — a resolved item shows its resolution and no verbs.
 ///
-/// Verbs render only while the item is `open` or `snoozed`. `draft` is the one
-/// verb that takes time: the partner answers 202 and the item sits `resolving`
-/// while its drafting routine runs; the sheet says so and re-reads the detail
-/// every 3 s (up to 5 min) until the status moves, then offers the draft for
-/// review. `open` follows the item's link; for a draft that is the review
-/// sheet, presented (not pushed — it owns its own NavigationStack).
+/// Verbs render only while the item is `open` or `snoozed`. Two verbs take
+/// time — `draft` (the partner writes a reply) and `close` (the partner closes
+/// the PR behind a `pr.review` item with its own `gh`): the partner answers 202
+/// and the item sits `resolving` while its routine runs; the sheet says which
+/// and re-reads the detail every 3 s (up to 5 min) until the status moves, then
+/// shows the outcome (the draft for review, or the closed PR). `close` is an
+/// external GitHub write, so it is confirm-gated here (design D32); the lens
+/// never offers it. `open` follows the item's link (D33): a draft opens the
+/// review sheet, a url opens the browser, a vault page opens the page sheet.
 struct AttentionItemSheet: View {
     private let api: APIClient
     private let itemId: String
@@ -19,7 +22,11 @@ struct AttentionItemSheet: View {
     private let onChanged: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openURL) private var openURL
     @State private var item: AttentionItem?
+    /// Confirm gates for the two writes that need one (D32 close, D35 approve).
+    @State private var confirmingClose = false
+    @State private var confirmingCleanup = false
     @State private var loadError: String?
     @State private var actionError: String?
     @State private var busy = false
@@ -94,6 +101,22 @@ struct AttentionItemSheet: View {
             }
             .task { await load() }
             .onDisappear { pollTask?.cancel() }
+            .confirmationDialog("Close this pull request on GitHub?", isPresented: $confirmingClose, titleVisibility: .visible) {
+                Button("Close pull request", role: .destructive) {
+                    if let item { Task { await runClose(item) } }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(closeMessage)
+            }
+            .confirmationDialog("Approve the cleanup?", isPresented: $confirmingCleanup, titleVisibility: .visible) {
+                Button("Approve cleanup", role: .destructive) {
+                    if let item { Task { await runApproveCleanup(item) } }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The partner deletes the files listed in this item on its next reconciliation run. Nexus deletes nothing.")
+            }
             .sheet(item: $reviewDraft) { ref in
                 DraftReviewSheet(api: api, draftId: ref.id) { onChanged() }
             }
@@ -137,13 +160,38 @@ struct AttentionItemSheet: View {
                 }
                 .disabled(busy || filing)
             }
+            // Approve cleanup (D35): a dismiss carrying the exact key the
+            // reconciliation skill reads back; offered only on the one item it
+            // reads it from, and only while the partner still accepts a dismiss.
+            if item.isActionable, item.isCleanupApproval, item.offeredVerbs.contains(.dismiss) {
+                Button {
+                    confirmingCleanup = true
+                } label: {
+                    Label("Approve cleanup", systemImage: "checkmark.seal")
+                }
+                .disabled(busy)
+            }
         } header: {
             Text("Follow up")
         } footer: {
-            Text(item.isActionable
-                 ? "Ask opens the partner's conversation with this item as the first message. File starts a Board session on a project and marks the item seen."
-                 : "Ask opens the partner's conversation with this item as the first message.")
+            Text(followUpFooter(for: item))
         }
+    }
+
+    private func followUpFooter(for item: AttentionItem) -> String {
+        var parts = ["Ask opens the partner's conversation with this item as the first message."]
+        if item.isActionable {
+            parts.append("File starts a Board session on a project and marks the item seen.")
+        }
+        if item.isActionable, item.isCleanupApproval {
+            parts.append("Approve records your approval on the item; the partner acts on it, Nexus deletes nothing.")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private var closeMessage: String {
+        let url = item?.links?.url.map { " (\($0))" } ?? ""
+        return "The partner closes it with its own gh\(url). Nothing is merged."
     }
 
     /// The project picker for "file as a to-do": the producer's suggestion (slice
@@ -242,20 +290,37 @@ struct AttentionItemSheet: View {
                 Section {
                     HStack(spacing: 10) {
                         ProgressView()
-                        Text("Drafting… the partner is writing a reply.")
+                        Text(item.slowVerb == .close
+                             ? "Closing the PR… the partner is closing it on GitHub."
+                             : "Drafting… the partner is writing a reply.")
                             .font(.callout)
                     }
                     if draftTimedOut {
-                        Text("Still running after 5 minutes. Pull to refresh later; the draft appears in the Drafts card when it lands.")
+                        Text(item.slowVerb == .close
+                             ? "Still running after 5 minutes. Check the PR on GitHub, or pull to refresh later."
+                             : "Still running after 5 minutes. Pull to refresh later; the draft appears in the Drafts card when it lands.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             } else if item.status == .resolved || item.status == .expired {
                 Section("Outcome") {
                     if let res = item.resolution {
-                        LabeledContent(res.verb.map { AttentionVerbLabel.title($0) } ?? "Resolved",
+                        LabeledContent(res.verb == .dismiss && item.isNotice ? "Seen" : res.verb.map { AttentionVerbLabel.title($0) } ?? "Resolved",
                                        value: [res.by, res.surface.map { "from \($0)" }].compactMap { $0 }.joined(separator: " "))
                         if let at = res.at { LabeledContent("When", value: Self.relative(at)) }
+                        if let url = res.closedURL {
+                            // http(s) only (the same allowlist as `linkURL`): a result is
+                            // the partner's data, never a scheme the app would launch.
+                            Link(destination: url) { Label("Closed — open the PR", systemImage: "arrow.up.right.square") }
+                        } else if let closed = res.closedUrl {
+                            LabeledContent("Closed", value: closed)
+                        }
+                        if res.approved {
+                            Label("Cleanup approved", systemImage: "checkmark.seal").foregroundStyle(.secondary)
+                        }
+                        if res.filedAs != nil {
+                            Label("Filed as a to-do", systemImage: "tray.and.arrow.down").foregroundStyle(.secondary)
+                        }
                     } else {
                         Text(item.status == .expired ? "Expired without action." : "Resolved.")
                             .font(.callout).foregroundStyle(.secondary)
@@ -268,9 +333,12 @@ struct AttentionItemSheet: View {
                 }
             } else if let message = item.lastErrorMessage, item.status == .open,
                       item.events?.last?.verb == "error" {
-                // A `draft` that returned the item to open with a reason on record.
+                // A slow verb that returned the item to open with a reason on record.
                 Section {
-                    Label("Drafting did not produce a reply — \(message)", systemImage: "exclamationmark.triangle")
+                    Label(item.slowVerb == .close
+                          ? "Closing did not go through — \(message)"
+                          : "Drafting did not produce a reply — \(message)",
+                          systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.orange)
                 }
             }
@@ -288,6 +356,10 @@ struct AttentionItemSheet: View {
             } footer: {
                 if offered.contains(.draft) {
                     Text("Draft asks the partner to write a reply. Nothing is sent: the reply lands in Drafts for your approval.")
+                } else if offered.contains(.close) {
+                    Text("Close asks the partner to close the pull request on GitHub. Nothing is merged from here.")
+                } else if item.isNotice {
+                    Text("Seen marks this notice read. Nothing else happens.")
                 }
             }
         }
@@ -323,11 +395,28 @@ struct AttentionItemSheet: View {
                     .fontWeight(proposed ? .semibold : .regular)
             }
             .disabled(busy)
-        case .dismiss:
+        case .close:
+            // Confirm-gated (D32): an external GitHub write, run by the partner.
             Button(role: .destructive) {
-                Task { await run(item, .dismiss) }
-            } label: { Label("Dismiss", systemImage: "xmark.circle") }
+                confirmingClose = true
+            } label: {
+                Label(proposed ? "Close pull request (proposed)" : "Close pull request", systemImage: "xmark.octagon")
+                    .fontWeight(proposed ? .semibold : .regular)
+            }
             .disabled(busy)
+        case .dismiss:
+            if item.isNotice {
+                // A notice wants "seen" (D36): the same verb, its honest name.
+                Button {
+                    Task { await run(item, .dismiss) }
+                } label: { Label("Seen", systemImage: "checkmark.circle") }
+                .disabled(busy)
+            } else {
+                Button(role: .destructive) {
+                    Task { await run(item, .dismiss) }
+                } label: { Label("Dismiss", systemImage: "xmark.circle") }
+                .disabled(busy)
+            }
         case .unknown:
             EmptyView()
         }
@@ -390,9 +479,11 @@ struct AttentionItemSheet: View {
         }
     }
 
+    /// Where `open` goes, by precedence (D33): draft → url → vault page → proposal.
     private func openLabel(for item: AttentionItem) -> String {
         if item.links?.draftId != nil { return "Review the draft" }
-        if item.links?.vaultPage != nil { return "Show the page" }
+        if item.linkURL != nil { return item.kind == .prReview ? "Open PR" : "Open link" }
+        if item.links?.vaultPage != nil { return item.kindName.hasPrefix("recon.") ? "Open Gap Report" : "Show the page" }
         if item.links?.proposalId != nil { return "About this proposal" }
         return "Open"
     }
@@ -441,6 +532,36 @@ struct AttentionItemSheet: View {
         }
     }
 
+    /// `close` (D32): confirmed already; the partner answers 202 with the item
+    /// `resolving` and closes the PR with its own `gh`. Poll until it settles.
+    private func runClose(_ item: AttentionItem) async {
+        busy = true
+        actionError = nil
+        defer { busy = false }
+        do {
+            self.item = try await api.resolveAttention(id: item.id, verb: .close)
+            onChanged()
+            if self.item?.status == .resolving { startPolling() }
+        } catch {
+            actionError = LoadState<AttentionItem>.message(for: error)
+        }
+    }
+
+    /// Approve cleanup (D35): confirmed already; a dismiss with exactly
+    /// `{approved: true}`, the key the reconciliation skill reads back.
+    private func runApproveCleanup(_ item: AttentionItem) async {
+        busy = true
+        actionError = nil
+        defer { busy = false }
+        do {
+            self.item = try await api.resolveAttention(id: item.id, verb: .dismiss, result: ["approved": true])
+            onChanged()
+            dismiss()
+        } catch {
+            actionError = LoadState<AttentionItem>.message(for: error)
+        }
+    }
+
     private func startPolling() {
         guard pollTask == nil else { return }
         drafting = true
@@ -475,6 +596,8 @@ struct AttentionItemSheet: View {
         actionError = nil
         if let draftId = item.links?.draftId {
             reviewDraft = DraftRef(id: draftId)
+        } else if let url = item.linkURL {
+            openURL(url)
         } else if item.links?.vaultPage != nil {
             await showPage(for: item)
         } else if item.links?.proposalId != nil {
