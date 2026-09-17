@@ -1,5 +1,5 @@
 # Intent: The lens gets a Needs-you list; the pushed hero goes
-Author: Keith. Status: draft. Source: conversation 2026-09-17 (first day wearing the G2 with slice 6c installed). Issue: k-sym/nexus#477 follow-on (design doc Slice 7). Related: `intent/2026-09-15-needs-you-attention-collection.md`.
+Author: Keith. Status: accepted (2026-09-17). Source: conversation 2026-09-17 (first day wearing the G2 with slice 6c installed). Issue: k-sym/nexus#477 follow-on (design doc Slice 7). Related: `intent/2026-09-15-needs-you-attention-collection.md`.
 
 ## Problem
 Every time the Session Cockpit opens on the G2 it shows the bell hero — "NEEDS YOU · <one item>" —
@@ -32,7 +32,7 @@ Keith on the G2. `src/glasses` only: `glass/router.ts` (priority without the int
   fixtures must show the new screens without a gateway.
 - The installed `.ehpk` is a separate artifact: bump, pack, Keith reinstalls.
 
-## Open questions
-- Do sessions needing input also list under Needs you (one list, two sources), or stay in Sessions only?
-- Does a tap on a row run the item's first lens verb straight away (as the hero does), or always open the card first?
-- Should the list be the launch screen only when there are open actions, or always?
+## Decided (Keith, 2026-09-17)
+- Sessions needing input list under Needs you too — one list, two sources, all in one place.
+- A tap on a row opens the item card; verbs run from the card, never from the list row.
+- The list is the launch screen only when there are open actions; otherwise Projects.
