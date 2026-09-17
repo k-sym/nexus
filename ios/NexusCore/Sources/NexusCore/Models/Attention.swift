@@ -101,6 +101,19 @@ public struct AttentionPage: Decodable, Sendable, Identifiable {
     public var id: String { memoryId ?? itemId ?? title }
 }
 
+/// Epoch seconds as the partner writes them: item columns are `int(now)`, but
+/// the event ledger (and anything else stamped straight from `time.time()`)
+/// is a float such as `1789574428.059785`. Foundation's `Int` decode rejects a
+/// non-integral number outright, which failed every detail row (each has at
+/// least a `post` event), so timestamps accept either and truncate.
+extension KeyedDecodingContainer {
+    func decodeEpochIfPresent(forKey key: Key) throws -> Int? {
+        if let whole = try? decodeIfPresent(Int.self, forKey: key) { return whole }
+        guard let real = try decodeIfPresent(Double.self, forKey: key), real.isFinite else { return nil }
+        return Int(real.rounded(.down))
+    }
+}
+
 /// One resolve, as the partner recorded it. `result` is producer-shaped; the
 /// `draft` verb writes `draft_id` into it.
 public struct AttentionResolution: Decodable, Sendable {
@@ -109,6 +122,17 @@ public struct AttentionResolution: Decodable, Sendable {
     public let surface: String?
     public let at: Int?
     public let result: [String: JSONValue]?
+
+    enum CodingKeys: String, CodingKey { case verb, by, surface, at, result }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        verb = try c.decodeIfPresent(AttentionVerb.self, forKey: .verb)
+        by = try c.decodeIfPresent(String.self, forKey: .by)
+        surface = try c.decodeIfPresent(String.self, forKey: .surface)
+        at = try c.decodeEpochIfPresent(forKey: .at)
+        result = try c.decodeIfPresent([String: JSONValue].self, forKey: .result)
+    }
 
     public var draftId: String? { result?["draft_id"]?.string }
 }
@@ -120,8 +144,20 @@ public struct AttentionEvent: Decodable, Sendable {
     public let verb: String
     public let by: String?
     public let surface: String?
+    /// Whole seconds; the ledger writes a float (see `decodeEpochIfPresent`).
     public let ts: Int?
     public let result: [String: JSONValue]?
+
+    enum CodingKeys: String, CodingKey { case verb, by, surface, ts, result }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        verb = try c.decodeIfPresent(String.self, forKey: .verb) ?? ""
+        by = try c.decodeIfPresent(String.self, forKey: .by)
+        surface = try c.decodeIfPresent(String.self, forKey: .surface)
+        ts = try c.decodeEpochIfPresent(forKey: .ts)
+        result = try c.decodeIfPresent([String: JSONValue].self, forKey: .result)
+    }
 
     /// The `error` event's message, when the producer recorded one.
     public var message: String? {
@@ -183,10 +219,10 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
         category = try c.decodeIfPresent(String.self, forKey: .category)
         suggestedProject = try c.decodeIfPresent(String.self, forKey: .suggestedProject)
         producer = try c.decodeIfPresent(String.self, forKey: .producer)
-        createdAt = try c.decodeIfPresent(Int.self, forKey: .createdAt)
-        updatedAt = try c.decodeIfPresent(Int.self, forKey: .updatedAt)
-        snoozedUntil = try c.decodeIfPresent(Int.self, forKey: .snoozedUntil)
-        expiresAt = try c.decodeIfPresent(Int.self, forKey: .expiresAt)
+        createdAt = try c.decodeEpochIfPresent(forKey: .createdAt)
+        updatedAt = try c.decodeEpochIfPresent(forKey: .updatedAt)
+        snoozedUntil = try c.decodeEpochIfPresent(forKey: .snoozedUntil)
+        expiresAt = try c.decodeEpochIfPresent(forKey: .expiresAt)
         seq = try c.decodeIfPresent(Int.self, forKey: .seq)
         alertSeq = try c.decodeIfPresent(Int.self, forKey: .alertSeq)
         resolution = try c.decodeIfPresent(AttentionResolution.self, forKey: .resolution)

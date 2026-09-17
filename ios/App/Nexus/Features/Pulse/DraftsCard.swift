@@ -222,8 +222,11 @@ struct DraftReviewSheet: View {
                                 LabeledContent("Teams", value: "meeting link attached on booking")
                             }
                         }
-                        if let replyTo = draft.replyTo {
-                            LabeledContent("Reply to", value: replyTo)
+                        if draft.replyTo != nil {
+                            // `reply_to` is `<alias>:<message-id>` — the thread
+                            // the send threads onto, not an address to show.
+                            LabeledContent("Reply", value: draft.to.isEmpty
+                                ? "in the thread, from \(draft.account)" : "to \(draft.to.joined(separator: ", "))")
                         } else if !draft.to.isEmpty {
                             LabeledContent("To", value: draft.to.joined(separator: ", "))
                         }

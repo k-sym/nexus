@@ -84,6 +84,36 @@ final class AttentionModelsTests: XCTestCase {
         XCTAssertEqual(it.lastErrorMessage, "nothing usable came back")
     }
 
+    /// The partner's ledger stamps events with `time.time()` — a float such as
+    /// `1789574428.059785` — while item columns are `int(now)`. Every real
+    /// detail row carries at least a `post` event, so an integer-only `ts`
+    /// failed the whole detail decode ("The server sent an unexpected
+    /// response") and the draft poll never saw the item leave `resolving`.
+    func testDetailDecodesFloatEventTimestamps() throws {
+        let json = """
+        {
+          "id": "558c045b1702", "kind": "mail.urgent", "status": "resolved",
+          "title": "PaulDyster@hill.co.uk — Fw: Report", "why": "[ssuk] arrived today",
+          "source": {"account": "ssuk", "ref": "AAQk01", "url": null},
+          "links": {"draft_id": "29a9a42f13e0", "vault_page": null, "proposal_id": null},
+          "proposed_verb": "draft", "verbs": ["draft", "snooze", "dismiss"], "lens_verbs": ["draft", "snooze", "dismiss"],
+          "created_at": 1789574428, "updated_at": 1789579125, "seq": 13, "alert_seq": 7,
+          "resolution": {"verb": "draft", "by": "ios", "surface": "phone", "at": 1789579125.5, "result": {"draft_id": "29a9a42f13e0"}},
+          "events": [
+            {"verb": "post", "by": "producer", "surface": "producer", "ts": 1789574428.059785, "result": null},
+            {"verb": "draft", "by": "ios", "surface": "phone", "ts": 1789579089.2, "result": {"started": true}},
+            {"verb": "draft", "by": "ios", "surface": "phone", "ts": 1789579125.473543, "result": {"draft_id": "29a9a42f13e0"}}
+          ]
+        }
+        """.data(using: .utf8)!
+        let it = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: json)
+        XCTAssertEqual(it.status, .resolved)
+        XCTAssertEqual(it.events?.count, 3)
+        XCTAssertEqual(it.events?.first?.ts, 1789574428)
+        XCTAssertEqual(it.resolution?.at, 1789579125)
+        XCTAssertEqual(it.draftId, "29a9a42f13e0")
+    }
+
     func testUnknownKindVerbAndStatusAreTolerated() throws {
         let json = """
         {

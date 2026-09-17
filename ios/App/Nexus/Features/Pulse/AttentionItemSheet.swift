@@ -450,13 +450,19 @@ struct AttentionItemSheet: View {
             for _ in 0..<100 { // 5 minutes at 3 s
                 try? await Task.sleep(for: .seconds(3))
                 if Task.isCancelled { return }
-                if let fresh = try? await api.attentionDetail(id: itemId) {
+                do {
+                    let fresh = try await api.attentionDetail(id: itemId)
+                    actionError = nil
                     item = fresh
                     if fresh.status != .resolving {
                         drafting = false
                         onChanged()
                         return
                     }
+                } catch {
+                    // Keep polling (a blip passes), but say so: a read that
+                    // keeps failing must not look like a draft still running.
+                    actionError = "Checking the draft failed — \(LoadState<AttentionItem>.message(for: error))"
                 }
             }
             draftTimedOut = true
