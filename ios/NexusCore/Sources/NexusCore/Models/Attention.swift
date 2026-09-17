@@ -161,6 +161,12 @@ public struct AttentionThreadMessage: Decodable, Sendable, Identifiable {
         return address
     }
 
+    /// Whether a 12-line clip could hide part of the body: long wrapped text, or
+    /// short lines — a 13-line message of 200 characters is clipped too.
+    public var needsMore: Bool {
+        body.count > 480 || body.split(separator: "\n", omittingEmptySubsequences: false).count > 12
+    }
+
     public var sentAt: Date? {
         guard let date, !date.isEmpty else { return nil }
         let f = ISO8601DateFormatter()

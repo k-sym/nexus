@@ -2,7 +2,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import NeedsYouCard, { offeredVerbs, openLabel, isCleanupApproval, httpUrl, isMail } from './NeedsYouCard';
-import { api, AttentionItem } from '../api';
+import { api, AttentionItem, FetchJsonError } from '../api';
 import { confirmDialog } from '../lib/confirm';
 
 vi.mock('../lib/confirm', () => ({ confirmDialog: vi.fn() }));
@@ -59,7 +59,7 @@ function stubList(items = [MAIL]) {
   });
   vi.spyOn(api.attention, 'get').mockImplementation(async (id) => ({ ...items.find((i) => i.id === id)!, events: [] }));
   // An older backend without the thread route unless a test says otherwise (6d, D41).
-  vi.spyOn(api.attention, 'thread').mockRejectedValue(new Error('Route GET:/api/attention/x/thread not found'));
+  vi.spyOn(api.attention, 'thread').mockRejectedValue(withStatus(new Error('Route GET:/api/attention/x/thread not found'), 404));
 }
 
 afterEach(() => {
@@ -346,6 +346,11 @@ describe('NeedsYouCard (6c)', () => {
   });
 });
 
+function withStatus(err: Error, status: number): Error {
+  (err as FetchJsonError).status = status;
+  return err;
+}
+
 // Slice 6d (design D40–D43): the latest message behind a mail item.
 const MESSAGE = {
   account: 'ssuk', id: 'AAMk-msg', thread: 'AAMk01', from: 'jane.holloway@contractor-example.co.uk', from_name: 'Jane Holloway',
@@ -378,13 +383,31 @@ describe('NeedsYouCard (6d)', () => {
 
   it("the partner's refusal is a footer sentence with the verbs intact; a missing route hides the block", async () => {
     stubList([MAIL]);
-    vi.spyOn(api.attention, 'thread').mockRejectedValue(new Error("thread is Graph-only today; 'resolve-google' is google"));
+    vi.spyOn(api.attention, 'thread').mockRejectedValue(withStatus(new Error("thread is Graph-only today; 'resolve-google' is google"), 409));
     const user = userEvent.setup();
     const first = render(<NeedsYouCard />);
     await user.click(await screen.findByText(/Colchester refit/));
     expect(await screen.findByText(/Not readable from here — thread is Graph-only today/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Draft a reply' })).toBeVisible();
     first.unmount();
+
+    // A partner 404 for the item hides the block even though its sentence says "unknown item".
+    stubList([MAIL]);
+    vi.spyOn(api.attention, 'thread').mockRejectedValue(withStatus(new Error('unknown item att_mail'), 404));
+    const second = render(<NeedsYouCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    await screen.findByRole('button', { name: 'Draft a reply' });
+    expect(screen.queryByTestId('attention-thread')).not.toBeInTheDocument();
+    second.unmount();
+
+    // A blip (502) is said as one, not as the partner refusing.
+    stubList([MAIL]);
+    vi.spyOn(api.attention, 'thread').mockRejectedValue(withStatus(new Error('thread read failed — timed out after 30s'), 502));
+    const third = render(<NeedsYouCard />);
+    await user.click(await screen.findByText(/Colchester refit/));
+    expect(await screen.findByText(/Could not read the thread right now — thread read failed/)).toBeVisible();
+    expect(screen.queryByText(/Not readable from here/)).not.toBeInTheDocument();
+    third.unmount();
 
     stubList([MAIL]); // the default stub: route not found
     render(<NeedsYouCard />);

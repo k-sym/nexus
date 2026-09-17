@@ -274,10 +274,13 @@ test('a thread the partner refuses or does not know passes through as 409 / 404 
 
 test('the to-do first turn names a mail item\'s conversation and never carries the message body (D43)', () => {
   // The live partner writes `source.ref` (the conversation id) on mail items.
-  const turn = buildAttentionFirstTurn({ ...ITEM, body: null, source: { account: 'ssuk', ref: 'AAMk01' } } as any);
+  // The partner writes the message's first line onto a mail item's `body` (its
+  // snippet): that is message text and must not ride into the first turn either.
+  const turn = buildAttentionFirstTurn({ ...ITEM, body: 'Hi Keith, any news on the method statement?', source: { account: 'ssuk', ref: 'AAMk01' } } as any);
   assert.match(turn, /mail conversation ssuk:AAMk01 \(read it with `partner mail thread ssuk:AAMk01`\)/);
   assert.match(turn, /\(account ssuk\)/);
   assert.doesNotMatch(turn, /any news on the method statement/);
+  assert.match(turn, /^Re: Method statement for the Colchester refit\n\nwaiting 3.2d/, 'title and why still lead');
   const meeting = buildAttentionFirstTurn(MEETING as any);
   assert.doesNotMatch(meeting, /mail conversation/, 'only mail items name a conversation');
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, AttentionItem, AttentionResponse, AttentionSnoozePreset, AttentionThreadMessage, AttentionVerb } from '../api';
+import { api, AttentionItem, AttentionResponse, AttentionSnoozePreset, AttentionThreadMessage, AttentionVerb, FetchJsonError } from '../api';
 import { confirmDialog } from '../lib/confirm';
 
 // "Needs you" card (#477): the partner's attention items — what needs Keith,
@@ -175,7 +175,8 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
   const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // The latest message behind a mail item (6d): fetched once on expand.
   const [thread, setThread] = useState<
-    { state: 'idle' } | { state: 'loading' } | { state: 'loaded'; message: AttentionThreadMessage } | { state: 'refused'; why: string } | { state: 'hidden' }
+    | { state: 'idle' } | { state: 'loading' } | { state: 'loaded'; message: AttentionThreadMessage }
+    | { state: 'refused'; why: string } | { state: 'unavailable'; why: string } | { state: 'hidden' }
   >({ state: 'idle' });
 
   // The list refreshes every minute; adopt its view of the item only when it
@@ -227,10 +228,14 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
       const message = t.messages?.[0];
       setThread(message?.body ? { state: 'loaded', message } : { state: 'hidden' });
     } catch (err: any) {
-      const why = String(err?.message || '');
-      // An older backend or partner without the route: hide (D41). A refusal
-      // (not readable today) is the partner's sentence, shown as a footer.
-      setThread(/not found/i.test(why) ? { state: 'hidden' } : { state: 'refused', why: why || 'The message could not be read.' });
+      const why = String(err?.message || '') || 'The message could not be read.';
+      const status = (err as FetchJsonError)?.status;
+      // 404 — an older backend or partner without the route, or no such item:
+      // hide (D41). 409 — the partner's own refusal (a mailbox it cannot read
+      // today): its sentence as a footer. Anything else is a blip, said as one.
+      if (status === 404 || (status == null && /not found/i.test(why))) setThread({ state: 'hidden' });
+      else if (status === 409) setThread({ state: 'refused', why });
+      else setThread({ state: 'unavailable', why });
     }
   };
 
@@ -360,6 +365,7 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
               <div className="text-[10px] uppercase tracking-wider text-faint font-medium">Latest message</div>
               {thread.state === 'loading' && <div className="text-faint">Reading the thread…</div>}
               {thread.state === 'refused' && <div className="text-faint">Not readable from here — {thread.why}</div>}
+              {thread.state === 'unavailable' && <div className="text-faint">Could not read the thread right now — {thread.why}</div>}
               {thread.state === 'loaded' && (
                 <>
                   <div className="text-faint">

@@ -227,6 +227,8 @@ function qs(params: Record<string, string | number | undefined>): string {
 export interface FetchJsonError extends Error {
   code?: string;
   retryable?: boolean;
+  /** The HTTP status, so a caller can tell a 404 from a 409 without parsing the sentence. */
+  status?: number;
 }
 
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
@@ -240,6 +242,7 @@ async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err: FetchJsonError = new Error((body as any).error || res.statusText);
+    err.status = res.status;
     if (typeof (body as any).code === 'string') err.code = (body as any).code;
     if (typeof (body as any).retryable === 'boolean') err.retryable = (body as any).retryable;
     throw err;

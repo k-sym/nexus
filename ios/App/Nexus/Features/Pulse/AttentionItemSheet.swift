@@ -176,7 +176,7 @@ struct AttentionItemSheet: View {
                             .font(.callout)
                             .textSelection(.enabled)
                             .lineLimit(threadExpanded ? nil : 12)
-                        if !threadExpanded, m.body.count > 480 {
+                        if !threadExpanded, m.needsMore {
                             Button("More") { threadExpanded = true }.font(.caption)
                         }
                     }

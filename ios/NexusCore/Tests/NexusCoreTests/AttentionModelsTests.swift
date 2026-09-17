@@ -261,6 +261,15 @@ final class AttentionModelsTests: XCTestCase {
         XCTAssertEqual(m.senderLine, "Jane Holloway <jane.holloway@contractor-example.co.uk>")
         XCTAssertEqual(m.sentAt?.timeIntervalSince1970, 1_789_562_901)
         XCTAssertTrue(m.body.hasPrefix("Hi Keith"))
+        XCTAssertFalse(m.needsMore)
+        let manyLines = try JSONDecoder.nexusREST.decode(AttentionThread.self, from: """
+        {"item_id": "x", "messages": [{"from": "a@x.com", "body": "\(Array(repeating: "line", count: 14).joined(separator: "\\n"))"}]}
+        """.data(using: .utf8)!)
+        XCTAssertTrue(manyLines.latest?.needsMore == true, "13+ short lines still need More")
+        let longWrapped = try JSONDecoder.nexusREST.decode(AttentionThread.self, from: """
+        {"item_id": "x", "messages": [{"from": "a@x.com", "body": "\(String(repeating: "word ", count: 120))"}]}
+        """.data(using: .utf8)!)
+        XCTAssertTrue(longWrapped.latest?.needsMore == true)
         let bare = try JSONDecoder.nexusREST.decode(AttentionThread.self, from: """
         {"item_id": "x", "messages": [{"from": "someone@x.com", "body": "text"}]}
         """.data(using: .utf8)!)

@@ -56,7 +56,12 @@ export function buildAttentionFirstTurn(item: FiledAttentionItem): string {
     lines.push('');
     lines.push(item.why.trim());
   }
-  if (item.body?.trim()) {
+  // D43: a mail item's body is the partner's first line of the message (the
+  // snippet) — hostile input the partner screens before a model sees it, so
+  // it never rides into a session's first turn; the conversation is named
+  // below instead. Every other kind's body is the producer's own prose.
+  const isMail = item.kind.startsWith('mail.');
+  if (!isMail && item.body?.trim()) {
     lines.push('');
     lines.push(item.body.trim());
   }
@@ -67,7 +72,7 @@ export function buildAttentionFirstTurn(item: FiledAttentionItem): string {
   // the text itself never rides along — the partner screens thread bodies.
   const account = typeof item.source?.account === 'string' ? item.source.account : '';
   const ref = typeof item.source?.ref === 'string' ? item.source.ref : '';
-  if (item.kind.startsWith('mail.') && account && ref) refs.push(`mail conversation ${account}:${ref} (read it with \`partner mail thread ${account}:${ref}\`)`);
+  if (isMail && account && ref) refs.push(`mail conversation ${account}:${ref} (read it with \`partner mail thread ${account}:${ref}\`)`);
   if (item.links?.url) refs.push(`link ${item.links.url}`);
   if (item.links?.vault_page) refs.push(`vault page "${item.links.vault_page}"`);
   if (item.links?.draft_id) refs.push(`draft ${item.links.draft_id}`);
