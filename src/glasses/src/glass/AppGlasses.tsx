@@ -18,6 +18,7 @@ export function AppGlasses() {
     sessions: st.sessions,
     approvals: st.approvals,
     attention: st.attention,
+    attentionReady: st.attentionReady,
     activeSessionId: st.activeSessionId,
     activeEvents: st.activeEvents,
     detailPage: st.detailPage,

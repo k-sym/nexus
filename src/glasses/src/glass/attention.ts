@@ -63,19 +63,32 @@ export function itemReason(item: AttentionItem): string {
   return item.why?.trim() || kindLabel(item.kind)
 }
 
-/** What the list shows for an entry (D51): a tier glyph, the name, and a short
- *  meta — `needs you` for a session, the kind label for an action, `notice` for
- *  a notice. Pixel fitting is the HUD's job; the why belongs to the card. */
+/** What the list shows for an entry (D51, the intent's "glyph, title, why"): a
+ *  tier glyph, the name, and the reason — the hub's reason for a session, the
+ *  item's why (its kind label when the why is empty). Pixel fitting is the HUD's job. */
 export interface NeedsRow { id: string; glyph: string; name: string; meta: string; kind: 'session' | 'item' }
 export const NEEDS_GLYPH = { action: '★', notice: '○' } as const
+
+// Human-readable reason from the hub's attention payload on a session.
+const SESSION_REASON: Record<string, string> = {
+  permission_prompt: 'permission',
+  idle_prompt: 'idle — waiting',
+  agent_needs_input: 'needs input',
+  elicitation_dialog: 'has a question',
+}
+export function sessionReason(s: SessionSummary): string {
+  const a = s.attention
+  if (!a) return 'needs you'
+  return SESSION_REASON[a.type] || (a.message || 'needs you').trim()
+}
 
 export function needsRow(entry: AttentionEntry): NeedsRow {
   if (entry.kind === 'session') {
     const s = entry.session
-    return { id: `session:${s.id}`, glyph: NEEDS_GLYPH.action, name: s.title || s.project || s.id.slice(0, 8), meta: 'needs you', kind: 'session' }
+    return { id: `session:${s.id}`, glyph: NEEDS_GLYPH.action, name: s.title || s.project || s.id.slice(0, 8), meta: sessionReason(s), kind: 'session' }
   }
   const notice = isNoticeItem(entry.item)
-  return { id: `item:${entry.item.id}`, glyph: notice ? NEEDS_GLYPH.notice : NEEDS_GLYPH.action, name: entry.item.title, meta: notice ? 'notice' : kindLabel(entry.item.kind), kind: 'item' }
+  return { id: `item:${entry.item.id}`, glyph: notice ? NEEDS_GLYPH.notice : NEEDS_GLYPH.action, name: entry.item.title, meta: itemReason(entry.item), kind: 'item' }
 }
 
 /** Actions = sessions needing a human + open action items; notices apart (D51). */

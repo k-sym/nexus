@@ -219,10 +219,13 @@ const PROJECT_NAME_W = PROJECT_ROW_W - 24
 const NEEDS_GLYPH_ROW = '★'
 const ITEM_RAIL_W = 214
 
-/** Needs-you row label: glyph · name · meta, the name fitted to what the fixed parts leave. */
+/** Needs-you row label: glyph · name · reason. The reason (a why, or the hub's reason)
+ *  gets up to NEEDS_META_W; the name gets whatever the fixed parts leave. */
+const NEEDS_META_W = 200
 function needsRowLabel(r: { glyph: string; name: string; meta: string }): string {
-  const budget = PROJECT_NAME_W - Math.ceil(getTextWidth(`${r.glyph}     ·   ${r.meta}`))
-  return `${r.glyph}  ${fitToWidth(r.name, budget)}   ·   ${r.meta}`
+  const meta = fitToWidth(r.meta, NEEDS_META_W)
+  const budget = PROJECT_NAME_W - Math.ceil(getTextWidth(`${r.glyph}     ·   ${meta}`))
+  return `${r.glyph}  ${fitToWidth(r.name, budget)}   ·   ${meta}`
 }
 
 // A firmware LIST item is a single text run, so the only lever for lining the name
@@ -283,7 +286,7 @@ function sessionRow(s: SessionSummary, nameW: number): { id: string; label: stri
 // selection) when a store update doesn't actually change the display.
 function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[]): string {
   if (scr === 'projects')
-    return `proj|${s.connection}|${groups.map((g) => `${g.badge}${g.name}${g.sessions.length}${g.sessions.some((x) => x.needsAttention) ? '!' : ''}`).join('~')}`
+    return `proj|${s.connection}|${needsTitle(needsCounts(attentionEntriesOf(s)))}|${groups.map((g) => `${g.badge}${g.name}${g.sessions.length}${g.sessions.some((x) => x.needsAttention) ? '!' : ''}`).join('~')}`
   if (scr === 'sessions')
     return `sess|${nav.projIdx}|${groups.map((g) => g.badge).join('')}|${(groups[nav.projIdx]?.sessions ?? []).map((x) => sessionRow(x, sessionsLayout(groups).nameW).label).join('~')}`
   // The activity line is part of the signature, not just the reply — while the agent
@@ -292,7 +295,7 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
   if (scr === 'detail') return `detail|${s.activeSessionId}|${latestReplyText(s.activeEvents).length}|${latestActivity(s.activeEvents) ?? ''}|${s.detailPage}|${s.steering ? 'S' : ''}|${s.interim}|${s.error ?? ''}|${s.pendingSteer ? `P${s.pendingSteer.text.length}:${s.pendingSteer.baseReply.length}` : ''}`
   if (scr === 'approval') return `appr|${gates(s).map((a) => a.id).join(',')}`
   if (scr === 'question') { const a = questions(s)[0]; const q = a ? currentQuestion(a, s) : null; return `q|${a?.id}|${q ? `${q.idx}/${q.total}` : ''}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}|${q?.allowOther ? 'O' : ''}` }
-  if (scr === 'needs') return `needs|${s.connection}|${attentionEntriesOf(s).map((e) => { const r = needsRow(e); return `${r.id}${r.meta}${r.name}` }).join('~')}`
+  if (scr === 'needs') return `needs|${s.connection}|${s.error ?? ''}|${attentionEntriesOf(s).map((e) => { const r = needsRow(e); return `${r.id}${r.meta}${r.name}` }).join('~')}`
   const it = s.attention?.find((i) => i.id === nav.itemId)
   return `item|${nav.itemId}|${it ? `${it.title}|${it.why}|${cardVerbRows(it).map((r) => r.verb).join(',')}` : 'gone'}|${s.error ?? ''}`
 }
@@ -424,9 +427,10 @@ export function AppGlasses3c() {
         }
         case 'needs': {
           // A session row opens its detail; an item row opens the card (D52) — no verb
-          // runs from the list.
+          // runs from the list. Any toast left by the last verb is consumed here.
           const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined
           if (!r?.id) break
+          store.setGlassError(null)
           if (r.id.startsWith('session:')) openSession(r.id.slice('session:'.length))
           else if (r.id.startsWith('item:')) { navRef.current = { ...navRef.current, itemId: r.id.slice('item:'.length) }; render() }
           break
@@ -471,7 +475,7 @@ export function AppGlasses3c() {
           break
         }
         case 'sessions': { navRef.current = { ...navRef.current, home: 'projects' }; render(); break } // back to projects home
-        case 'needs': { navRef.current = { ...navRef.current, home: 'projects' }; render(); break }    // back to projects home
+        case 'needs': { store.setGlassError(null); navRef.current = { ...navRef.current, home: 'projects' }; render(); break }    // back to projects home
         case 'item': { navRef.current = { ...navRef.current, itemId: null }; render(); break }         // back to the list
         case 'detail': { if (s.steering) { cancelSteer(); break } closeSession(); break } // 2tap: stop steering, else leave
         case 'approval': { const a = gates(s)[0]; if (a) deny(a.id); break }
@@ -519,8 +523,10 @@ export function AppGlasses3c() {
       if (nav.home === 'sessions' && !groups[nav.projIdx]) { nav.home = 'projects'; nav.projIdx = 0 }
       // An open card whose item left the store (resolved elsewhere, expired) — fall back to the list.
       if (nav.itemId && !s.attention?.some((i) => i.id === nav.itemId)) nav.itemId = null
-      // Landing (D54): the first connected snapshot decides the home once.
-      if (!landedRef.current && s.connection === 'ok') {
+      // Landing (D54): decided once, on the first snapshot that is connected AND has
+      // the first attention answer — HubFeed marks `ok` before that fetch returns,
+      // so an earlier decision would only ever see the sessions.
+      if (!landedRef.current && s.connection === 'ok' && s.attentionReady) {
         landedRef.current = true
         if (landsOnNeeds(attentionEntriesOf(s))) nav.home = 'needs'
       }
@@ -545,7 +551,7 @@ export function AppGlasses3c() {
 export function glass(st: ReturnType<typeof store.getState>): GlassSnapshot {
   return {
     connection: st.connection, armed: st.armed, sessions: st.sessions,
-    approvals: st.approvals, attention: st.attention, activeSessionId: st.activeSessionId,
+    approvals: st.approvals, attention: st.attention, attentionReady: st.attentionReady, activeSessionId: st.activeSessionId,
     activeEvents: st.activeEvents, detailPage: st.detailPage, error: st.glassError,
     listening: st.glassListening, steering: st.glassSteering, interim: st.glassInterim,
     pendingSteer: st.glassPendingSteer,
@@ -690,8 +696,10 @@ export function composeCockpitPage(
     // notices — one native list under frameless chrome, like Projects. Tap opens a
     // session or an item card; nothing runs from a row.
     const entries = attentionEntriesOf(s)
-    const state = s.connection === 'ok' ? needsTitle(needsCounts(entries)) : s.connection === 'error' ? 'disconnected' : 'connecting…'
-    addNavChrome(page, `NEEDS YOU   ·   ${state}`, '• open   •• projects')
+    // The chrome's right-hand text is the counts — or, just after a verb, the one-line
+    // acknowledgement / refusal `resolveLens` left (cleared on the next navigation).
+    const state = s.error ? s.error : s.connection === 'ok' ? needsTitle(needsCounts(entries)) : s.connection === 'error' ? 'disconnected' : 'connecting…'
+    addNavChrome(page, `NEEDS YOU   ·   ${fitToWidth(state, 260)}`, '• open   •• projects')
     const rows = entries.length
       ? entries.map((e) => { const r = needsRow(e); return { id: r.id, label: needsRowLabel(r) } })
       : [{ id: '', label: s.connection === 'ok' ? '(nothing needs you)' : s.connection === 'error' ? '(disconnected)' : '(connecting…)' }]

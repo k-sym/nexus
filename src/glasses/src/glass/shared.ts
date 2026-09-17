@@ -9,6 +9,7 @@ export interface GlassSnapshot {
   sessions: SessionSummary[]
   approvals: Approval[]          // pending only; a non-empty queue takes over the HUD
   attention?: AttentionItem[]    // partner items (#477); open ones join the Needs-you list (slice 7). Optional so prototype snapshot builders need no change.
+  attentionReady?: boolean       // the first attention fetch answered; the landing decision waits for it (D54)
   activeSessionId: string | null // set => detail screen
   activeEvents: TranscriptEvent[]
   detailPage: number             // Phase 2: page of the latest reply shown on the detail card

@@ -13,7 +13,7 @@ const item = (over: Partial<AttentionItem> & { id: string }): AttentionItem => (
   verbs: ['draft', 'open', 'snooze', 'dismiss'], lens_verbs: ['draft', 'snooze', 'dismiss'],
   alert_seq: 4, created_at: 0, snoozed_until: null, ...over,
 })
-const notice = (id: string) => item({ id, kind: 'night.summary', category: 'notice', proposed_verb: 'dismiss', verbs: ['open', 'dismiss'], lens_verbs: ['dismiss'], title: 'Night summary' })
+const notice = (id: string) => item({ id, kind: 'night.summary', category: 'notice', proposed_verb: 'dismiss', verbs: ['open', 'dismiss'], lens_verbs: ['dismiss'], title: 'Night summary', why: 'seen is enough' })
 const pr = (id: string) => item({ id, kind: 'pr.review', title: '#212 Tighten the poll', why: 'RISKY', proposed_verb: 'open', verbs: ['open', 'close', 'snooze', 'dismiss'], lens_verbs: ['dismiss'] })
 
 test('entries: sessions needing attention first, then open actions, then open notices (D51)', () => {
@@ -22,12 +22,16 @@ test('entries: sessions needing attention first, then open actions, then open no
   assert.deepEqual(attentionEntries([], undefined), [])
 })
 
-test('needs rows: tier glyph, name and a short meta per source', () => {
+test('needs rows: tier glyph, name and the reason — the hub reason, the why, or the kind when the why is empty', () => {
   const [s, p, m, n] = attentionEntries([session('s1', true)], [pr('p'), item({ id: 'm' }), notice('n')])
-  assert.deepEqual(needsRow(s!), { id: 'session:s1', glyph: '★', name: 's1', meta: 'needs you', kind: 'session' })
-  assert.deepEqual(needsRow(p!), { id: 'item:p', glyph: '★', name: '#212 Tighten the poll', meta: 'PR review', kind: 'item' })
-  assert.equal(needsRow(m!).meta, 'mail waiting')
-  assert.deepEqual(needsRow(n!), { id: 'item:n', glyph: '○', name: 'Night summary', meta: 'notice', kind: 'item' })
+  assert.deepEqual(needsRow(s!), { id: 'session:s1', glyph: '★', name: 's1', meta: 'needs input', kind: 'session' })
+  assert.deepEqual(needsRow(p!), { id: 'item:p', glyph: '★', name: '#212 Tighten the poll', meta: 'RISKY', kind: 'item' })
+  assert.equal(needsRow(m!).meta, 'waiting 3d')
+  assert.deepEqual(needsRow(n!), { id: 'item:n', glyph: '○', name: 'Night summary', meta: 'seen is enough', kind: 'item' })
+  assert.equal(needsRow(attentionEntries([], [item({ id: 'e', why: '' })])[0]!).meta, 'mail waiting', 'an empty why falls back to the kind')
+  const bare = { ...session('s2', true), attention: { type: 'custom', message: 'Pick a branch' } }
+  assert.equal(needsRow(attentionEntries([bare], [])[0]!).meta, 'Pick a branch')
+  assert.equal(needsRow(attentionEntries([{ ...session('s3', true), attention: null }], [])[0]!).meta, 'needs you')
 })
 
 test('counts and title: sessions count as actions, notices apart; the landing rule follows the actions', () => {

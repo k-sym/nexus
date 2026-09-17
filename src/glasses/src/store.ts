@@ -11,6 +11,7 @@ export interface State {
   sessions: SessionSummary[]
   approvals: Approval[] // pending only
   attention: AttentionItem[] // partner "Needs you" items, open only (#477) — the Needs-you list's second source
+  attentionReady: boolean    // the first attention fetch has answered (items, a 404 or a blip) — the HUD's landing waits for it (slice 7, D54)
   error: string | null
   forceConnect: boolean // user asked to re-open the Connect screen (change hub), even though a baseUrl is saved
 
@@ -47,6 +48,7 @@ let state: State = {
   sessions: [],
   approvals: [],
   attention: [],
+  attentionReady: false,
   error: null,
   forceConnect: false,
   activeSessionId: null,
