@@ -5,7 +5,7 @@ import { store, useStore } from '../store'
 import { decide, getSession, resolveAttention, setArmed } from '../api'
 import { toDisplayData, onGlassAction } from './router'
 import { attentionEntriesOf, entryName, entryReason, isInterruptActive } from './screens/interrupt'
-import { tapPlan, verbToast, heroHeadline } from './attention'
+import { tapPlan, verbToast, heroHeadline, isNoticeItem } from './attention'
 import { renderInterruptHero, iconReady } from './hero'
 import { padTo } from './theme'
 import type { GlassSnapshot, GlassActions } from './shared'
@@ -100,9 +100,11 @@ export function AppGlasses() {
     // what was sent in one line, and let the next poll be the truth. A refusal
     // shows the partner's sentence the same way.
     resolveAttention(id, verb) {
+      // A notice's dismiss was offered as "Seen"; say the same when it lands (D36).
+      const notice = store.getState().attention.some((i) => i.id === id && isNoticeItem(i))
       store.removeAttention(id)
       resolveAttention(id, verb, verb === 'snooze' ? 'tomorrow' : undefined)
-        .then(() => store.setGlassError(verbToast(verb)))
+        .then(() => store.setGlassError(verbToast(verb, notice)))
         .catch((e) => store.setGlassError(`${verb} failed: ${e instanceof Error ? e.message : e}`))
     },
   })

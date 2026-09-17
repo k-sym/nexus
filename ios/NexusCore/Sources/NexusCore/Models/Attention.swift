@@ -101,6 +101,16 @@ public struct AttentionLinks: Decodable, Sendable {
     public let vaultPage: String?
     public let proposalId: String?
     public let url: String?
+
+    /// A partner-supplied url the app will hand to `openURL` or a `Link`:
+    /// http(s) only, else nil. The partner is trusted for its data, not for a
+    /// scheme the system would route somewhere else.
+    public static func httpURL(_ raw: String?) -> URL? {
+        guard let raw = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+              let url = URL(string: raw), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http"
+        else { return nil }
+        return url
+    }
 }
 
 /// A vault page behind an item (`GET /api/attention/:id/page`): the memory the
@@ -149,8 +159,10 @@ public struct AttentionResolution: Decodable, Sendable {
     }
 
     public var draftId: String? { result?["draft_id"]?.string }
-    /// The PR url a finished `close` verb recorded.
+    /// The PR url a finished `close` verb recorded, as the partner wrote it.
     public var closedUrl: String? { result?["closed"]?.string }
+    /// The same, only when it is an http(s) url the app may open (see `AttentionLinks.httpURL`).
+    public var closedURL: URL? { AttentionLinks.httpURL(closedUrl) }
     /// Approve cleanup (D35) recorded `{approved: true}` on the dismiss.
     public var approved: Bool { result?["approved"]?.bool == true }
     /// File as a to-do (D34) recorded the thread the item became.
@@ -282,16 +294,13 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
     /// The one reconciliation item whose dismiss-with-`{approved: true}` the
     /// skill treats as approval (D35). Nothing else is.
     public var isCleanupApproval: Bool {
-        kind == .reconDecision && (dedupKey?.hasSuffix(":cleanup") ?? false)
+        guard kind == .reconDecision, let key = dedupKey else { return false }
+        // Exactly the skill's namespace: `recon:<statement>:cleanup`, nothing else.
+        return key.hasPrefix("recon:") && key.hasSuffix(":cleanup") && key.count > "recon::cleanup".count
     }
 
     /// The url behind the item, when the producer linked one (a PR for `pr.review`).
-    public var linkURL: URL? {
-        guard let raw = links?.url?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
-              let url = URL(string: raw), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http"
-        else { return nil }
-        return url
-    }
+    public var linkURL: URL? { AttentionLinks.httpURL(links?.url) }
 
     /// The producer's recorded reason when a `draft` verb returned the item to
     /// open without drafting.

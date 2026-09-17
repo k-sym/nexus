@@ -91,7 +91,20 @@ export function isNotice(item: Pick<AttentionItem, 'category'>): boolean {
 /** The one reconciliation item whose approval the skill reads back (D35):
  *  `recon.decision` keyed `recon:<statement>:cleanup`. Nothing else is approval. */
 export function isCleanupApproval(item: Pick<AttentionItem, 'kind' | 'dedup_key'>): boolean {
-  return item.kind === 'recon.decision' && typeof item.dedup_key === 'string' && item.dedup_key.endsWith(':cleanup');
+  // Exactly the skill's namespace: `recon:<statement>:cleanup`, nothing else.
+  return item.kind === 'recon.decision' && typeof item.dedup_key === 'string' && /^recon:.+:cleanup$/.test(item.dedup_key);
+}
+
+/** A partner-supplied url the desktop will put in an `href`: http(s) only, else null —
+ *  the partner is trusted for its data, not for a scheme the browser would execute. */
+export function httpUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const u = new URL(raw.trim());
+    return u.protocol === 'https:' || u.protocol === 'http:' ? u.toString() : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Verbs the desktop may offer right now, in the partner's canonical order. */
@@ -109,7 +122,7 @@ export function slowVerbOf(item: Pick<AttentionItem, 'kind'>): 'close' | 'draft'
 /** The label on the `open` verb, by where it goes (D33). */
 export function openLabel(item: Pick<AttentionItem, 'kind' | 'links'>): string {
   if (item.links?.draft_id) return 'Review the draft';
-  if (item.links?.url) return item.kind === 'pr.review' ? 'Open PR' : 'Open link';
+  if (httpUrl(item.links?.url)) return item.kind === 'pr.review' ? 'Open PR' : 'Open link';
   if (item.links?.vault_page) return item.kind.startsWith('recon.') ? 'Open Gap Report' : 'Show the page';
   return 'Open';
 }
@@ -127,8 +140,7 @@ function draftIdOf(item: AttentionItem): string | null {
 }
 
 function closedUrlOf(item: AttentionItem): string | null {
-  const closed = item.resolution?.result?.closed;
-  return typeof closed === 'string' && closed ? closed : null;
+  return httpUrl(item.resolution?.result?.closed);
 }
 
 function lastErrorMessage(item: AttentionItem): string | null {
@@ -372,12 +384,15 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
                       : verb === 'dismiss' && !notice ? 'border border-subtle text-red-300 hover:text-red-200'
                       : verb === 'close' ? 'border border-red-400/60 text-red-300 hover:text-red-200'
                       : 'border border-subtle';
-                    if (verb === 'open' && item.links?.url && !item.links.draft_id) {
+                    const linkUrl = !item.links?.draft_id ? httpUrl(item.links?.url) : null;
+                    if (verb === 'open' && linkUrl) {
                       // A link opens in the browser; the event is recorded on the way out.
+                      // http(s) only: a `javascript:` or `data:` url from the partner is
+                      // never an href, it falls through to the plain Open button.
                       return (
                         <a
                           key={verb}
-                          href={item.links.url}
+                          href={linkUrl}
                           target="_blank"
                           rel="noopener noreferrer"
                           onClick={() => void recordOpen()}

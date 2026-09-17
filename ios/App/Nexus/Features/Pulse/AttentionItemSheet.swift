@@ -308,8 +308,12 @@ struct AttentionItemSheet: View {
                         LabeledContent(res.verb == .dismiss && item.isNotice ? "Seen" : res.verb.map { AttentionVerbLabel.title($0) } ?? "Resolved",
                                        value: [res.by, res.surface.map { "from \($0)" }].compactMap { $0 }.joined(separator: " "))
                         if let at = res.at { LabeledContent("When", value: Self.relative(at)) }
-                        if let closed = res.closedUrl, let url = URL(string: closed) {
+                        if let url = res.closedURL {
+                            // http(s) only (the same allowlist as `linkURL`): a result is
+                            // the partner's data, never a scheme the app would launch.
                             Link(destination: url) { Label("Closed — open the PR", systemImage: "arrow.up.right.square") }
+                        } else if let closed = res.closedUrl {
+                            LabeledContent("Closed", value: closed)
                         }
                         if res.approved {
                             Label("Cleanup approved", systemImage: "checkmark.seal").foregroundStyle(.secondary)

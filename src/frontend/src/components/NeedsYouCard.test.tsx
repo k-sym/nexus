@@ -1,7 +1,7 @@
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import NeedsYouCard, { offeredVerbs, openLabel, isCleanupApproval } from './NeedsYouCard';
+import NeedsYouCard, { offeredVerbs, openLabel, isCleanupApproval, httpUrl } from './NeedsYouCard';
 import { api, AttentionItem } from '../api';
 import { confirmDialog } from '../lib/confirm';
 
@@ -238,6 +238,15 @@ describe('helpers (6c)', () => {
     expect(isCleanupApproval(CLEANUP)).toBe(true);
     expect(isCleanupApproval(QUESTION)).toBe(false);
     expect(isCleanupApproval({ kind: 'pr.review', dedup_key: 'recon:x:cleanup' })).toBe(false);
+    // The skill reads exactly `recon:<statement>:cleanup`; a key in another namespace is not approval.
+    expect(isCleanupApproval({ kind: 'recon.decision', dedup_key: 'other:cleanup' })).toBe(false);
+    expect(isCleanupApproval({ kind: 'recon.decision', dedup_key: 'recon:cleanup' })).toBe(false);
+    // Only http(s) ever reaches an href.
+    expect(httpUrl('https://github.com/k-sym/nexus/pull/212')).toBe('https://github.com/k-sym/nexus/pull/212');
+    expect(httpUrl('javascript:alert(1)')).toBeNull();
+    expect(httpUrl('data:text/html,hi')).toBeNull();
+    expect(httpUrl('')).toBeNull();
+    expect(openLabel({ ...PR, links: { ...PR.links, url: 'javascript:alert(1)' } })).toBe('Open');
     expect(offeredVerbs(PR)).toEqual(['open', 'close', 'snooze', 'dismiss']);
     expect(offeredVerbs(PR_OK)).toEqual(['open', 'dismiss']);
   });
@@ -281,6 +290,16 @@ describe('NeedsYouCard (6c)', () => {
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
     await user.click(link);
     await waitFor(() => expect(resolve).toHaveBeenCalledWith('att_ok', { verb: 'open' }));
+  });
+
+  it('a non-http url from the partner never becomes an anchor', async () => {
+    const bad: AttentionItem = { ...PR_OK, id: 'att_bad', title: '#7 Bad link', links: { ...PR_OK.links, url: 'javascript:alert(1)' } };
+    stubList([bad]);
+    const user = userEvent.setup();
+    render(<NeedsYouCard />);
+    await user.click(await screen.findByText(/Bad link/));
+    expect(await screen.findByRole('button', { name: 'Open' })).toBeVisible();
+    expect(screen.queryByRole('link')).not.toBeInTheDocument();
   });
 
   it('notices rank after actions under a divider, count separately and read Seen', async () => {

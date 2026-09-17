@@ -18,7 +18,7 @@ import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
 import { answer, decide, getSession, sendSteer, setSteerFocus, resolveAttention } from '../api'
 import { attentionEntriesOf, attentionKey, entryName, entryReason, isInterruptActive } from './screens/interrupt'
-import { heroHeadline, tapPlan, verbToast } from './attention'
+import { heroHeadline, isNoticeItem, tapPlan, verbToast } from './attention'
 import { renderInterruptHero, iconReady } from './hero'
 import { matchAnswer, sttConfig } from './stt'
 import { toGlassText } from './markdown'
@@ -429,7 +429,7 @@ export function AppGlasses3c() {
           if (!entry) break
           store.dismissInterrupt(intrKey(store.getState()))
           if (entry.kind === 'session') openSession(entry.id)
-          else { const plan = tapPlan(entry); if (plan.tapVerb) resolveLens(entry.id, plan.tapVerb) }
+          else { const plan = tapPlan(entry); if (plan.tapVerb) resolveLens(entry.id, plan.tapVerb, isNoticeItem(entry.item)) }
           break
         }
       }
@@ -457,7 +457,7 @@ export function AppGlasses3c() {
           // 2tap: acknowledge; for a partner item also `dismiss` when the lens may.
           const entry = attentionEntriesOf(s)[0]
           store.dismissInterrupt(intrKey(store.getState()))
-          if (entry?.kind === 'item') { const plan = tapPlan(entry); if (plan.doubleTapVerb) resolveLens(entry.id, plan.doubleTapVerb) }
+          if (entry?.kind === 'item') { const plan = tapPlan(entry); if (plan.doubleTapVerb) resolveLens(entry.id, plan.doubleTapVerb, isNoticeItem(entry.item)) }
           break
         }
       }
@@ -537,10 +537,10 @@ function intrKey(st: ReturnType<typeof store.getState>): string {
 // A lens verb on a partner attention item (#477, design D15): fire-and-acknowledge.
 // The item leaves the hero now; the next poll is the truth; one line says what was
 // sent, or the partner's sentence when it refused (it enforces its own lens subset).
-function resolveLens(id: string, verb: Parameters<typeof resolveAttention>[1]) {
+function resolveLens(id: string, verb: Parameters<typeof resolveAttention>[1], notice = false) {
   store.removeAttention(id)
   resolveAttention(id, verb, verb === 'snooze' ? 'tomorrow' : undefined)
-    .then(() => store.setGlassError(verbToast(verb)))
+    .then(() => store.setGlassError(verbToast(verb, notice)))
     .catch((e) => store.setGlassError(`${verb} failed: ${e instanceof Error ? e.message : e}`))
 }
 

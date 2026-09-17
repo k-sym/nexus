@@ -104,12 +104,13 @@ export function tapPlan(entry: AttentionEntry): TapPlan {
   }
 }
 
-/** One-line acknowledgement after a lens verb was sent. */
-export function verbToast(verb: AttentionVerb): string {
+/** One-line acknowledgement after a lens verb was sent. A notice's dismiss
+ *  was offered as "Seen" (D36), so its toast says the same. */
+export function verbToast(verb: AttentionVerb, notice = false): string {
   switch (verb) {
     case 'draft': return 'Drafting a reply…'
     case 'snooze': return 'Snoozed until tomorrow'
-    case 'dismiss': return 'Dismissed'
+    case 'dismiss': return notice ? 'Seen' : 'Dismissed'
     case 'open': return 'Opened'
   }
 }

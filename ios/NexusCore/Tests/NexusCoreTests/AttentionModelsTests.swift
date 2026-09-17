@@ -201,6 +201,12 @@ final class AttentionModelsTests: XCTestCase {
         {"id": "att_q", "kind": "recon.decision", "status": "open", "title": "AWS lines", "verbs": ["open", "dismiss"], "dedup_key": "recon:2026-08:aws-lines"}
         """.data(using: .utf8)!)
         XCTAssertFalse(question.isCleanupApproval, "a question is not the cleanup item")
+        for key in ["other:cleanup", "recon:cleanup", ":cleanup", "recon:2026-08:cleanup-list"] {
+            let odd = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+            {"id": "o", "kind": "recon.decision", "status": "open", "title": "x", "verbs": ["dismiss"], "dedup_key": "\(key)"}
+            """.data(using: .utf8)!)
+            XCTAssertFalse(odd.isCleanupApproval, "\(key) is not the skill's key")
+        }
 
         let notice = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
         {"id": "att_n", "kind": "night.summary", "status": "open", "category": "notice", "title": "Night summary",
@@ -223,7 +229,13 @@ final class AttentionModelsTests: XCTestCase {
         """.data(using: .utf8)!)
         XCTAssertEqual(closed.verb, .close)
         XCTAssertEqual(closed.closedUrl, "https://github.com/k-sym/nexus/pull/212")
+        XCTAssertEqual(closed.closedURL?.absoluteString, "https://github.com/k-sym/nexus/pull/212")
         XCTAssertFalse(closed.approved)
+        let odd = try JSONDecoder.nexusREST.decode(AttentionResolution.self, from: """
+        {"verb": "close", "by": "ios", "surface": "phone", "at": 1789470000, "result": {"closed": "javascript:alert(1)"}}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(odd.closedUrl, "javascript:alert(1)")
+        XCTAssertNil(odd.closedURL, "only http(s) results open")
         let approved = try JSONDecoder.nexusREST.decode(AttentionResolution.self, from: """
         {"verb": "dismiss", "by": "ios", "surface": "phone", "at": 1789470000.5, "result": {"approved": true}}
         """.data(using: .utf8)!)
