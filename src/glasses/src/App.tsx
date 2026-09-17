@@ -21,10 +21,12 @@ function refreshSessions() {
   getSessions('active').then(sessions => store.set({ sessions })).catch(() => {})
 }
 
-// Partner attention items (#477) join the needs-you hero. An older gateway without
-// the route (404) or a partner blip leaves the hero to the thread-born gates.
+// Partner attention items (#477) join the Needs-you list (slice 7). An older gateway
+// without the route (404) or a partner blip leaves the list to the thread-born sessions.
 function refreshAttention() {
-  getAttention().then(attention => store.set({ attention })).catch(() => {})
+  // `attentionReady` flips on the first answer of any kind, so the HUD's one-shot
+  // landing (D54) never decides on the empty pre-fetch array.
+  getAttention().then(attention => store.set({ attention, attentionReady: true })).catch(() => store.set({ attentionReady: true }))
 }
 
 function applyEvent(e: SseEvent) {

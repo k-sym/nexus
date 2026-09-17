@@ -10,7 +10,8 @@ export interface State {
   armed: boolean
   sessions: SessionSummary[]
   approvals: Approval[] // pending only
-  attention: AttentionItem[] // partner "Needs you" items, open only (#477) — a second hero source
+  attention: AttentionItem[] // partner "Needs you" items, open only (#477) — the Needs-you list's second source
+  attentionReady: boolean    // the first attention fetch has answered (items, a 404 or a blip) — the HUD's landing waits for it (slice 7, D54)
   error: string | null
   forceConnect: boolean // user asked to re-open the Connect screen (change hub), even though a baseUrl is saved
 
@@ -33,10 +34,6 @@ export interface State {
   glassQuestionId: string | null        // approval id the accumulated answers belong to
   glassQuestionIdx: number              // index of the question currently being answered
   glassAnswers: Record<string, string>  // answers so far, keyed by exact question text
-  // Attention-interrupt bookkeeping: the set of attention session-ids the user has
-  // already acknowledged, keyed as a sorted join. While it matches the live set the
-  // interrupt stays dismissed; a new/changed attention set re-raises it.
-  dismissedAttentionKey: string | null
 }
 
 const LS_URL = 'cockpit.baseUrl'
@@ -51,6 +48,7 @@ let state: State = {
   sessions: [],
   approvals: [],
   attention: [],
+  attentionReady: false,
   error: null,
   forceConnect: false,
   activeSessionId: null,
@@ -64,7 +62,6 @@ let state: State = {
   glassQuestionId: null,
   glassQuestionIdx: 0,
   glassAnswers: {},
-  dismissedAttentionKey: null,
 }
 
 const listeners = new Set<() => void>()
@@ -109,10 +106,6 @@ export const store = {
   openDetail(id: string, events: TranscriptEvent[]) {
     // Reset to the top of the latest reply whenever a session opens.
     state = { ...state, activeSessionId: id, activeEvents: events, detailPage: 0 }
-    emit()
-  },
-  dismissInterrupt(key: string) {
-    state = { ...state, dismissedAttentionKey: key }
     emit()
   },
   /** Optimistic: a lens verb was sent; the next poll is the truth. */

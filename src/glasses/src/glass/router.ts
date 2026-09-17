@@ -4,17 +4,13 @@ import type { GlassSnapshot, GlassActions } from './shared'
 import { listScreen } from './screens/list'
 import { approvalScreen } from './screens/approval'
 import { detailScreen } from './screens/detail'
-import { interruptScreen, isInterruptActive } from './screens/interrupt'
 
 // Unlike even-toolkit's URL-driven router, the cockpit derives the active screen
 // from state so a pending approval can *interrupt* whatever you were looking at.
-// Priority: pending approval > unacknowledged attention > open detail > home list.
+// Priority: pending approval > open detail > home list. The pushed needs-you hero
+// is gone (slice 7); the live 3c HUD lists attention instead (AppGlasses3c).
 function pick(snapshot: GlassSnapshot): GlassScreen<GlassSnapshot, GlassActions> {
   if (snapshot.approvals.length > 0) return approvalScreen
-  // A notify-driven "needs you" takes over the screen once — until acknowledged
-  // (dismissedAttentionKey) or opened. Suppressed while a detail view is open so
-  // "tap → review" actually lands on the transcript.
-  if (isInterruptActive(snapshot)) return interruptScreen
   if (snapshot.activeSessionId) return detailScreen
   return listScreen
 }

@@ -1,7 +1,8 @@
-// The needs-you hero's two sources (#477): sessions blocking on a human (thread-
-// born, as before) and the partner's open attention items. Pure and import-free
-// on purpose — `node --test` runs this file's tests directly, and the rules here
-// (what the lens may offer) deserve tests that need no glasses runtime.
+// The Needs-you list's two sources (#477, slice 7): sessions blocking on a human
+// (thread-born, as before) and the partner's open attention items. Pure and
+// import-free on purpose — `node --test` runs this file's tests directly, and the
+// rules here (what the lens may offer, what counts as an action, what lands the
+// cockpit on the list) deserve tests that need no glasses runtime.
 import type { AttentionItem, AttentionVerb, SessionSummary } from '../types'
 
 export type AttentionEntry =
@@ -14,7 +15,7 @@ export function isNoticeItem(item: Pick<AttentionItem, 'category'>): boolean {
 }
 
 /** Sessions needing attention first (their order is the caller's), then the
- *  partner's open actions, then its open notices (D36: an action stays in
+ *  partner's open actions, then its open notices (D36/D51: an action stays in
  *  front of a digest). Anything not `open` (snoozed, resolving) never needs a
  *  glance. */
 export function attentionEntries(sessions: SessionSummary[], items: AttentionItem[] | undefined): AttentionEntry[] {
@@ -22,21 +23,6 @@ export function attentionEntries(sessions: SessionSummary[], items: AttentionIte
   const open = (items ?? []).filter((i) => i.status === 'open')
   const toEntry = (i: AttentionItem): AttentionEntry => ({ kind: 'item', id: i.id, item: i })
   return [...fromSessions, ...open.filter((i) => !isNoticeItem(i)).map(toEntry), ...open.filter(isNoticeItem).map(toEntry)]
-}
-
-/** The hero's headline: a notice is not a demand (D36). */
-export function heroHeadline(entry: AttentionEntry | null | undefined): string {
-  return entry?.kind === 'item' && isNoticeItem(entry.item) ? 'NOTICE' : 'NEEDS YOU'
-}
-
-/** Stable key for the current attention set. While it equals the dismissed key the
- *  interrupt stays down; any change re-raises it. An item's key carries its
- *  alert_seq so a renotify (the partner bumping it) is news again after a dismissal. */
-export function attentionKey(entries: AttentionEntry[]): string {
-  return entries
-    .map((e) => (e.kind === 'session' ? e.id : `item:${e.id}@${e.item.alert_seq}`))
-    .sort()
-    .join(',')
 }
 
 // Never `open` (the lens has nowhere to open to) and never `close` (an external
@@ -67,7 +53,6 @@ export const KIND_LABELS: Record<string, string> = {
   'system.alert': 'system alert',
 }
 
-const VERB_LABELS: Record<AttentionVerb, string> = { draft: 'Draft', open: 'Open', snooze: 'Snooze', dismiss: 'Dismiss' }
 
 export function kindLabel(kind: string): string {
   return KIND_LABELS[kind] ?? kind
@@ -78,30 +63,65 @@ export function itemReason(item: AttentionItem): string {
   return item.why?.trim() || kindLabel(item.kind)
 }
 
-export interface TapPlan {
-  tapLabel: string
-  /** null = acknowledge locally, nothing sent. */
-  tapVerb: AttentionVerb | null
-  doubleTapLabel: string
-  doubleTapVerb: 'dismiss' | null
+/** What the list shows for an entry (D51, the intent's "glyph, title, why"): a
+ *  tier glyph, the name, and the reason — the hub's reason for a session, the
+ *  item's why (its kind label when the why is empty). Pixel fitting is the HUD's job. */
+export interface NeedsRow { id: string; glyph: string; name: string; meta: string; kind: 'session' | 'item' }
+export const NEEDS_GLYPH = { action: '★', notice: '○' } as const
+
+// Human-readable reason from the hub's attention payload on a session.
+const SESSION_REASON: Record<string, string> = {
+  permission_prompt: 'permission',
+  idle_prompt: 'idle — waiting',
+  agent_needs_input: 'needs input',
+  elicitation_dialog: 'has a question',
+}
+export function sessionReason(s: SessionSummary): string {
+  const a = s.attention
+  if (!a) return 'needs you'
+  return SESSION_REASON[a.type] || (a.message || 'needs you').trim()
 }
 
-/** What the two gestures do for an entry. Sessions keep today's Review/Dismiss
- *  (dismiss = local acknowledgement). An item's tap is its first lens verb; its
- *  double-tap is `dismiss` when the lens may, else a local "Later". A notice's
- *  dismiss reads "Seen" (D36): same verb, honest name. */
-export function tapPlan(entry: AttentionEntry): TapPlan {
-  if (entry.kind === 'session') return { tapLabel: 'Review', tapVerb: null, doubleTapLabel: 'Dismiss', doubleTapVerb: null }
-  const verbs = lensVerbs(entry.item)
-  const first = verbs[0] ?? null
-  const canDismiss = verbs.includes('dismiss')
-  const dismissLabel = isNoticeItem(entry.item) ? 'Seen' : 'Dismiss'
-  return {
-    tapLabel: first ? (first === 'dismiss' ? dismissLabel : VERB_LABELS[first]) : 'Later',
-    tapVerb: first,
-    doubleTapLabel: canDismiss ? dismissLabel : 'Later',
-    doubleTapVerb: canDismiss ? 'dismiss' : null,
+export function needsRow(entry: AttentionEntry): NeedsRow {
+  if (entry.kind === 'session') {
+    const s = entry.session
+    return { id: `session:${s.id}`, glyph: NEEDS_GLYPH.action, name: s.title || s.project || s.id.slice(0, 8), meta: sessionReason(s), kind: 'session' }
   }
+  const notice = isNoticeItem(entry.item)
+  return { id: `item:${entry.item.id}`, glyph: notice ? NEEDS_GLYPH.notice : NEEDS_GLYPH.action, name: entry.item.title, meta: itemReason(entry.item), kind: 'item' }
+}
+
+/** Actions = sessions needing a human + open action items; notices apart (D51). */
+export function needsCounts(entries: AttentionEntry[]): { actions: number; notices: number } {
+  let actions = 0, notices = 0
+  for (const e of entries) {
+    if (e.kind === 'item' && isNoticeItem(e.item)) notices += 1
+    else actions += 1
+  }
+  return { actions, notices }
+}
+
+/** The list chrome's right-hand text: "2 to action · 1 to see", or "nothing needs you". */
+export function needsTitle(counts: { actions: number; notices: number }): string {
+  const parts: string[] = []
+  if (counts.actions > 0) parts.push(`${counts.actions} to action`)
+  if (counts.notices > 0) parts.push(`${counts.notices} to see`)
+  return parts.length ? parts.join(' · ') : 'nothing needs you'
+}
+
+/** Whether the cockpit opens on the list (D54): only when something is actionable —
+ *  a session waiting on a human or an open action item. Notices alone do not. */
+export function landsOnNeeds(entries: AttentionEntry[]): boolean {
+  return needsCounts(entries).actions > 0
+}
+
+const CARD_LABELS: Record<AttentionVerb, string> = { draft: 'Draft a reply', open: 'Open', snooze: 'Snooze until tomorrow', dismiss: 'Dismiss' }
+
+/** The item card's rows (D52): the item's lens verbs, labelled; a notice's dismiss
+ *  reads "Seen". Never `open` or `close` (lensVerbs already excludes them). */
+export function cardVerbRows(item: AttentionItem): Array<{ verb: AttentionVerb; label: string }> {
+  const notice = isNoticeItem(item)
+  return lensVerbs(item).map((verb) => ({ verb, label: verb === 'dismiss' && notice ? 'Seen' : CARD_LABELS[verb] }))
 }
 
 /** One-line acknowledgement after a lens verb was sent. A notice's dismiss

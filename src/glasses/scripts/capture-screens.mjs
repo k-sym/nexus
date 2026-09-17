@@ -27,7 +27,8 @@ const SHOTS = [
   { file: 'detail-paginated', fixture: 'detail-long', screen: 'detail', project: 0 },
   { file: 'approval', fixture: 'approval', screen: 'approval', project: 0 },
   { file: 'question', fixture: 'question-multi', screen: 'question', project: 0 },
-  { file: 'interrupt', fixture: 'list', screen: 'interrupt', project: 0 },
+  { file: 'needs', fixture: 'needs', screen: 'needs', project: 0 },
+  { file: 'item', fixture: 'needs', screen: 'item', project: 0 },
 ]
 
 const browser = await chromium.launch()

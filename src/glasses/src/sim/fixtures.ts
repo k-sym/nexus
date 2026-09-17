@@ -102,9 +102,6 @@ export function applyFixture(name: string): boolean {
     case 'list': {
       store.set({
         connection: 'ok', approvals: [], activeSessionId: null, activeEvents: [],
-        // Pre-dismiss the attention interrupt so the LIST (with its ●/◐/○ dots) shows
-        // instead of the pushed "needs you" hero. Key = sorted needs-attention ids.
-        dismissedAttentionKey: 's1',
         sessions: [
           session({ id: 's1', title: 'nexus · gateway', project: 'nexus', projectBadge: 'NEX', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' }, lastActivityAt: now - 4_000 }),
           session({ id: 's2', title: 'baker · api', project: 'Baker Internal', projectBadge: 'BAK', live: true, lastActivityAt: now - 90_000 }),
@@ -147,8 +144,8 @@ export function applyFixture(name: string): boolean {
       store.set({ sessions: [s], approvals: [approval], activeSessionId: null, activeEvents: [] })
       return true
     }
-    // A partner attention item with no session behind it (#477): the hero's second
-    // source. The footer reads "● Draft   ●● Dismiss" — the item's lens verbs.
+    // A partner attention item with no session behind it (#477): the Needs-you list's
+    // second source. The card's rows are the item's lens verbs.
     case 'attention': {
       const item: AttentionItem = {
         id: 'att_mail', kind: 'mail.waiting', status: 'open',
@@ -157,11 +154,12 @@ export function applyFixture(name: string): boolean {
         proposed_verb: 'draft', verbs: ['draft', 'open', 'snooze', 'dismiss'], lens_verbs: ['draft', 'snooze', 'dismiss'],
         alert_seq: 4, created_at: Math.floor(now / 1000) - 3600 * 5, snoozed_until: null,
       }
-      store.set({ sessions: [], approvals: [], attention: [item], connection: 'ok', activeSessionId: null, activeEvents: [], dismissedAttentionKey: null })
+      store.set({ sessions: [], approvals: [], attention: [item], connection: 'ok', activeSessionId: null, activeEvents: [] })
       return true
     }
-    // A notice (#477 slice 6b/6c, D36): the hero reads NOTICE and its one gesture is
-    // "Seen" — the partner's `dismiss` under its honest name. Footer "● Seen   ●● Seen".
+    // A notice (#477 slice 6b/6c, D36): listed under "to see"; its card's one row is
+    // "Seen" — the partner's `dismiss` under its honest name. Alone, it does not land
+    // the cockpit on the list (D54).
     case 'notice': {
       const item: AttentionItem = {
         id: 'att_night', kind: 'night.summary', status: 'open', category: 'notice',
@@ -170,7 +168,23 @@ export function applyFixture(name: string): boolean {
         proposed_verb: 'dismiss', verbs: ['open', 'dismiss'], lens_verbs: ['dismiss'],
         alert_seq: 7, created_at: Math.floor(now / 1000) - 3600 * 6, snoozed_until: null,
       }
-      store.set({ sessions: [], approvals: [], attention: [item], connection: 'ok', activeSessionId: null, activeEvents: [], dismissedAttentionKey: null })
+      store.set({ sessions: [], approvals: [], attention: [item], connection: 'ok', activeSessionId: null, activeEvents: [] })
+      return true
+    }
+    // Slice 7: the Needs-you list with all three tiers — a session waiting on a human,
+    // two actions (a mail item and a RISKY PR review), and a notice.
+    case 'needs': {
+      const s1 = session({ id: 's1', title: 'nexus · gateway', project: 'nexus', projectBadge: 'NEX', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' } })
+      const s2 = session({ id: 's2', title: 'baker · api', project: 'Baker Internal', projectBadge: 'BAK', live: true, lastActivityAt: now - 90_000 })
+      const items: AttentionItem[] = [
+        { id: 'att_night', kind: 'night.summary', status: 'open', category: 'notice', title: 'Night summary — 0 PRs, queue drained', why: 'seen is enough',
+          proposed_verb: 'dismiss', verbs: ['open', 'dismiss'], lens_verbs: ['dismiss'], alert_seq: 7, created_at: Math.floor(now / 1000) - 3600 * 6, snoozed_until: null },
+        { id: 'att_mail', kind: 'mail.waiting', status: 'open', category: 'action', title: 'Re: Method statement for the Colchester refit', why: 'waiting 3.2d from jane.holloway',
+          proposed_verb: 'draft', verbs: ['draft', 'open', 'snooze', 'dismiss'], lens_verbs: ['draft', 'snooze', 'dismiss'], alert_seq: 4, created_at: Math.floor(now / 1000) - 3600 * 5, snoozed_until: null },
+        { id: 'att_pr', kind: 'pr.review', status: 'open', category: 'action', title: '#212 Tighten the attention poll cursor', why: 'RISKY — fix or close',
+          proposed_verb: 'open', verbs: ['open', 'close', 'snooze', 'dismiss'], lens_verbs: ['dismiss'], alert_seq: 8, created_at: Math.floor(now / 1000) - 3600 * 2, snoozed_until: null },
+      ]
+      store.set({ sessions: [s1, s2], approvals: [], attention: items, connection: 'ok', activeSessionId: null, activeEvents: [] })
       return true
     }
     default:
