@@ -160,6 +160,19 @@ export function applyFixture(name: string): boolean {
       store.set({ sessions: [], approvals: [], attention: [item], connection: 'ok', activeSessionId: null, activeEvents: [], dismissedAttentionKey: null })
       return true
     }
+    // A notice (#477 slice 6b/6c, D36): the hero reads NOTICE and its one gesture is
+    // "Seen" — the partner's `dismiss` under its honest name. Footer "● Seen   ●● Seen".
+    case 'notice': {
+      const item: AttentionItem = {
+        id: 'att_night', kind: 'night.summary', status: 'open', category: 'notice',
+        title: 'Night summary — 0 PRs, queue drained',
+        why: 'seen is enough',
+        proposed_verb: 'dismiss', verbs: ['open', 'dismiss'], lens_verbs: ['dismiss'],
+        alert_seq: 7, created_at: Math.floor(now / 1000) - 3600 * 6, snoozed_until: null,
+      }
+      store.set({ sessions: [], approvals: [], attention: [item], connection: 'ok', activeSessionId: null, activeEvents: [], dismissedAttentionKey: null })
+      return true
+    }
     default:
       return false
   }

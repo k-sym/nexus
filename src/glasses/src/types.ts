@@ -107,5 +107,7 @@ export interface AttentionItem {
   alert_seq: number
   created_at: number
   snoozed_until: number | null
+  /** `notice` (a glance is "seen") or `action`; an older gateway sends neither = action (#477 D36). */
+  category?: 'notice' | 'action' | (string & {})
 }
 

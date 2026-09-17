@@ -109,7 +109,7 @@ function drawGestureFooter(ctx: CanvasRenderingContext2D, cx: number, baseY: num
  * this screen too — it needs the pixels, not the encoded BLE tiles. The band is
  * drawn at the canvas origin; the caller places it (on the lens it sits at BAND_Y).
  */
-export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reason: string, footer: HeroFooter = DEFAULT_FOOTER): void {
+export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reason: string, footer: HeroFooter = DEFAULT_FOOTER, headline = 'NEEDS YOU'): void {
   canvas.width = COLS * TW  // 600
   canvas.height = TH        // 144
   const ctx = canvas.getContext('2d')!
@@ -125,7 +125,7 @@ export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reas
   ctx.fillStyle = '#ffffff'
   ctx.textBaseline = 'alphabetic'
   ctx.font = "700 28px system-ui, -apple-system, 'Segoe UI', sans-serif"
-  ctx.fillText('NEEDS YOU', cx, 96)
+  ctx.fillText(headline, cx, 96)
 
   ctx.fillStyle = '#b8b8b8'
   ctx.font = "500 14px system-ui, -apple-system, 'Segoe UI', sans-serif"
@@ -138,9 +138,9 @@ export function paintInterruptHero(canvas: HTMLCanvasElement, name: string, reas
 export const HERO_BAND = { y: BAND_Y, w: COLS * TW, h: TH }
 
 /** Render the interrupt hero and return positioned, encoded image tiles. */
-export function renderInterruptHero(name: string, reason: string, footer: HeroFooter = DEFAULT_FOOTER): HeroTile[] {
+export function renderInterruptHero(name: string, reason: string, footer: HeroFooter = DEFAULT_FOOTER, headline = 'NEEDS YOU'): HeroTile[] {
   const canvas = document.createElement('canvas')
-  paintInterruptHero(canvas, name, reason, footer)
+  paintInterruptHero(canvas, name, reason, footer, headline)
 
   const tiles: HeroTile[] = []
   for (let i = 0; i < COLS; i++) {

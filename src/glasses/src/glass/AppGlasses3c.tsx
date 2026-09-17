@@ -18,7 +18,7 @@ import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
 import { answer, decide, getSession, sendSteer, setSteerFocus, resolveAttention } from '../api'
 import { attentionEntriesOf, attentionKey, entryName, entryReason, isInterruptActive } from './screens/interrupt'
-import { tapPlan, verbToast } from './attention'
+import { heroHeadline, tapPlan, verbToast } from './attention'
 import { renderInterruptHero, iconReady } from './hero'
 import { matchAnswer, sttConfig } from './stt'
 import { toGlassText } from './markdown'
@@ -731,6 +731,7 @@ async function renderInterrupt(s: GlassSnapshot) {
     entry ? entryName(entry) : 'session',
     entry ? entryReason(entry) : '',
     plan ? { tap: plan.tapLabel, doubleTap: plan.doubleTapLabel } : undefined,
+    heroHeadline(entry),
   )
 
   const overlay = new TextContainerProperty({

@@ -164,6 +164,78 @@ final class AttentionModelsTests: XCTestCase {
         XCTAssertEqual(b.error, "connect ECONNREFUSED")
     }
 
+    // Slice 6c (design D32–D38): the 6b contract on the phone.
+    func testSixBKindsCloseVerbAndCleanupKeyDecode() throws {
+        let pr = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+        {"id": "att_pr", "kind": "pr.review", "status": "open", "category": "action",
+         "title": "#212 Tighten the poll", "why": "RISKY — touches the cursor",
+         "links": {"draft_id": null, "vault_page": null, "proposal_id": null, "url": "https://github.com/k-sym/nexus/pull/212"},
+         "proposed_verb": "open", "verbs": ["open", "close", "snooze", "dismiss"], "lens_verbs": ["dismiss"],
+         "dedup_key": "pr:k-sym/nexus#212", "suggested_project": "nexus", "seq": 1, "alert_seq": 1}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(pr.kind, .prReview)
+        XCTAssertEqual(pr.verbs, [.open, .close, .snooze, .dismiss])
+        XCTAssertEqual(pr.offeredVerbs, [.open, .close, .snooze, .dismiss], "close is offered where listed, in the case order")
+        XCTAssertEqual(pr.linkURL?.absoluteString, "https://github.com/k-sym/nexus/pull/212")
+        XCTAssertEqual(pr.slowVerb, .close)
+        XCTAssertFalse(pr.isCleanupApproval)
+        XCTAssertFalse(pr.isNotice)
+        XCTAssertEqual(pr.suggestedProject, "nexus")
+        XCTAssertTrue(AttentionVerb.close.isSlow)
+        XCTAssertFalse(AttentionVerb.dismiss.isSlow)
+
+        let looksGood = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+        {"id": "att_ok", "kind": "pr.review", "status": "open", "title": "#219 ok", "verbs": ["open", "dismiss"], "lens_verbs": ["dismiss"]}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(looksGood.offeredVerbs, [.open, .dismiss], "close is never invented for a LOOKS GOOD item")
+
+        let cleanup = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+        {"id": "att_cl", "kind": "recon.decision", "status": "open", "title": "Cleanup awaiting approval",
+         "links": {"draft_id": null, "vault_page": "Gap Report 2026-08", "proposal_id": null},
+         "verbs": ["open", "snooze", "dismiss"], "lens_verbs": ["dismiss"], "dedup_key": "recon:2026-08:cleanup"}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(cleanup.kind, .reconDecision)
+        XCTAssertTrue(cleanup.isCleanupApproval)
+        XCTAssertEqual(cleanup.slowVerb, .draft, "only pr.review can be closing")
+        let question = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+        {"id": "att_q", "kind": "recon.decision", "status": "open", "title": "AWS lines", "verbs": ["open", "dismiss"], "dedup_key": "recon:2026-08:aws-lines"}
+        """.data(using: .utf8)!)
+        XCTAssertFalse(question.isCleanupApproval, "a question is not the cleanup item")
+
+        let notice = try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+        {"id": "att_n", "kind": "night.summary", "status": "open", "category": "notice", "title": "Night summary",
+         "proposed_verb": "dismiss", "verbs": ["open", "dismiss"], "lens_verbs": ["dismiss"]}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(notice.kind, .nightSummary)
+        XCTAssertTrue(notice.isNotice)
+        XCTAssertEqual(notice.offeredVerbs, [.open, .dismiss])
+        for raw in ["brief.morning", "evening.triage", "recon.update", "system.alert"] {
+            XCTAssertNotEqual(AttentionKind(rawValue: raw), nil, raw)
+        }
+        XCTAssertNil(try JSONDecoder.nexusREST.decode(AttentionItem.self, from: """
+        {"id": "att_j", "kind": "pr.review", "status": "open", "title": "x", "links": {"url": "javascript:alert(1)"}, "verbs": []}
+        """.data(using: .utf8)!).linkURL, "only http(s) urls open")
+    }
+
+    func testResolutionResultsForCloseApproveAndFile() throws {
+        let closed = try JSONDecoder.nexusREST.decode(AttentionResolution.self, from: """
+        {"verb": "close", "by": "ios", "surface": "phone", "at": 1789470000, "result": {"closed": "https://github.com/k-sym/nexus/pull/212", "by": "ios"}}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(closed.verb, .close)
+        XCTAssertEqual(closed.closedUrl, "https://github.com/k-sym/nexus/pull/212")
+        XCTAssertFalse(closed.approved)
+        let approved = try JSONDecoder.nexusREST.decode(AttentionResolution.self, from: """
+        {"verb": "dismiss", "by": "ios", "surface": "phone", "at": 1789470000.5, "result": {"approved": true}}
+        """.data(using: .utf8)!)
+        XCTAssertTrue(approved.approved)
+        XCTAssertNil(approved.closedUrl)
+        let filed = try JSONDecoder.nexusREST.decode(AttentionResolution.self, from: """
+        {"verb": "dismiss", "by": "ios", "surface": "phone", "at": 1789470000, "result": {"filed_as": "thread-1"}}
+        """.data(using: .utf8)!)
+        XCTAssertEqual(filed.filedAs, "thread-1")
+        XCTAssertFalse(filed.approved, "a filed_as is not approval")
+    }
+
     func testSnoozePresetsMatchThePartner() {
         XCTAssertEqual(AttentionSnoozePreset.allCases.map(\.rawValue), ["later", "tomorrow", "next_week"])
     }

@@ -712,12 +712,19 @@ export interface DraftDecision extends OutboundDraft {
 // invents one — there is no approve or send here by construction. Mirror of
 // `Models/Attention.swift` in ios/NexusCore.
 export type AttentionStatus = 'open' | 'snoozed' | 'resolving' | 'resolved' | 'expired';
-export type AttentionVerb = 'draft' | 'open' | 'snooze' | 'dismiss';
+/** The partner's closed verb set. `close` (slice 6b) closes the PR behind a
+ *  `pr.review` item through the partner's own `gh`; the desktop confirms first. */
+export type AttentionVerb = 'draft' | 'open' | 'snooze' | 'dismiss' | 'close';
 export type AttentionSnoozePreset = 'later' | 'tomorrow' | 'next_week';
 /** Kinds the producers post today; a future kind arrives as a plain string. */
 export type AttentionKind =
   | 'mail.waiting' | 'mail.urgent' | 'draft.pending' | 'meeting.prep'
-  | 'quiz.prep' | 'quiz.harvest' | 'autonomy.proposal' | (string & {});
+  | 'quiz.prep' | 'quiz.harvest' | 'autonomy.proposal'
+  | 'pr.review' | 'recon.decision'
+  | 'brief.morning' | 'evening.triage' | 'night.summary' | 'recon.update' | 'system.alert'
+  | (string & {});
+/** A notice wants "seen" (dismiss) or filing; an action wants its verbs (D19). Absent = action. */
+export type AttentionCategory = 'notice' | 'action';
 
 export interface AttentionResolution {
   verb: AttentionVerb | string;
@@ -748,8 +755,14 @@ export interface AttentionItem {
   body: string | null;
   /** Producer-shaped reference (account, conversation, …). */
   source: Record<string, unknown>;
-  /** The partner normalises links to exactly these three keys. */
-  links: { draft_id: string | null; vault_page: string | null; proposal_id: string | null };
+  /** The partner normalises links to exactly these keys (`url` since slice 6b: the PR behind a `pr.review`). */
+  links: { draft_id: string | null; vault_page: string | null; proposal_id: string | null; url?: string | null };
+  /** `notice` | `action` (slice 6b, a property of the kind); absent on an older partner = action. */
+  category?: AttentionCategory | (string & {});
+  /** Project slug or badge the producer suggests for "file as a to-do". */
+  suggested_project?: string | null;
+  /** The producer's stable key (`recon:<statement>:cleanup` is the one the desktop reads). */
+  dedup_key?: string;
   proposed_verb: AttentionVerb | (string & {});
   /** Verbs the item allows. Stored on the item and never stripped: the partner
    *  answers 409 unless the status is open or snoozed, so gate on status too. */
@@ -784,6 +797,8 @@ export interface AttentionResolveInput {
   verb: AttentionVerb;
   preset?: AttentionSnoozePreset;
   until?: number;
+  /** What a dismissed item became (D34): `{ approved: true }` from Approve cleanup. */
+  result?: Record<string, unknown>;
 }
 
 // Idea Watcher (#352) — one created GitHub issue of a graduation set.

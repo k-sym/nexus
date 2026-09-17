@@ -3,7 +3,7 @@ import { moveHighlight } from 'even-toolkit/glass-nav'
 import { line, truncate, centered, footer, DRILL, DOT_ACTIVE } from '../theme'
 import type { GlassSnapshot, GlassActions } from '../shared'
 import type { SessionSummary } from '../../types'
-import { attentionEntries, attentionKey, itemReason, tapPlan, type AttentionEntry } from '../attention'
+import { attentionEntries, attentionKey, heroHeadline, itemReason, tapPlan, type AttentionEntry } from '../attention'
 
 export { attentionKey }
 
@@ -80,7 +80,7 @@ export const interruptScreen: GlassScreen<GlassSnapshot, GlassActions> = {
         line(''),
         centered(`${DOT_ACTIVE} ${clip(name, 32)}`),
         line(''),
-        centered('NEEDS YOU'),
+        centered(heroHeadline(entry)),
         centered(entryReason(entry)),
         line(''),
         counter,

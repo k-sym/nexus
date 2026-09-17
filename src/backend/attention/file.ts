@@ -25,6 +25,11 @@ const KIND_LABELS: Record<string, string> = {
   'autonomy.proposal': 'an autonomy proposal',
   'pr.review': 'a PR review',
   'recon.decision': 'a reconciliation decision',
+  'brief.morning': 'the morning brief',
+  'evening.triage': 'the evening triage',
+  'night.summary': 'a night summary',
+  'recon.update': 'a reconciliation update',
+  'system.alert': 'a system alert',
 };
 
 /** Thread title: the item's title, clipped like the other origins. */

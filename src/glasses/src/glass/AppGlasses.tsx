@@ -5,7 +5,7 @@ import { store, useStore } from '../store'
 import { decide, getSession, resolveAttention, setArmed } from '../api'
 import { toDisplayData, onGlassAction } from './router'
 import { attentionEntriesOf, entryName, entryReason, isInterruptActive } from './screens/interrupt'
-import { tapPlan, verbToast } from './attention'
+import { tapPlan, verbToast, heroHeadline } from './attention'
 import { renderInterruptHero, iconReady } from './hero'
 import { padTo } from './theme'
 import type { GlassSnapshot, GlassActions } from './shared'
@@ -54,7 +54,7 @@ export function AppGlasses() {
   // Re-encode only when the shown content (or icon readiness) changes.
   const homeImageTiles = useMemo(
     () => (heroEntry && heroPlan
-      ? renderInterruptHero(heroName, heroReason, { tap: heroPlan.tapLabel, doubleTap: heroPlan.doubleTapLabel })
+      ? renderInterruptHero(heroName, heroReason, { tap: heroPlan.tapLabel, doubleTap: heroPlan.doubleTapLabel }, heroHeadline(heroEntry))
       : undefined),
     [heroEntry?.kind, heroEntry?.id, heroName, heroReason, heroFooterKey, iconTick],
   )

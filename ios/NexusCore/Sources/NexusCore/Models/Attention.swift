@@ -32,6 +32,14 @@ public enum AttentionKind: String, Sendable {
     case quizPrep = "quiz.prep"
     case quizHarvest = "quiz.harvest"
     case autonomyProposal = "autonomy.proposal"
+    // Slice 6b kinds (baker-internal D23/D30): two actions, five notices.
+    case prReview = "pr.review"
+    case reconDecision = "recon.decision"
+    case briefMorning = "brief.morning"
+    case eveningTriage = "evening.triage"
+    case nightSummary = "night.summary"
+    case reconUpdate = "recon.update"
+    case systemAlert = "system.alert"
     case unknown
 }
 
@@ -51,13 +59,19 @@ public enum AttentionStatus: String, Decodable, Sendable {
 
 /// The partner's closed verb set. `approve` and `send` cannot appear: the
 /// store's CHECK constraint refuses them, so an unknown value is a future verb,
-/// not a hidden send.
+/// not a hidden send. `close` (slice 6b) closes the PR behind a `pr.review`
+/// item through the partner's own `gh`; the phone confirms before sending it
+/// and the lens never offers it. The case order is the order verbs are offered.
 public enum AttentionVerb: String, Decodable, Sendable, CaseIterable {
     case draft
     case open
+    case close
     case snooze
     case dismiss
     case unknown
+
+    /// The two verbs the partner answers 202 for while its routine runs.
+    public var isSlow: Bool { self == .draft || self == .close }
 
     public init(from decoder: Decoder) throws {
         let raw = try decoder.singleValueContainer().decode(String.self)
@@ -135,6 +149,12 @@ public struct AttentionResolution: Decodable, Sendable {
     }
 
     public var draftId: String? { result?["draft_id"]?.string }
+    /// The PR url a finished `close` verb recorded.
+    public var closedUrl: String? { result?["closed"]?.string }
+    /// Approve cleanup (D35) recorded `{approved: true}` on the dismiss.
+    public var approved: Bool { result?["approved"]?.bool == true }
+    /// File as a to-do (D34) recorded the thread the item became.
+    public var filedAs: String? { result?["filed_as"]?.string }
 }
 
 /// Append-only ledger row from the detail call. `verb` here includes
@@ -183,8 +203,11 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
     public let lensVerbs: [AttentionVerb]?
     /// `notice` | `action` once the producer sets it (slice 6b); absent = action.
     public let category: String?
-    /// Project slug or badge the producer suggests for "file as a to-do" (6b); absent today.
+    /// Project slug or badge the producer suggests for "file as a to-do" (6b).
     public let suggestedProject: String?
+    /// The producer's stable key. `recon:<statement>:cleanup` is the one item
+    /// whose approval the reconciliation skill reads back (D35).
+    public let dedupKey: String?
     public let producer: String?
     public let createdAt: Int?
     public let updatedAt: Int?
@@ -200,7 +223,7 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
         case id, status, title, why, body, source, links, verbs, producer, seq, resolution, events
         case kindName = "kind"
         case proposedVerb, lensVerbs, createdAt, updatedAt, snoozedUntil, expiresAt, alertSeq
-        case category, suggestedProject
+        case category, suggestedProject, dedupKey
     }
 
     public init(from decoder: Decoder) throws {
@@ -218,6 +241,7 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
         lensVerbs = try c.decodeIfPresent([AttentionVerb].self, forKey: .lensVerbs)
         category = try c.decodeIfPresent(String.self, forKey: .category)
         suggestedProject = try c.decodeIfPresent(String.self, forKey: .suggestedProject)
+        dedupKey = try c.decodeIfPresent(String.self, forKey: .dedupKey)
         producer = try c.decodeIfPresent(String.self, forKey: .producer)
         createdAt = try c.decodeEpochIfPresent(forKey: .createdAt)
         updatedAt = try c.decodeEpochIfPresent(forKey: .updatedAt)
@@ -249,6 +273,25 @@ public struct AttentionItem: Decodable, Sendable, Identifiable {
     /// The draft this item reaches: recorded by a finished `draft` verb, or
     /// linked by the producer (a `draft.pending` item).
     public var draftId: String? { resolution?.draftId ?? links?.draftId }
+
+    /// The slow verb this item can be running while `resolving` (D38): a
+    /// `pr.review` can only be closing; everything else can only be drafting.
+    /// Decided by kind because the list carries no events.
+    public var slowVerb: AttentionVerb { kind == .prReview ? .close : .draft }
+
+    /// The one reconciliation item whose dismiss-with-`{approved: true}` the
+    /// skill treats as approval (D35). Nothing else is.
+    public var isCleanupApproval: Bool {
+        kind == .reconDecision && (dedupKey?.hasSuffix(":cleanup") ?? false)
+    }
+
+    /// The url behind the item, when the producer linked one (a PR for `pr.review`).
+    public var linkURL: URL? {
+        guard let raw = links?.url?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty,
+              let url = URL(string: raw), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http"
+        else { return nil }
+        return url
+    }
 
     /// The producer's recorded reason when a `draft` verb returned the item to
     /// open without drafting.

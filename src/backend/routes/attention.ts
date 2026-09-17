@@ -156,7 +156,8 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
       const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim().slice(0, 40) : 'nexus';
       const surface = typeof body.surface === 'string' && body.surface.trim() ? body.surface.trim().slice(0, 16) : undefined;
       try {
-        await partner.resolveAttention(id, { verb: 'dismiss', by, ...(surface ? { surface } : {}) });
+        // D34: the partner's ledger records what the item became (the thread id).
+        await partner.resolveAttention(id, { verb: 'dismiss', by, ...(surface ? { surface } : {}), result: { filed_as: thread.id } });
       } catch (err: any) {
         // 409 = already resolved; anything else is the partner's problem, not the to-do's.
         fastify.log?.warn?.({ id, status: err?.status }, 'attention file: dismiss refused');
@@ -166,12 +167,15 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
     });
 
     // A write: the person who tapped is owed the truth. The partner answers 202
-    // while a `draft` verb is still running (the item sits `resolving`); that
-    // status is passed through so the phone can tell "started" from "done".
+    // while a slow verb (`draft`, `close`) is still running (the item sits
+    // `resolving`); that status is passed through so the phone can tell
+    // "started" from "done". `close` is an external GitHub write run by the
+    // partner's own `gh` (baker-internal D25); the phone and the web confirm
+    // before sending it, and the lens never offers it.
     fastify.post('/api/attention/:id/resolve', async (request, reply) => {
       const { id } = request.params as { id: string };
       const body = (request.body ?? {}) as {
-        verb?: unknown; by?: unknown; surface?: unknown; until?: unknown; preset?: unknown;
+        verb?: unknown; by?: unknown; surface?: unknown; until?: unknown; preset?: unknown; result?: unknown;
       };
       if (typeof body.verb !== 'string' || !body.verb.trim()) {
         reply.code(400);
@@ -189,6 +193,9 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
       if (typeof body.surface === 'string' && body.surface.trim()) payload.surface = body.surface.trim().slice(0, 16);
       if (typeof body.until === 'number' && Number.isFinite(body.until)) payload.until = Math.floor(body.until);
       if (typeof body.preset === 'string' && body.preset.trim()) payload.preset = body.preset.trim();
+      // D34: a plain-object result rides along (Approve cleanup sends
+      // `{ approved: true }`); anything else is dropped, as the partner would.
+      if (isPlainObject(body.result)) payload.result = body.result;
       try {
         const result = await partner.resolveAttention(id, payload);
         reply.code(result.status);
@@ -200,6 +207,10 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
       }
     });
   };
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // The partner answers FastAPI-style `{"detail": "..."}`; surface the sentence,

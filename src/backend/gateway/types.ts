@@ -112,5 +112,7 @@ export interface LensAttentionItem {
   alert_seq: number;
   created_at: number;
   snoozed_until: number | null;
+  /** `notice` (a glance is "seen") or `action`; absent on the row = action (#477 D36). */
+  category: 'notice' | 'action';
 }
 

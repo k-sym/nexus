@@ -189,6 +189,7 @@ export function toLensAttentionItem(row: Record<string, unknown>): LensAttention
     alert_seq: num(row.alert_seq),
     created_at: num(row.created_at),
     snoozed_until: typeof snoozed === 'number' ? snoozed : null,
+    category: row.category === 'notice' ? 'notice' : 'action',
   };
 }
 
