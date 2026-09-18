@@ -124,6 +124,24 @@ export function cardVerbRows(item: AttentionItem): Array<{ verb: AttentionVerb; 
   return lensVerbs(item).map((verb) => ({ verb, label: verb === 'dismiss' && notice ? 'Seen' : CARD_LABELS[verb] }))
 }
 
+/** The firmware caps a native list item at 63 BYTES of UTF-8 (the simulator logs
+ *  "list item text length 71 exceeds limit of 63 bytes" and rejects the whole page —
+ *  a blank lens). Pixel fitting cannot see bytes: ★ is three, · is two and … is
+ *  three. Clamp on a code-point boundary and end with an ellipsis. */
+export const LIST_ITEM_MAX_BYTES = 63
+export function clampListItem(text: string, maxBytes = LIST_ITEM_MAX_BYTES): string {
+  const enc = new TextEncoder()
+  if (enc.encode(text).length <= maxBytes) return text
+  const ell = '…'
+  const budget = maxBytes - enc.encode(ell).length
+  let out = ''
+  for (const ch of text) {
+    if (enc.encode(out + ch).length > budget) break
+    out += ch
+  }
+  return out.trimEnd() + ell
+}
+
 /** One-line acknowledgement after a lens verb was sent. A notice's dismiss
  *  was offered as "Seen" (D36), so its toast says the same. */
 export function verbToast(verb: AttentionVerb, notice = false): string {

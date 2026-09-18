@@ -45,8 +45,11 @@ const LONG_REPLY =
 
 /** Seed the store for a named scenario. Returns false for an unknown name. */
 export function applyFixture(name: string): boolean {
-  // Dummy baseUrl so <App> renders past the Connect screen; sim mode skips HubFeed.
+  // Dummy baseUrl so <App> renders past the Connect screen; sim mode skips HubFeed —
+  // so the attention fetch it would run never answers; mark it answered here or the
+  // HUD's landing (D54) waits forever and every fixture opens on Projects.
   store.setCredentials('http://sim.local', '')
+  store.set({ attentionReady: true })
   // Design-lab mockups (?sim=lab-*) and the navigable prototype (?sim=p3) render
   // their own bitmaps in <Lab>/<Phase3App>; no store seeding — just claim the name
   // so boot() skips the live seed.
@@ -185,6 +188,26 @@ export function applyFixture(name: string): boolean {
           proposed_verb: 'open', verbs: ['open', 'close', 'snooze', 'dismiss'], lens_verbs: ['dismiss'], alert_seq: 8, created_at: Math.floor(now / 1000) - 3600 * 2, snoozed_until: null },
       ]
       store.set({ sessions: [s1, s2], approvals: [], attention: items, connection: 'ok', activeSessionId: null, activeEvents: [] })
+      return true
+    }
+    // Slice 7 walk: a list far longer than the lens shows at once (the live store had
+    // 15 open items on 2026-09-17) — scroll deep, open a card, come back.
+    case 'needs-many': {
+      const s1 = session({ id: 's1', title: 'nexus · gateway', project: 'nexus', projectBadge: 'NEX', live: true, needsAttention: true, attention: { type: 'agent_needs_input', message: 'Waiting for your answer' } })
+      const kinds: Array<[string, string, string[]]> = [
+        ['mail.waiting', 'draft', ['draft', 'snooze', 'dismiss']], ['meeting.prep', 'open', ['dismiss']], ['pr.review', 'open', ['dismiss']],
+        ['draft.pending', 'open', []], ['mail.urgent', 'draft', ['draft', 'snooze', 'dismiss']], ['recon.decision', 'open', ['dismiss']],
+      ]
+      // `?sim=needs-many&n=<count>` sets the action count (default 14) so a run can bisect a size limit.
+      const many = Math.max(1, Number(new URLSearchParams(window.location.search).get('n') || 14))
+      const items: AttentionItem[] = Array.from({ length: many }, (_, i) => {
+        const [kind, proposed, lens] = kinds[i % kinds.length]!
+        return { id: `att_${i + 1}`, kind, status: 'open', category: 'action', title: `Item ${i + 1} — ${kind} with a title long enough to clip at the edge`, why: `why for item ${i + 1}`,
+          proposed_verb: proposed, verbs: ['open', 'snooze', 'dismiss', ...(lens.includes('draft') ? ['draft'] : [])], lens_verbs: lens, alert_seq: i + 1, created_at: Math.floor(now / 1000) - 3600 * (i + 1), snoozed_until: null }
+      })
+      items.push({ id: 'att_night', kind: 'night.summary', status: 'open', category: 'notice', title: 'Night summary — 0 PRs, queue drained', why: 'seen is enough',
+        proposed_verb: 'dismiss', verbs: ['open', 'dismiss'], lens_verbs: ['dismiss'], alert_seq: 20, created_at: Math.floor(now / 1000) - 3600 * 6, snoozed_until: null })
+      store.set({ sessions: [s1], approvals: [], attention: items, connection: 'ok', activeSessionId: null, activeEvents: [] })
       return true
     }
     default:
