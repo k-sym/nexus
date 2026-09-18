@@ -106,7 +106,11 @@ export async function fileAttention(id: string, projectId: string): Promise<{ th
 
 /** Slice 8 (D62): the projects a to-do can land on. */
 export async function getProjects(): Promise<LensProject[]> {
-  return (await readJson<{ projects?: LensProject[] }>(await api('/api/projects'), 'projects')).projects ?? []
+  const body = await readJson<{ projects?: LensProject[]; error?: string }>(await api('/api/projects'), 'projects')
+  // The gateway answers 200 with `error` when its project query fails (fail-soft like
+  // the list); for the picker that is a failure to say, not an empty list to show.
+  if (body.error) throw new GatewayError(body.error, 502)
+  return body.projects ?? []
 }
 
 /** STT (voice) config Nexus serves from ~/.nexus/config.yaml gateway.stt. */

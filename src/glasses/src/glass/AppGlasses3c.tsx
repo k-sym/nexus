@@ -329,6 +329,19 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
 const readCache = new Map<string, ReadText>()
 let projectsCache: LensProject[] = []
 
+/** Preview-only: seed what Read would show for an item without a gateway — the body
+ *  pages when the source is the body, the "(reading…)" placeholder otherwise — and
+ *  optionally the picker's projects. The HUD fills these itself at runtime. */
+export function seedPreviewRead(item: AttentionItem | undefined, projects: LensProject[] = []): void {
+  readCache.clear()
+  projectsCache = projects
+  if (!item) return
+  const source = readSource(item)
+  if (source === 'body') readCache.set(item.id, { title: item.title, pages: pageLines(wrapToWidth(item.body ?? '', DETAIL_BODY_WRAP), DETAIL_ROWS), state: 'ready' })
+  else if (source) readCache.set(item.id, { title: item.title, pages: ['(reading…)'], state: 'loading' })
+  else readCache.set(item.id, { title: item.title, pages: ['(nothing to read)'], state: 'missing' })
+}
+
 export function AppGlasses3c() {
   const sdkRef = useRef<GlassesSdk | null>(null)
   // index→row map for the current list, so a tap event resolves to a project/session.
@@ -396,11 +409,16 @@ export function AppGlasses3c() {
           // a blip says so and is retried on the next Read.
           const status = e instanceof GatewayError ? e.status : 0
           const text = e instanceof Error ? e.message : String(e)
-          readCache.set(it.id, { title: it.title, pages: pageLines(wrapToWidth(status === 404 ? '(nothing to read)' : text, DETAIL_BODY_WRAP), DETAIL_ROWS), state: status === 409 ? 'refused' : status === 404 ? 'missing' : 'error' })
+          // The gateway's sentence is the page whatever the status (D61): "This item has
+          // no page." says more than a generic placeholder; only an empty message gets one.
+          readCache.set(it.id, { title: it.title, pages: pageLines(wrapToWidth(text.trim() || '(nothing to read)', DETAIL_BODY_WRAP), DETAIL_ROWS), state: status === 409 ? 'refused' : status === 404 ? 'missing' : 'error' })
         })
         .finally(() => { sigRef.current = ''; render() })
     }
+    let filing = false // one filing at a time: two taps a beat apart must not make two Board cards
     const fileTodoOn = async (it: AttentionItem, projectId: string) => {
+      if (filing) return
+      filing = true
       try {
         const res = await fileAttention(it.id, projectId)
         const badge = projectsCache.find((p) => p.id === projectId)?.badge ?? ''
@@ -409,11 +427,13 @@ export function AppGlasses3c() {
       } catch (e) {
         store.setGlassError(`to-do failed: ${e instanceof Error ? e.message : e}`)
       }
+      filing = false
       navRef.current = { ...navRef.current, itemId: null, read: null, picking: false }
       sigRef.current = ''
       render()
     }
     const fileTodo = async (it: AttentionItem) => {
+      if (filing) return
       if (!projectsCache.length) {
         try { projectsCache = await getProjects() } catch (e) { store.setGlassError(`projects: ${e instanceof Error ? e.message : e}`); return }
       }

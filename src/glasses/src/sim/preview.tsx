@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import { getTextWidth, G2_TEXT_LINE_HEIGHT } from 'even-toolkit/pretext'
-import { composeCockpitPage, glass, groupProjects, pickScreen, type Nav, type Screen } from '../glass/AppGlasses3c'
+import { composeCockpitPage, glass, groupProjects, pickScreen, type Nav, type Screen, seedPreviewRead } from '../glass/AppGlasses3c'
 import { attentionEntriesOf } from '../glass/screens/needs'
 import { landsOnNeeds } from '../glass/attention'
 import { applyFixture } from './fixtures'
@@ -154,6 +154,10 @@ export function Preview() {
         picking: override === 'pick',
       }
       if (override === 'auto' && projIdx === 0 && landsOnNeeds(attentionEntriesOf(snap))) nav.home = 'needs' // the HUD's landing rule (D54)
+      // The read screen and the picker read module-level caches the HUD fills at runtime;
+      // seed them from the fixture so the preview shows the body's pages, not the fallback.
+      seedPreviewRead(override === 'read' || override === 'pick' ? (firstItem?.kind === 'item' ? firstItem.item : undefined) : undefined,
+        override === 'pick' ? [{ id: 'p1', slug: 'nexus', name: 'Nexus', badge: 'NXS' }, { id: 'p2', slug: 'baker-internal', name: 'Baker Internal', badge: 'BKR' }] : [])
       const screen = override === 'auto' ? pickScreen(snap, nav) : override
       const sdk = new GlassesSdk()
       const rowsRef = { current: [] as { id: string; label: string }[] }
