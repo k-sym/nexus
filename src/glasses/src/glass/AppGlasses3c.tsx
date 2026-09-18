@@ -13,7 +13,7 @@ import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
 import { answer, decide, getSession, sendSteer, setSteerFocus, resolveAttention } from '../api'
 import { attentionEntriesOf } from './screens/needs'
-import { cardVerbRows, isNoticeItem, kindLabel, landsOnNeeds, needsCounts, needsRow, needsTitle, verbToast } from './attention'
+import { LIST_ITEM_MAX_BYTES, cardVerbRows, clampListItem, isNoticeItem, kindLabel, landsOnNeeds, needsCounts, needsRow, needsTitle, verbToast } from './attention'
 import { matchAnswer, sttConfig } from './stt'
 import { toGlassText } from './markdown'
 import type { GlassSnapshot } from './shared'
@@ -219,13 +219,25 @@ const PROJECT_NAME_W = PROJECT_ROW_W - 24
 const NEEDS_GLYPH_ROW = '★'
 const ITEM_RAIL_W = 214
 
-/** Needs-you row label: glyph · name · reason. The reason (a why, or the hub's reason)
- *  gets up to NEEDS_META_W; the name gets whatever the fixed parts leave. */
-const NEEDS_META_W = 200
+/** Needs-you row label: glyph · name · reason. The binding limit is the firmware's
+ *  63 BYTES per list item, not pixels (a 63-byte row of this font fits the row width),
+ *  so the budget is split in bytes: the reason keeps up to NEEDS_META_BYTES, the name
+ *  gets the rest — clamping the finished label instead would always eat the reason
+ *  first, and "why…" on every row says nothing. */
+const NEEDS_META_BYTES = 20
+const NEEDS_ROW_FIXED = '★     ·   ' // glyph, gaps, separator — measured in bytes below
 function needsRowLabel(r: { glyph: string; name: string; meta: string }): string {
-  const meta = fitToWidth(r.meta, NEEDS_META_W)
-  const budget = PROJECT_NAME_W - Math.ceil(getTextWidth(`${r.glyph}     ·   ${meta}`))
-  return `${r.glyph}  ${fitToWidth(r.name, budget)}   ·   ${meta}`
+  const bytes = (t: string) => new TextEncoder().encode(t).length
+  const fixed = bytes(NEEDS_ROW_FIXED) + bytes(r.glyph) - bytes('★')
+  const meta = clampListItem(r.meta, Math.min(NEEDS_META_BYTES, bytes(r.meta)))
+  const name = clampListItem(r.name, LIST_ITEM_MAX_BYTES - fixed - bytes(meta))
+  return clampListItem(`${r.glyph}  ${name}   ·   ${meta}`)
+}
+
+/** Every native list goes through here: the firmware rejects the whole page when one
+ *  item exceeds 63 bytes (see clampListItem), so no row builder is trusted alone. */
+function listLabels(rows: { id: string; label: string }[]): string[] {
+  return rows.map((r) => clampListItem(r.label))
 }
 
 // A firmware LIST item is a single text run, so the only lever for lining the name
@@ -515,6 +527,13 @@ export function AppGlasses3c() {
     sdk.addEventListener(onEvent)
 
     // --- render loop: rebuild the page when the display signature changes ---
+    // A render can fail before the SDK bridge is ready (the very first page, right
+    // after launch) or on a transient bridge error. The signature is only cleared
+    // on success, so a failure retries on the next store change AND on a short
+    // timer — otherwise a first-page failure leaves the lens blank until something
+    // else happens to change (the 10 s poll moving a session's age), which is
+    // exactly the "nothing on the glasses for minutes" seen after a reinstall.
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
     const render = () => {
       const s = glass(store.getState())
       const nav = navRef.current
@@ -536,12 +555,17 @@ export function AppGlasses3c() {
       sigRef.current = sig
       selIdx = 0 // new screen/content → firmware selection resets to the top; mirror it
       screenRef.current = scr
-      buildAndRender(sdk, scr, s, nav, groups, rowsRef).catch((err) => store.setGlassError(`render failed: ${err}`))
+      console.log(`[cockpit] render ${scr} (${rowsRef.current.length} rows before compose)`)
+      buildAndRender(sdk, scr, s, nav, groups, rowsRef).then(() => console.log(`[cockpit] rendered ${scr}`)).catch((err) => {
+        console.error('[cockpit] render failed', err)
+        sigRef.current = '' // this page did not reach the lens: any change, or the timer, tries again
+        if (!retryTimer) retryTimer = setTimeout(() => { retryTimer = null; render() }, 1000)
+      })
     }
 
     render()
     const unsub = store.subscribe(render)
-    return () => { if (tapTimer) clearTimeout(tapTimer); unsub(); sdk.removeEventListener(onEvent); disposeEngine() }
+    return () => { if (tapTimer) clearTimeout(tapTimer); if (retryTimer) clearTimeout(retryTimer); unsub(); sdk.removeEventListener(onEvent); disposeEngine() }
   }, [])
 
   return null
@@ -610,7 +634,7 @@ export function composeCockpitPage(
     const counts = needsCounts(attentionEntriesOf(s))
     if (counts.actions + counts.notices > 0) rows.unshift({ id: NEEDS_DOOR, label: `${NEEDS_GLYPH_ROW}  Needs you   ·   ${needsTitle(counts)}` })
     rowsRef.current = rows
-    const list = page.addListElement(rows.map((r) => r.label))
+    const list = page.addListElement(listLabels(rows))
     list.setItemWidth(PROJECT_ROW_W)
     list.setIsItemSelectBorderEn(true)
     list.markAsEventCaptureElement()
@@ -631,7 +655,7 @@ export function composeCockpitPage(
     const sessions = group?.sessions ?? []
     const rows = sessions.length ? sessions.map((x) => sessionRow(x, nameW)) : [{ id: '', label: '(no active sessions)' }]
     rowsRef.current = rows
-    const list = page.addListElement(rows.map((r) => r.label))
+    const list = page.addListElement(listLabels(rows))
     list.setItemWidth(rowW)
     list.setIsItemSelectBorderEn(true)
     list.markAsEventCaptureElement()
@@ -684,7 +708,7 @@ export function composeCockpitPage(
         rows.unshift({ id: SPEAK, label: q?.allowOther ? '• Speak a custom answer' : '• Speak answer' })
       }
       rowsRef.current = rows
-      const list = page.addListElement(rows.map((r) => r.label))
+      const list = page.addListElement(listLabels(rows))
       list.setItemWidth(320)
       list.setIsItemSelectBorderEn(true)  // the only frame here, same as the nav lists
       list.markAsEventCaptureElement()
@@ -704,7 +728,7 @@ export function composeCockpitPage(
       ? entries.map((e) => { const r = needsRow(e); return { id: r.id, label: needsRowLabel(r) } })
       : [{ id: '', label: s.connection === 'ok' ? '(nothing needs you)' : s.connection === 'error' ? '(disconnected)' : '(connecting…)' }]
     rowsRef.current = rows
-    const list = page.addListElement(rows.map((r) => r.label))
+    const list = page.addListElement(listLabels(rows))
     list.setItemWidth(PROJECT_ROW_W)
     list.setIsItemSelectBorderEn(true)
     list.markAsEventCaptureElement()
@@ -727,7 +751,7 @@ export function composeCockpitPage(
     const verbs = it ? cardVerbRows(it) : []
     const rows = verbs.length ? verbs.map((v) => ({ id: v.verb, label: `› ${v.label}` })) : [{ id: '', label: '(no lens verbs — use the phone)' }]
     rowsRef.current = rows
-    const list = page.addListElement(rows.map((r) => r.label))
+    const list = page.addListElement(listLabels(rows))
     list.setItemWidth(320)
     list.setIsItemSelectBorderEn(true)
     list.markAsEventCaptureElement()

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { attentionEntries, lensVerbs, itemReason, kindLabel, isNoticeItem, verbToast, needsRow, needsCounts, needsTitle, landsOnNeeds, cardVerbRows } from './attention.ts'
+import { attentionEntries, lensVerbs, itemReason, kindLabel, isNoticeItem, verbToast, needsRow, needsCounts, needsTitle, landsOnNeeds, cardVerbRows, clampListItem, LIST_ITEM_MAX_BYTES } from './attention.ts'
 import type { AttentionItem, SessionSummary } from '../types.ts'
 
 const session = (id: string, needsAttention: boolean): SessionSummary => ({
@@ -69,4 +69,19 @@ test('reason, kind labels and toasts', () => {
   assert.equal(verbToast('dismiss', true), 'Seen')
   assert.equal(verbToast('dismiss'), 'Dismissed')
   assert.equal(verbToast('draft'), 'Drafting a reply…')
+})
+
+test('list items are clamped to the firmware\'s 63 bytes on a code-point boundary, ending in an ellipsis', () => {
+  const bytes = (t: string) => new TextEncoder().encode(t).length
+  const long = '★  Item 14 — mail.waiting with a title long enough to clip at the edge   ·   why for item 14'
+  assert.ok(bytes(long) > LIST_ITEM_MAX_BYTES)
+  const clamped = clampListItem(long)
+  assert.ok(bytes(clamped) <= LIST_ITEM_MAX_BYTES, `${bytes(clamped)} bytes`)
+  assert.ok(clamped.endsWith('…'))
+  assert.ok(clamped.startsWith('★  Item 14'))
+  assert.equal(clampListItem('short row'), 'short row')
+  // a multibyte glyph right at the boundary is dropped whole, never split
+  const edge = 'x'.repeat(60) + '★★'
+  assert.ok(bytes(clampListItem(edge)) <= LIST_ITEM_MAX_BYTES)
+  assert.ok(!clampListItem(edge).includes('\uFFFD'))
 })

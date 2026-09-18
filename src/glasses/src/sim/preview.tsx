@@ -29,7 +29,7 @@ const DIM = 'rgba(99, 255, 155, 0.55)'
 const FONT_PX = 21 // pairs with the 27px LVGL line height
 
 const FIXTURES = [
-  'list', 'needs', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention', 'notice',
+  'list', 'needs', 'needs-many', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention', 'notice',
 ] as const
 
 const SCREENS: Screen[] = ['projects', 'sessions', 'needs', 'item', 'detail', 'approval', 'question']
