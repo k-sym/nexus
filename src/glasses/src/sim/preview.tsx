@@ -16,9 +16,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { GlassesSdk } from 'even-toolkit/sdk-wrapper'
 import { getTextWidth, G2_TEXT_LINE_HEIGHT } from 'even-toolkit/pretext'
-import { composeCockpitPage, glass, groupProjects, pickScreen, type Nav, type Screen } from '../glass/AppGlasses3c'
+import { composeCockpitPage, glass, groupProjects, pickScreen, type Nav, type Screen, seedPreviewRead } from '../glass/AppGlasses3c'
 import { attentionEntriesOf } from '../glass/screens/needs'
-import { landsOnNeeds } from '../glass/attention'
+import { landsOnNeeds, readSource } from '../glass/attention'
 import { applyFixture } from './fixtures'
 import { store } from '../store'
 
@@ -145,7 +145,10 @@ export function Preview() {
       const groups = groupProjects(snap.sessions)
       // Slice 7: `needs` is a home; `item` needs an open card — the preview opens the
       // first partner item of the fixture.
-      const firstItem = attentionEntriesOf(snap).find((e) => e.kind === 'item')
+      // `item`/`pick` open the fixture's first partner item; `read` prefers one whose text
+      // needs no gateway (a body), so the preview shows real pages rather than "(reading…)".
+      const itemEntries = attentionEntriesOf(snap).filter((e): e is Extract<ReturnType<typeof attentionEntriesOf>[number], { kind: 'item' }> => e.kind === 'item')
+      const firstItem = (override === 'read' ? itemEntries.find((e) => readSource(e.item) === 'body') : undefined) ?? itemEntries[0]
       const nav: Nav = {
         home: override === 'needs' ? 'needs' : projIdx > 0 ? 'sessions' : 'projects',
         projIdx,
@@ -154,6 +157,10 @@ export function Preview() {
         picking: override === 'pick',
       }
       if (override === 'auto' && projIdx === 0 && landsOnNeeds(attentionEntriesOf(snap))) nav.home = 'needs' // the HUD's landing rule (D54)
+      // The read screen and the picker read module-level caches the HUD fills at runtime;
+      // seed them from the fixture so the preview shows the body's pages, not the fallback.
+      seedPreviewRead(override === 'read' || override === 'pick' ? (firstItem?.kind === 'item' ? firstItem.item : undefined) : undefined,
+        override === 'pick' ? [{ id: 'p1', slug: 'nexus', name: 'Nexus', badge: 'NXS' }, { id: 'p2', slug: 'baker-internal', name: 'Baker Internal', badge: 'BKR' }] : [])
       const screen = override === 'auto' ? pickScreen(snap, nav) : override
       const sdk = new GlassesSdk()
       const rowsRef = { current: [] as { id: string; label: string }[] }

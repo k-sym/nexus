@@ -289,7 +289,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
   // passes the upstream status through (404 / 409 with the partner's sentence,
   // else 502); reading records nothing; the To-do is stamped `glasses`/`lens`
   // by the wiring. All four are absent (404) on a gateway wired without them.
-  const passThrough = async (reply: { code(n: number): unknown }, run: () => Promise<{ status: number; body: unknown }>) => {
+  const passThrough = async (reply: { code(n: number): unknown }, run: () => Promise<{ status: number; body: unknown }>, fallback = 'Attention read failed.') => {
     try {
       const result = await run();
       reply.code(result.status);
@@ -297,7 +297,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
     } catch (err: any) {
       const status = typeof err?.status === 'number' ? err.status : 502;
       reply.code(status === 400 || status === 404 || status === 409 ? status : 502);
-      return { error: extractDetail(err?.message) || 'Attention read failed.' };
+      return { error: extractDetail(err?.message) || fallback };
     }
   };
   app.get('/api/attention/:id/thread', async (request, reply) => {
@@ -315,7 +315,7 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
     const body = (request.body ?? {}) as { project_id?: unknown };
     if (typeof body.project_id !== 'string' || !body.project_id.trim()) { reply.code(400); return { error: 'project_id (string) is required' }; }
     if (!attention?.file) { reply.code(404); return { error: 'to-do filing not available on this gateway' }; }
-    return passThrough(reply, () => attention.file!(id, body.project_id as string));
+    return passThrough(reply, () => attention.file!(id, body.project_id as string), 'Attention filing failed.');
   });
   app.get('/api/projects', async () => {
     if (!attention?.projects) return { projects: [] as LensProject[] };

@@ -220,6 +220,7 @@ test('the To-do files through the source with the project, refuses a missing pro
     file: async (id, projectId) => {
       filed.push([id, projectId]);
       if (projectId === 'nope') throw Object.assign(new Error('Project not found'), { status: 404 });
+      if (projectId === 'boom') throw new Error('');
       return { status: 200, body: { thread: { id: 'thr_1', project_id: projectId, title: 'IT Standup' }, firstTurn: 'IT Standup\n\n…' } };
     },
     projects: async () => [{ id: 'p1', slug: 'nexus', name: 'Nexus', badge: 'NEX' }],
@@ -234,6 +235,9 @@ test('the To-do files through the source with the project, refuses a missing pro
     assert.deepEqual(filed, [['att_01', 'p1']]);
     const missing = await fed.handle.app.inject({ method: 'POST', url: '/api/attention/att_01/file', payload: { project_id: 'nope' } });
     assert.equal(missing.statusCode, 404);
+    const boom = await fed.handle.app.inject({ method: 'POST', url: '/api/attention/att_01/file', payload: { project_id: 'boom' } });
+    assert.equal(boom.statusCode, 502);
+    assert.equal(boom.json().error, 'Attention filing failed.', 'the filing route names its own failure, not a read');
     assert.deepEqual((await fed.handle.app.inject({ method: 'GET', url: '/api/projects' })).json(), { projects: [{ id: 'p1', slug: 'nexus', name: 'Nexus', badge: 'NEX' }] });
   } finally {
     await fed.cleanup();
