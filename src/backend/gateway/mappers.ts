@@ -190,6 +190,9 @@ export function toLensAttentionItem(row: Record<string, unknown>): LensAttention
     created_at: num(row.created_at),
     snoozed_until: typeof snoozed === 'number' ? snoozed : null,
     category: row.category === 'notice' ? 'notice' : 'action',
+    body: typeof row.body === 'string' && row.body.trim() ? row.body : null,
+    has_page: typeof (row.links as { vault_page?: unknown } | undefined)?.vault_page === 'string' && !!(row.links as { vault_page: string }).vault_page.trim(),
+    suggested_project: typeof row.suggested_project === 'string' && row.suggested_project.trim() ? row.suggested_project : null,
   };
 }
 

@@ -15,6 +15,10 @@ import websocket from '@fastify/websocket';
 import { getDb } from './db.js';
 import { loadConfig, getDbPath, getNexusDir, resolveOpenRouterKey, resolveEnvVars, expandHome } from './config.js';
 import { startGateway } from './gateway/server.js';
+import { lookupAttentionPage } from './attention/page.js';
+import { fileAttentionItem } from './attention/file.js';
+import { daemon } from './memory/client.js';
+import type { LensProject } from './gateway/types.js';
 import { toLensAttentionItem } from './gateway/mappers.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerChatRoutes } from './routes/chat.js';
@@ -432,6 +436,28 @@ async function main() {
           if (!partner) throw Object.assign(new Error('Assistant URL and key must be configured in Settings.'), { status: 400 });
           return partner.resolveAttention(id, { ...body, by: 'glasses', surface: 'lens' });
         },
+        // Slice 8: reads and the To-do from the lens, through the same code the
+        // phone's routes use (attention/page.ts, attention/file.ts).
+        thread: async (id) => {
+          const partner = partnerFromConfig();
+          if (!partner) throw Object.assign(new Error('Assistant URL and key must be configured in Settings.'), { status: 400 });
+          return { status: 200, body: await partner.getAttentionThread(id) };
+        },
+        page: async (id) => {
+          const partner = partnerFromConfig();
+          if (!partner) throw Object.assign(new Error('Assistant URL and key must be configured in Settings.'), { status: 400 });
+          return lookupAttentionPage(partner, async (q) => (await daemon.search(q, { namespace: 'global' }, 5)).items, id);
+        },
+        file: async (id, projectId) => {
+          const partner = partnerFromConfig();
+          if (!partner) throw Object.assign(new Error('Assistant URL and key must be configured in Settings.'), { status: 400 });
+          const result = await fileAttentionItem(db, partner, id, {
+            projectId, by: 'glasses', surface: 'lens', queueFirstTurn: true,
+            warn: (message, detail) => console.warn(`[gateway] ${message}`, detail),
+          });
+          return { status: 200, body: result };
+        },
+        projects: async () => db.prepare('SELECT id, slug, name, badge FROM projects ORDER BY sort_order, name').all() as LensProject[],
       },
       config: {
         enabled: config.gateway.enabled,

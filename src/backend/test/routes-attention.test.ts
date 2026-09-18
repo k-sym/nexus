@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import Fastify from 'fastify';
 import { getDb } from '../db';
 import { createAttentionRoutes } from '../routes/attention';
-import { buildAttentionFirstTurn, attentionThreadTitle } from '../attention/file';
+import { buildAttentionFirstTurn, attentionThreadTitle, fileAttentionItem } from '../attention/file';
+import { createPartnerClient } from '../partner/client';
 import { parseAttentionOrigin } from '../routes/board';
 import type { PartnerFetch } from '../partner/client';
 import type { NexusConfig } from '@nexus/shared';
@@ -418,3 +419,20 @@ test('the to-do first turn and title degrade gracefully for a bare item', () => 
   assert.equal(parseAttentionOrigin('{"kind":"x"}'), null);
 });
 
+
+test('fileAttentionItem with queueFirstTurn persists the composed first turn as the thread\'s first user message (D62, the lens)', async () => {
+  const resolves: any[] = [];
+  const db = dbWithProject();
+  const partner = createPartnerClient({ url: 'http://adapter:8788', key: 'k1', fetchImpl: partnerFor(MEETING, resolves) });
+  const result = await fileAttentionItem(db, partner, 'att_meet', { projectId: 'proj-1', by: 'glasses', surface: 'lens', queueFirstTurn: true });
+  const msgs = db.prepare('SELECT role, content, message_type FROM chat_messages WHERE thread_id = ? ORDER BY created_at').all(result.thread.id) as Array<{ role: string; content: string; message_type: string }>;
+  assert.equal(msgs.length, 1);
+  assert.equal(msgs[0].role, 'user');
+  assert.equal(msgs[0].content, result.firstTurn);
+  assert.match(msgs[0].content, /^IT Standup and Review — Thu 17 Sep 09:30/);
+  assert.deepEqual(resolves, [{ verb: 'dismiss', by: 'glasses', surface: 'lens', result: { filed_as: result.thread.id } }]);
+  // The phone's path leaves the chat to the client: no message queued.
+  const quiet = await fileAttentionItem(db, partner, 'att_meet', { projectId: 'proj-1', by: 'ios', surface: 'phone' });
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM chat_messages WHERE thread_id = ?').get(quiet.thread.id) as { c: number }).c, 0);
+  db.close();
+});

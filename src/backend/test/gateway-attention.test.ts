@@ -61,8 +61,9 @@ test('toLensAttentionItem keeps only what the hero shows and tolerates a partial
     id: 'att_01', kind: 'mail.waiting', title: ROW.title, why: ROW.why, status: 'open',
     proposed_verb: 'draft', verbs: ['draft', 'open', 'snooze', 'dismiss'], lens_verbs: ['draft', 'snooze', 'dismiss'],
     alert_seq: 4, created_at: 1789470000, snoozed_until: null, category: 'action',
+    body: null, has_page: false, suggested_project: null,
   });
-  assert.ok(!('body' in lens) && !('links' in lens) && !('source' in lens));
+  assert.ok(!('links' in lens) && !('source' in lens) && !('events' in lens), 'the lens gets the body (D58) but never links, source or the ledger');
   const partial = toLensAttentionItem({ id: 'x', verbs: ['snooze', 7], lens_verbs: 'nope' });
   assert.equal(partial.kind, 'unknown');
   assert.deepEqual(partial.verbs, ['snooze']);
@@ -70,6 +71,12 @@ test('toLensAttentionItem keeps only what the hero shows and tolerates a partial
   assert.equal(partial.alert_seq, 0);
   assert.equal(partial.category, 'action', 'absent category = action');
   assert.equal(toLensAttentionItem({ ...ROW, kind: 'night.summary', category: 'notice' }).category, 'notice');
+  // Slice 8 (D58): what Read needs rides on the item; a blank body is null, a page is a flag.
+  const rich = toLensAttentionItem({ ...ROW, kind: 'meeting.prep', body: 'Prep pack…', links: { vault_page: 'Meeting prep: IT Standup (2026-09-17)' }, suggested_project: 'ssuk' });
+  assert.equal(rich.body, 'Prep pack…');
+  assert.equal(rich.has_page, true);
+  assert.equal(rich.suggested_project, 'ssuk');
+  assert.equal(toLensAttentionItem({ ...ROW, body: '   ' }).body, null);
 });
 
 test('GET /api/attention serves the source in lens shape and is empty without one', async () => {
@@ -164,5 +171,71 @@ test('the partner refusing a lens verb reaches the glasses as 409 with its sente
     assert.equal(broken.statusCode, 502);
   } finally {
     await cleanup();
+  }
+});
+
+// Slice 8 (D59/D62/D63): the reads and the To-do, each passing the upstream status through.
+test('thread and page reads pass 200 / 404 / 409 through and are absent on a gateway wired without them', async () => {
+  const bare = setup({ list: async () => [], resolve: async () => ({ status: 200, body: {} }) });
+  try {
+    assert.equal((await bare.handle.app.inject({ method: 'GET', url: '/api/attention/att_01/thread' })).statusCode, 404);
+    assert.equal((await bare.handle.app.inject({ method: 'GET', url: '/api/attention/att_01/page' })).statusCode, 404);
+    assert.deepEqual((await bare.handle.app.inject({ method: 'GET', url: '/api/projects' })).json(), { projects: [] });
+  } finally {
+    await bare.cleanup();
+  }
+  const MESSAGE = { item_id: 'att_01', messages: [{ account: 'ssuk', id: 'm', thread: 'c', from: 'jane@x.com', from_name: 'Jane', subject: 'Re: PO', date: '2026-09-17T12:00:00Z', body: 'Hi Keith, any news?' }] };
+  const fed = setup({
+    list: async () => [],
+    resolve: async () => ({ status: 200, body: {} }),
+    thread: async (id) => {
+      if (id === 'att_meet') throw Object.assign(new Error(JSON.stringify({ detail: 'thread applies to mail items only' })), { status: 409 });
+      if (id === 'nope') throw Object.assign(new Error(JSON.stringify({ detail: 'unknown item nope' })), { status: 404 });
+      return { status: 200, body: MESSAGE };
+    },
+    page: async (id) => (id === 'att_meet' ? { status: 200, body: { title: 'Meeting prep', body: '# Prep', item_id: id } } : { status: 404, body: { error: 'This item has no page.' } }),
+  });
+  try {
+    const ok = await fed.handle.app.inject({ method: 'GET', url: '/api/attention/att_01/thread' });
+    assert.equal(ok.statusCode, 200);
+    assert.equal(ok.json().messages[0].from_name, 'Jane');
+    const refused = await fed.handle.app.inject({ method: 'GET', url: '/api/attention/att_meet/thread' });
+    assert.equal(refused.statusCode, 409);
+    assert.equal(refused.json().error, 'thread applies to mail items only');
+    assert.equal((await fed.handle.app.inject({ method: 'GET', url: '/api/attention/nope/thread' })).statusCode, 404);
+    const page = await fed.handle.app.inject({ method: 'GET', url: '/api/attention/att_meet/page' });
+    assert.equal(page.statusCode, 200);
+    assert.equal(page.json().body, '# Prep');
+    assert.equal((await fed.handle.app.inject({ method: 'GET', url: '/api/attention/att_01/page' })).statusCode, 404);
+  } finally {
+    await fed.cleanup();
+  }
+});
+
+test('the To-do files through the source with the project, refuses a missing project_id first, and lists projects', async () => {
+  const filed: Array<[string, string]> = [];
+  const fed = setup({
+    list: async () => [],
+    resolve: async () => ({ status: 200, body: {} }),
+    file: async (id, projectId) => {
+      filed.push([id, projectId]);
+      if (projectId === 'nope') throw Object.assign(new Error('Project not found'), { status: 404 });
+      return { status: 200, body: { thread: { id: 'thr_1', project_id: projectId, title: 'IT Standup' }, firstTurn: 'IT Standup\n\n…' } };
+    },
+    projects: async () => [{ id: 'p1', slug: 'nexus', name: 'Nexus', badge: 'NEX' }],
+  });
+  try {
+    const bad = await fed.handle.app.inject({ method: 'POST', url: '/api/attention/att_01/file', payload: {} });
+    assert.equal(bad.statusCode, 400);
+    assert.deepEqual(filed, []);
+    const ok = await fed.handle.app.inject({ method: 'POST', url: '/api/attention/att_01/file', payload: { project_id: 'p1' } });
+    assert.equal(ok.statusCode, 200);
+    assert.equal(ok.json().thread.id, 'thr_1');
+    assert.deepEqual(filed, [['att_01', 'p1']]);
+    const missing = await fed.handle.app.inject({ method: 'POST', url: '/api/attention/att_01/file', payload: { project_id: 'nope' } });
+    assert.equal(missing.statusCode, 404);
+    assert.deepEqual((await fed.handle.app.inject({ method: 'GET', url: '/api/projects' })).json(), { projects: [{ id: 'p1', slug: 'nexus', name: 'Nexus', badge: 'NEX' }] });
+  } finally {
+    await fed.cleanup();
   }
 });

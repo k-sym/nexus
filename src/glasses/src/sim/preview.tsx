@@ -29,10 +29,10 @@ const DIM = 'rgba(99, 255, 155, 0.55)'
 const FONT_PX = 21 // pairs with the 27px LVGL line height
 
 const FIXTURES = [
-  'list', 'needs', 'needs-many', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention', 'notice',
+  'list', 'needs', 'needs-many', 'read', 'detail-short', 'detail-long', 'detail-working', 'approval', 'question', 'question-multi', 'attention', 'notice',
 ] as const
 
-const SCREENS: Screen[] = ['projects', 'sessions', 'needs', 'item', 'detail', 'approval', 'question']
+const SCREENS: Screen[] = ['projects', 'sessions', 'needs', 'item', 'read', 'pick', 'detail', 'approval', 'question']
 
 /** Serialized element shape — the subset of the SDK payload the preview draws. */
 interface Painted {
@@ -149,7 +149,9 @@ export function Preview() {
       const nav: Nav = {
         home: override === 'needs' ? 'needs' : projIdx > 0 ? 'sessions' : 'projects',
         projIdx,
-        itemId: override === 'item' && firstItem ? firstItem.id : null,
+        itemId: (override === 'item' || override === 'read' || override === 'pick') && firstItem ? firstItem.id : null,
+        read: override === 'read' ? { page: 0 } : null,
+        picking: override === 'pick',
       }
       if (override === 'auto' && projIdx === 0 && landsOnNeeds(attentionEntriesOf(snap))) nav.home = 'needs' // the HUD's landing rule (D54)
       const screen = override === 'auto' ? pickScreen(snap, nav) : override

@@ -11,24 +11,32 @@ import { GlassesSdk, type GlassesPage } from 'even-toolkit/sdk-wrapper'
 import { STTEngine } from 'even-toolkit/stt'
 import { getTextWidth } from 'even-toolkit/pretext'
 import { store } from '../store'
-import { answer, decide, getSession, sendSteer, setSteerFocus, resolveAttention } from '../api'
+import { answer, decide, getSession, sendSteer, setSteerFocus, resolveAttention, getAttentionThread, getAttentionPage, fileAttention, getProjects, GatewayError } from '../api'
 import { attentionEntriesOf } from './screens/needs'
-import { LIST_ITEM_MAX_BYTES, cardVerbRows, clampListItem, isNoticeItem, kindLabel, landsOnNeeds, needsCounts, needsRow, needsTitle, verbToast } from './attention'
+import { LIST_ITEM_MAX_BYTES, cardVerbRows, clampListItem, isNoticeItem, kindLabel, landsOnNeeds, messageHeader, needsCounts, needsRow, needsTitle, pageLines, readSource, todoProject, verbToast } from './attention'
 import { matchAnswer, sttConfig } from './stt'
 import { toGlassText } from './markdown'
 import type { GlassSnapshot } from './shared'
-import type { Approval, AskUserQuestionInput, SessionSummary, TranscriptEvent } from '../types'
+import type { Approval, AskUserQuestionInput, AttentionItem, LensProject, SessionSummary, TranscriptEvent } from '../types'
 
 // Phase 3 nav: the flat session list is replaced by a projects → sessions drill-down
 // (the locked firmware-text design). approval / question still hard-take over the HUD
 // from wherever you are; detail is a session opened from the sessions list; `needs` is
 // the Needs-you list (a third home) and `item` its card (slice 7).
-export type Screen = 'approval' | 'question' | 'detail' | 'projects' | 'sessions' | 'needs' | 'item'
+export type Screen = 'approval' | 'question' | 'detail' | 'projects' | 'sessions' | 'needs' | 'item' | 'read' | 'pick'
 
 // Where the "home" nav sits when nothing is taking over the HUD. `detail` is not
 // stored here — it's implied by store.activeSessionId (so it survives store updates
 // and reuses the existing steer/paging machinery). `itemId` is the open item card.
-export interface Nav { home: 'projects' | 'sessions' | 'needs'; projIdx: number; itemId: string | null }
+export interface Nav {
+  home: 'projects' | 'sessions' | 'needs'; projIdx: number; itemId: string | null
+  /** Slice 8: the open card's read screen (page index) and the To-do project picker. */
+  read: { page: number } | null; picking: boolean
+}
+const READ_ROW = '__read__', TODO_ROW = '__todo__'
+
+/** What the read screen shows for an item, once fetched (D59/D61). */
+export interface ReadText { title: string; pages: string[]; state: 'loading' | 'ready' | 'refused' | 'missing' | 'error' }
 const NEEDS_DOOR = '__needs__' // the Projects list's first row when something needs you (D55)
 
 const BORDER = 0xffffff as never // maps to green on the monochrome lens
@@ -134,6 +142,8 @@ function submitOrAdvance(a: Approval, value: string) {
 export function pickScreen(s: GlassSnapshot, nav: Nav): Screen {
   if (gates(s).length > 0) return 'approval'
   if (questions(s).length > 0) return 'question'
+  if (nav.itemId && nav.read) return 'read'
+  if (nav.itemId && nav.picking) return 'pick'
   if (nav.itemId) return 'item'
   if (s.activeSessionId) return 'detail'
   return nav.home // 'projects' (home) | 'sessions' (drilled into a project) | 'needs' (the list)
@@ -309,8 +319,15 @@ function signature(s: GlassSnapshot, scr: Screen, nav: Nav, groups: ProjGroup[])
   if (scr === 'question') { const a = questions(s)[0]; const q = a ? currentQuestion(a, s) : null; return `q|${a?.id}|${q ? `${q.idx}/${q.total}` : ''}|${s.listening ? 'L' : ''}|${s.interim}|${s.error ?? ''}|${q ? q.options.join('~') : ''}|${q?.allowOther ? 'O' : ''}` }
   if (scr === 'needs') return `needs|${s.connection}|${s.error ?? ''}|${attentionEntriesOf(s).map((e) => { const r = needsRow(e); return `${r.id}${r.meta}${r.name}` }).join('~')}`
   const it = s.attention?.find((i) => i.id === nav.itemId)
-  return `item|${nav.itemId}|${it ? `${it.title}|${it.why}|${cardVerbRows(it).map((r) => r.verb).join(',')}` : 'gone'}|${s.error ?? ''}`
+  if (scr === 'read') { const r = readCache.get(nav.itemId ?? ''); return `read|${nav.itemId}|${r?.state ?? 'none'}|${r?.pages.length ?? 0}|${nav.read?.page ?? 0}|${s.error ?? ''}` }
+  if (scr === 'pick') return `pick|${nav.itemId}|${projectsCache.map((p) => p.id).join(',')}|${s.error ?? ''}`
+  return `item|${nav.itemId}|${it ? `${it.title}|${it.why}|${readSource(it) ?? '-'}|${cardVerbRows(it).map((r) => r.verb).join(',')}` : 'gone'}|${s.error ?? ''}`
 }
+
+// Slice 8: what Read fetched per item (cleared when the item leaves the store), and
+// the project list for the To-do picker. Module-level so the signature can read them.
+const readCache = new Map<string, ReadText>()
+let projectsCache: LensProject[] = []
 
 export function AppGlasses3c() {
   const sdkRef = useRef<GlassesSdk | null>(null)
@@ -320,7 +337,7 @@ export function AppGlasses3c() {
   const sigRef = useRef<string>('')
   // Home nav position (projects list, or drilled into one project's sessions). Detail
   // is implied by store.activeSessionId, so it isn't tracked here.
-  const navRef = useRef<Nav>({ home: 'projects', projIdx: 0, itemId: null })
+  const navRef = useRef<Nav>({ home: 'projects', projIdx: 0, itemId: null, read: null, picking: false })
   // Landing (D54): once, on the first connected snapshot, open on the Needs-you list
   // when something is actionable; otherwise Projects. Never re-evaluated after.
   const landedRef = useRef(false)
@@ -352,6 +369,60 @@ export function AppGlasses3c() {
       } catch (e) { store.setGlassError(`load failed: ${e}`) }
     }
     const closeSession = () => { store.closeDetail(); setSteerFocus(null).catch(() => { /* best-effort unfocus */ }) }
+
+    // --- Slice 8: Read (D59/D61) and To-do (D62) from the item card ---
+    const pageRead = (delta: number) => {
+      const id = navRef.current.itemId; const r = id ? readCache.get(id) : undefined
+      if (!id || !r || !navRef.current.read) return
+      const next = Math.max(0, Math.min(r.pages.length - 1, navRef.current.read.page + delta))
+      if (next !== navRef.current.read.page) { navRef.current = { ...navRef.current, read: { page: next } }; render() }
+    }
+    const openRead = (it: AttentionItem) => {
+      navRef.current = { ...navRef.current, read: { page: 0 } }
+      const cached = readCache.get(it.id)
+      if (cached && cached.state !== 'error') { render(); return }
+      const source = readSource(it)
+      if (!source) { readCache.set(it.id, { title: it.title, pages: ['(nothing to read)'], state: 'missing' }); render(); return }
+      if (source === 'body') { readCache.set(it.id, { title: it.title, pages: pageLines(wrapToWidth(it.body ?? '', DETAIL_BODY_WRAP), DETAIL_ROWS), state: 'ready' }); render(); return }
+      readCache.set(it.id, { title: it.title, pages: ['(reading…)'], state: 'loading' })
+      render()
+      const fetchText = source === 'thread'
+        ? getAttentionThread(it.id).then((m) => `${messageHeader(m)}\n${m.body}`)
+        : getAttentionPage(it.id).then((p) => p.body)
+      fetchText
+        .then((text) => readCache.set(it.id, { title: it.title, pages: pageLines(wrapToWidth(text, DETAIL_BODY_WRAP), DETAIL_ROWS), state: 'ready' }))
+        .catch((e) => {
+          // The partner's sentence is the page (a Google mailbox, no page in the vault);
+          // a blip says so and is retried on the next Read.
+          const status = e instanceof GatewayError ? e.status : 0
+          const text = e instanceof Error ? e.message : String(e)
+          readCache.set(it.id, { title: it.title, pages: pageLines(wrapToWidth(status === 404 ? '(nothing to read)' : text, DETAIL_BODY_WRAP), DETAIL_ROWS), state: status === 409 ? 'refused' : status === 404 ? 'missing' : 'error' })
+        })
+        .finally(() => { sigRef.current = ''; render() })
+    }
+    const fileTodoOn = async (it: AttentionItem, projectId: string) => {
+      try {
+        const res = await fileAttention(it.id, projectId)
+        const badge = projectsCache.find((p) => p.id === projectId)?.badge ?? ''
+        store.removeAttention(it.id)
+        store.setGlassError(`To-do filed${badge ? ` · ${badge}` : ''} — ${res.thread.title}`.slice(0, 60))
+      } catch (e) {
+        store.setGlassError(`to-do failed: ${e instanceof Error ? e.message : e}`)
+      }
+      navRef.current = { ...navRef.current, itemId: null, read: null, picking: false }
+      sigRef.current = ''
+      render()
+    }
+    const fileTodo = async (it: AttentionItem) => {
+      if (!projectsCache.length) {
+        try { projectsCache = await getProjects() } catch (e) { store.setGlassError(`projects: ${e instanceof Error ? e.message : e}`); return }
+      }
+      const match = todoProject(it.suggested_project, projectsCache)
+      if (match) { await fileTodoOn(it, match.id); return }
+      navRef.current = { ...navRef.current, picking: true }
+      sigRef.current = ''
+      render()
+    }
     const allow = (id: string) => { store.removeApproval(id); decide(id, 'allow').catch((e) => store.setGlassError(`allow failed: ${e}`)) }
     const deny = (id: string) => { store.removeApproval(id); decide(id, 'deny').catch((e) => store.setGlassError(`deny failed: ${e}`)) }
     // Answer the current question by choosing a listed option — advances to the next
@@ -448,14 +519,40 @@ export function AppGlasses3c() {
           break
         }
         case 'item': {
-          // The selected row is one of the item's lens verbs: run it and return to the list.
+          // Rows: Read (D59) → the read screen; To-do (D62) → file, or the picker; a
+          // lens verb → run it and return to the list.
           const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined
           const id = navRef.current.itemId
           const it = id ? s.attention?.find((i) => i.id === id) : undefined
           if (!r?.id || !it) break
+          if (r.id === READ_ROW) { openRead(it); break }
+          if (r.id === TODO_ROW) { void fileTodo(it); break }
           resolveLens(it.id, r.id as Parameters<typeof resolveLens>[1], isNoticeItem(it))
           navRef.current = { ...navRef.current, itemId: null }
           render()
+          break
+        }
+        case 'read': {
+          // Tap = next page; on a notice's last page, tap = Seen (D60).
+          const id = navRef.current.itemId
+          const it = id ? s.attention?.find((i) => i.id === id) : undefined
+          const r = id ? readCache.get(id) : undefined
+          const page = navRef.current.read?.page ?? 0
+          if (!it || !r) break
+          if (page + 1 < r.pages.length) { navRef.current = { ...navRef.current, read: { page: page + 1 } }; render(); break }
+          if (isNoticeItem(it) && cardVerbRows(it).some((v) => v.verb === 'dismiss')) {
+            resolveLens(it.id, 'dismiss', true)
+            navRef.current = { ...navRef.current, itemId: null, read: null }
+            render()
+          }
+          break
+        }
+        case 'pick': {
+          const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined
+          const id = navRef.current.itemId
+          const it = id ? s.attention?.find((i) => i.id === id) : undefined
+          if (!r?.id || !it) break
+          void fileTodoOn(it, r.id)
           break
         }
         case 'sessions': { const r = typeof idx === 'number' ? rowsRef.current[idx] : undefined; if (r?.id) openSession(r.id); break }
@@ -489,6 +586,8 @@ export function AppGlasses3c() {
         case 'sessions': { navRef.current = { ...navRef.current, home: 'projects' }; render(); break } // back to projects home
         case 'needs': { store.setGlassError(null); navRef.current = { ...navRef.current, home: 'projects' }; render(); break }    // back to projects home
         case 'item': { navRef.current = { ...navRef.current, itemId: null }; render(); break }         // back to the list
+        case 'read': { navRef.current = { ...navRef.current, read: null }; render(); break }           // back to the card
+        case 'pick': { navRef.current = { ...navRef.current, picking: false }; render(); break }       // back to the card
         case 'detail': { if (s.steering) { cancelSteer(); break } closeSession(); break } // 2tap: stop steering, else leave
         case 'approval': { const a = gates(s)[0]; if (a) deny(a.id); break }
         case 'question': {
@@ -517,8 +616,8 @@ export function AppGlasses3c() {
       const nRows = rowsRef.current.length || 1
       // On the detail screen a scroll pages through the latest reply; elsewhere it
       // moves the native list selection.
-      if (et === 1) { if (screenRef.current === 'detail') { pageDetail(-1); return } selIdx = Math.max(0, selIdx - 1); return } // scroll up
-      if (et === 2) { if (screenRef.current === 'detail') { pageDetail(1); return } selIdx = Math.min(nRows - 1, selIdx + 1); return } // scroll down
+      if (et === 1) { if (screenRef.current === 'detail') { pageDetail(-1); return } if (screenRef.current === 'read') { pageRead(-1); return } selIdx = Math.max(0, selIdx - 1); return } // scroll up
+      if (et === 2) { if (screenRef.current === 'detail') { pageDetail(1); return } if (screenRef.current === 'read') { pageRead(1); return } selIdx = Math.min(nRows - 1, selIdx + 1); return } // scroll down
       // Single click: prefer the firmware's row index; fall back to our tracked one.
       pendingIdx = le && typeof le.currentSelectItemIndex === 'number' ? le.currentSelectItemIndex : selIdx
       if (tapTimer) clearTimeout(tapTimer)
@@ -543,7 +642,7 @@ export function AppGlasses3c() {
       // A drilled-into project can vanish (session ended, list refreshed) — fall home.
       if (nav.home === 'sessions' && !groups[nav.projIdx]) { nav.home = 'projects'; nav.projIdx = 0 }
       // An open card whose item left the store (resolved elsewhere, expired) — fall back to the list.
-      if (nav.itemId && !s.attention?.some((i) => i.id === nav.itemId)) nav.itemId = null
+      if (nav.itemId && !s.attention?.some((i) => i.id === nav.itemId)) { readCache.delete(nav.itemId); nav.itemId = null; nav.read = null; nav.picking = false }
       // Landing (D54): decided once, on the first snapshot that is connected AND has
       // the first attention answer — HubFeed marks `ok` before that fetch returns,
       // so an earlier decision would only ever see the sessions.
@@ -752,7 +851,12 @@ export function composeCockpitPage(
     rail.setSize((z) => { z.setWidth(ITEM_RAIL_W + 8).setHeight(BODY_H) })
 
     const verbs = it ? cardVerbRows(it) : []
-    const rows = verbs.length ? verbs.map((v) => ({ id: v.verb, label: `› ${v.label}` })) : [{ id: '', label: '(no lens verbs — use the phone)' }]
+    const rows: { id: string; label: string }[] = []
+    // Read first whenever there is something to read (D59); the verbs; then To-do (D62).
+    if (it && readSource(it)) rows.push({ id: READ_ROW, label: readSource(it) === 'thread' ? '› Read the message' : readSource(it) === 'page' ? '› Read the page' : '› Read' })
+    rows.push(...verbs.map((v) => ({ id: v.verb, label: `› ${v.label}` })))
+    if (it) rows.push({ id: TODO_ROW, label: '› To-do' })
+    if (!rows.length) rows.push({ id: '', label: '(no lens verbs — use the phone)' })
     rowsRef.current = rows
     const list = page.addListElement(listLabels(rows))
     list.setItemWidth(320)
@@ -760,6 +864,39 @@ export function composeCockpitPage(
     list.markAsEventCaptureElement()
     list.setPosition((p) => { p.setX(236).setY(BODY_Y) })
     list.setSize((z) => { z.setWidth(330).setHeight(BODY_H) })
+  } else if (scr === 'read') {
+    // The read screen (D59): the item's title in the header bar with k/N, the text
+    // wrapped to the lens width, seven rows a page. Scroll pages; tap = next page (a
+    // notice's last page: Seen); 2tap = back to the card. Reading records nothing.
+    rowsRef.current = []
+    const it = s.attention?.find((i) => i.id === nav.itemId)
+    const r = readCache.get(nav.itemId ?? '')
+    const pages = r?.pages.length ? r.pages : ['(nothing to read)']
+    const pg = Math.min(Math.max(0, nav.read?.page ?? 0), pages.length - 1)
+    const last = pg === pages.length - 1
+    const notice = !!it && isNoticeItem(it)
+    const hint = last && notice && r?.state === 'ready' ? '• seen   •• back' : last ? '•• back' : '• next   •• back'
+    const budget = headerLabelBudget(hint)
+    const tag = pages.length > 1 ? `   ${pg + 1}/${pages.length}` : ''
+    addHeaderBar(page, `‹ ${fitToWidth(r?.title ?? it?.title ?? 'item', budget - Math.ceil(getTextWidth(`‹ ${tag}`)))}${tag}`, hint)
+    const body = page.addTextElement(pages[pg] + (s.error ? `\n! ${s.error}` : ''))
+    body.markAsEventCaptureElement()
+    body.setPosition((p) => { p.setX(DETAIL_BODY_X).setY(BODY_Y) })
+    body.setSize((z) => { z.setWidth(DETAIL_BODY_EL_W).setHeight(BODY_H) })
+  } else if (scr === 'pick') {
+    // The To-do project picker (D62): only when the producer's suggestion matches no
+    // project. A native list of badge · name; tap files there; 2tap = back to the card.
+    addHeaderBar(page, 'TO-DO   ·   which project?', '• file   •• back')
+    const rows = projectsCache.length
+      ? projectsCache.map((p) => ({ id: p.id, label: `${p.badge || '·'}   ${p.name}` }))
+      : [{ id: '', label: '(no projects)' }]
+    rowsRef.current = rows
+    const list = page.addListElement(listLabels(rows))
+    list.setItemWidth(PROJECT_ROW_W)
+    list.setIsItemSelectBorderEn(true)
+    list.markAsEventCaptureElement()
+    list.setPosition((p) => { p.setX(18).setY(BODY_Y) })
+    list.setSize((z) => { z.setWidth(PROJECT_ROW_W + 4).setHeight(BODY_H) })
   } else {
     // detail = the focused session, in the locked header-bar layout:
     //   • header bar (the ONE deliberate border): session name left, page k/N inline.

@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify';
-import { randomUUID } from 'node:crypto';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
 import { createPartnerClient, type PartnerAttentionResolveBody, type PartnerFetch } from '../partner/client.js';
 import { daemon, type DaemonRecallItem } from '../memory/client.js';
-import { attentionOriginJson, attentionThreadTitle, buildAttentionFirstTurn, type FiledAttentionItem } from '../attention/file.js';
-import type { ChatThread, NexusConfig, OriginSessionResult } from '@nexus/shared';
+import { FileAttentionError, fileAttentionItem } from '../attention/file.js';
+import { lookupAttentionPage } from '../attention/page.js';
+import type { NexusConfig, OriginSessionResult } from '@nexus/shared';
 
 interface AttentionRoutesOptions {
   fetchImpl?: PartnerFetch;
@@ -74,33 +74,10 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
-      let item: FiledAttentionItem;
-      try {
-        item = (await partner.getAttention(id)) as FiledAttentionItem;
-      } catch (err: any) {
-        reply.code(err?.status === 404 ? 404 : 502);
-        return { error: extractDetail(err?.message) || 'Attention fetch failed.' };
-      }
-      const title = item?.links?.vault_page?.trim();
-      if (!title) {
-        reply.code(404);
-        return { error: 'This item has no page.' };
-      }
       const search = options.searchPages ?? (async (q: string) => (await daemon.search(q, { namespace: 'global' }, 5)).items);
-      let hits: Array<Pick<DaemonRecallItem, 'id' | 'title' | 'body'>>;
-      try {
-        hits = await search(title);
-      } catch (err: any) {
-        reply.code(502);
-        return { error: `Memory daemon unavailable — ${err?.message || 'search failed'}` };
-      }
-      const wanted = title.toLowerCase();
-      const page = hits.find((h) => (h.title ?? '').trim().toLowerCase() === wanted) ?? null;
-      if (!page || !page.body) {
-        reply.code(404);
-        return { error: `No page titled "${title}" in the vault.` };
-      }
-      return { title: page.title ?? title, body: page.body, memory_id: page.id, item_id: id };
+      const result = await lookupAttentionPage(partner, search, id);
+      reply.code(result.status);
+      return result.body;
     });
 
     // The message behind a mail item (#477 slice 6d, design D40/D41): the
@@ -140,54 +117,22 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
         reply.code(400);
         return { error: 'project_id (string) is required' };
       }
-      const db = fastify.db;
-      const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(body.project_id.trim()) as { id: string } | undefined;
-      if (!project) {
-        reply.code(404);
-        return { error: 'Project not found' };
-      }
       const partner = client();
       if (!partner) {
         reply.code(400);
         return { error: 'Assistant URL and key must be configured in Settings.' };
       }
-      let item: FiledAttentionItem;
       try {
-        item = (await partner.getAttention(id)) as FiledAttentionItem;
+        return await fileAttentionItem(fastify.db, partner, id, {
+          projectId: body.project_id,
+          by: typeof body.by === 'string' && body.by.trim() ? body.by : 'nexus',
+          surface: typeof body.surface === 'string' && body.surface.trim() ? body.surface : undefined,
+          warn: (message, detail) => fastify.log?.warn?.(detail, message),
+        });
       } catch (err: any) {
-        reply.code(err?.status === 404 ? 404 : 502);
-        return { error: extractDetail(err?.message) || 'Attention fetch failed.' };
+        reply.code(err instanceof FileAttentionError ? err.status : 502);
+        return { error: err?.message || 'Filing failed.' };
       }
-      if (!item?.id) {
-        reply.code(502);
-        return { error: 'The partner returned no item.' };
-      }
-
-      const nowIso = new Date().toISOString();
-      const thread: ChatThread = {
-        id: randomUUID(),
-        project_id: project.id,
-        title: attentionThreadTitle(item),
-        created_at: nowIso,
-        updated_at: nowIso,
-        archived_at: null,
-        attention_item: attentionOriginJson(item),
-      };
-      db.prepare(
-        'INSERT INTO chat_threads (id, project_id, title, created_at, updated_at, archived_at, attention_item) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(thread.id, thread.project_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at, thread.attention_item);
-
-      const by = typeof body.by === 'string' && body.by.trim() ? body.by.trim().slice(0, 40) : 'nexus';
-      const surface = typeof body.surface === 'string' && body.surface.trim() ? body.surface.trim().slice(0, 16) : undefined;
-      try {
-        // D34: the partner's ledger records what the item became (the thread id).
-        await partner.resolveAttention(id, { verb: 'dismiss', by, ...(surface ? { surface } : {}), result: { filed_as: thread.id } });
-      } catch (err: any) {
-        // 409 = already resolved; anything else is the partner's problem, not the to-do's.
-        fastify.log?.warn?.({ id, status: err?.status }, 'attention file: dismiss refused');
-      }
-
-      return { thread, firstTurn: buildAttentionFirstTurn(item) };
     });
 
     // A write: the person who tapped is owed the truth. The partner answers 202
