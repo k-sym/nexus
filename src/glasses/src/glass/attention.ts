@@ -142,6 +142,45 @@ export function clampListItem(text: string, maxBytes = LIST_ITEM_MAX_BYTES): str
   return out.trimEnd() + ell
 }
 
+/** What Read shows for an item (D59), in order: a mail item's latest message
+ *  (fetched), a vault page (fetched), the body the partner already sent. */
+export type ReadSource = 'thread' | 'page' | 'body'
+export function readSource(item: Pick<AttentionItem, 'kind' | 'has_page' | 'body'>): ReadSource | null {
+  if (item.kind.startsWith('mail.')) return 'thread'
+  if (item.has_page) return 'page'
+  if (item.body && item.body.trim()) return 'body'
+  return null
+}
+
+/** Split wrapped lines into pages of `rows` (the detail card's seven). */
+export function pageLines(lines: string[], rows: number): string[] {
+  const pages: string[] = []
+  for (let i = 0; i < lines.length; i += rows) pages.push(lines.slice(i, i + rows).join('\n'))
+  return pages.length ? pages : ['']
+}
+
+/** The project a To-do lands on (D62): the producer's suggestion matched against
+ *  slug or badge, case-insensitively; null means the lens must ask. */
+export function todoProject<P extends { slug: string; badge: string }>(suggested: string | null | undefined, projects: P[]): P | null {
+  const want = (suggested ?? '').trim().toLowerCase()
+  if (!want) return null
+  return projects.find((p) => p.slug.toLowerCase() === want || p.badge.toLowerCase() === want) ?? null
+}
+
+/** First line of a mail message on the read screen: who and when. */
+export function messageHeader(m: { from?: string; from_name?: string; date?: string }, now = Date.now()): string {
+  const who = m.from_name?.trim() || m.from?.trim() || 'someone'
+  const when = m.date ? ageOf(Date.parse(m.date), now) : ''
+  return when ? `From ${who} · ${when}` : `From ${who}`
+}
+function ageOf(ms: number, now: number): string {
+  if (!Number.isFinite(ms)) return ''
+  const s = Math.max(0, now - ms) / 1000
+  if (s < 3600) return `${Math.max(1, Math.floor(s / 60))}m ago`
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`
+  return `${Math.floor(s / 86400)}d ago`
+}
+
 /** One-line acknowledgement after a lens verb was sent. A notice's dismiss
  *  was offered as "Seen" (D36), so its toast says the same. */
 export function verbToast(verb: AttentionVerb, notice = false): string {

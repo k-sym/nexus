@@ -109,5 +109,18 @@ export interface AttentionItem {
   snoozed_until: number | null
   /** `notice` (a glance is "seen") or `action`; an older gateway sends neither = action (#477 D36). */
   category?: 'notice' | 'action' | (string & {})
+  /** Slice 8 (D58): what Read can show without a fetch — the partner's clipped body. */
+  body?: string | null
+  /** A vault page exists behind the item (`links.vault_page`); the page is fetched on Read. */
+  has_page?: boolean
+  /** The producer's suggested project (slug or badge) for a To-do from the lens (D62). */
+  suggested_project?: string | null
 }
+
+/** A project as the gateway lists it for the lens's To-do picker (D62). */
+export interface LensProject { id: string; slug: string; name: string; badge: string }
+
+/** The latest message behind a mail item, as the partner's thread read returns it. */
+export interface LensThreadMessage { from?: string; from_name?: string; subject?: string; date?: string; body: string }
+
 

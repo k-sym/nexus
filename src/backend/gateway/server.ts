@@ -18,7 +18,7 @@ import type { ServerResponse } from 'node:http';
 import type { PiRuntime } from '../pi/runtime.js';
 import { buildDetail, buildSessions, resolveSession, type Scope } from './sessions.js';
 import { questionToApproval, toolCallToApproval, translateGlassesAnswer } from './mappers.js';
-import type { Approval, LensAttentionItem, SseEvent } from './types.js';
+import type { Approval, LensAttentionItem, SseEvent, LensProject } from './types.js';
 
 interface Db {
   prepare(sql: string): { get(...args: unknown[]): any; all(...args: unknown[]): any; run(...args: unknown[]): any };
@@ -61,6 +61,13 @@ export interface GatewayAttentionSource {
    *  the upstream status so a 202 (`draft` running) survives. Throws a
    *  status-bearing Error on refusal. */
   resolve(id: string, body: { verb: string; preset?: string }): Promise<{ status: number; body: unknown }>;
+  /** Slice 8 (D59/D62/D63) — reads and the To-do, each answering with the upstream
+   *  status so 404/409 reach the lens with the partner's sentence. Optional so an
+   *  older wiring (and the tests' minimal source) keeps serving the list. */
+  thread?(id: string): Promise<{ status: number; body: unknown }>;
+  page?(id: string): Promise<{ status: number; body: unknown }>;
+  file?(id: string, projectId: string): Promise<{ status: number; body: unknown }>;
+  projects?(): Promise<LensProject[]>;
 }
 
 export interface GatewayHandle {
@@ -274,6 +281,48 @@ export function createGatewayApp(deps: GatewayDependencies): GatewayHandle {
       const status = typeof err?.status === 'number' ? err.status : 502;
       reply.code(status === 400 || status === 404 || status === 409 ? status : 502);
       return { error: extractDetail(err?.message) || 'Attention resolve failed.' };
+    }
+  });
+
+  // Slice 8 (D59/D63): what the card's Read shows — the latest message behind a
+  // mail item and the vault page behind an item — and the To-do (D62). Each
+  // passes the upstream status through (404 / 409 with the partner's sentence,
+  // else 502); reading records nothing; the To-do is stamped `glasses`/`lens`
+  // by the wiring. All four are absent (404) on a gateway wired without them.
+  const passThrough = async (reply: { code(n: number): unknown }, run: () => Promise<{ status: number; body: unknown }>) => {
+    try {
+      const result = await run();
+      reply.code(result.status);
+      return result.body;
+    } catch (err: any) {
+      const status = typeof err?.status === 'number' ? err.status : 502;
+      reply.code(status === 400 || status === 404 || status === 409 ? status : 502);
+      return { error: extractDetail(err?.message) || 'Attention read failed.' };
+    }
+  };
+  app.get('/api/attention/:id/thread', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!attention?.thread) { reply.code(404); return { error: 'thread read not available on this gateway' }; }
+    return passThrough(reply, () => attention.thread!(id));
+  });
+  app.get('/api/attention/:id/page', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    if (!attention?.page) { reply.code(404); return { error: 'page read not available on this gateway' }; }
+    return passThrough(reply, () => attention.page!(id));
+  });
+  app.post('/api/attention/:id/file', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { project_id?: unknown };
+    if (typeof body.project_id !== 'string' || !body.project_id.trim()) { reply.code(400); return { error: 'project_id (string) is required' }; }
+    if (!attention?.file) { reply.code(404); return { error: 'to-do filing not available on this gateway' }; }
+    return passThrough(reply, () => attention.file!(id, body.project_id as string));
+  });
+  app.get('/api/projects', async () => {
+    if (!attention?.projects) return { projects: [] as LensProject[] };
+    try {
+      return { projects: await attention.projects() };
+    } catch (err) {
+      return { projects: [] as LensProject[], error: (err as Error)?.message || 'Projects fetch failed.' };
     }
   });
 

@@ -1,5 +1,5 @@
 import { store } from './store'
-import type { Approval, AttentionItem, AttentionVerb, SessionDetail, SessionSummary, SseEvent } from './types'
+import type { Approval, AttentionItem, AttentionVerb, SessionDetail, SessionSummary, SseEvent, LensProject, LensThreadMessage } from './types'
 
 function creds() {
   const { baseUrl, token } = store.getState()
@@ -74,6 +74,39 @@ export async function resolveAttention(id: string, verb: AttentionVerb, preset?:
     const body = await res.json().catch(() => ({})) as { error?: string }
     throw new Error(body.error || `resolveAttention: ${res.status}`)
   }
+}
+
+/** A status-bearing failure from a read or a file action: the gateway's sentence and code. */
+export class GatewayError extends Error { constructor(message: string, public status: number) { super(message) } }
+async function readJson<T>(res: Response, what: string): Promise<T> {
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({})) as { error?: string }
+    throw new GatewayError(body.error || `${what}: ${res.status}`, res.status)
+  }
+  return res.json() as Promise<T>
+}
+
+/** Slice 8 (D59): the latest message behind a mail item — fetched on the Read tap, never polled. */
+export async function getAttentionThread(id: string): Promise<LensThreadMessage> {
+  const t = await readJson<{ messages?: LensThreadMessage[] }>(await api(`/api/attention/${encodeURIComponent(id)}/thread`), 'thread')
+  const m = t.messages?.[0]
+  if (!m?.body) throw new GatewayError('(no message)', 404)
+  return m
+}
+
+/** Slice 8 (D59): the vault page behind an item, as markdown text. */
+export async function getAttentionPage(id: string): Promise<{ title: string; body: string }> {
+  return readJson(await api(`/api/attention/${encodeURIComponent(id)}/page`), 'page')
+}
+
+/** Slice 8 (D62): file the item as a Board to-do on a project; the gateway queues the first turn. */
+export async function fileAttention(id: string, projectId: string): Promise<{ thread: { id: string; title: string } }> {
+  return readJson(await api(`/api/attention/${encodeURIComponent(id)}/file`, { method: 'POST', body: JSON.stringify({ project_id: projectId }) }), 'file')
+}
+
+/** Slice 8 (D62): the projects a to-do can land on. */
+export async function getProjects(): Promise<LensProject[]> {
+  return (await readJson<{ projects?: LensProject[] }>(await api('/api/projects'), 'projects')).projects ?? []
 }
 
 /** STT (voice) config Nexus serves from ~/.nexus/config.yaml gateway.stt. */

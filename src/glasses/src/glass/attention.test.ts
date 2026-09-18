@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { attentionEntries, lensVerbs, itemReason, kindLabel, isNoticeItem, verbToast, needsRow, needsCounts, needsTitle, landsOnNeeds, cardVerbRows, clampListItem, LIST_ITEM_MAX_BYTES } from './attention.ts'
+import { attentionEntries, lensVerbs, itemReason, kindLabel, isNoticeItem, verbToast, needsRow, needsCounts, needsTitle, landsOnNeeds, cardVerbRows, clampListItem, LIST_ITEM_MAX_BYTES, readSource, pageLines, todoProject, messageHeader } from './attention.ts'
 import type { AttentionItem, SessionSummary } from '../types.ts'
 
 const session = (id: string, needsAttention: boolean): SessionSummary => ({
@@ -84,4 +84,38 @@ test('list items are clamped to the firmware\'s 63 bytes on a code-point boundar
   const edge = 'x'.repeat(60) + '★★'
   assert.ok(bytes(clampListItem(edge)) <= LIST_ITEM_MAX_BYTES)
   assert.ok(!clampListItem(edge).includes('\uFFFD'))
+})
+
+// Slice 8 (D59/D62): what Read shows, how it pages, where a To-do lands.
+test('read source: thread for mail, page when a vault page exists, body when non-empty, else nothing', () => {
+  assert.equal(readSource(item({ id: 'm' })), 'thread')
+  assert.equal(readSource(item({ id: 'p', kind: 'meeting.prep', has_page: true, body: 'pack' })), 'page')
+  assert.equal(readSource(notice('n')), null)
+  assert.equal(readSource({ ...notice('n'), body: 'Drained 3 tasks.' }), 'body')
+  assert.equal(readSource(item({ id: 'x', kind: 'pr.review', body: '   ' })), null)
+})
+
+test('pages of seven rows; an empty text is one blank page', () => {
+  const lines = Array.from({ length: 16 }, (_, i) => `l${i + 1}`)
+  const pages = pageLines(lines, 7)
+  assert.equal(pages.length, 3)
+  assert.equal(pages[0], 'l1\nl2\nl3\nl4\nl5\nl6\nl7')
+  assert.equal(pages[2], 'l15\nl16')
+  assert.deepEqual(pageLines([], 7), [''])
+})
+
+test('a to-do lands on the suggested project by slug or badge, case-insensitively, else asks', () => {
+  const projects = [{ id: '1', slug: 'nexus', badge: 'NEX', name: 'Nexus' }, { id: '2', slug: 'ssuk', badge: 'SSU', name: 'Safety Services UK' }]
+  assert.equal(todoProject('nexus', projects)?.id, '1')
+  assert.equal(todoProject('ssu', projects)?.id, '2')
+  assert.equal(todoProject('NEX', projects)?.id, '1')
+  assert.equal(todoProject('wisesafety', projects), null)
+  assert.equal(todoProject(null, projects), null)
+})
+
+test('a message header names who and when', () => {
+  const now = Date.parse('2026-09-18T12:00:00Z')
+  assert.equal(messageHeader({ from: 'jane@x.com', from_name: 'Jane Holloway', date: '2026-09-17T12:00:00Z' }, now), 'From Jane Holloway · 1d ago')
+  assert.equal(messageHeader({ from: 'jane@x.com' }, now), 'From jane@x.com')
+  assert.equal(messageHeader({}, now), 'From someone')
 })

@@ -210,6 +210,27 @@ export function applyFixture(name: string): boolean {
       store.set({ sessions: [s1], approvals: [], attention: items, connection: 'ok', activeSessionId: null, activeEvents: [] })
       return true
     }
+    // Slice 8: what Read shows — a notice with a body, a meeting with a vault page and
+    // a suggested project, a mail item whose message is fetched (the sim has no hub, so
+    // that read shows the failure page); the To-do on the meeting matches NEX.
+    case 'read': {
+      const s1 = session({ id: 's1', title: 'nexus · gateway', project: 'nexus', projectBadge: 'NEX', live: true })
+      const brief = ['*WEATHER* 13–18°C, showers after lunch.', '', '*AGENDA* 09:30 IT Standup and Review · 14:30 WISE update.', '',
+        '*INBOXES* ssuk 2 unread · baker 0 · wise 1.', '', '*WAITING* Vicki Walsh — Missing Subcontractors (0.1d).', '',
+        '*GITHUB* wisesafety #212 RISKY — fix or close; nexus #491 merged.', '', '*SYSTEM* all routines green; night queue drained 3 tasks.', '',
+        'Have a good one.'].join('\n')
+      const items: AttentionItem[] = [
+        { id: 'att_brief', kind: 'brief.morning', status: 'open', category: 'notice', title: 'Morning brief — Fri 18 Sep', why: 'weather, agenda, 2 inboxes, 1 PR',
+          body: brief, proposed_verb: 'dismiss', verbs: ['open', 'dismiss'], lens_verbs: ['dismiss'], alert_seq: 9, created_at: Math.floor(now / 1000) - 3600, snoozed_until: null },
+        { id: 'att_meet', kind: 'meeting.prep', status: 'open', category: 'action', title: 'IT Standup and Review — Fri 18 Sep 09:30', why: 'Tomorrow 09:30, 5 others — prep pack in the vault',
+          body: 'Prep pack filed: IT Standup and Review (2026-09-18).', has_page: true, suggested_project: 'nexus',
+          proposed_verb: 'open', verbs: ['open', 'snooze', 'dismiss'], lens_verbs: ['dismiss'], alert_seq: 8, created_at: Math.floor(now / 1000) - 7200, snoozed_until: null },
+        { id: 'att_mail', kind: 'mail.waiting', status: 'open', category: 'action', title: 'Re: Method statement for the Colchester refit', why: 'waiting 3.2d from jane.holloway',
+          proposed_verb: 'draft', verbs: ['draft', 'open', 'snooze', 'dismiss'], lens_verbs: ['draft', 'snooze', 'dismiss'], alert_seq: 4, created_at: Math.floor(now / 1000) - 3600 * 5, snoozed_until: null },
+      ]
+      store.set({ sessions: [s1], approvals: [], attention: items, connection: 'ok', activeSessionId: null, activeEvents: [] })
+      return true
+    }
     default:
       return false
   }

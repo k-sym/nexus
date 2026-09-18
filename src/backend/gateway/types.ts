@@ -114,5 +114,14 @@ export interface LensAttentionItem {
   snoozed_until: number | null;
   /** `notice` (a glance is "seen") or `action`; absent on the row = action (#477 D36). */
   category: 'notice' | 'action';
+  /** Slice 8 (D58): the partner's clipped body, so Read needs no fetch for a notice. */
+  body: string | null;
+  /** A vault page exists behind the item; the gateway's `/page` fetches it on Read. */
+  has_page: boolean;
+  /** The producer's suggested project (slug or badge) for a To-do from the lens. */
+  suggested_project: string | null;
 }
+
+/** A project as the lens's To-do picker lists it (D62). */
+export interface LensProject { id: string; slug: string; name: string; badge: string }
 
