@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { parseRoleChildRun, type RoleChildRun } from '@nexus/shared';
 import { apiFetch } from '../api-base';
-import { approvalLabel, ToolCallTimeline, type ToolCallInfo } from './ToolCallTimeline';
+import { approvalLabel, isQuestionTool, ToolCallTimeline, type ToolCallInfo } from './ToolCallTimeline';
+import { QuestionCard } from './QuestionCard';
+import { normalizeQuestionRequest, parseQuestionResult } from '../lib/questions';
 import { registerApprovalSlot } from '../hooks/approval-slots';
 
 export interface RoleChildResponse {
@@ -64,9 +66,27 @@ export function RoleChildBlock({ child, toolCall }: { child: RoleChildRun; toolC
         {error && <p role="alert">{error} <button onClick={() => void load()}>Retry</button></p>}
         {data && (!data.transcriptAvailable ? <p>Child transcript unavailable. The saved report is shown above.</p> : <>
           {data.messages.flatMap(m => m.tool_calls ?? []).length === 0 && <p>No tool calls recorded.</p>}
-          <ToolCallTimeline toolCalls={data.messages.flatMap(m => m.tool_calls ?? [])} />
+          <ChildWork toolCalls={data.messages.flatMap(m => m.tool_calls ?? [])} />
         </>)}
       </div>}
     </div>}
   </section>;
+}
+
+/** The child's tool calls in order. ToolCallTimeline drops question calls (the
+ *  parent bubble renders them as QuestionCards), so they are interleaved here
+ *  read-only: the child's questions were answered in the parent thread. */
+function ChildWork({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
+  const runs: ToolCallInfo[][] = [];
+  for (const tc of toolCalls) {
+    const last = runs[runs.length - 1];
+    if (last && !isQuestionTool(tc) && !isQuestionTool(last[0])) last.push(tc);
+    else runs.push([tc]);
+  }
+  return <>{runs.map(run => {
+    const tc = run[0];
+    if (!isQuestionTool(tc)) return <ToolCallTimeline key={tc.id} toolCalls={run} />;
+    const result = parseQuestionResult(tc.details) ?? parseQuestionResult(tc.result);
+    return <QuestionCard key={tc.id} request={normalizeQuestionRequest(tc.args)!} answeredResult={result ?? undefined} unavailable={!result} onSubmit={() => Promise.resolve()} />;
+  })}</>;
 }

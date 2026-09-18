@@ -31,6 +31,23 @@ describe('role child blocks', () => {
     fireEvent.click(screen.getByText('Hide work')); fireEvent.click(screen.getByText('Show work'));
     expect(apiFetch).toHaveBeenCalledTimes(1);
   });
+  it('keeps child questions in the work timeline, read-only and in order', async () => {
+    const question = { questions: [{ id: 'q', header: 'Scope', question: 'Which package?', options: [{ value: 'backend', label: 'Backend' }, { value: 'frontend', label: 'Frontend' }] }] };
+    vi.mocked(apiFetch).mockResolvedValue(new Response(JSON.stringify({ child, transcriptAvailable: true, messages: [
+      { id: 'a', tool_calls: [{ id: 'one', name: 'bash', args: { command: 'first-command' }, status: 'succeeded' }] },
+      { id: 'b', tool_calls: [{ id: 'ask', name: 'question', args: question, status: 'succeeded', details: { toolCallId: 'ask', status: 'answered', answers: [{ questionId: 'q', selected: ['backend'] }] } }] },
+      { id: 'c', tool_calls: [{ id: 'two', name: 'bash', args: { command: 'second-command' }, status: 'succeeded' }] },
+    ] })));
+    render(<ToolActivity toolCalls={[call()]} running={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /scout fake\/model/ }));
+    fireEvent.click(screen.getByText('Show work'));
+    await screen.findByText('bash $ first-command');
+    const asked = screen.getByText('Scope: Backend');
+    const first = screen.getByText('bash $ first-command'), second = screen.getByText('bash $ second-command');
+    expect(first.compareDocumentPosition(asked) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(asked.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /submit/i })).toBeNull();
+  });
   it('keeps Refuter report visible outside the collapsed outer activity', () => {
     render(<ToolActivity toolCalls={[call({ ...child, role: 'refuter' })]} running={false} />);
     expect(screen.getByText(child.report)).toBeVisible();

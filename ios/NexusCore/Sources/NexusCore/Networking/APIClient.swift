@@ -358,13 +358,15 @@ public actor APIClient {
 
     // MARK: M4
 
-    /// Held NDJSON queue: one `snapshot`, then `pending`/`resolved`, with `\n`
-    /// heartbeats. Holding it open marks the client "attached" server-side.
+    /// A role child run's metadata and retained transcript. Chat payloads are
+    /// camelCase with arbitrary tool args, so decode plain like `threadDetail`.
     public func childRun(_ id: String) async throws -> RoleChildResponse {
         let component = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
-        return try await request(Endpoint(path: "/api/runs/\(component)/events"))
+        return try await request(Endpoint(path: "/api/runs/\(component)/events"), decoder: plainDecoder)
     }
 
+    /// Held NDJSON queue: one `snapshot`, then `pending`/`resolved`, with `\n`
+    /// heartbeats. Holding it open marks the client "attached" server-side.
     public func approvalsStream() throws -> AsyncThrowingStream<JSONValue, Error> {
         try events(.approvalsStream)
     }

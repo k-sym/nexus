@@ -37,4 +37,28 @@ final class RoleChildTests: XCTestCase {
         XCTAssertFalse(try JSONDecoder().decode(RoleChildResponse.self, from: Data(response.utf8)).transcriptAvailable)
         XCTAssertNil(RoleChildRun(json: .object(["childRunId": .string("x")])))
     }
+    func testChildRunKeepsToolArgKeysVerbatim() async throws {
+        let body = "{\"child\":\(details),\"transcriptAvailable\":true,\"messages\":[{\"id\":\"a\",\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"one\",\"name\":\"read\",\"args\":{\"file_path\":\"a.ts\"},\"status\":\"succeeded\"}]}]}"
+        ChildRunStub.body = Data(body.utf8)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ChildRunStub.self]
+        let api = APIClient(tokenStore: TokenStore(service: "nexus-tests", account: "role-child"), session: URLSession(configuration: config))
+        await api.configure(baseURL: URL(string: "http://stub.local"))
+        let response = try await api.childRun("child-1")
+        let args = try XCTUnwrap(response.messages.first?.toolCalls?.first?.args)
+        XCTAssertEqual(args["file_path"], .string("a.ts"))
+    }
+}
+
+final class ChildRunStub: URLProtocol {
+    nonisolated(unsafe) static var body = Data()
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.body)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }
