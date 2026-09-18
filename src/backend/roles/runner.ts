@@ -9,7 +9,7 @@ import type { ConcurrencyTracker } from '../pi/concurrency.js';
 import type { ActivityBus } from '../activity/events.js';
 import { readOverrides } from './config.js';
 import { ROLE_TOOLS, ROLE_PURPOSES } from './definitions.js';
-interface Parent { threadId: string; projectId: string; cwd: string; runId: string; owner: symbol; signal: AbortSignal; onQuestion?: (event: any) => void; }
+interface Parent { threadId: string; projectId: string; cwd: string; runId: string; owner: symbol; signal: AbortSignal; onQuestion?: (event: any) => void; onRole?: (event: any) => void; }
 export class RoleRunner {
   private parents = new Map<string, Parent>();
   private parentTools = new Map<string, Set<string>>();
@@ -64,6 +64,7 @@ export class RoleRunner {
     this.deps.db.prepare('INSERT INTO role_runs (id, parent_run_id, parent_tool_call_id, thread_id, role, model_key, status, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').run(id, parent.runId, callId, parent.threadId, role, modelKey, 'running', new Date(start).toISOString());
     const activity = { operationId: id, kind: 'chat_turn' as const, title: `${role[0].toUpperCase() + role.slice(1)} · ${modelKey}`, threadId: parent.threadId, projectId: parent.projectId, provider: resolved.model.provider, model: resolved.model.id, diagnostics };
     this.deps.bus?.emit({ ...activity, type: 'start' });
+    parent.onRole?.({ type: 'tool_execution_update', toolCallId: callId, toolName: ROLE_TOOLS[role], partialResult: { content: [], details: { childRunId: id, role, model: modelKey, tokens: 0, durationMs: 0, status: 'running' } } });
     let child: (EngineSession & { dispose?: () => void }) | undefined;
     let reason = '', report = '', tokens = 0, turns = 0;
     let unsubscribe: (() => void) | undefined;
@@ -79,7 +80,7 @@ export class RoleRunner {
     combined.addEventListener('abort', onAbort, { once: true });
     const timer = setTimeout(() => stop('Time ceiling reached'), this.deps.config.max_minutes * 60000);
     try {
-      child = await resolved.engine.createChildSession({ id, parentThreadId: parent.threadId, cwd: parent.cwd, role, prompt: `You are the Nexus ${role}. ${ROLE_PURPOSES[role]}\nWork only on the supplied brief. You cannot delegate. Finish with a concise report and verification evidence.` });
+      child = await resolved.engine.createChildSession({ id, parentThreadId: parent.threadId, parentToolCallId: callId, cwd: parent.cwd, role, prompt: `You are the Nexus ${role}. ${ROLE_PURPOSES[role]}\nWork only on the supplied brief. You cannot delegate. Finish with a concise report and verification evidence.` });
       await child.setModel(resolved.model);
       unsubscribe = child.subscribe(event => {
         if ((event.type === 'tool_execution_start' || event.type === 'tool_execution_end') && event.toolName === 'question') {
@@ -108,7 +109,7 @@ export class RoleRunner {
     report = `${reason ? `INCOMPLETE: ${reason}\n\n` : ''}${report || 'No report returned.'}`;
     this.deps.db.prepare('UPDATE role_runs SET status = ?, report = ?, tokens = ?, completed_at = ?, duration_ms = ? WHERE id = ?').run(status, report, tokens, new Date().toISOString(), durationMs, id);
     this.deps.bus?.emit({ ...activity, type: 'stop', status: reason ? 'failed' : 'succeeded', usage: { totalTokens: tokens }, durationMs, error: reason || undefined });
-    const details = { childRunId: id, role, model: modelKey, tokens, durationMs, status };
-    return { content: [{ type: 'text' as const, text: `${report}\n\n${JSON.stringify(details)}` }], details, ...(reason ? { isError: true } : {}) };
+    const details = { childRunId: id, role, model: modelKey, tokens, durationMs, status, report };
+    return { content: [{ type: 'text' as const, text: `${report}\n\n${JSON.stringify({ childRunId: id, role, model: modelKey, tokens, durationMs, status })}` }], details, ...(reason ? { isError: true } : {}) };
   }
 }

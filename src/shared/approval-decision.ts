@@ -16,6 +16,8 @@ export const APPROVAL_DECISION_CUSTOM_TYPE = 'nexus.approval_decision' as const;
 export type ApprovalDecisionBy = 'human' | 'partner' | 'timeout' | 'aborted';
 
 export interface ApprovalDecisionEvent {
+  childRunId?: string;
+  parentToolCallId?: string;
   threadId: string;
   toolCallId: string;
   toolName: string;

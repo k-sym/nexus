@@ -26,6 +26,8 @@ import { corsHeaders } from '../cors-headers.js';
 /** A pending gate as the UI needs it. `category` lets the client style a
  *  `bash` gate differently from a read, without duplicating the classification. */
 export interface PendingApprovalDto {
+  childRunId?: string;
+  parentToolCallId?: string;
   threadId: string;
   toolCallId: string;
   toolName: string;
@@ -53,6 +55,7 @@ export function toPendingDto(view: PendingApprovalView): PendingApprovalDto {
     input: view.input,
     cwd: view.cwd,
     requestedAt: view.requestedAt,
+    ...(view.childRunId ? { childRunId: view.childRunId, parentToolCallId: view.parentToolCallId } : {}),
   };
 }
 

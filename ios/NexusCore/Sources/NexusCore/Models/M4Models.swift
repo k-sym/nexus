@@ -7,6 +7,8 @@ import Foundation
 /// LiveHub doesn't re-serialize.
 public struct PendingApproval: Identifiable, Hashable, Sendable {
     public var id: String { toolCallId }
+    public let childRunId: String?
+    public let parentToolCallId: String?
     public let threadId: String
     public let toolCallId: String
     public let toolName: String
@@ -17,6 +19,8 @@ public struct PendingApproval: Identifiable, Hashable, Sendable {
 
     public init?(json: JSONValue) {
         guard let toolCallId = json["toolCallId"]?.string else { return nil }
+        self.childRunId = json["childRunId"]?.string
+        self.parentToolCallId = json["parentToolCallId"]?.string
         self.toolCallId = toolCallId
         self.threadId = json["threadId"]?.string ?? ""
         self.toolName = json["toolName"]?.string ?? ""

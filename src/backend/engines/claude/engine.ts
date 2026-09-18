@@ -160,7 +160,7 @@ export class ClaudeEngine implements ChatEngine {
       tools,
       systemPromptAppendix: child?.prompt ?? systemPromptAppendix,
       policy: pi.policyFor(child?.parentThreadId ?? threadId, cwd),
-      approvals: child ? labelledApprovals(pi.approvals, child.role) : pi.approvals,
+      approvals: child ? labelledApprovals(pi.approvals, child.role, { childRunId: child.id, parentToolCallId: child.parentToolCallId }) : pi.approvals,
       audit: pi.auditSink,
       env: resolveClaudeAuthEnv(cfg),
       settingSources: child ? [] : settingSources,

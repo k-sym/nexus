@@ -113,6 +113,8 @@ public struct PersistedToolCall: Decodable, Identifiable, Hashable, Sendable {
     public let result: String?
     /// How this call's tool-gate settled, when it went through one (#374).
     public let approval: PersistedToolApproval?
+    public let childApproval: PersistedToolApproval?
+    public let details: JSONValue?
 }
 
 /// The projection's approval stamp on a gated tool call (#374).
@@ -155,4 +157,40 @@ public struct ContextUsage: Hashable, Sendable {
         self.tokens = value["tokens"]?.int
         self.percent = value["percent"]?.double
     }
+}
+
+/// Optional structured role metadata shared by live and persisted tool calls.
+public struct RoleChildRun: Decodable, Hashable, Sendable {
+    public let childRunId: String
+    public let role: String
+    public let model: String
+    public let status: String
+    public let tokens: Int
+    public let durationMs: Double
+    public let report: String?
+
+    public init?(json: JSONValue?) {
+        guard let json, let id = json["childRunId"]?.string, !id.isEmpty,
+              let role = json["role"]?.string, nexusRoleNames.contains(role),
+              let model = json["model"]?.string, let status = json["status"]?.string,
+              ["running", "completed", "incomplete", "interrupted"].contains(status),
+              let tokens = json["tokens"]?.double, tokens.isFinite, tokens >= 0, tokens < Double(Int.max),
+              let duration = json["durationMs"]?.double, duration.isFinite else { return nil }
+        self.childRunId = id; self.role = role; self.model = model; self.status = status
+        self.tokens = Int(tokens); self.durationMs = duration; self.report = json["report"]?.string
+    }
+
+    public func reportText(fallback: String) -> String {
+        if let report { return report }
+        guard let range = fallback.range(of: "\n\n", options: .backwards),
+              let json = JSONValue.parse(Data(fallback[range.upperBound...].utf8)),
+              RoleChildRun(json: json)?.childRunId == childRunId else { return fallback }
+        return String(fallback[..<range.lowerBound])
+    }
+}
+
+public struct RoleChildResponse: Decodable, Sendable {
+    public let child: RoleChildRun
+    public let transcriptAvailable: Bool
+    public let messages: [PersistedMessage]
 }

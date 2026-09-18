@@ -52,6 +52,8 @@ export interface ApprovalDecision {
  *  (the glasses cockpit gateway). Carries the tool name / input / cwd so the
  *  gateway can render the approval card without a second lookup. */
 export interface PendingApprovalView {
+  childRunId?: string;
+  parentToolCallId?: string;
   threadId: string;
   toolCallId: string;
   toolName: string;
@@ -65,6 +67,8 @@ export interface PendingApprovalView {
  *  lookup. Every resolution path supplies it — the single removal choke-point
  *  guarantees that. */
 export interface ApprovalResolution {
+  childRunId?: string;
+  parentToolCallId?: string;
   toolName: string;
   /** Bounded human-readable input summary (never the raw payload). */
   inputSummary: string;
@@ -108,6 +112,8 @@ export const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000;
 export const ATTENDED_APPROVAL_TIMEOUT_MS = 30 * 60_000;
 
 interface PendingApproval {
+  childRunId?: string;
+  parentToolCallId?: string;
   threadId: string;
   toolCallId: string;
   toolName: string;
@@ -212,6 +218,7 @@ export class ApprovalBroker {
     /** Omit to let the broker pick based on client presence (the normal path).
      *  Supplying a value pins this gate to it for its whole life. */
     explicitTimeoutMs?: number,
+    linkage?: { childRunId: string; parentToolCallId?: string },
   ): Promise<ApprovalDecision> {
     const key = this.key(threadId, toolCallId);
     if (this.pending.has(key)) return Promise.reject(new Error(`Approval already pending: ${toolCallId}`));
@@ -221,7 +228,7 @@ export class ApprovalBroker {
 
     return new Promise<ApprovalDecision>((resolve) => {
       const entry: PendingApproval = {
-        threadId, toolCallId, toolName, input, cwd,
+        threadId, toolCallId, toolName, input, cwd, ...linkage,
         requestedAt: Date.now(), resolve, signal, presenceDriven,
       };
       if (timeoutMs > 0 && Number.isFinite(timeoutMs)) {
@@ -307,6 +314,7 @@ export class ApprovalBroker {
       input: entry.input,
       cwd: entry.cwd,
       requestedAt: entry.requestedAt,
+      ...(entry.childRunId ? { childRunId: entry.childRunId, parentToolCallId: entry.parentToolCallId } : {}),
     };
   }
 
@@ -340,6 +348,7 @@ export class ApprovalBroker {
       toolCallId: entry.toolCallId,
       resolution: {
         toolName: entry.toolName,
+        ...(entry.childRunId ? { childRunId: entry.childRunId, parentToolCallId: entry.parentToolCallId } : {}),
         inputSummary: summarizeToolInput(entry.input),
         ...how,
       },
