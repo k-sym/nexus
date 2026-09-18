@@ -534,7 +534,9 @@ export function AppGlasses3c() {
     // else happens to change (the 10 s poll moving a session's age), which is
     // exactly the "nothing on the glasses for minutes" seen after a reinstall.
     let retryTimer: ReturnType<typeof setTimeout> | null = null
+    let active = true // false after cleanup: a render settling late must not retry against a disposed SDK
     const render = () => {
+      if (!active) return
       const s = glass(store.getState())
       const nav = navRef.current
       const groups = groupProjects(s.sessions)
@@ -557,6 +559,7 @@ export function AppGlasses3c() {
       screenRef.current = scr
       console.log(`[cockpit] render ${scr} (${rowsRef.current.length} rows before compose)`)
       buildAndRender(sdk, scr, s, nav, groups, rowsRef).then(() => console.log(`[cockpit] rendered ${scr}`)).catch((err) => {
+        if (!active) return
         console.error('[cockpit] render failed', err)
         sigRef.current = '' // this page did not reach the lens: any change, or the timer, tries again
         if (!retryTimer) retryTimer = setTimeout(() => { retryTimer = null; render() }, 1000)
@@ -565,7 +568,7 @@ export function AppGlasses3c() {
 
     render()
     const unsub = store.subscribe(render)
-    return () => { if (tapTimer) clearTimeout(tapTimer); if (retryTimer) clearTimeout(retryTimer); unsub(); sdk.removeEventListener(onEvent); disposeEngine() }
+    return () => { active = false; if (tapTimer) clearTimeout(tapTimer); if (retryTimer) clearTimeout(retryTimer); unsub(); sdk.removeEventListener(onEvent); disposeEngine() }
   }, [])
 
   return null
