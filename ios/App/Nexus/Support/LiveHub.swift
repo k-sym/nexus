@@ -98,6 +98,15 @@ final class LiveHub {
         }
     }
 
+    func childRun(_ id: String) async throws -> RoleChildResponse { try await api.childRun(id) }
+
+    func decideChild(_ approval: PendingApproval, action: String) async throws {
+        do { try await api.decideApproval(toolCallId: approval.toolCallId, action: action) }
+        catch APIError.server(let status, _) where status == 404 { /* already answered elsewhere */ }
+        pending.removeAll { $0.toolCallId == approval.toolCallId }
+        syncBadge()
+    }
+
     func decide(_ approval: PendingApproval, action: String, reason: String? = nil) {
         pending.removeAll { $0.toolCallId == approval.toolCallId } // optimistic
         syncBadge()

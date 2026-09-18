@@ -484,9 +484,9 @@ export function usePiStream() {
       if (d?.toolCallId) {
         dispatch({
           type: 'TOOL_CALL_UPDATE',
-          id: d.toolCallId,
+          id: d.parentToolCallId ?? d.toolCallId,
           patch: {
-            approval: {
+            [d.parentToolCallId ? 'childApproval' : 'approval']: {
               outcome: d.outcome,
               answeredBy: d.answeredBy,
               ...(d.reason ? { reason: d.reason } : {}),
@@ -547,7 +547,7 @@ export function usePiStream() {
       const partial = (ev.partialResult?.content ?? [])
         .map((c: { text?: string }) => c.text ?? '')
         .join('');
-      dispatch({ type: 'TOOL_CALL_UPDATE', id: ev.toolCallId, patch: { status: 'running' } });
+      dispatch({ type: 'TOOL_CALL_UPDATE', id: ev.toolCallId, patch: { status: 'running', ...(ev.partialResult?.details !== undefined ? { details: ev.partialResult.details } : {}) } });
       dispatch({ type: 'TOOL_PARTIAL_OUTPUT', id: ev.toolCallId, partialOutput: partial });
     } else if (type === 'tool_execution_end') {
       const result = (ev.result?.content ?? [])

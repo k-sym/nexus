@@ -229,7 +229,12 @@ test('Pi child exposes the Scout allowlist and disposal retains audit entries', 
     assert.deepEqual(session.getActiveToolNames().sort(), ['find', 'grep', 'ls', 'read']);
     session.sessionManager.appendMessage({ role: 'user', content: [{ type: 'text', text: 'Scout' }] } as any);
     session.sessionManager.appendMessage({ role: 'assistant', content: [{ type: 'text', text: 'Evidence retained' }] } as any);
+    session.sessionManager.appendCustomEntry('nexus.role_run', { toolCallId: 'delegate', partialResult: { details: { childRunId: 'child-pi' } } });
+    session.sessionManager.appendCustomEntry('nexus.approval_decision', { toolCallId: 'read-1', childRunId: 'child-pi', outcome: 'allowed' });
     session.dispose();
+    const retained = await pi.readMessages('child-pi', dir) as any[];
+    assert.ok(retained.some(e => e.customType === 'nexus.role_run'));
+    assert.ok(retained.some(e => e.customType === 'nexus.approval_decision'));
     assert.ok((await pi.readMessages('child-pi', dir)).some((entry: any) => entry.message?.content?.[0]?.text === 'Evidence retained'));
     assert.equal(pi.hasSession('child-pi', dir), false);
     assert.ok(pi.models.find('openai', 'gpt-5.6-sol'));

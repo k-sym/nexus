@@ -16,6 +16,8 @@ export type ToolCategory =
   | 'interactive' | 'read' | 'write' | 'exec' | 'services' | 'network' | 'unknown';
 
 export interface PendingApproval {
+  childRunId?: string;
+  parentToolCallId?: string;
   threadId: string;
   toolCallId: string;
   toolName: string;
@@ -120,20 +122,12 @@ export function useApprovals(): UseApprovalsResult {
   }, []);
 
   const decide = useCallback(async (toolCallId: string, action: 'allow' | 'deny', reason?: string) => {
-    // Drop it locally first: the round trip is short but a second click on a
-    // gate that is already decided is worse than a momentary optimistic hide.
-    // The stream's `resolved` confirms, and a 404 means someone else answered
-    // it — in both cases removed is the correct end state.
-    setApprovals((prev) => prev.filter((a) => a.toolCallId !== toolCallId));
-    try {
-      await apiFetch(`/api/approvals/${encodeURIComponent(toolCallId)}/decision`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action, ...(reason ? { reason } : {}) }),
-      });
-    } catch {
-      /* the gate is gone from our view either way; the backend defaults to deny */
-    }
+    const response = await apiFetch(`/api/approvals/${encodeURIComponent(toolCallId)}/decision`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...(reason ? { reason } : {}) }),
+    });
+    if (!response.ok && response.status !== 404) throw new Error(`Decision failed (${response.status}). Please retry.`);
+    setApprovals(prev => prev.filter(a => a.toolCallId !== toolCallId));
   }, []);
 
   return { approvals, connected, decide };

@@ -40,6 +40,8 @@ public struct ToolCallView: Identifiable, Hashable, Sendable {
     public var status: ToolStatus
     public var result: String
     public var approval: ToolApprovalStamp? = nil
+    public var childApproval: ToolApprovalStamp? = nil
+    public var childRun: RoleChildRun? = nil
 }
 
 /// An attachment shown on the user's own turn (image thumbnail). Platform-neutral
@@ -151,6 +153,10 @@ public struct TranscriptReducer: Sendable {
                         view.approval = ToolApprovalStamp(
                             outcome: outcome, answeredBy: approval.answeredBy, reason: approval.reason)
                     }
+                    view.childRun = RoleChildRun(json: call.details)
+                    if let approval = call.childApproval, let outcome = ToolApprovalStamp.Outcome(rawValue: approval.outcome) {
+                        view.childApproval = ToolApprovalStamp(outcome: outcome, answeredBy: approval.answeredBy, reason: approval.reason)
+                    }
                     return view
                 }
                 return RenderedMessage(
@@ -260,9 +266,15 @@ public struct TranscriptReducer: Sendable {
                     name: event["toolName"]?.string ?? "",
                     args: event["args"] ?? .object([:]))
         case "tool_execution_update":
+            if let child = RoleChildRun(json: event["partialResult"]?["details"]) {
+                updateTool(event["toolCallId"]?.string ?? "") { $0.childRun = child }
+            }
             appendToolOutput(id: event["toolCallId"]?.string ?? "",
                              text: event["partialResult"]?["content"]?.joinedContentText ?? "")
         case "tool_execution_end":
+            if let child = RoleChildRun(json: event["result"]?["details"]) {
+                updateTool(event["toolCallId"]?.string ?? "") { $0.childRun = child }
+            }
             finishTool(id: event["toolCallId"]?.string ?? "",
                        result: event["result"]?["content"]?.joinedContentText ?? "",
                        isError: event["isError"]?.bool ?? false)
@@ -397,11 +409,13 @@ public struct TranscriptReducer: Sendable {
               let id = decision["toolCallId"]?.string,
               let outcome = ToolApprovalStamp.Outcome(rawValue: decision["outcome"]?.string ?? "")
         else { return }
-        updateTool(id) { tool in
-            tool.approval = ToolApprovalStamp(
+        updateTool(decision["parentToolCallId"]?.string ?? id) { tool in
+            let stamp = ToolApprovalStamp(
                 outcome: outcome,
                 answeredBy: decision["answeredBy"]?.string ?? "human",
                 reason: decision["reason"]?.string)
+            if decision["parentToolCallId"]?.string != nil { tool.childApproval = stamp }
+            else { tool.approval = stamp }
         }
     }
 

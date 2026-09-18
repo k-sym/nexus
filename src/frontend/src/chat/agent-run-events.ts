@@ -21,6 +21,11 @@ export function agentRunActionsFor(ev: StreamEvent, now: number): AgentRunAction
   if (ev?.kind === 'run_start') return [{ type: 'RUN_STARTED', run: ev.run }];
   if (ev?.kind === 'run_end') return [{ type: 'RUN_ENDED', run: ev.run }];
 
+  if (ev?.kind === 'approval_decision' && ev.decision?.toolCallId) {
+    const d = ev.decision;
+    return [{ type: 'TOOL_APPROVAL', id: d.parentToolCallId ?? d.toolCallId, child: !!d.parentToolCallId, approval: { outcome: d.outcome, answeredBy: d.answeredBy, ...(d.reason ? { reason: d.reason } : {}), decidedAt: d.decidedAt } }];
+  }
+
   switch (ev?.type) {
     case 'message_update': {
       const ame = ev.assistantMessageEvent;
@@ -33,7 +38,7 @@ export function agentRunActionsFor(ev: StreamEvent, now: number): AgentRunAction
     case 'tool_execution_start':
       return [{ type: 'TOOL_STARTED', id: ev.toolCallId, name: ev.toolName, args: ev.args ?? {}, at: now }];
     case 'tool_execution_update':
-      return [{ type: 'TOOL_OUTPUT', id: ev.toolCallId, output: extractStreamText(ev.partialResult?.content), at: now }];
+      return [{ type: 'TOOL_OUTPUT', id: ev.toolCallId, output: extractStreamText(ev.partialResult?.content), details: ev.partialResult?.details, at: now }];
     case 'tool_execution_end':
       return [{ type: 'TOOL_FINISHED', id: ev.toolCallId, result: extractStreamText(ev.result?.content), details: ev.result?.details, isError: !!ev.isError, at: now }];
     default:

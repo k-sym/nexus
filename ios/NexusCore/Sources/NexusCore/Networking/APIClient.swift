@@ -360,6 +360,11 @@ public actor APIClient {
 
     /// Held NDJSON queue: one `snapshot`, then `pending`/`resolved`, with `\n`
     /// heartbeats. Holding it open marks the client "attached" server-side.
+    public func childRun(_ id: String) async throws -> RoleChildResponse {
+        let component = id.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? ""
+        return try await request(Endpoint(path: "/api/runs/\(component)/events"))
+    }
+
     public func approvalsStream() throws -> AsyncThrowingStream<JSONValue, Error> {
         try events(.approvalsStream)
     }

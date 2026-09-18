@@ -424,7 +424,7 @@ export class PiRuntime {
   roleFactories?: (threadId: string, cwd: string) => ExtensionFactory[];
 
   extensionFactoriesFor(threadId: string, cwd: string, child?: ChildSessionOptions): ExtensionFactory[] {
-    const approvals = child ? labelledApprovals(this.approvals, child.role) : this.approvals;
+    const approvals = child ? labelledApprovals(this.approvals, child.role, { childRunId: child.id, parentToolCallId: child.parentToolCallId }) : this.approvals;
     const questions = child ? labelledQuestions(this.questions, child.role) : this.questions;
     const factories = buildSessionExtensionFactories(
       threadId, cwd, questions, approvals, this.policyFor(threadId, cwd),
@@ -699,7 +699,7 @@ export class PiRuntime {
     const sm = SessionManager.open(match.path, sessionDir, cwd);
     return sm.getEntries().filter((entry) =>
       entry.type === 'message'
-      || (entry.type === 'custom' && (entry.customType === AGENT_RUN_CUSTOM_TYPE || entry.customType === 'nexus-role-question')),
+      || (entry.type === 'custom' && (entry.customType === AGENT_RUN_CUSTOM_TYPE || entry.customType === 'nexus-role-question' || entry.customType === 'nexus.role_run' || entry.customType === 'nexus.approval_decision')),
     );
   }
 }
