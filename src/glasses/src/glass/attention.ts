@@ -126,8 +126,8 @@ export function cardVerbRows(item: AttentionItem): Array<{ verb: AttentionVerb; 
 
 /** The firmware caps a native list item at 63 BYTES of UTF-8 (the simulator logs
  *  "list item text length 71 exceeds limit of 63 bytes" and rejects the whole page —
- *  a blank lens). Pixel fitting cannot see bytes: ★ is three, · and … are three
- *  and two. Clamp on a code-point boundary and end with an ellipsis. */
+ *  a blank lens). Pixel fitting cannot see bytes: ★ is three, · is two and … is
+ *  three. Clamp on a code-point boundary and end with an ellipsis. */
 export const LIST_ITEM_MAX_BYTES = 63
 export function clampListItem(text: string, maxBytes = LIST_ITEM_MAX_BYTES): string {
   const enc = new TextEncoder()
