@@ -27,8 +27,9 @@ function setup(action: (emit: (event: any) => void) => Promise<void>, limits = {
   const runner = new RoleRunner({ db, engines, concurrency, config: { ...config, ...limits } });
   let parentListener = (_: any) => {};
   const parent = { abort: async () => {}, subscribe: (fn: any) => { parentListener = fn; return () => {}; } } as EngineSession;
-  const finish = runner.bind({ threadId: 't', projectId: 'p', cwd: '/tmp', runId: 'parent', owner }, parent);
-  return { db, runner, parent, emitParent: (event: any) => parentListener(event), finish, concurrency, owner, engines, get options() { return options; }, get aborts() { return aborts; }, get disposed() { return disposed; } };
+  const roleEvents: any[] = [];
+  const finish = runner.bind({ onRole: event => roleEvents.push(event), threadId: 't', projectId: 'p', cwd: '/tmp', runId: 'parent', owner }, parent);
+  return { db, runner, parent, roleEvents, emitParent: (event: any) => parentListener(event), finish, concurrency, owner, engines, get options() { return options; }, get aborts() { return aborts; }, get disposed() { return disposed; } };
 }
 const message = { type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'Found three call sites.' }], usage: { totalTokens: 12 }, stopReason: 'stop' } };
 test('role restrictions cover both native and MCP aliases, including recursive delegation', async () => {
@@ -45,6 +46,9 @@ test('child runs preserve execution identity, report, usage and parent tool link
   try {
     const tools = await collectPiTools(s.runner.factories('t'));
     const result = await tools[0].execute('call', { brief: 'Find callers' }, undefined, undefined, {} as any);
+    assert.equal(s.roleEvents[0].partialResult.details.childRunId, result.details.childRunId);
+    assert.equal(s.roleEvents[0].partialResult.details.status, 'running');
+    assert.equal(s.options.parentToolCallId, 'call');
     assert.equal(result.details.status, 'completed'); assert.equal(result.details.tokens, 12);
     assert.equal(s.options.parentThreadId, 't'); assert.notEqual(s.options.id, 't');
     const row = s.db.prepare('SELECT * FROM role_runs').get() as any;

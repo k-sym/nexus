@@ -825,6 +825,17 @@ Each project has a sessions interface:
 - **Signal filters** trim noisy tool output (ANSI, progress bars, package-manager spam, test output, stack traces, diff context) before it lands in chat history — configurable globally and per-project under `signal_filters` in `config.yaml`.
 - Archival is user-triggered. Nexus summarizes the conversation into canonical `nexus` memory, then removes the hot SQLite thread only after memory storage succeeds.
 
+### Role child runs
+
+Delegated Scout, Researcher, Builder, Refuter and Debugger calls show their role,
+model, status, tokens and duration inside chat on desktop and iOS. Refuter reports
+open by default; other reports start collapsed. **Show work** fetches the child's
+retained tool timeline on demand through `GET /api/runs/:id/events`. Pending child
+tool approvals appear inside the role block, with the existing approval queue as
+the fallback when that block is not on screen. Missing historical transcripts are
+labelled unavailable; the saved report remains readable. No new configuration or
+Settings section is required.
+
 ### Agent tools
 
 On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `grep`, …), each chat session is handed a set of Nexus tools defined in `src/backend/pi/`. Every one follows the same **omit-when-unavailable** contract: a session never advertises a tool it can't actually run, so the model's tool list is an honest reflection of what this machine and this project can do right now.

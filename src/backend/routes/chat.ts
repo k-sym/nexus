@@ -1,3 +1,4 @@
+import { registerRoleRunRoutes } from './role-runs.js';
 import { RoleRunner } from '../roles/runner.js';
 import { readOverrides, roleView, validateRoleOverrides } from '../roles/config.js';
 /**
@@ -360,6 +361,8 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
     ).run(thread.id, thread.project_id, thread.title, thread.created_at, thread.updated_at, thread.archived_at);
     return thread;
   });
+
+  await registerRoleRunRoutes(fastify);
 
   fastify.get('/api/threads/:threadId', async (request) => {
     const { threadId } = request.params as { threadId: string };
@@ -744,7 +747,10 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
         if (title) write({ kind: 'thread_title', threadId, title });
       });
       if (session) {
-        finishRoles = roles.bind({ threadId, projectId: thread.project_id, cwd, runId, owner: projectClaimOwner, onQuestion: event => {
+        finishRoles = roles.bind({ threadId, projectId: thread.project_id, cwd, runId, owner: projectClaimOwner, onRole: event => {
+          session?.sessionManager?.appendCustomEntry("nexus.role_run", event);
+          write(event);
+        }, onQuestion: event => {
           session?.sessionManager?.appendCustomEntry("nexus-role-question", { ...event, timestamp: Date.now() });
           write(event);
         } }, session);
@@ -805,6 +811,7 @@ export async function registerChatRoutes(fastify: FastifyInstance, options: Regi
             threadId,
             toolCallId: ev.toolCallId,
             toolName: ev.resolution.toolName,
+            ...(ev.resolution.childRunId ? { childRunId: ev.resolution.childRunId, parentToolCallId: ev.resolution.parentToolCallId } : {}),
             inputSummary: ev.resolution.inputSummary,
             outcome: ev.resolution.outcome,
             answeredBy: ev.resolution.answeredBy,
@@ -1159,6 +1166,13 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
   // Gate decisions recorded into the session log (#374), attached to their
   // tool call below so the transcript shows who allowed or denied it.
   const approvalsByToolCall = new Map<string, ApprovalDecisionEvent>();
+  const roleDetails = new Map<string, unknown>();
+  const childApprovalsByParent = new Map<string, ApprovalDecisionEvent>();
+  for (const entry of entries as any[]) {
+    if (entry?.type === 'custom' && entry.customType === 'nexus.role_run') {
+      roleDetails.set(entry.data?.toolCallId, entry.data?.partialResult?.details);
+    }
+  }
   const sourceEntries = (entries as any[]).map(entry => {
     if (entry?.type !== 'custom' || entry.customType !== 'nexus-role-question') return entry;
     const event = entry.data;
@@ -1174,6 +1188,7 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
     if (entry?.type === 'custom' && entry.customType === APPROVAL_DECISION_CUSTOM_TYPE) {
       const data = entry.data as ApprovalDecisionEvent | undefined;
       if (data?.toolCallId) approvalsByToolCall.set(String(data.toolCallId), data);
+      if (data?.parentToolCallId) childApprovalsByParent.set(data.parentToolCallId, data);
     }
     if (entry?.type === 'custom' && entry.customType === AGENT_RUN_CUSTOM_TYPE) {
       const data = entry.data as AgentRunStart | AgentRunEnd | undefined;
@@ -1287,6 +1302,9 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
               decidedAt: approval.decidedAt,
             };
           }
+          const childDecision = childApprovalsByParent.get(String(block.id));
+          if (childDecision) call.childApproval = { outcome: childDecision.outcome, answeredBy: childDecision.answeredBy, reason: childDecision.reason };
+          if (roleDetails.has(String(block.id))) call.details = roleDetails.get(String(block.id));
           if (result) {
             call.result = resultText;
             call.completedAt = result.timestamp;
@@ -1309,6 +1327,11 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
       const projectedTools = runIsActive
         ? toolCalls.map((toolCall: any) => toolCall.status === 'interrupted' ? { ...toolCall, status: 'running' } : toolCall)
         : toolCalls;
+      for (const tool of projectedTools as any[]) {
+        if (tool.details?.childRunId && tool.details.status === 'running' && tool.status === 'interrupted') {
+          tool.details = { ...tool.details, status: 'interrupted' };
+        }
+      }
       const hasRunningTool = runIsActive && projectedTools.some((toolCall: any) => toolCall.status === 'running');
       const run = runStart ? {
         runId: runStart.runId,

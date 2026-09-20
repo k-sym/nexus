@@ -339,7 +339,10 @@ struct MessageBubble: View {
                 if !message.thinking.isEmpty {
                     ThinkingView(text: message.thinking)
                 }
-                ForEach(message.toolCalls) { ToolCallCard(tool: $0) }
+                ForEach(message.toolCalls) { tool in
+                    if let child = tool.childRun { RoleChildCard(tool: tool, child: child) }
+                    else { ToolCallCard(tool: tool) }
+                }
                 if !message.content.isEmpty {
                     MarkdownText(text: message.content)
                 } else if message.isStreaming, message.thinking.isEmpty, message.toolCalls.isEmpty {
@@ -514,5 +517,100 @@ struct ContextMeter: View {
 
     private func format(_ n: Int) -> String {
         n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
+    }
+}
+
+/// A role report and its on-demand work, using the same metadata as desktop.
+struct RoleChildCard: View {
+    let tool: ToolCallView
+    let child: RoleChildRun
+    @Environment(LiveHub.self) private var liveHub
+    @State private var expanded: Bool
+    @State private var workOpen = false
+    @State private var loading = false
+    @State private var response: RoleChildResponse?
+    @State private var error: String?
+    @State private var decisionError: String?
+    @State private var deciding = false
+
+    init(tool: ToolCallView, child: RoleChildRun) {
+        self.tool = tool; self.child = child
+        _expanded = State(initialValue: child.role == "refuter")
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button { expanded.toggle() } label: {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(child.role.capitalized) · \(child.model)").font(.subheadline.weight(.medium))
+                    Text("\(child.status == "running" && tool.status != .running ? "interrupted" : child.status) · \(child.tokens) tokens · \(String(format: "%.1f", child.durationMs / 1000))s")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(.plain)
+            ForEach(liveHub.pending.filter { $0.childRunId == child.childRunId }) { approval in
+                ApprovalRow(approval: approval,
+                    onAllow: { decide(approval, action: "allow") },
+                    onDeny: { decide(approval, action: "deny") })
+                    .disabled(deciding)
+            }
+            if let decisionError { Text(decisionError).font(.caption).foregroundStyle(.red) }
+            if let stamp = tool.childApproval {
+                Text("Child tool: \(stamp.label)").font(.caption).foregroundStyle(.secondary)
+            }
+            if expanded {
+                let report = child.reportText(fallback: tool.result)
+                if !report.isEmpty { MarkdownText(text: report) }
+                Button(workOpen ? "Hide work" : "Show work") { workOpen.toggle() }
+                if workOpen {
+                    if loading { ProgressView("Loading child work…") }
+                    if let error {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                        Button("Retry") { Task { await load() } }
+                    }
+                    if let response {
+                        if !response.transcriptAvailable {
+                            Text("Child transcript unavailable. The saved report is shown above.").font(.caption)
+                        } else {
+                            let tools = childTools(response)
+                            if tools.isEmpty { Text("No tool calls recorded.").font(.caption) }
+                            ForEach(tools) { ToolCallCard(tool: $0) }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(10)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 8))
+        .task(id: workOpen) { if workOpen, response == nil { await load() } }
+        .onChange(of: child.status) { _, _ in response = nil; workOpen = false }
+    }
+
+    private func childTools(_ response: RoleChildResponse) -> [ToolCallView] {
+        var reducer = TranscriptReducer()
+        reducer.loadPersisted(response.messages)
+        return reducer.messages.flatMap(\.toolCalls)
+    }
+
+    private func load() async {
+        guard !loading else { return }
+        loading = true; error = nil
+        defer { loading = false }
+        do {
+            let value = try await liveHub.childRun(child.childRunId)
+            try Task.checkCancellation()
+            response = value
+        } catch is CancellationError { }
+        catch { self.error = error.localizedDescription }
+    }
+
+    private func decide(_ approval: PendingApproval, action: String) {
+        guard !deciding else { return }
+        deciding = true; decisionError = nil
+        Task {
+            defer { deciding = false }
+            do { try await liveHub.decideChild(approval, action: action) }
+            catch { decisionError = error.localizedDescription }
+        }
     }
 }

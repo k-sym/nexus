@@ -1035,3 +1035,23 @@ export interface ThreadRoles {
   effective: RoleModels;
   available: Record<RoleName, boolean>;
 }
+
+/** Display metadata for a Nexus-owned role child (#455). */
+export interface RoleChildRun {
+  childRunId: string;
+  role: RoleName;
+  model: string;
+  status: 'running' | 'completed' | 'incomplete' | 'interrupted';
+  tokens: number;
+  durationMs: number;
+  report?: string;
+}
+export function parseRoleChildRun(value: unknown): RoleChildRun | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const v = value as RoleChildRun;
+  if (typeof v.childRunId !== 'string' || !v.childRunId || !ROLE_NAMES.includes(v.role) || typeof v.model !== 'string'
+    || !['running', 'completed', 'incomplete', 'interrupted'].includes(v.status)
+    || !Number.isFinite(v.tokens) || v.tokens < 0 || !Number.isFinite(v.durationMs) || v.durationMs < 0
+    || (v.report !== undefined && typeof v.report !== 'string')) return undefined;
+  return v;
+}

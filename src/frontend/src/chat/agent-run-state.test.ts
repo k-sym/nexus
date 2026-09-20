@@ -91,3 +91,14 @@ describe('agentRunReducer', () => {
     expect(run.tools[0].status).toBe('running');
   });
 });
+
+it('preserves early role identity and child approval on the run-card path', () => {
+  let run = startRun();
+  run = agentRunReducer(run, { type: 'TOOL_STARTED', id: 'delegate', name: 'build', args: {}, at: 1 })!;
+  const details = { childRunId: 'child', role: 'builder', model: 'fake/model', status: 'running', tokens: 0, durationMs: 0 };
+  run = agentRunReducer(run, { type: 'TOOL_OUTPUT', id: 'delegate', output: '', details, at: 2 })!;
+  run = agentRunReducer(run, { type: 'TOOL_APPROVAL', id: 'delegate', child: true, approval: { outcome: 'allowed', answeredBy: 'human' } })!;
+  expect(run.tools[0].details).toEqual(details);
+  expect(run.tools[0].childApproval?.outcome).toBe('allowed');
+  expect(run.tools[0].approval).toBeUndefined();
+});

@@ -1,3 +1,4 @@
+import type { ToolCallApproval } from '@nexus/shared';
 import type {
   AgentRunAbortSource,
   AgentRunTerminalStatus,
@@ -32,6 +33,8 @@ export interface AgentToolView {
   partialOutput: string;
   result?: string;
   details?: unknown;
+  approval?: ToolCallApproval;
+  childApproval?: ToolCallApproval;
   error?: string;
   payloadBytes?: number;
 }
@@ -60,7 +63,8 @@ export type AgentRunAction =
   | { type: 'PREPARING_TOOL'; at: number }
   | { type: 'TOOL_QUEUED'; id: string; name: string; args: Record<string, unknown>; at: number }
   | { type: 'TOOL_STARTED'; id: string; name: string; args: Record<string, unknown>; at: number }
-  | { type: 'TOOL_OUTPUT'; id: string; output: string; at: number }
+  | { type: 'TOOL_APPROVAL'; id: string; child: boolean; approval: ToolCallApproval }
+  | { type: 'TOOL_OUTPUT'; id: string; output: string; details?: unknown; at: number }
   | { type: 'TOOL_FINISHED'; id: string; result: string; details?: unknown; isError: boolean; at: number }
   | { type: 'RUN_ENDED'; run: EndRun }
   | { type: 'RUN_INTERRUPTED'; at: number; error?: string };
@@ -142,6 +146,8 @@ export function agentRunReducer(state: AgentRunView | null, action: AgentRunActi
         : [...state.tools, newTool(action.id, action.name, action.args, action.at, 'running')];
       return { ...state, tools, phase: 'tool_running', lastEventAt: action.at };
     }
+    case 'TOOL_APPROVAL':
+      return { ...state, tools: updateTool(state, action.id, tool => ({ ...tool, [action.child ? 'childApproval' : 'approval']: action.approval })) };
     case 'TOOL_OUTPUT':
       return {
         ...state,
@@ -149,6 +155,7 @@ export function agentRunReducer(state: AgentRunView | null, action: AgentRunActi
           ...tool,
           firstOutputAt: tool.firstOutputAt ?? action.at,
           partialOutput: tool.partialOutput + action.output,
+          ...(action.details !== undefined ? { details: action.details } : {}),
         })),
         phase: 'tool_running',
         lastEventAt: action.at,

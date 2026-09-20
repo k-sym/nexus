@@ -8,6 +8,9 @@
  *
  * Phase 2 of #266.
  */
+import { useState, useSyncExternalStore } from 'react';
+import { createPortal } from 'react-dom';
+import { approvalSlot, subscribeApprovalSlots, approvalSlotsVersion } from '../hooks/approval-slots';
 import { useApprovals, type PendingApproval, type ToolCategory } from '../hooks/useApprovals';
 
 /** Accent per category, so a shell command doesn't look like a file read. */
@@ -61,10 +64,19 @@ export function shortCwd(cwd: string): string {
 
 interface ApprovalCardProps {
   approval: PendingApproval;
-  onDecide: (toolCallId: string, action: 'allow' | 'deny') => void;
+  onDecide: (toolCallId: string, action: 'allow' | 'deny') => Promise<void>;
 }
 
 function ApprovalCard({ approval, onDecide }: ApprovalCardProps) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const decide = async (action: 'allow' | 'deny') => {
+    if (busy) return;
+    setBusy(true); setError('');
+    try { await onDecide(approval.toolCallId, action); }
+    catch (e) { setError(e instanceof Error ? e.message : 'Decision failed. Please retry.'); }
+    finally { setBusy(false); }
+  };
   const summary = summarizeInput(approval.input);
   const project = shortCwd(approval.cwd);
   return (
@@ -83,15 +95,16 @@ function ApprovalCard({ approval, onDecide }: ApprovalCardProps) {
           {summary}
         </div>
       )}
+      {error && <p role="alert">{error}</p>}
       <div className="flex gap-2 mt-2">
         <button
-          onClick={() => onDecide(approval.toolCallId, 'allow')}
+          disabled={busy} onClick={() => void decide('allow')}
           className="flex-1 text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-100 transition-colors"
         >
           Allow
         </button>
         <button
-          onClick={() => onDecide(approval.toolCallId, 'deny')}
+          disabled={busy} onClick={() => void decide('deny')}
           className="flex-1 text-xs px-2 py-1 rounded bg-zinc-800 hover:bg-red-900/60 text-zinc-300 transition-colors"
         >
           Deny
@@ -103,21 +116,14 @@ function ApprovalCard({ approval, onDecide }: ApprovalCardProps) {
 
 export default function ApprovalQueue() {
   const { approvals, decide } = useApprovals();
+  useSyncExternalStore(subscribeApprovalSlots, approvalSlotsVersion);
   if (approvals.length === 0) return null;
-
-  return (
+  const sorted = [...approvals].sort((a, b) => a.requestedAt - b.requestedAt);
+  const card = (approval: PendingApproval) => <ApprovalCard key={approval.toolCallId} approval={approval} onDecide={decide} />;
+  return <>
+    {sorted.filter(a => approvalSlot(a.childRunId)).map(a => createPortal(card(a), approvalSlot(a.childRunId)!, a.toolCallId))}
     <div className="fixed bottom-4 left-4 z-50 flex flex-col gap-2 w-80 max-w-[calc(100vw-2rem)]">
-      {/* Oldest first: the gate that has been waiting longest is closest to
-          timing out, so it should be the one under the cursor. */}
-      {[...approvals]
-        .sort((a, b) => a.requestedAt - b.requestedAt)
-        .map((approval) => (
-          <ApprovalCard
-            key={approval.toolCallId}
-            approval={approval}
-            onDecide={(id, action) => { void decide(id, action); }}
-          />
-        ))}
+      {sorted.filter(a => !approvalSlot(a.childRunId)).map(card)}
     </div>
-  );
+  </>;
 }

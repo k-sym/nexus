@@ -47,7 +47,7 @@ export type EngineSession = Pick<
 };
 
 export interface ChildSessionOptions {
-  id: string; parentThreadId: string; cwd: string; role: RoleName; prompt: string;
+  id: string; parentThreadId: string; parentToolCallId?: string; cwd: string; role: RoleName; prompt: string;
 }
 
 export interface ChatEngine {

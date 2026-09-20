@@ -1,5 +1,7 @@
 import { WarningCircle, Check, Circle, Prohibit, Spinner, CaretDown, CaretUp, Wrench, ShieldCheck, ShieldSlash } from '@phosphor-icons/react';
 import { useState } from 'react';
+import { parseRoleChildRun } from '@nexus/shared';
+import { RoleChildBlock } from './RoleChildBlock';
 import { QuestionCard } from './QuestionCard';
 import { normalizeQuestionRequest, parseQuestionResult, type QuestionAnswer, type QuestionToolResult } from '../lib/questions';
 
@@ -31,6 +33,7 @@ export interface ToolCallInfo {
   completedAt?: number;
   payloadBytes?: number;
   approval?: ToolCallApprovalInfo;
+  childApproval?: ToolCallApprovalInfo;
 }
 
 /** "approved — you" / "denied — partner" / "auto-denied — timed out". The
@@ -109,7 +112,7 @@ export function QuestionCards({ toolCalls, questionState, onAnswerQuestion, only
   return <div className="flex flex-col gap-2 mt-2">{cards}</div>;
 }
 
-function ToolCallBlock({
+function OrdinaryToolCallBlock({
   toolCall,
   detailsExpanded,
 }: { toolCall: ToolCallInfo; detailsExpanded?: boolean }) {
@@ -236,9 +239,9 @@ export function ToolActivity({ toolCalls, running, detailsExpanded, terminalLabe
         ? tools.map((tc) => (
             <ToolCallBlock key={tc.id} toolCall={tc} detailsExpanded={detailsExpanded} />
           ))
-        : activeTool && (
-            <ToolCallBlock key={activeTool.id} toolCall={activeTool} detailsExpanded={detailsExpanded} />
-          )}
+        : tools.filter(tc => tc === activeTool || parseRoleChildRun(tc.details)).map(tc => (
+            <ToolCallBlock key={tc.id} toolCall={tc} detailsExpanded={detailsExpanded} />
+          ))}
     </div>
   );
 }
@@ -683,4 +686,10 @@ function isDiff(text: string): boolean {
 function truncate(text: string, max: number): string {
   if (text.length <= max) return text;
   return `${text.slice(0, max)}\n... (${text.length - max} more chars)`;
+}
+
+function ToolCallBlock(props: { toolCall: ToolCallInfo; detailsExpanded?: boolean }) {
+  const child = parseRoleChildRun(props.toolCall.details);
+  const interrupted = child?.status === 'running' && ['interrupted', 'cancelled', 'failed', 'error'].includes(props.toolCall.status);
+  return child ? <RoleChildBlock child={interrupted ? { ...child, status: 'interrupted' } : child} toolCall={props.toolCall} /> : <OrdinaryToolCallBlock {...props} />;
 }

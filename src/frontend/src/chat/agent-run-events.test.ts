@@ -32,3 +32,11 @@ describe('extractStreamText', () => {
     expect(extractStreamText(undefined)).toBe('');
   });
 });
+
+it('maps early child metadata and a child gate to the delegating call', () => {
+  const details = { childRunId: 'child', role: 'builder' };
+  expect(agentRunActionsFor({ type: 'tool_execution_update', toolCallId: 'delegate', partialResult: { content: [], details } }, 1))
+    .toEqual([{ type: 'TOOL_OUTPUT', id: 'delegate', output: '', details, at: 1 }]);
+  expect(agentRunActionsFor({ kind: 'approval_decision', decision: { toolCallId: 'edit', parentToolCallId: 'delegate', outcome: 'allowed', answeredBy: 'human' } }, 2))
+    .toEqual([{ type: 'TOOL_APPROVAL', id: 'delegate', child: true, approval: { outcome: 'allowed', answeredBy: 'human', decidedAt: undefined } }]);
+});
