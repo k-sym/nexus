@@ -135,6 +135,36 @@ caller degrades to fusion order as before. The launchd plist sources
 `~/.partner/env` so `${OPENROUTER_API_KEY}` interpolates; unset, the cloud tier
 disables cleanly and behavior is exactly the pre-cloud daemon.
 
+## Vault layout and moves
+
+- `Memories/` — global pages (captures, references, profiles, …).
+- `Meeting Notes/` — every global page with `category: meeting` (Conversate end-turn notes).
+  It is an inbox: file a meeting later by setting `project` in Obsidian's properties panel.
+  Frontmatter wins over path (`deriveScope`), so the folder is a view, never a scope, and
+  dragging a page between folders changes nothing about how it is recalled.
+- `Nexus/Projects/<slug>/<Category>/` — nexus-namespace pages, path-scoped.
+
+Moves are safe: a page moved without a content change keeps its row (the row's `file_path`
+follows the file and an oplog `move` is written), so a later reindex does not soft-delete it.
+
+**Boot gate (`waitForVault`) and the `.nexus-vault` marker.** The daemon stamps a hidden
+marker file into the vault the first time it writes or indexes there. A populated index whose
+marker cannot be read (and whose walk finds no markdown) is an unmounted or half-hydrated
+vault (Dropbox / File Provider still coming up at login, a wrong path, a move in progress),
+not an emptied one: the daemon waits up to 5 minutes, then starts with the index intact, and
+the reindex skips its missing-file pass. Directory existence is never trusted on its own — a
+synced mount lists folders before their contents arrive. A ready vault with pages deleted is
+honoured as a real edit. A fresh, empty index gets its directory created and stamped; a vault
+indexed before markers existed is stamped on the first boot that finds its markdown.
+
+**Vault in Dropbox (baker-pro, since 2026-09-21).** The canonical vault is
+`~/Library/CloudStorage/Dropbox/Obsidian/Nexus`; `~/Obsidian/Nexus` is a symlink to it so
+every configured and stored path stays valid. Two rules: the SQLite index is NOT in the vault
+(`memory.db_path: ~/.nexus/index/nexus-memory.db` in `config.yaml` — a synced database file
+corrupts), and the boot gate above covers the login race, so the launchd wrapper needs no
+path-specific logic. Edits from another machine arrive through Dropbox as ordinary external
+edits: the watcher ingests them, last writer wins.
+
 ## Run as a LaunchD agent (always-on)
 
 `npm run build` first (the plist runs compiled `dist/src/index.js`), then:

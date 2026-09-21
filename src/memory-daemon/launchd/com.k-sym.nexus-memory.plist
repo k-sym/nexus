@@ -20,7 +20,10 @@
 
     <!-- sh wrapper: source ~/.partner/env (bare KEY=value lines, chmod 600) so
          config.yaml env refs like ${OPENROUTER_API_KEY} interpolate — launchd does
-         not read shell profiles. Missing env file is fine (cloud tier disables). -->
+         not read shell profiles. Missing env file is fine (cloud tier disables).
+         A vault on a late-mounting volume (Dropbox, File Provider) needs no wrapper
+         logic: the daemon's own waitForVault() waits for the vault's .nexus-vault
+         marker to be readable before it trusts a reindex. -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/sh</string>

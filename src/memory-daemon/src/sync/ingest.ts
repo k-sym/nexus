@@ -14,6 +14,7 @@ import { deriveTitle } from "./title.js";
 import { buildSegments, embedPending } from "../index/indexer.js";
 import { deleteFts } from "../index/fts.js";
 import { dropVectors } from "../index/embed.js";
+import { ensureVaultMarker } from "./marker.js";
 
 export type IngestAction = "insert" | "update" | "noop";
 
@@ -55,10 +56,28 @@ export async function ingestFile(
   }
 
   const existing = ctx.db
-    .prepare("SELECT id, content_hash, created_at, deleted_at FROM memories WHERE id = ?")
-    .get(id) as { id: string; content_hash: string; created_at: string; deleted_at: string | null } | undefined;
+    .prepare("SELECT id, content_hash, created_at, deleted_at, file_path FROM memories WHERE id = ?")
+    .get(id) as { id: string; content_hash: string; created_at: string; deleted_at: string | null; file_path: string } | undefined;
 
   if (!options.force && existing && existing.content_hash === hash && existing.deleted_at === null) {
+    if (existing.file_path !== filePath) {
+      // Same content, new location: a page dragged between folders in Obsidian, or the
+      // whole vault relocated (Dropbox, 2026-09-21). The row must follow the file, or the
+      // next reindex's missing-file pass soft-deletes a memory that is still there.
+      const now = new Date().toISOString();
+      ctx.db.prepare("UPDATE memories SET file_path = ?, file_mtime = ? WHERE id = ?").run(filePath, mtime, id);
+      ctx.db
+        .prepare(
+          `INSERT INTO sync_state (file_path, memory_id, last_mtime, last_indexed_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(file_path) DO UPDATE SET
+             memory_id = excluded.memory_id, last_mtime = excluded.last_mtime,
+             last_indexed_at = excluded.last_indexed_at`,
+        )
+        .run(filePath, id, mtime, now);
+      oplog(ctx.db, "move", { memory_id: id, detail: filePath });
+      console.log(`[ingest] moved ${id} → ${filePath}`);
+    }
     return { id, action: "noop" };
   }
 
@@ -173,11 +192,12 @@ export async function storeMemory(
   }
 
   const filePath = scopeToPath(ctx.cfg.vaultPath, input, id);
+  ensureVaultMarker(ctx.cfg.vaultPath); // a vault the daemon writes into is a ready vault
   writeMemoryFile(ctx, filePath, fm, input.body);
   return (await ingestFile(ctx, filePath))!;
 }
 
-function scopeToPath(
+export function scopeToPath(
   vault: string,
   input: { namespace: string; project?: string | null; category?: string | null },
   id: string,
@@ -186,6 +206,11 @@ function scopeToPath(
     const cat = capitalize(input.category ?? "memory");
     return join(vault, "Nexus", "Projects", input.project, cat, `${id}.md`);
   }
+  // Meeting pages get their own folder: an inbox Keith reviews in Obsidian and files
+  // later by setting `project` in the properties panel. Frontmatter wins over path
+  // (deriveScope), so the folder is a view, never a scope — moving a page between
+  // folders changes nothing about how it is recalled.
+  if ((input.category ?? "").toLowerCase() === "meeting") return join(vault, "Meeting Notes", `${id}.md`);
   return join(vault, "Memories", `${id}.md`);
 }
 
