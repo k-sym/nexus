@@ -57,6 +57,32 @@ test('child runs preserve execution identity, report, usage and parent tool link
     await s.finish(); assert.equal(s.concurrency.releaseProject('p', s.owner), true);
   } finally { s.db.close(); }
 });
+test('a pending child question pauses the time ceiling and resumes it once answered', async () => {
+  const askedAt = { start: 0 };
+  const s = setup(async emit => {
+    emit({ type: 'tool_execution_start', toolCallId: 'ask', toolName: 'question', args: { questions: [{ id: 'q', header: 'Heading', question: 'Which?', options: [] }] } });
+    askedAt.start = Date.now();
+    await new Promise(resolve => setTimeout(resolve, 220));
+    emit({ type: 'tool_execution_end', toolCallId: 'ask', toolName: 'question', result: { content: [] } });
+    emit(message);
+  }, { max_minutes: 0.002 });
+  try {
+    const tools = await collectPiTools(s.runner.factories('t'));
+    const result = await tools[0].execute('call', { brief: 'Build it' }, undefined, undefined, {} as any);
+    assert.equal(result.details.status, 'completed');
+    assert.ok(Date.now() - askedAt.start > 120, 'the wait outlasted the ceiling');
+    assert.equal(s.roleEvents.some(e => String(e.partialResult?.details?.report ?? '').includes('Time ceiling')), false);
+  } finally { s.db.close(); }
+});
+test('the time ceiling still stops a child that is working, not waiting', async () => {
+  const s = setup(async () => { await new Promise(resolve => setTimeout(resolve, 250)); }, { max_minutes: 0.002 });
+  try {
+    const tools = await collectPiTools(s.runner.factories('t'));
+    const result = await tools[0].execute('call', { brief: 'Build it' }, undefined, undefined, {} as any);
+    assert.match(result.details.report, /Time ceiling reached/);
+    assert.equal(s.aborts, 1);
+  } finally { s.db.close(); }
+});
 test('abort does not release ownership while a stubborn child is still executing', async () => {
   let release!: () => void, started!: () => void;
   const ready = new Promise<void>(r => { started = r; });

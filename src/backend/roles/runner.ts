@@ -78,7 +78,21 @@ export class RoleRunner {
     };
     const onAbort = () => stop('Parent or tool call cancelled');
     combined.addEventListener('abort', onAbort, { once: true });
-    const timer = setTimeout(() => stop('Time ceiling reached'), this.deps.config.max_minutes * 60000);
+    // Time waiting on a human for a forwarded question is not the child's work,
+    // so the ceiling clock pauses while one is pending (#500). The question's own
+    // expiry and the parent's abort still bound the wait.
+    let remainingMs = this.deps.config.max_minutes * 60000, clockStart = Date.now(), pendingQuestions = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => stop('Time ceiling reached'), remainingMs);
+    const pauseClock = () => {
+      if (pendingQuestions++ > 0 || !timer) return;
+      clearTimeout(timer); timer = undefined;
+      remainingMs = Math.max(0, remainingMs - (Date.now() - clockStart));
+    };
+    const resumeClock = () => {
+      if (pendingQuestions === 0 || --pendingQuestions > 0 || reason) return;
+      clockStart = Date.now();
+      timer = setTimeout(() => stop('Time ceiling reached'), remainingMs);
+    };
     try {
       child = await resolved.engine.createChildSession({ id, parentThreadId: parent.threadId, parentToolCallId: callId, cwd: parent.cwd, role, prompt: `You are the Nexus ${role}. ${ROLE_PURPOSES[role]}\nWork only on the supplied brief. You cannot delegate. Finish with a concise report and verification evidence.` });
       await child.setModel(resolved.model);
@@ -86,6 +100,7 @@ export class RoleRunner {
         if ((event.type === 'tool_execution_start' || event.type === 'tool_execution_end') && event.toolName === 'question') {
           const mapped = event.type === 'tool_execution_start' ? { ...event, args: { ...event.args, questions: event.args.questions?.map((q: any) => ({ ...q, header: `${role[0].toUpperCase() + role.slice(1)} · ${q.header}` })) } } : event;
           parent.onQuestion?.(mapped);
+          if (event.type === 'tool_execution_start') pauseClock(); else resumeClock();
         }
         if (event.type !== 'message_end' || event.message.role !== 'assistant') return;
         turns++;
@@ -100,7 +115,8 @@ export class RoleRunner {
       else await child.prompt(`${args.brief}\n${args.files?.length ? `Relevant files:\n${args.files.join('\n')}` : ''}`);
     } catch (error) { reason ||= error instanceof Error ? error.message : String(error); }
     finally {
-      clearTimeout(timer); combined.removeEventListener('abort', onAbort); unsubscribe?.();
+      if (timer) clearTimeout(timer);
+      combined.removeEventListener('abort', onAbort); unsubscribe?.();
       try { child?.dispose?.(); } catch (error) { reason ||= `Child cleanup failed: ${String(error)}`; }
     }
     if (!report.trim()) reason ||= 'Child returned no report';

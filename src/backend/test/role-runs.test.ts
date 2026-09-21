@@ -7,6 +7,7 @@ import { flattenEntries } from '../routes/chat.js';
 import { ApprovalBroker } from '../pi/approvals.js';
 import { labelledApprovals } from '../roles/brokers.js';
 import { toPendingDto } from '../routes/approvals.js';
+import { AGENT_RUN_CUSTOM_TYPE } from '@nexus/shared';
 
 const child = { childRunId: 'child-1', role: 'scout', model: 'fake/model', tokens: 12, durationMs: 100, status: 'completed' };
 const entries = [
@@ -61,6 +62,18 @@ test('role metadata survives history for both structured results and early child
   const interrupted = flattenEntries([start, link]) as any[];
   assert.equal(interrupted[0].tool_calls[0].details.childRunId, child.childRunId);
   assert.equal(interrupted[0].tool_calls[0].details.status, 'interrupted');
+});
+
+test('a forwarded child question stays answerable in history while the parent run is active', async () => {
+  const runStart = { type: 'custom', customType: AGENT_RUN_CUSTOM_TYPE, data: { event: 'start', runId: 'r', threadId: 't', startedAt: '2026-09-20T19:49:47Z', provider: 'p', model: 'm' } };
+  const parent = { type: 'message', id: 'parent', message: { role: 'assistant', content: [{ type: 'toolCall', id: 'delegate', name: 'build', arguments: {} }] } };
+  const asked = { type: 'custom', id: 'ask', customType: 'nexus-role-question', data: { type: 'tool_execution_start', toolCallId: 'ask-1', args: { questions: [{ id: 'q', header: 'Builder · Heading', question: 'Which heading?', options: [] }] }, timestamp: 2 } };
+  const live = flattenEntries([runStart, parent, asked], '/repo', { activeRunIds: new Set(['r']), activeThreadIds: new Set(['t']) }) as any[];
+  const liveCalls = live.flatMap(m => m.tool_calls ?? []);
+  assert.equal(liveCalls.find((c: any) => c.id === 'ask-1').status, 'running');
+  assert.equal(liveCalls.find((c: any) => c.id === 'delegate').status, 'running');
+  const dead = flattenEntries([runStart, parent, asked], '/repo') as any[];
+  assert.equal(dead.flatMap(m => m.tool_calls ?? []).find((c: any) => c.id === 'ask-1').status, 'interrupted');
 });
 
 test('child approval carries identity through pending DTO and resolution without changing permission behavior', async () => {
