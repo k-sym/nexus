@@ -1,3 +1,4 @@
+import './support/nexus-test-dir';
 delete process.env.MONDAY_TOKEN;
 
 import { test } from 'node:test';
