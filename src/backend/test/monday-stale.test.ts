@@ -1,5 +1,6 @@
 delete process.env.MONDAY_TOKEN;
 
+import './support/nexus-test-dir';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import Fastify from 'fastify';
