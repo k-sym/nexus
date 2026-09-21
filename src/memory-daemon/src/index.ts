@@ -6,14 +6,13 @@ import { openDb, oplog } from "./db/index.js";
 import { ModelClient } from "./models/client.js";
 import { buildServer } from "./server.js";
 import type { AppContext } from "./context.js";
-import { reindexAll } from "./sync/reindex.js";
+import { reindexAll, waitForVault } from "./sync/reindex.js";
 import { startWatcher } from "./sync/watcher.js";
 import { recoverGhostJobs } from "./jobs/recovery.js";
 import { startWorker } from "./jobs/worker.js";
 
 async function main() {
   const cfg = loadConfig();
-  mkdirSync(cfg.vaultPath, { recursive: true });
 
   const db = openDb(cfg.dbPath);
   const models = new ModelClient(cfg.models);
@@ -27,6 +26,7 @@ async function main() {
   if (recovered > 0) console.log(`[nexus-memory] ghost recovery: ${recovered} job(s) reset to PENDING`);
 
   // Rebuild the index from the canonical vault, then watch for deltas.
+  await waitForVault(ctx);
   const stats = await reindexAll(ctx);
   console.log(`[nexus-memory] reindex: ${JSON.stringify(stats)}`);
   const worker = startWorker(ctx);

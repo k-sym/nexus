@@ -135,6 +135,32 @@ caller degrades to fusion order as before. The launchd plist sources
 `~/.partner/env` so `${OPENROUTER_API_KEY}` interpolates; unset, the cloud tier
 disables cleanly and behavior is exactly the pre-cloud daemon.
 
+## Vault layout and moves
+
+- `Memories/` — global pages (captures, references, profiles, …).
+- `Meeting Notes/` — every global page with `category: meeting` (Conversate end-turn notes).
+  It is an inbox: file a meeting later by setting `project` in Obsidian's properties panel.
+  Frontmatter wins over path (`deriveScope`), so the folder is a view, never a scope, and
+  dragging a page between folders changes nothing about how it is recalled.
+- `Nexus/Projects/<slug>/<Category>/` — nexus-namespace pages, path-scoped.
+
+Moves are safe: a page moved without a content change keeps its row (the row's `file_path`
+follows the file and an oplog `move` is written), so a later reindex does not soft-delete it.
+
+**Boot gate (`waitForVault`).** A populated index whose vault root is missing or empty is an
+unmounted vault (Dropbox / File Provider still coming up at login, a wrong path, a move in
+progress), not an emptied one. The daemon waits up to 5 minutes for it, then starts with the
+index intact, and the reindex skips its missing-file pass. A present tree with pages deleted
+is honoured as a real edit. A fresh, empty index still gets its vault directory created.
+
+**Vault in Dropbox (baker-pro, since 2026-09-21).** The canonical vault is
+`~/Library/CloudStorage/Dropbox/Obsidian/Nexus`; `~/Obsidian/Nexus` is a symlink to it so
+every configured and stored path stays valid. Two rules: the SQLite index is NOT in the vault
+(`memory.db_path: ~/.nexus/index/nexus-memory.db` in `config.yaml` — a synced database file
+corrupts), and the launchd wrapper waits for `$HOME/Obsidian/Nexus/Memories` to exist before
+starting node (belt and braces with the boot gate above). Edits from another machine arrive
+through Dropbox as ordinary external edits: the watcher ingests them, last writer wins.
+
 ## Run as a LaunchD agent (always-on)
 
 `npm run build` first (the plist runs compiled `dist/src/index.js`), then:
