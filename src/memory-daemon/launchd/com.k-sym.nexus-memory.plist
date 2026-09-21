@@ -21,14 +21,14 @@
     <!-- sh wrapper: source ~/.partner/env (bare KEY=value lines, chmod 600) so
          config.yaml env refs like ${OPENROUTER_API_KEY} interpolate — launchd does
          not read shell profiles. Missing env file is fine (cloud tier disables).
-         The until-loop waits for the vault (a Dropbox folder behind ~/Obsidian/Nexus
-         since 2026-09-21) to be mounted before node starts; adjust the path if your
-         vault_path differs. The daemon's own waitForVault() guards the same race. -->
+         A vault on a late-mounting volume (Dropbox, File Provider) needs no wrapper
+         logic: the daemon's own waitForVault() waits for the vault's .nexus-vault
+         marker to be readable before it trusts a reindex. -->
     <key>ProgramArguments</key>
     <array>
         <string>/bin/sh</string>
         <string>-c</string>
-        <string>set -a; . "$HOME/.partner/env" 2>/dev/null; set +a; until [ -d "$HOME/Obsidian/Nexus/Memories" ]; do echo "[launchd] vault not mounted yet, waiting"; sleep 5; done; exec /opt/homebrew/bin/node __REPLACE_WITH_ABS_PATH__/nexus/src/memory-daemon/dist/src/index.js</string>
+        <string>set -a; . "$HOME/.partner/env" 2>/dev/null; set +a; exec /opt/homebrew/bin/node __REPLACE_WITH_ABS_PATH__/nexus/src/memory-daemon/dist/src/index.js</string>
     </array>
 
     <key>WorkingDirectory</key>

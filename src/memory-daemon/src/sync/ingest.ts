@@ -14,6 +14,7 @@ import { deriveTitle } from "./title.js";
 import { buildSegments, embedPending } from "../index/indexer.js";
 import { deleteFts } from "../index/fts.js";
 import { dropVectors } from "../index/embed.js";
+import { ensureVaultMarker } from "./marker.js";
 
 export type IngestAction = "insert" | "update" | "noop";
 
@@ -191,6 +192,7 @@ export async function storeMemory(
   }
 
   const filePath = scopeToPath(ctx.cfg.vaultPath, input, id);
+  ensureVaultMarker(ctx.cfg.vaultPath); // a vault the daemon writes into is a ready vault
   writeMemoryFile(ctx, filePath, fm, input.body);
   return (await ingestFile(ctx, filePath))!;
 }

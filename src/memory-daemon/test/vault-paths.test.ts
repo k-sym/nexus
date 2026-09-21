@@ -17,6 +17,7 @@ import { openDb } from "../src/db/index.js";
 import type { ModelClient } from "../src/models/client.js";
 import { ingestFile, scopeToPath, storeMemory } from "../src/sync/ingest.js";
 import { reindexAll, waitForVault } from "../src/sync/reindex.js";
+import { VAULT_MARKER, vaultReady } from "../src/sync/marker.js";
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "nexus-vault-paths-"));
@@ -113,6 +114,35 @@ test("a missing vault root never empties a populated index", async () => {
   }
 });
 
+test("folders present but nothing hydrated (no marker, no markdown) keeps the index", async () => {
+  const f = fixture();
+  try {
+    const res = await storeMemory(f.ctx, { namespace: "global", category: "meeting", source: "test", body: "keep" });
+    assert.ok(vaultReady(f.ctx.cfg.vaultPath), "storeMemory stamped the vault");
+    rmSync(f.ctx.cfg.vaultPath, { recursive: true, force: true });
+    mkdirSync(join(f.ctx.cfg.vaultPath, "Memories"), { recursive: true }); // what a placeholder mount looks like
+    assert.equal(await waitForVault(f.ctx, { timeoutMs: 40, pollMs: 10 }), false);
+    const stats = await reindexAll(f.ctx);
+    assert.equal(stats.removed, 0);
+    assert.equal(row(f.ctx, res.id).deleted_at, null);
+  } finally {
+    f.close();
+  }
+});
+
+test("a vault indexed before markers existed is stamped on the first boot that finds markdown", async () => {
+  const f = fixture();
+  try {
+    await storeMemory(f.ctx, { namespace: "global", category: "capture", source: "test", body: "old" });
+    rmSync(join(f.ctx.cfg.vaultPath, VAULT_MARKER));
+    assert.equal(vaultReady(f.ctx.cfg.vaultPath), false);
+    assert.equal(await waitForVault(f.ctx, { timeoutMs: 10, pollMs: 5 }), true);
+    assert.ok(vaultReady(f.ctx.cfg.vaultPath));
+  } finally {
+    f.close();
+  }
+});
+
 test("a present vault with a page deleted still soft-deletes that page", async () => {
   const f = fixture();
   try {
@@ -132,6 +162,7 @@ test("waitForVault creates the directory for a fresh, empty index", async () => 
   try {
     assert.equal(await waitForVault(f.ctx, { timeoutMs: 10, pollMs: 5 }), true);
     assert.ok(existsSync(f.ctx.cfg.vaultPath));
+    assert.ok(vaultReady(f.ctx.cfg.vaultPath), "fresh vault is stamped");
   } finally {
     f.close();
   }
