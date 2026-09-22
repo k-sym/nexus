@@ -54,3 +54,6 @@ project_docs
 
 # Claude Code local settings
 settings.local.json
+
+# Node diagnostic reports (process.report), written to the cwd, e.g. by backend test runs
+report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
