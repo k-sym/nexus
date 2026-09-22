@@ -1157,18 +1157,34 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         return { error: ideaScope.repoGateError };
       }
       const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot, ideaScope.subdir);
-      const promptContent = withIdeaSeed(session, promptWithFileReferences(content, savedAttachments));
+      const requestContent = promptWithFileReferences(content, savedAttachments);
       // The background run executes against its Partner session (the run agent is
       // created with session_id), so the whole turn persists to Partner SessionDB
       // and renders from /messages — no local mirror. Ensure the session exists in
       // Partner (and its remote_session_id is recorded) before handing off.
       const remoteSessionId = await ensureRemoteSession(partner, session);
+      // Decide the seed and insert the run row with no await in between
+      // (better-sqlite3 is synchronous), so two concurrent handoffs cannot both
+      // read "no prior turn" and both prepend it.
+      const promptContent = withIdeaSeed(session, requestContent);
       const run = createRun(db, session.id, 'overnight', promptContent);
-      const remote = await partner.startRun({
-        input: promptContent,
-        sessionId: remoteSessionId,
-        sessionKey: `nexus:assistant:${session.id}`,
-      });
+      let remote: Awaited<ReturnType<typeof partner.startRun>>;
+      try {
+        remote = await partner.startRun({
+          input: promptContent,
+          sessionId: remoteSessionId,
+          sessionKey: `nexus:assistant:${session.id}`,
+        });
+      } catch (err) {
+        // A rejected submission never reached the Partner: settle the row as
+        // failed rather than leave it `running` with no remote id (which /sync
+        // would never select, and which withIdeaSeed would read as a prior turn).
+        const now = new Date().toISOString();
+        db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?')
+          .run('failed', errorMessage(err), now, now, run.id);
+        db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
+        throw err;
+      }
       updateRunRemote(db, run.id, remote.runId);
       return { run: publicRun(db.prepare('SELECT * FROM assistant_runs WHERE id = ?').get(run.id) as AssistantRun) };
     });
