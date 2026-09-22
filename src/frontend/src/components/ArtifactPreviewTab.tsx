@@ -3,25 +3,24 @@ import { ArrowSquareOut } from '@phosphor-icons/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { api, type FilePreview } from '../api';
-import RightRail from './RightRail';
 
-interface ArtifactPreviewRailProps {
+interface ArtifactPreviewTabProps {
   projectId: string;
+  /** The file to show, set when a path in chat is clicked; null until then. */
   selectedPath: string | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
 }
 
-export default function ArtifactPreviewRail({ projectId, selectedPath, open, onOpenChange }: ArtifactPreviewRailProps) {
+export default function ArtifactPreviewTab({ projectId, selectedPath }: ArtifactPreviewTabProps) {
   const [preview, setPreview] = useState<FilePreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!selectedPath || !open) return;
+    if (!selectedPath) return;
     let alive = true;
     setLoading(true);
     setError(null);
+    setPreview(null);
     api.projects.previewFile(projectId, selectedPath)
       .then((next) => {
         if (alive) setPreview(next);
@@ -33,41 +32,39 @@ export default function ArtifactPreviewRail({ projectId, selectedPath, open, onO
         if (alive) setLoading(false);
       });
     return () => { alive = false; };
-  }, [open, projectId, selectedPath]);
+  }, [projectId, selectedPath]);
 
-  if (!selectedPath) return null;
+  if (!selectedPath) {
+    return <div className="py-6 text-center text-xs text-faint">Click a file path in the chat to preview it here.</div>;
+  }
   const title = preview?.name ?? selectedPath.split('/').pop() ?? 'Preview';
 
   return (
-    <RightRail
-      label="Preview"
-      title={title}
-      open={open}
-      onOpenChange={onOpenChange}
-      ariaLabel="File preview"
-      resizable
-      actions={preview?.kind === 'pdf' ? (
-        <a
-          href={preview.url}
-          target="_blank"
-          rel="noreferrer"
-          title="Open preview"
-          className="flex items-center gap-1 text-xs text-faint hover:text-[var(--text-primary)] transition-colors"
-        >
-          <ArrowSquareOut size={14} /> Open
-        </a>
-      ) : null}
-    >
-      {loading ? (
-        <div className="py-6 text-center text-xs text-faint">Loading preview…</div>
-      ) : error ? (
-        <div className="surface-panel rounded-md border border-subtle p-3 text-xs text-amber-200" role="alert">{error}</div>
-      ) : preview ? (
-        <PreviewBody preview={preview} />
-      ) : (
-        <div className="py-6 text-center text-xs text-faint">Select a file to preview.</div>
-      )}
-    </RightRail>
+    <div className="flex h-full min-h-0 flex-col gap-2">
+      <div className="flex items-center justify-between gap-2 px-1">
+        <span className="min-w-0 truncate text-[10px] uppercase tracking-wider text-faint font-medium" title={selectedPath}>{title}</span>
+        {preview?.kind === 'pdf' && (
+          <a
+            href={preview.url}
+            target="_blank"
+            rel="noreferrer"
+            title="Open preview"
+            className="flex shrink-0 items-center gap-1 text-xs text-faint hover:text-[var(--text-primary)] transition-colors"
+          >
+            <ArrowSquareOut size={14} /> Open
+          </a>
+        )}
+      </div>
+      <div className="min-h-0 flex-1">
+        {loading ? (
+          <div className="py-6 text-center text-xs text-faint">Loading preview…</div>
+        ) : error ? (
+          <div className="surface-panel rounded-md border border-subtle p-3 text-xs text-amber-200" role="alert">{error}</div>
+        ) : preview ? (
+          <PreviewBody preview={preview} />
+        ) : null}
+      </div>
+    </div>
   );
 }
 

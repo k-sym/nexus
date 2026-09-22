@@ -31,7 +31,7 @@ import { AgentRunCard } from './AgentRunCard';
 import { RunStatusStrip } from './RunStatusStrip';
 import type { AgentRunView } from '../chat/agent-run-state';
 import { useFollowAtBottom } from '../hooks/useFollowAtBottom';
-import ArtifactPreviewRail from './ArtifactPreviewRail';
+import SessionDrawer, { loadDrawerState, saveDrawerState, type DrawerState } from './SessionDrawer';
 import ChatMessageContent from './ChatMessageContent';
 import {
   type ThinkingLevel,
@@ -60,6 +60,8 @@ interface ChatPanelProps {
    *  `onSeedConsumed`. Used by the "Run task" flow to start the agent on open. */
   seed?: { threadId: string; prompt: string; modelKey: string } | null;
   onSeedConsumed?: () => void;
+  /** Navigate to the project's full Memory page (the drawer's Memory tab "Open" action). */
+  onOpenMemoryPage?: () => void;
 }
 
 const MAX_PENDING_ATTACHMENTS = 5;
@@ -154,7 +156,7 @@ function fileToAttachment(file: File): Promise<ChatAttachment> {
   });
 }
 
-export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavigateToThread, onThreadsChanged, onSessionActivityChange, backendActiveThreadIds, seed, onSeedConsumed }: ChatPanelProps) {
+export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavigateToThread, onThreadsChanged, onSessionActivityChange, backendActiveThreadIds, seed, onSeedConsumed, onOpenMemoryPage }: ChatPanelProps) {
   const { models, activeModelId, capabilitiesLoading, setModel, setThread } = useModels();
   const { state, startStream, abortStream, detachStream, stopRun, dispatch, setActiveThread, lastOutcomeRef } = usePiStream();
   const [input, setInput] = useState('');
@@ -177,7 +179,9 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
   const [questionSubmissions, setQuestionSubmissions] = useState<QuestionSubmissionState>({});
   const [fallbackSubmissions, setFallbackSubmissions] = useState<QuestionSubmissionState>({});
   const [artifactPath, setArtifactPath] = useState<string | null>(null);
-  const [artifactRailOpen, setArtifactRailOpen] = useState(false);
+  // The right-hand drawer (Memory / Preview / Sub-agents): its open state and tab persist across sessions.
+  const [drawer, setDrawer] = useState<DrawerState>(loadDrawerState);
+  useEffect(() => saveDrawerState(drawer), [drawer]);
   const [thinkingByThread, setThinkingByThread] = useState<Record<string, ThinkingSelection>>({});
   // Per-thread Supervise (tool-gate every call). Ephemeral on the pi runtime;
   // seeded from GET /api/threads/:id and toggled via POST .../supervise.
@@ -283,7 +287,6 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
     setPendingAttachments([]);
     setAttachmentWarning(null);
     setArtifactPath(null);
-    setArtifactRailOpen(false);
     setDraggingAttachments(false);
   }, [threadId, dispatch, detachStream]);
 
@@ -340,7 +343,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
 
   const openArtifactPreview = useCallback((path: string) => {
     setArtifactPath(path);
-    setArtifactRailOpen(true);
+    setDrawer((current) => ({ ...current, open: true, tab: 'preview' }));
   }, []);
 
   // Helper to fetch thread messages (without setting model)
@@ -833,12 +836,27 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
     enabled: !!threadId && !isRunning && !input.trim() && state.status !== 'error',
   });
 
+  const drawerRail = (
+    <SessionDrawer
+      projectId={projectId}
+      threadId={threadId}
+      running={isRunning}
+      artifactPath={artifactPath}
+      state={drawer}
+      onStateChange={setDrawer}
+      onOpenMemoryPage={onOpenMemoryPage ?? (() => {})}
+    />
+  );
+
   if (!threadId) {
     return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-faint text-sm">Select a session, or use “+ New Session” in the tree to start one.</p>
+      <div className="flex-1 flex min-w-0 h-full">
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <p className="text-faint text-sm">Select a session, or use “+ New Session” in the tree to start one.</p>
+          </div>
         </div>
+        {drawerRail}
       </div>
     );
   }
@@ -1170,12 +1188,7 @@ export default function ChatPanel({ projectId, threadId, onBusyConflict, onNavig
         </div>
       </div>
       </div>
-      <ArtifactPreviewRail
-        projectId={projectId}
-        selectedPath={artifactPath}
-        open={artifactRailOpen}
-        onOpenChange={setArtifactRailOpen}
-      />
+      {drawerRail}
     </div>
   );
 }

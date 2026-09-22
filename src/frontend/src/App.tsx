@@ -24,7 +24,6 @@ import MemoryView from './components/MemoryView';
 import SettingsPage from './components/SettingsPage';
 import { ProjectManagementView } from './components/ProjectManagementView';
 import ProjectModal from './components/ProjectModal';
-import MemoryRail from './components/MemoryRail';
 import ActivityConsole from './components/ActivityConsole';
 import DiffReviewPanel from './components/DiffReviewPanel';
 import type { ActivityResponse, ChatSessionSummary, OperationKind, OperationStatus, ReviewActionResult } from './api';
@@ -757,23 +756,18 @@ export default function App() {
             </div>
           ) : subView === 'chat' ? (
             <div className="flex h-full min-h-0">
-              <div className="flex-1 min-w-0">
-                <ChatPanel
-                  key={activeProject.id}
-                  projectId={activeProject.id}
-                  threadId={activeThreadId}
-                  onBusyConflict={() => {}}
-                  onNavigateToThread={(id) => selectThread(activeProject.id, id)}
-                  onThreadsChanged={() => { void loadThreads(activeProject.id); void refreshLiveSessions(); }}
-                  onSessionActivityChange={handleSessionActivityChange}
-                  backendActiveThreadIds={runningThreadIds}
-                  seed={taskSeed}
-                  onSeedConsumed={() => setTaskSeed(null)}
-                />
-              </div>
-              <MemoryRail
+              <ChatPanel
+                key={activeProject.id}
                 projectId={activeProject.id}
-                onOpenFull={() => selectSubView(activeProject.id, 'memory')}
+                threadId={activeThreadId}
+                onBusyConflict={() => {}}
+                onNavigateToThread={(id) => selectThread(activeProject.id, id)}
+                onThreadsChanged={() => { void loadThreads(activeProject.id); void refreshLiveSessions(); }}
+                onSessionActivityChange={handleSessionActivityChange}
+                backendActiveThreadIds={runningThreadIds}
+                seed={taskSeed}
+                onSeedConsumed={() => setTaskSeed(null)}
+                onOpenMemoryPage={() => selectSubView(activeProject.id, 'memory')}
               />
             </div>
           ) : subView === 'memory' ? (

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { CaretLeft, CaretRight } from '@phosphor-icons/react';
 
+export interface RailTab { id: string; label: string }
+
 interface RightRailProps {
   label: string;
   title: string;
@@ -11,13 +13,18 @@ interface RightRailProps {
   children: ReactNode;
   ariaLabel?: string;
   resizable?: boolean;
+  /** When given, the header shows these tabs in place of the title. */
+  tabs?: RailTab[];
+  activeTab?: string;
+  onTabChange?: (id: string) => void;
+  initialWidth?: number;
 }
 
 const MIN_RAIL_WIDTH = 240;
 const MAX_RAIL_WIDTH = 720;
 
-export default function RightRail({ label, title, open, onOpenChange, actions, footer, children, ariaLabel, resizable = false }: RightRailProps) {
-  const [width, setWidth] = useState(288);
+export default function RightRail({ label, title, open, onOpenChange, actions, footer, children, ariaLabel, resizable = false, tabs, activeTab, onTabChange, initialWidth = 288 }: RightRailProps) {
+  const [width, setWidth] = useState(initialWidth);
   const [resizing, setResizing] = useState(false);
 
   const resizeTo = useCallback((clientX: number) => {
@@ -51,6 +58,12 @@ export default function RightRail({ label, title, open, onOpenChange, actions, f
     );
   }
 
+  const moveTab = (delta: number) => {
+    if (!tabs?.length || !onTabChange) return;
+    const index = Math.max(0, tabs.findIndex((tab) => tab.id === activeTab));
+    onTabChange(tabs[(index + delta + tabs.length) % tabs.length].id);
+  };
+
   return (
     <aside
       className="relative shrink-0 border-l border-subtle surface-glass flex flex-col min-h-0"
@@ -80,9 +93,41 @@ export default function RightRail({ label, title, open, onOpenChange, actions, f
           <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-transparent transition-colors group-hover:bg-[var(--border-strong)] group-focus:bg-[var(--accent)]" />
         </div>
       )}
-      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-subtle">
-        <span className="min-w-0 truncate text-[10px] uppercase tracking-wider text-faint font-medium">{title}</span>
-        <div className="flex shrink-0 items-center gap-2">
+      <div className="flex items-center justify-between gap-2 px-2 py-1.5 border-b border-subtle">
+        {tabs && tabs.length > 0 ? (
+          <div
+            role="tablist"
+            aria-label={`${label} tabs`}
+            className="flex min-w-0 items-center gap-1 overflow-x-auto"
+            onKeyDown={(event) => {
+              if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+              event.preventDefault();
+              moveTab(event.key === 'ArrowLeft' ? -1 : 1);
+            }}
+          >
+            {tabs.map((tab) => {
+              const selected = tab.id === activeTab;
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={selected}
+                  tabIndex={selected ? 0 : -1}
+                  onClick={() => onTabChange?.(tab.id)}
+                  className={`shrink-0 rounded-md border px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    selected ? 'surface-panel border-strong text-primary' : 'border-transparent text-faint hover:text-[var(--text-primary)]'
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <span className="min-w-0 truncate px-1 text-[10px] uppercase tracking-wider text-faint font-medium">{title}</span>
+        )}
+        <div className="flex shrink-0 items-center gap-2 pr-1">
           {actions}
           <button
             type="button"

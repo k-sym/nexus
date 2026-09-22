@@ -12,6 +12,15 @@ export interface RoleChildResponse {
   messages: Array<{ id: string; role: string; content?: string; tool_calls?: ToolCallInfo[] }>;
 }
 
+/** The child's saved report and retained tool timeline, as `GET /api/runs/:id/events` returns them. */
+export async function loadRoleChildWork(childRunId: string, signal?: AbortSignal): Promise<RoleChildResponse> {
+  const response = await apiFetch(`/api/runs/${encodeURIComponent(childRunId)}/events`, { signal });
+  if (!response.ok) throw new Error(`Could not load child work (${response.status}).`);
+  const value = await response.json() as RoleChildResponse;
+  if (!parseRoleChildRun(value.child) || !Array.isArray(value.messages)) throw new Error('Invalid child transcript.');
+  return value;
+}
+
 export function RoleChildBlock({ child, toolCall }: { child: RoleChildRun; toolCall: ToolCallInfo }) {
   const [expanded, setExpanded] = useState(child.role === 'refuter');
   const [workOpen, setWorkOpen] = useState(false);
@@ -31,10 +40,7 @@ export function RoleChildBlock({ child, toolCall }: { child: RoleChildRun; toolC
     abort.current = controller;
     setLoading(true); setError('');
     try {
-      const response = await apiFetch(`/api/runs/${encodeURIComponent(child.childRunId)}/events`, { signal: controller.signal });
-      if (!response.ok) throw new Error(`Could not load child work (${response.status}).`);
-      const value = await response.json() as RoleChildResponse;
-      if (!parseRoleChildRun(value.child) || !Array.isArray(value.messages)) throw new Error('Invalid child transcript.');
+      const value = await loadRoleChildWork(child.childRunId, controller.signal);
       if (!controller.signal.aborted) setData(value);
     } catch (e) {
       if (!controller.signal.aborted) setError(e instanceof Error ? e.message : 'Could not load child work.');
@@ -76,7 +82,7 @@ export function RoleChildBlock({ child, toolCall }: { child: RoleChildRun; toolC
 /** The child's tool calls in order. ToolCallTimeline drops question calls (the
  *  parent bubble renders them as QuestionCards), so they are interleaved here
  *  read-only: the child's questions were answered in the parent thread. */
-function ChildWork({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
+export function ChildWork({ toolCalls }: { toolCalls: ToolCallInfo[] }) {
   const runs: ToolCallInfo[][] = [];
   for (const tc of toolCalls) {
     const last = runs[runs.length - 1];

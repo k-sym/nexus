@@ -819,6 +819,7 @@ Each project has a sessions interface:
 - Pick which curated model powers the conversation (per-thread; remembered on the thread).
 - Drag-and-drop files onto the composer — they land in `project_docs/uploads/` and are referenced in context. Image and document (PDF/Word/Excel/CSV/markdown/plain-text) attachments are supported, gated by the selected model's input modalities.
 - Relevant memories are recalled and injected into the prompt; each Q&A is archived to memory (best-effort).
+- **Session drawer**: one collapsible, resizable drawer on the right of a session with three tabs — **Memory** (the project's recent memories, add one inline, *Open* for the full page), **Preview** (an inline preview of a file the agent named in chat; clicking a path in a reply opens this tab) and **Sub-agents** (every role child run of the session, newest first: role, model, status, tokens and duration; expand a row for its ids, the reason it stopped early, its report and its tool timeline, refreshed every few seconds while a child runs). Only the showing tab polls; the open state and chosen tab persist across sessions and reloads.
 - **Question cards**: when an agent emits a `question` tool call, it renders as a structured question card (single/multi/custom answers); your reply is fed back as the next turn (`POST /api/threads/:threadId/questions/:toolCallId/answer`).
 - **Live streaming**: replies stream token-by-token over NDJSON (`POST /api/threads/:threadId/messages/stream`). The Pi runtime normalizes events across providers (text deltas, tool calls, thinking blocks, run boundaries, context-usage), so you see the agent working regardless of which provider backs the model. The full entry history is also persisted as session JSONL under `~/.nexus/sessions/<repo-slug>/`.
 - **Concurrency**: a per-`(project, model)` slot and a project-wide slot prevent two repo-mutating runs from racing on the same working tree (issue #95). A conflicting request gets a `409` with `kind: thread_busy` / `model_busy` / `project_busy`; the frontend can retry with `X-Confirm-Cancel: true` to abort the holder first. Live runs are listed at `GET /api/chat/active-runs` and abortable via `POST /api/threads/:threadId/abort`.
@@ -835,6 +836,14 @@ tool approvals appear inside the role block, with the existing approval queue as
 the fallback when that block is not on screen. Missing historical transcripts are
 labelled unavailable; the saved report remains readable. No new configuration or
 Settings section is required.
+
+The session drawer's **Sub-agents** tab (beside Memory and Preview) lists every child
+of the open session, newest first, from `GET /api/threads/:threadId/runs`: role, model,
+status, tokens and duration, expanding into the child run, parent run and tool call ids,
+the started and finished times, the reason a child stopped early (the runner's
+`INCOMPLETE:` prefix), its report and its tool timeline, refetched every few seconds
+while the child is running. It is the place to debug a delegation without scrolling
+the transcript; child approvals stay inside the chat's role block.
 
 A child's question is forwarded to the parent thread and stays answerable there,
 including after the app reloads mid-run. While it waits for you, the role's
@@ -1006,6 +1015,8 @@ The task board was replaced by the session-first board in #439. These routes sta
 | POST | `/api/threads/:threadId/messages/stream` | Send a turn; streams NDJSON (`run_start`, `text_delta`, tool calls, `context_usage`, `run_end`, …). Body includes `modelKey`, `images`, `attachments`. Concurrency `409`s with `kind: thread_busy` / `model_busy` / `project_busy`. |
 | POST | `/api/threads/:threadId/abort` | Abort the thread's active run (`{ source: 'user' \| 'frontend' }`) |
 | POST | `/api/threads/:threadId/questions/:toolCallId/answer` | Answer a structured question card |
+| GET | `/api/threads/:threadId/runs` | Role child runs of a thread, newest first, with their parent run and tool call ids (the session drawer's Sub-agents tab) |
+| GET | `/api/runs/:id/events` | A role child run's saved report plus its retained tool timeline (Show work) |
 | PATCH | `/api/threads/:threadId` | Rename a thread |
 | POST | `/api/threads/:threadId/archive` | Archive a thread to memory |
 | DELETE | `/api/threads/:threadId` | Delete a thread |
@@ -1295,9 +1306,9 @@ nexus/
 │           ├── hooks/           # usePiStream, useAssistantStream, useModels, useFollowAtBottom
 │           ├── lib/
 │           └── components/      # MissionControl, KanbanBoard, ChatPanel, AssistantView, IdeasView,
-│                                # ActivityConsole, MemoryView, MemoryRail, TicketsView,
+│                                # ActivityConsole, MemoryView, SessionDrawer, MemoryTab, TicketsView,
 │                                # TaskModelPicker, ModelSelector, ModelCurationSection, PiAuthSection,
-│                                # TrustPrivacySection, SettingsPage, DiffReviewPanel, ArtifactPreviewRail,
+│                                # TrustPrivacySection, SettingsPage, DiffReviewPanel, ArtifactPreviewTab, SubAgentsTab,
 │                                # ChatArtifactLinks, RightRail, QuestionCard, ThinkingBlock,
 │                                # ToolCallTimeline, CommandPalette, Sidebar, TopBar, DaemonToasts,
 │                                # NotificationToasts, ProjectModal, TaskModal, AgentRunCard, …

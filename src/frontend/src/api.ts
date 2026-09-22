@@ -1,4 +1,4 @@
-import type { ThreadRoles, RoleName } from '@nexus/shared';
+import type { ThreadRoles, RoleName, RoleChildRunRecord } from '@nexus/shared';
 import type { AgentBridgeReply, AgentBridgeProjectPolicy, AgentBridgeProjectScope, AgentBridgeTrust } from '@nexus/shared';
 /**
  * Frontend API client.
@@ -879,6 +879,8 @@ export const api = {
   roles: {
     get: (threadId?: string) => fetchJson<ThreadRoles>(threadId ? `/api/threads/${encodeURIComponent(threadId)}/roles` : "/api/roles"),
     update: (threadId: string, patch: Partial<Record<RoleName, string | null>>) => fetchJson<ThreadRoles>(`/api/threads/${encodeURIComponent(threadId)}/roles`, { method: "PUT", body: JSON.stringify(patch) }),
+    /** Every role child run of a thread, newest first (the session drawer's Sub-agents tab). */
+    runs: (threadId: string) => fetchJson<{ runs: RoleChildRunRecord[] }>(`/api/threads/${encodeURIComponent(threadId)}/runs`),
   },
   chat: {
     threads: (projectId: string) => fetchJson<ChatThread[]>(`/api/projects/${projectId}/threads`),

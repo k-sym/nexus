@@ -90,3 +90,27 @@ test('child approval carries identity through pending DTO and resolution without
   assert.equal(events[1].resolution.childRunId, 'child-1');
   assert.equal(events[1].resolution.parentToolCallId, 'delegate');
 });
+
+test('a thread lists its role child runs newest first with their ledger identity', async () => {
+  const db = new Database(':memory:');
+  db.exec(`CREATE TABLE chat_threads(id TEXT, project_id TEXT); INSERT INTO chat_threads VALUES ('t','p');
+    CREATE TABLE role_runs(id TEXT PRIMARY KEY, parent_run_id TEXT, parent_tool_call_id TEXT, thread_id TEXT, role TEXT, model_key TEXT, status TEXT, report TEXT, tokens INTEGER, started_at TEXT, completed_at TEXT, duration_ms INTEGER);
+    INSERT INTO role_runs VALUES ('old','run-1','call-1','t','scout','fake/model','completed','Found it.',12,'2026-09-22T08:00:00Z','2026-09-22T08:00:05Z',5000);
+    INSERT INTO role_runs VALUES ('new','run-2','call-2','t','builder','fake/model','running','',0,'2026-09-22T09:00:00Z',NULL,NULL);
+    INSERT INTO role_runs VALUES ('other','run-3','call-3','u','scout','fake/model','completed','x',1,'2026-09-22T10:00:00Z','2026-09-22T10:00:01Z',1000);`);
+  const app = Fastify();
+  app.decorate('db', db);
+  app.decorate('pi', {} as any);
+  await registerRoleRunRoutes(app);
+  try {
+    const response = await app.inject('/api/threads/t/runs');
+    assert.equal(response.statusCode, 200);
+    const { runs } = response.json();
+    assert.deepEqual(runs.map((run: any) => run.childRunId), ['new', 'old']);
+    assert.deepEqual(runs[1], { childRunId: 'old', role: 'scout', model: 'fake/model', status: 'completed', tokens: 12, durationMs: 5000, report: 'Found it.',
+      parentRunId: 'run-1', parentToolCallId: 'call-1', startedAt: '2026-09-22T08:00:00Z', completedAt: '2026-09-22T08:00:05Z' });
+    assert.equal(runs[0].completedAt, null);
+    assert.equal(runs[0].durationMs, 0);
+    assert.equal((await app.inject('/api/threads/missing/runs')).statusCode, 404);
+  } finally { await app.close(); db.close(); }
+});
