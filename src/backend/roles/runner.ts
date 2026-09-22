@@ -69,6 +69,7 @@ export class RoleRunner {
     let reason = '', report = '', tokens = 0, turns = 0;
     let unsubscribe: (() => void) | undefined;
     const combined = signal ? AbortSignal.any([signal, parent.signal]) : parent.signal;
+    let remainingMs = this.deps.config.max_minutes * 60000, clockStart = Date.now(), pendingQuestions = 0;
     const stop = (why: string) => {
       reason ||= why;
       this.deps.bus?.emit({ ...activity, type: 'update', lastEvent: 'cancelling', error: `${reason}; waiting for the child to stop before releasing the project` });
@@ -76,12 +77,14 @@ export class RoleRunner {
         this.deps.bus?.emit({ ...activity, type: 'update', lastEvent: 'cancellation_failed', error: `Child cancellation failed; project remains locked: ${String(error)}` });
       });
     };
-    const onAbort = () => stop('Parent or tool call cancelled');
+    // A question's expiry reaches the child as a parent abort (routes/chat.ts
+    // aborts before it cancels the question), so name the question when one is
+    // pending rather than reporting an ordinary cancellation.
+    const onAbort = () => stop(pendingQuestions > 0 ? 'Question unanswered; parent run stopped' : 'Parent or tool call cancelled');
     combined.addEventListener('abort', onAbort, { once: true });
     // Time waiting on a human for a forwarded question is not the child's work,
     // so the ceiling clock pauses while one is pending (#500). The question's own
     // expiry and the parent's abort still bound the wait.
-    let remainingMs = this.deps.config.max_minutes * 60000, clockStart = Date.now(), pendingQuestions = 0;
     let timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => stop('Time ceiling reached'), remainingMs);
     const pauseClock = () => {
       if (pendingQuestions++ > 0 || !timer) return;

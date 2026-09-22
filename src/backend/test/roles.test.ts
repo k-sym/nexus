@@ -74,6 +74,23 @@ test('a pending child question pauses the time ceiling and resumes it once answe
     assert.equal(s.roleEvents.some(e => String(e.partialResult?.details?.report ?? '').includes('Time ceiling')), false);
   } finally { s.db.close(); }
 });
+test('a child stopped while its question is unanswered says so in the report', async () => {
+  let release!: () => void, asked!: () => void;
+  const waiting = new Promise<void>(r => { release = r; });
+  const ready = new Promise<void>(r => { asked = r; });
+  const s = setup(async emit => {
+    emit({ type: 'tool_execution_start', toolCallId: 'ask', toolName: 'question', args: { questions: [] } });
+    asked(); await waiting;
+  });
+  try {
+    const tools = await collectPiTools(s.runner.factories('t'));
+    const pending = tools[0].execute('call', { brief: 'Build it' }, undefined, undefined, {} as any);
+    await ready;
+    await s.parent.abort(); release();
+    const result = await pending;
+    assert.match(result.details.report, /^INCOMPLETE: Question unanswered/);
+  } finally { release(); s.db.close(); }
+});
 test('the time ceiling still stops a child that is working, not waiting', async () => {
   const s = setup(async () => { await new Promise(resolve => setTimeout(resolve, 250)); }, { max_minutes: 0.002 });
   try {
