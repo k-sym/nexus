@@ -50,15 +50,16 @@ interface SessionDrawerProps {
 
 /** The right-hand drawer of a project session: Memory, Preview and Sub-agents
  *  as tabs of one collapsible, resizable rail. Only the showing tab mounts, so
- *  only it polls. */
+ *  only it polls. The collapsed strip names the drawer, not the tab it last
+ *  showed, so it reads the same whichever tab is selected. */
 export default function SessionDrawer({ projectId, threadId, running, artifactPath, state, onStateChange, onOpenMemoryPage }: SessionDrawerProps) {
   const [memoryVersion, setMemoryVersion] = useState(0);
   const active = TABS.find((tab) => tab.id === state.tab) ?? TABS[0];
 
   return (
     <RightRail
-      label={active.label}
-      title={active.label}
+      label="Drawer"
+      title="Session drawer"
       ariaLabel="Session drawer"
       open={state.open}
       onOpenChange={(open) => onStateChange({ ...state, open })}
