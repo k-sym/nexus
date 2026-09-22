@@ -55,10 +55,10 @@ describe('SessionDrawer', () => {
     expect(onStateChange).toHaveBeenLastCalledWith({ open: true, tab: 'subagents' });
   });
 
-  it('collapses to a strip named for the active tab', () => {
+  it('collapses to a strip named for the drawer, whichever tab is selected', () => {
     const { onStateChange } = drawer({ open: false, tab: 'subagents' });
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTitle('Show sub-agents'));
+    fireEvent.click(screen.getByTitle('Show drawer'));
     expect(onStateChange).toHaveBeenCalledWith({ open: true, tab: 'subagents' });
   });
 
@@ -77,7 +77,7 @@ describe('SessionDrawer', () => {
   it('can be resized with pointer or keyboard', async () => {
     drawer({ open: true, tab: 'memory' });
     const rail = screen.getByRole('complementary', { name: 'Session drawer' });
-    const handle = screen.getByRole('separator', { name: 'Resize memory' });
+    const handle = screen.getByRole('separator', { name: 'Resize drawer' });
 
     fireEvent.pointerDown(handle, { clientX: 900 });
     const move = new Event('pointermove', { bubbles: true });
