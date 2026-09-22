@@ -557,6 +557,22 @@ function promptWithFileReferences(content: string, attachments: AssistantAttachm
   return `${content}\n\nAttached files:\n${lines.join('\n')}`;
 }
 
+// The seed block that opens an idea dialogue's first Partner turn. Labelled so
+// the model reads it as the idea's starting notes (data the user wrote when
+// parking the idea), not as the request itself — the request follows it.
+export const IDEA_SEED_HEADING = 'Seed notes for this idea';
+
+export function ideaSeedBlock(title: string, seed: string): string {
+  return [
+    `${IDEA_SEED_HEADING} — "${title}"`,
+    'These are the notes captured when the idea was parked. Treat them as the starting context for this dialogue; the message after the rule is the actual request.',
+    '',
+    seed.trim(),
+    '',
+    '---',
+  ].join('\n');
+}
+
 function hasImageAttachments(attachments: AssistantAttachment[]): boolean {
   return attachments.some((attachment) => attachment.type === 'image');
 }
@@ -679,6 +695,30 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
       };
     };
 
+    // Idea dialogues start from the idea's seed notes, but the seed lives only
+    // in the `ideas` row — the Partner never saw it, so the first research
+    // turn re-derived the idea from scratch (2026-09-22, f112bfe3). The
+    // Partner's `system_message` is per-turn and unpersisted, whereas a user
+    // turn lands in Partner SessionDB and the resumed Claude session, so the
+    // seed rides the opening turn instead. Idempotence: only a session with
+    // no prior turn that reached the Partner gets it. A `failed` run may never
+    // have got there (Partner down before ensureRemoteSession), so it does not
+    // count — at worst a mid-stream failure repeats the seed once, which
+    // beats losing it for good. Re-opening an idea sends nothing.
+    const withIdeaSeed = (session: AssistantSession, content: string): string => {
+      if (session.origin !== 'idea') return content;
+      const idea = db.prepare('SELECT title, seed FROM ideas WHERE session_id = ?').get(session.id) as
+        | { title: string; seed: string | null }
+        | undefined;
+      const seed = idea?.seed?.trim();
+      if (!idea || !seed) return content;
+      const prior = db
+        .prepare("SELECT id FROM assistant_runs WHERE session_id = ? AND status != 'failed' LIMIT 1")
+        .get(session.id);
+      if (prior) return content;
+      return `${ideaSeedBlock(idea.title, seed)}\n\n${content}`;
+    };
+
     const streamSessionTurn = async (sessionId: string, content: string, attachmentsInput: unknown, modelKey: unknown, reply: any, request: FastifyRequest) => {
       const trimmed = content.trim();
       const attachmentsResult = validateAssistantAttachments(attachmentsInput);
@@ -694,7 +734,7 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         return { error: ideaScope.repoGateError };
       }
       const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot, ideaScope.subdir);
-      const promptContent = promptWithFileReferences(trimmed, savedAttachments);
+      const promptContent = withIdeaSeed(session, promptWithFileReferences(trimmed, savedAttachments));
       // Optional (unlike the thread route): absent means the session's persisted
       // choice, falling back to the adapter's service default. The adapter 400s
       // on an id outside its allowlist before spawning anything.
@@ -1117,18 +1157,34 @@ export function createAssistantRoutes(load: () => NexusConfig = loadConfig, opti
         return { error: ideaScope.repoGateError };
       }
       const savedAttachments = saveAssistantAttachments(attachmentsResult.attachments, uploadRoot, ideaScope.subdir);
-      const promptContent = promptWithFileReferences(content, savedAttachments);
+      const requestContent = promptWithFileReferences(content, savedAttachments);
       // The background run executes against its Partner session (the run agent is
       // created with session_id), so the whole turn persists to Partner SessionDB
       // and renders from /messages — no local mirror. Ensure the session exists in
       // Partner (and its remote_session_id is recorded) before handing off.
       const remoteSessionId = await ensureRemoteSession(partner, session);
+      // Decide the seed and insert the run row with no await in between
+      // (better-sqlite3 is synchronous), so two concurrent handoffs cannot both
+      // read "no prior turn" and both prepend it.
+      const promptContent = withIdeaSeed(session, requestContent);
       const run = createRun(db, session.id, 'overnight', promptContent);
-      const remote = await partner.startRun({
-        input: promptContent,
-        sessionId: remoteSessionId,
-        sessionKey: `nexus:assistant:${session.id}`,
-      });
+      let remote: Awaited<ReturnType<typeof partner.startRun>>;
+      try {
+        remote = await partner.startRun({
+          input: promptContent,
+          sessionId: remoteSessionId,
+          sessionKey: `nexus:assistant:${session.id}`,
+        });
+      } catch (err) {
+        // A rejected submission never reached the Partner: settle the row as
+        // failed rather than leave it `running` with no remote id (which /sync
+        // would never select, and which withIdeaSeed would read as a prior turn).
+        const now = new Date().toISOString();
+        db.prepare('UPDATE assistant_runs SET status = ?, error = ?, completed_at = ?, updated_at = ? WHERE id = ?')
+          .run('failed', errorMessage(err), now, now, run.id);
+        db.prepare('UPDATE assistant_sessions SET status = ?, updated_at = ? WHERE id = ?').run('failed', now, session.id);
+        throw err;
+      }
       updateRunRemote(db, run.id, remote.runId);
       return { run: publicRun(db.prepare('SELECT * FROM assistant_runs WHERE id = ?').get(run.id) as AssistantRun) };
     });

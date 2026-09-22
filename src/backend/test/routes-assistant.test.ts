@@ -5,7 +5,7 @@ import Fastify from 'fastify';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createAssistantRoutes, remoteSessionTitle } from '../routes/assistant';
+import { createAssistantRoutes, remoteSessionTitle, IDEA_SEED_HEADING } from '../routes/assistant';
 import { loadConfig } from '../config';
 import { getDb } from '../db';
 import type { PartnerFetch } from '../partner/client';
@@ -623,6 +623,146 @@ test('Idea dialogue attachments are gated on a valid target repo and filed per i
       payload: { content: 'just talking' },
     });
     assert.equal(textOnly.statusCode, 200);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Idea dialogue first turn carries the idea seed notes to the Partner, once', async () => {
+  // The seed lives only in the `ideas` row; the Partner never saw it, so a
+  // research turn re-derived the idea from scratch (2026-09-22). It now opens
+  // the first Partner turn — and only the first: re-opening the idea or
+  // sending later turns must not repeat it.
+  const partnerMessages: string[] = [];
+  let failNext = false;
+  const fetchImpl = partnerChatMock({
+    onChatStream: (_url, init) => {
+      partnerMessages.push(JSON.parse(String(init?.body)).message);
+      if (failNext) {
+        failNext = false;
+        return new Response('nope', { status: 500 });
+      }
+      return sseResponse(['event: assistant.delta\ndata: {"delta":"ok"}\n\n', 'event: done\ndata: {}\n\n']);
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO assistant_sessions (id, title, status, origin, created_at, updated_at) VALUES ('idea-sess', 'Idea: Glasses HUD', 'idle', 'idea', ?, ?)",
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO ideas (id, title, seed, state, tags, session_id, source, created_at, updated_at)
+       VALUES ('idea-1', 'Glasses HUD', '  Show the needs-you count on the G2 lens.\nKeep it to one line.  ', 'parked', '[]', 'idea-sess', 'idea_watcher', ?, ?)`,
+    ).run(now, now);
+
+    const send = (content: string) => app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/idea-sess/messages/stream',
+      payload: { content },
+    });
+
+    // A first turn that never reaches the Partner (500 on the stream) leaves
+    // the seed unsent, so the retry still carries it.
+    failNext = true;
+    const failed = await send('Research brief: prior art');
+    assert.equal(ndjsonEvents(failed.payload).find((e) => e.kind === 'run_end').run.status, 'failed');
+
+    const first = await send('Research brief: prior art');
+    assert.equal(first.statusCode, 200);
+    assert.equal(partnerMessages.length, 2);
+    for (const message of partnerMessages) {
+      assert.ok(message.startsWith(`${IDEA_SEED_HEADING} — "Glasses HUD"`), 'seed block opens the turn, labelled with the idea title');
+      assert.match(message, /Show the needs-you count on the G2 lens\.\nKeep it to one line\./, 'seed text is trimmed and intact');
+      assert.ok(message.endsWith('---\n\nResearch brief: prior art'), 'the request follows the rule');
+    }
+    // The run row records what the Partner actually received.
+    const runs = db.prepare("SELECT input, status FROM assistant_runs WHERE session_id = 'idea-sess' ORDER BY started_at").all() as any[];
+    assert.deepEqual(runs.map((r) => r.status), ['failed', 'succeeded']);
+    assert.ok(runs[1].input.startsWith(IDEA_SEED_HEADING));
+
+    // Later turns are the bare message: the seed is already in the Partner
+    // transcript and the resumed Claude session.
+    const second = await send('Narrow it to option 2');
+    assert.equal(second.statusCode, 200);
+    assert.equal(partnerMessages[2], 'Narrow it to option 2');
+
+    // The seed never leaks into an ordinary (non-idea) session's turns.
+    const plain = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Plain' } });
+    await app.inject({ method: 'POST', url: `/api/assistant/sessions/${plain.json().id}/messages/stream`, payload: { content: 'hello' } });
+    assert.equal(partnerMessages[3], 'hello');
+
+    // An idea with no seed opens with the bare request too.
+    db.prepare(
+      "INSERT INTO assistant_sessions (id, title, status, origin, created_at, updated_at) VALUES ('idea-sess-2', 'Idea: Empty', 'idle', 'idea', ?, ?)",
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO ideas (id, title, seed, state, tags, session_id, source, created_at, updated_at)
+       VALUES ('idea-2', 'Empty', '   ', 'parked', '[]', 'idea-sess-2', 'idea_watcher', ?, ?)`,
+    ).run(now, now);
+    await app.inject({ method: 'POST', url: '/api/assistant/sessions/idea-sess-2/messages/stream', payload: { content: 'no seed here' } });
+    assert.equal(partnerMessages[4], 'no seed here');
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Idea dialogue background handoff carries the seed once and settles a rejected submission as failed', async () => {
+  // The /runs path composes its own prompt and submits /v1/runs separately
+  // from /messages/stream, so it gets its own seed coverage. A rejected
+  // submission must not leave a `running` row behind: that row would read as
+  // a prior turn and the retry would go out without the seed.
+  const runInputs: string[] = [];
+  let rejectNext = false;
+  const fetchImpl = partnerChatMock({
+    onOther: (url, init) => {
+      if (url.endsWith('/v1/runs') && init?.method === 'POST') {
+        runInputs.push(JSON.parse(String(init?.body)).input);
+        if (rejectNext) {
+          rejectNext = false;
+          return new Response('adapter down', { status: 503 });
+        }
+        return jsonRes({ run_id: `remote-run-${runInputs.length}`, status: 'started' });
+      }
+      return undefined;
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO assistant_sessions (id, title, status, origin, created_at, updated_at) VALUES ('idea-bg', 'Idea: Overnight', 'idle', 'idea', ?, ?)",
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO ideas (id, title, seed, state, tags, session_id, source, created_at, updated_at)
+       VALUES ('idea-bg-1', 'Overnight', 'Batch the nightly sync.', 'parked', '[]', 'idea-bg', 'idea_watcher', ?, ?)`,
+    ).run(now, now);
+    const handoff = (content: string) => app.inject({ method: 'POST', url: '/api/assistant/sessions/idea-bg/runs', payload: { content } });
+
+    rejectNext = true;
+    const rejected = await handoff('Work on this overnight');
+    assert.ok(rejected.statusCode >= 500, `submission failure surfaces as an error (${rejected.statusCode})`);
+    const settled = db.prepare("SELECT status, remote_run_id, error FROM assistant_runs WHERE session_id = 'idea-bg'").all() as any[];
+    assert.equal(settled.length, 1);
+    assert.equal(settled[0].status, 'failed', 'a rejected submission does not linger as running');
+    assert.equal(settled[0].remote_run_id, null);
+    assert.match(settled[0].error, /503|adapter down/);
+
+    const accepted = await handoff('Work on this overnight');
+    assert.equal(accepted.statusCode, 200);
+    assert.equal(runInputs.length, 2);
+    for (const input of runInputs) {
+      assert.ok(input.startsWith(`${IDEA_SEED_HEADING} — "Overnight"`), 'the /v1/runs input opens with the seed block');
+      assert.ok(input.endsWith('---\n\nWork on this overnight'));
+    }
+    assert.equal(accepted.json().run.status, 'running');
+
+    // Two handoffs in flight at once: only one may carry the seed.
+    const [a, b] = await Promise.all([handoff('first of a pair'), handoff('second of a pair')]);
+    assert.equal(a.statusCode, 200);
+    assert.equal(b.statusCode, 200);
+    assert.equal(runInputs.slice(2).filter((input) => input.startsWith(IDEA_SEED_HEADING)).length, 0, 'later turns never repeat the seed');
+    assert.deepEqual(runInputs.slice(2).sort(), ['first of a pair', 'second of a pair']);
   } finally {
     await cleanup(app, db, dir);
   }
