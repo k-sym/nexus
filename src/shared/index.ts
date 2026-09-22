@@ -1055,3 +1055,11 @@ export function parseRoleChildRun(value: unknown): RoleChildRun | undefined {
     || (v.report !== undefined && typeof v.report !== 'string')) return undefined;
   return v;
 }
+/** A role child run as the session drawer lists it: the display fields plus the
+ *  ledger identity that ties it to the parent run and the delegating tool call. */
+export interface RoleChildRunRecord extends RoleChildRun {
+  parentRunId: string;
+  parentToolCallId: string;
+  startedAt: string;
+  completedAt: string | null;
+}

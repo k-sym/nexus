@@ -601,7 +601,7 @@ describe('ChatPanel', () => {
     render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
     await userEvent.click(await screen.findByRole('button', { name: `Preview preview.md` }));
 
-    expect(await screen.findByRole('complementary', { name: 'File preview' })).toBeInTheDocument();
+    expect(await screen.findByRole('tabpanel', { name: 'Preview' })).toBeInTheDocument();
     expect(await screen.findByText(/Built notes\./)).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/projects/p1/files/preview?path=${encodeURIComponent(filePath)}`,
@@ -636,7 +636,7 @@ describe('ChatPanel', () => {
     render(<ChatPanel projectId="p1" threadId="t1" onBusyConflict={noop} />);
     await userEvent.click(await screen.findByRole('button', { name: 'Preview stick-man-640x480.png' }));
 
-    expect(await screen.findByRole('complementary', { name: 'File preview' })).toBeInTheDocument();
+    expect(await screen.findByRole('tabpanel', { name: 'Preview' })).toBeInTheDocument();
     expect(await screen.findByAltText('stick-man-640x480.png')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       `/api/projects/p1/files/preview?path=${encodeURIComponent(filePath)}`,

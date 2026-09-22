@@ -52,7 +52,6 @@ vi.mock('./components/AssistantView', () => ({
 vi.mock('./components/IdeasView', () => ({
   default: () => <div data-testid="ideas-view">Ideas</div>,
 }));
-vi.mock('./components/MemoryRail', () => ({ default: () => <div data-testid="memory-rail" /> }));
 vi.mock('./components/ProjectManagementView', () => ({
   ProjectManagementView: ({ projectId }: { projectId: string }) => (
     <div data-testid="project-management-view">{projectId}</div>
