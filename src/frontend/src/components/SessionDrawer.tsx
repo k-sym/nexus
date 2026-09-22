@@ -59,7 +59,7 @@ export default function SessionDrawer({ projectId, threadId, running, artifactPa
   return (
     <RightRail
       label="Drawer"
-      title={active.label}
+      title="Session drawer"
       ariaLabel="Session drawer"
       open={state.open}
       onOpenChange={(open) => onStateChange({ ...state, open })}
