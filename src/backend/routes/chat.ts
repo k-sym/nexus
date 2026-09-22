@@ -1352,7 +1352,10 @@ export function flattenEntries(entries: unknown[], repoPath = process.cwd(), opt
         role: 'assistant',
         content: text,
         thinking: thinking || null,
-        tool_calls: toolCalls.length > 0 ? toolCalls : null,
+        // An active run's calls are still in flight, not interrupted: the same
+        // projection as `run.tools`, so a reload mid-run keeps a pending
+        // question answerable (#500).
+        tool_calls: toolCalls.length > 0 ? projectedTools : null,
         model: m.model,
         provider: m.provider,
         isError,
