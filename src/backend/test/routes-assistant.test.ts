@@ -5,7 +5,7 @@ import Fastify from 'fastify';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createAssistantRoutes, remoteSessionTitle } from '../routes/assistant';
+import { createAssistantRoutes, remoteSessionTitle, IDEA_SEED_HEADING } from '../routes/assistant';
 import { loadConfig } from '../config';
 import { getDb } from '../db';
 import type { PartnerFetch } from '../partner/client';
@@ -623,6 +623,85 @@ test('Idea dialogue attachments are gated on a valid target repo and filed per i
       payload: { content: 'just talking' },
     });
     assert.equal(textOnly.statusCode, 200);
+  } finally {
+    await cleanup(app, db, dir);
+  }
+});
+
+test('Idea dialogue first turn carries the idea seed notes to the Partner, once', async () => {
+  // The seed lives only in the `ideas` row; the Partner never saw it, so a
+  // research turn re-derived the idea from scratch (2026-09-22). It now opens
+  // the first Partner turn — and only the first: re-opening the idea or
+  // sending later turns must not repeat it.
+  const partnerMessages: string[] = [];
+  let failNext = false;
+  const fetchImpl = partnerChatMock({
+    onChatStream: (_url, init) => {
+      partnerMessages.push(JSON.parse(String(init?.body)).message);
+      if (failNext) {
+        failNext = false;
+        return new Response('nope', { status: 500 });
+      }
+      return sseResponse(['event: assistant.delta\ndata: {"delta":"ok"}\n\n', 'event: done\ndata: {}\n\n']);
+    },
+  });
+  const { app, db, dir } = makeApp({ fetchImpl });
+  try {
+    const now = new Date().toISOString();
+    db.prepare(
+      "INSERT INTO assistant_sessions (id, title, status, origin, created_at, updated_at) VALUES ('idea-sess', 'Idea: Glasses HUD', 'idle', 'idea', ?, ?)",
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO ideas (id, title, seed, state, tags, session_id, source, created_at, updated_at)
+       VALUES ('idea-1', 'Glasses HUD', '  Show the needs-you count on the G2 lens.\nKeep it to one line.  ', 'parked', '[]', 'idea-sess', 'idea_watcher', ?, ?)`,
+    ).run(now, now);
+
+    const send = (content: string) => app.inject({
+      method: 'POST',
+      url: '/api/assistant/sessions/idea-sess/messages/stream',
+      payload: { content },
+    });
+
+    // A first turn that never reaches the Partner (500 on the stream) leaves
+    // the seed unsent, so the retry still carries it.
+    failNext = true;
+    const failed = await send('Research brief: prior art');
+    assert.equal(ndjsonEvents(failed.payload).find((e) => e.kind === 'run_end').run.status, 'failed');
+
+    const first = await send('Research brief: prior art');
+    assert.equal(first.statusCode, 200);
+    assert.equal(partnerMessages.length, 2);
+    for (const message of partnerMessages) {
+      assert.ok(message.startsWith(`${IDEA_SEED_HEADING} — "Glasses HUD"`), 'seed block opens the turn, labelled with the idea title');
+      assert.match(message, /Show the needs-you count on the G2 lens\.\nKeep it to one line\./, 'seed text is trimmed and intact');
+      assert.ok(message.endsWith('---\n\nResearch brief: prior art'), 'the request follows the rule');
+    }
+    // The run row records what the Partner actually received.
+    const runs = db.prepare("SELECT input, status FROM assistant_runs WHERE session_id = 'idea-sess' ORDER BY started_at").all() as any[];
+    assert.deepEqual(runs.map((r) => r.status), ['failed', 'succeeded']);
+    assert.ok(runs[1].input.startsWith(IDEA_SEED_HEADING));
+
+    // Later turns are the bare message: the seed is already in the Partner
+    // transcript and the resumed Claude session.
+    const second = await send('Narrow it to option 2');
+    assert.equal(second.statusCode, 200);
+    assert.equal(partnerMessages[2], 'Narrow it to option 2');
+
+    // The seed never leaks into an ordinary (non-idea) session's turns.
+    const plain = await app.inject({ method: 'POST', url: '/api/assistant/sessions', payload: { title: 'Plain' } });
+    await app.inject({ method: 'POST', url: `/api/assistant/sessions/${plain.json().id}/messages/stream`, payload: { content: 'hello' } });
+    assert.equal(partnerMessages[3], 'hello');
+
+    // An idea with no seed opens with the bare request too.
+    db.prepare(
+      "INSERT INTO assistant_sessions (id, title, status, origin, created_at, updated_at) VALUES ('idea-sess-2', 'Idea: Empty', 'idle', 'idea', ?, ?)",
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO ideas (id, title, seed, state, tags, session_id, source, created_at, updated_at)
+       VALUES ('idea-2', 'Empty', '   ', 'parked', '[]', 'idea-sess-2', 'idea_watcher', ?, ?)`,
+    ).run(now, now);
+    await app.inject({ method: 'POST', url: '/api/assistant/sessions/idea-sess-2/messages/stream', payload: { content: 'no seed here' } });
+    assert.equal(partnerMessages[4], 'no seed here');
   } finally {
     await cleanup(app, db, dir);
   }
