@@ -836,6 +836,12 @@ the fallback when that block is not on screen. Missing historical transcripts ar
 labelled unavailable; the saved report remains readable. No new configuration or
 Settings section is required.
 
+A child's question is forwarded to the parent thread and stays answerable there,
+including after the app reloads mid-run. While it waits for you, the role's
+**Maximum minutes** clock is paused; the question's own timeout
+(`server.question_timeout_minutes`, 30 by default) and stopping the parent run
+still end the wait.
+
 ### Agent tools
 
 On top of the Pi runtime's built-in file/shell tools (`read`, `edit`, `bash`, `grep`, …), each chat session is handed a set of Nexus tools defined in `src/backend/pi/`. Every one follows the same **omit-when-unavailable** contract: a session never advertises a tool it can't actually run, so the model's tool list is an honest reflection of what this machine and this project can do right now.
