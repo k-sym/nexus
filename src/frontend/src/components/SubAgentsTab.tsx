@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowsClockwise, CaretDown, CaretRight } from '@phosphor-icons/react';
 import type { RoleChildRunRecord } from '@nexus/shared';
 import { api } from '../api';
@@ -24,15 +24,22 @@ export default function SubAgentsTab({ threadId, running }: SubAgentsTabProps) {
   const [error, setError] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  useEffect(() => { setRuns(null); setError(null); setExpandedId(null); }, [threadId]);
+  // A reply from the previous session can land after the switch; it must not
+  // show under the new thread, so each load is stamped with the generation it
+  // started in and dropped if the thread changed meanwhile.
+  const generation = useRef(0);
+  useEffect(() => { generation.current++; setRuns(null); setError(null); setExpandedId(null); }, [threadId]);
 
   const load = useCallback(async () => {
     if (!threadId) return;
+    const started = generation.current;
     try {
       const { runs: next } = await api.roles.runs(threadId);
+      if (generation.current !== started) return;
       setRuns((current) => keepIfSameJson(current, next));
       setError(null);
     } catch (err) {
+      if (generation.current !== started) return;
       setError(err instanceof Error ? err.message : 'Could not load sub-agents.');
     }
   }, [threadId]);

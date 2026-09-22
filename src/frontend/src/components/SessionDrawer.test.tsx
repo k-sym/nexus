@@ -44,6 +44,17 @@ describe('SessionDrawer', () => {
     expect(screen.getByRole('tabpanel', { name: 'Preview' })).toHaveTextContent('preview of docs/a.md');
   });
 
+  it('moves focus with the selection when arrow keys change tabs', () => {
+    const { onStateChange } = drawer({ open: true, tab: 'memory' });
+    const memory = screen.getByRole('tab', { name: 'Memory' });
+    memory.focus();
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowRight' });
+    expect(onStateChange).toHaveBeenCalledWith({ open: true, tab: 'preview' });
+    expect(screen.getByRole('tab', { name: 'Preview' })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole('tablist'), { key: 'ArrowLeft' });
+    expect(onStateChange).toHaveBeenLastCalledWith({ open: true, tab: 'subagents' });
+  });
+
   it('collapses to a strip named for the active tab', () => {
     const { onStateChange } = drawer({ open: false, tab: 'subagents' });
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();

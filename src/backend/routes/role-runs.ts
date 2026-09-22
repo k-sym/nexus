@@ -9,9 +9,17 @@ interface RoleRunRow {
   report: string | null; started_at: string; completed_at: string | null; repo_path?: string | null;
 }
 
+/** The runner writes duration_ms when a child ends; startup recovery marks a
+ *  live row interrupted with only completed_at, so fall back to the timestamps. */
+function durationOf(row: RoleRunRow): number {
+  if (row.duration_ms !== null && row.duration_ms !== undefined) return row.duration_ms;
+  const started = Date.parse(row.started_at), completed = row.completed_at ? Date.parse(row.completed_at) : NaN;
+  return Number.isFinite(started) && Number.isFinite(completed) ? Math.max(0, completed - started) : 0;
+}
+
 function toChild(row: RoleRunRow): RoleChildRun {
   return { childRunId: row.id, role: row.role, model: row.model_key, status: row.status,
-    tokens: row.tokens ?? 0, durationMs: row.duration_ms ?? 0, report: row.report ?? '' };
+    tokens: row.tokens ?? 0, durationMs: durationOf(row), report: row.report ?? '' };
 }
 
 export async function registerRoleRunRoutes(fastify: FastifyInstance) {

@@ -58,10 +58,14 @@ export default function RightRail({ label, title, open, onOpenChange, actions, f
     );
   }
 
-  const moveTab = (delta: number) => {
+  // Arrow keys select the neighbouring tab and move focus with it: the old
+  // button drops to tabIndex -1 on re-render, so focus must not be left there.
+  const moveTab = (list: HTMLElement, delta: number) => {
     if (!tabs?.length || !onTabChange) return;
     const index = Math.max(0, tabs.findIndex((tab) => tab.id === activeTab));
-    onTabChange(tabs[(index + delta + tabs.length) % tabs.length].id);
+    const next = (index + delta + tabs.length) % tabs.length;
+    onTabChange(tabs[next].id);
+    (list.children[next] as HTMLElement | undefined)?.focus();
   };
 
   return (
@@ -102,7 +106,7 @@ export default function RightRail({ label, title, open, onOpenChange, actions, f
             onKeyDown={(event) => {
               if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
               event.preventDefault();
-              moveTab(event.key === 'ArrowLeft' ? -1 : 1);
+              moveTab(event.currentTarget, event.key === 'ArrowLeft' ? -1 : 1);
             }}
           >
             {tabs.map((tab) => {

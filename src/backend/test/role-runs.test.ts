@@ -97,7 +97,8 @@ test('a thread lists its role child runs newest first with their ledger identity
     CREATE TABLE role_runs(id TEXT PRIMARY KEY, parent_run_id TEXT, parent_tool_call_id TEXT, thread_id TEXT, role TEXT, model_key TEXT, status TEXT, report TEXT, tokens INTEGER, started_at TEXT, completed_at TEXT, duration_ms INTEGER);
     INSERT INTO role_runs VALUES ('old','run-1','call-1','t','scout','fake/model','completed','Found it.',12,'2026-09-22T08:00:00Z','2026-09-22T08:00:05Z',5000);
     INSERT INTO role_runs VALUES ('new','run-2','call-2','t','builder','fake/model','running','',0,'2026-09-22T09:00:00Z',NULL,NULL);
-    INSERT INTO role_runs VALUES ('other','run-3','call-3','u','scout','fake/model','completed','x',1,'2026-09-22T10:00:00Z','2026-09-22T10:00:01Z',1000);`);
+    INSERT INTO role_runs VALUES ('other','run-3','call-3','u','scout','fake/model','completed','x',1,'2026-09-22T10:00:00Z','2026-09-22T10:00:01Z',1000);
+    INSERT INTO role_runs VALUES ('lost','run-0','call-0','t','debugger','fake/model','interrupted','',0,'2026-09-22T07:00:00Z','2026-09-22T07:02:30Z',NULL);`);
   const app = Fastify();
   app.decorate('db', db);
   app.decorate('pi', {} as any);
@@ -106,11 +107,14 @@ test('a thread lists its role child runs newest first with their ledger identity
     const response = await app.inject('/api/threads/t/runs');
     assert.equal(response.statusCode, 200);
     const { runs } = response.json();
-    assert.deepEqual(runs.map((run: any) => run.childRunId), ['new', 'old']);
+    assert.deepEqual(runs.map((run: any) => run.childRunId), ['new', 'old', 'lost']);
     assert.deepEqual(runs[1], { childRunId: 'old', role: 'scout', model: 'fake/model', status: 'completed', tokens: 12, durationMs: 5000, report: 'Found it.',
       parentRunId: 'run-1', parentToolCallId: 'call-1', startedAt: '2026-09-22T08:00:00Z', completedAt: '2026-09-22T08:00:05Z' });
     assert.equal(runs[0].completedAt, null);
     assert.equal(runs[0].durationMs, 0);
+    // Startup recovery leaves duration_ms NULL on an interrupted row; the timestamps still give it.
+    assert.equal(runs[2].status, 'interrupted');
+    assert.equal(runs[2].durationMs, 150_000);
     assert.equal((await app.inject('/api/threads/missing/runs')).statusCode, 404);
   } finally { await app.close(); db.close(); }
 });

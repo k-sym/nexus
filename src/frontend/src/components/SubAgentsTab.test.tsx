@@ -71,6 +71,21 @@ describe('SubAgentsTab', () => {
     expect(rolesApi.runs).toHaveBeenCalledWith('t1');
   });
 
+  it('drops a reply from the previous session that lands after a switch', async () => {
+    let resolveOld: (value: { runs: unknown[] }) => void = () => {};
+    rolesApi.runs.mockImplementation((threadId: string) => threadId === 'old'
+      ? new Promise((resolve) => { resolveOld = resolve; })
+      : Promise.resolve({ runs: [live] }));
+    const { rerender } = render(<SubAgentsTab threadId="old" running={false} />);
+    rerender(<SubAgentsTab threadId="new" running />);
+    expect(await screen.findByText('1 run · 1 running')).toBeInTheDocument();
+
+    resolveOld({ runs: [done, stopped] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.getByText('1 run · 1 running')).toBeInTheDocument();
+    expect(screen.queryByText('Scout')).not.toBeInTheDocument();
+  });
+
   it('splits the runner\'s early-stop prefix from the report body', () => {
     expect(splitReport('INCOMPLETE: Time ceiling reached\n\nNo report returned.')).toEqual({ reason: 'Time ceiling reached', body: 'No report returned.' });
     expect(splitReport('Ordinary report.')).toEqual({ reason: null, body: 'Ordinary report.' });
