@@ -7,6 +7,7 @@
  * ever receives drafts the user has already reviewed and confirmed.
  */
 import { FastifyInstance } from 'fastify';
+import type Database from 'better-sqlite3';
 import { v4 as uuid } from 'uuid';
 import path from 'node:path';
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
@@ -51,6 +52,20 @@ function publicIdea(row: IdeaRow): Idea {
     if (Array.isArray(parsed)) tags = parsed.filter((t): t is string => typeof t === 'string');
   } catch { /* malformed tags render as none */ }
   return { ...row, tags, graduated_to: parseGraduation(row.graduated_to) };
+}
+
+/**
+ * Park a new idea. `source` says where it came from: 'idea_watcher' for the
+ * quick capture, 'attention' for a Needs-you item filed as an idea.
+ */
+export function insertIdea(db: Database.Database, title: string, seed: string, source = 'idea_watcher'): Idea {
+  const now = new Date().toISOString();
+  const id = uuid();
+  db.prepare(
+    `INSERT INTO ideas (id, title, seed, state, tags, target_repo, session_id, graduated_to, source, created_at, updated_at)
+     VALUES (?, ?, ?, 'parked', '[]', NULL, NULL, NULL, ?, ?, ?)`,
+  ).run(id, title, seed, source, now, now);
+  return publicIdea(db.prepare('SELECT * FROM ideas WHERE id = ?').get(id) as IdeaRow);
 }
 
 function httpError(message: string, statusCode: number): Error {
@@ -131,13 +146,7 @@ export async function registerIdeaRoutes(fastify: FastifyInstance, options: Idea
     const body = (request.body ?? {}) as { title?: string; seed?: string };
     const title = (body.title ?? '').trim();
     if (!title) throw httpError('title is required', 400);
-    const now = new Date().toISOString();
-    const id = uuid();
-    db.prepare(
-      `INSERT INTO ideas (id, title, seed, state, tags, target_repo, session_id, graduated_to, source, created_at, updated_at)
-       VALUES (?, ?, ?, 'parked', '[]', NULL, NULL, NULL, 'idea_watcher', ?, ?)`,
-    ).run(id, title, body.seed ?? '', now, now);
-    return publicIdea(getIdea(id)!);
+    return insertIdea(db, title, body.seed ?? '');
   });
 
   fastify.patch('/api/ideas/:id', async (request) => {

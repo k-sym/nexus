@@ -98,6 +98,7 @@ final class ConnectionStore {
         do {
             let projects = try await api.projects()
             projectCount = projects.count
+            ProjectsCache.shared.store(projects)
             UserDefaults.standard.set(normalized, forKey: Self.baseURLKey)
             phase = .connected
         } catch APIError.unauthorized {
@@ -113,6 +114,7 @@ final class ConnectionStore {
         UserDefaults.standard.removeObject(forKey: Self.baseURLKey)
         await api.configure(baseURL: nil)
         projectCount = nil
+        ProjectsCache.shared.clear()
         phase = .unconfigured
     }
 

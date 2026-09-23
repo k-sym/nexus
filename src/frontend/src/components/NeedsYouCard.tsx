@@ -404,7 +404,7 @@ function AttentionRow({ item: listed, onChanged }: { item: AttentionItem; onChan
                 <span className="text-faint"> · closed <a href={closedUrl} target="_blank" rel="noopener noreferrer" className="underline">{closedUrl}</a></span>
               )}
               {item.resolution?.result?.approved === true && <span className="text-faint"> · cleanup approved.</span>}
-              {typeof item.resolution?.result?.filed_as === 'string' && <span className="text-faint"> · filed as a to-do.</span>}
+              {typeof item.resolution?.result?.filed_as === 'string' && <span className="text-faint"> · filed as {filedAsLabel(item.resolution.result.filed_as)}.</span>}
             </div>
           )}
 
@@ -544,4 +544,11 @@ export default function NeedsYouCard() {
       ))}
     </div>
   );
+}
+
+/** What a filed item became: a Board to-do (a thread id), an idea (`idea:<id>`) or an Apple reminder (`reminder`). */
+function filedAsLabel(filedAs: string): string {
+  if (filedAs.startsWith('idea:')) return 'an idea';
+  if (filedAs === 'reminder') return 'a reminder';
+  return 'a to-do';
 }

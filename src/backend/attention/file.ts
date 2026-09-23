@@ -6,7 +6,8 @@
  */
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import type { ChatThread, OriginSessionResult } from '@nexus/shared';
+import type { ChatThread, Idea, OriginSessionResult } from '@nexus/shared';
+import { insertIdea } from '../routes/ideas.js';
 import type { PartnerClient } from '../partner/client.js';
 
 /** The fields of a partner item the to-do carries. Everything else stays with the partner. */
@@ -71,10 +72,25 @@ export function buildAttentionFirstTurn(item: FiledAttentionItem): string {
     lines.push(item.body.trim());
   }
   lines.push('');
+  lines.push(attentionSourceLine(item, 'a to-do'));
+  lines.push('');
+  lines.push('How to work this:');
+  lines.push('- Work out what is actually needed and propose the next concrete step before doing anything.');
+  lines.push('- Pull the referenced page, draft or thread into the conversation if it helps; ask before assuming.');
+  lines.push('- Do not send mail, write to GitHub, Monday or Jira, or change external systems: those are decided by hand after review.');
+  return lines.join('\n');
+}
+
+/**
+ * The provenance line both filings carry: which partner item, what kind, and
+ * the conversation, link, page, draft or proposal it points at. A mail item
+ * names its conversation (D43) so an agent can read it through the partner;
+ * the message text itself never rides along.
+ */
+export function attentionSourceLine(item: FiledAttentionItem, filedAs: string): string {
+  const what = KIND_LABELS[item.kind] ?? item.kind;
+  const isMail = item.kind.startsWith('mail.');
   const refs: string[] = [];
-  // D43: a mail item names its conversation so the session's agent can read the
-  // latest message through the partner (`partner mail thread <account>:<ref>`);
-  // the text itself never rides along — the partner screens thread bodies.
   const account = typeof item.source?.account === 'string' ? item.source.account : '';
   const ref = typeof item.source?.ref === 'string' ? item.source.ref : '';
   if (isMail && account && ref) refs.push(`mail conversation ${account}:${ref} (read it with \`partner mail thread ${account}:${ref}\`)`);
@@ -83,13 +99,7 @@ export function buildAttentionFirstTurn(item: FiledAttentionItem): string {
   if (item.links?.draft_id) refs.push(`draft ${item.links.draft_id}`);
   if (item.links?.proposal_id) refs.push(`autonomy proposal ${item.links.proposal_id}`);
   const accountNote = account ? ` (account ${account})` : '';
-  lines.push(`Source: partner attention item ${item.id} — ${what}${accountNote}${refs.length ? `; ${refs.join(', ')}` : ''}. Filed from the phone as a to-do.`);
-  lines.push('');
-  lines.push('How to work this:');
-  lines.push('- Work out what is actually needed and propose the next concrete step before doing anything.');
-  lines.push('- Pull the referenced page, draft or thread into the conversation if it helps; ask before assuming.');
-  lines.push('- Do not send mail, write to GitHub, Monday or Jira, or change external systems: those are decided by hand after review.');
-  return lines.join('\n');
+  return `Source: partner attention item ${item.id} — ${what}${accountNote}${refs.length ? `; ${refs.join(', ')}` : ''}. Filed from the phone as ${filedAs}.`;
 }
 
 export class FileAttentionError extends Error {
@@ -118,13 +128,7 @@ export interface FileAttentionOptions {
 export async function fileAttentionItem(db: Database.Database, partner: PartnerClient, id: string, opts: FileAttentionOptions): Promise<OriginSessionResult> {
   const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(opts.projectId.trim()) as { id: string } | undefined;
   if (!project) throw new FileAttentionError('Project not found', 404);
-  let item: FiledAttentionItem;
-  try {
-    item = (await partner.getAttention(id)) as FiledAttentionItem;
-  } catch (err: any) {
-    throw new FileAttentionError(detailOf(err?.message) || 'Attention fetch failed.', err?.status === 404 ? 404 : 502);
-  }
-  if (!item?.id) throw new FileAttentionError('The partner returned no item.', 502);
+  const item = await readFiledItem(partner, id);
 
   const nowIso = new Date().toISOString();
   const thread: ChatThread = {
@@ -146,15 +150,57 @@ export async function fileAttentionItem(db: Database.Database, partner: PartnerC
     ).run(randomUUID(), thread.id, 'user', firstTurn, '[]', 'text', null, null, null, nowIso);
   }
 
+  // D34: the partner's ledger records what the item became (the thread id).
+  await dismissFiled(partner, id, thread.id, opts);
+  return { thread, firstTurn };
+}
+
+/**
+ * The notes an idea filed from a Needs-you item is parked with: the why, the
+ * producer's prose (never a mail snippet, D43) and the source line. No working
+ * instructions — an idea is discussed before anything is done about it.
+ */
+export function buildAttentionIdeaSeed(item: FiledAttentionItem): string {
+  const lines: string[] = [];
+  if (item.why?.trim()) lines.push(item.why.trim(), '');
+  if (!item.kind.startsWith('mail.') && item.body?.trim()) lines.push(item.body.trim(), '');
+  lines.push(attentionSourceLine(item, 'an idea'));
+  return lines.join('\n');
+}
+
+export type FileAttentionIdeaOptions = Omit<FileAttentionOptions, 'projectId' | 'queueFirstTurn'>;
+
+/**
+ * File one item as a parked idea (for things that belong to no project): read
+ * the item, park the idea, then dismiss the item with `{ filed_as: 'idea:<id>' }`.
+ * A refused dismiss does not undo the filing, as for a to-do.
+ */
+export async function fileAttentionAsIdea(db: Database.Database, partner: PartnerClient, id: string, opts: FileAttentionIdeaOptions): Promise<Idea> {
+  const item = await readFiledItem(partner, id);
+  const idea = insertIdea(db, attentionThreadTitle(item), buildAttentionIdeaSeed(item), 'attention');
+  await dismissFiled(partner, id, `idea:${idea.id}`, opts);
+  return idea;
+}
+
+async function readFiledItem(partner: PartnerClient, id: string): Promise<FiledAttentionItem> {
+  let item: FiledAttentionItem;
+  try {
+    item = (await partner.getAttention(id)) as FiledAttentionItem;
+  } catch (err: any) {
+    throw new FileAttentionError(detailOf(err?.message) || 'Attention fetch failed.', err?.status === 404 ? 404 : 502);
+  }
+  if (!item?.id) throw new FileAttentionError('The partner returned no item.', 502);
+  return item;
+}
+
+async function dismissFiled(partner: PartnerClient, id: string, filedAs: string, opts: Pick<FileAttentionOptions, 'by' | 'surface' | 'warn'>): Promise<void> {
   const by = opts.by.trim().slice(0, 40) || 'nexus';
   const surface = opts.surface?.trim().slice(0, 16);
   try {
-    // D34: the partner's ledger records what the item became (the thread id).
-    await partner.resolveAttention(id, { verb: 'dismiss', by, ...(surface ? { surface } : {}), result: { filed_as: thread.id } });
+    await partner.resolveAttention(id, { verb: 'dismiss', by, ...(surface ? { surface } : {}), result: { filed_as: filedAs } });
   } catch (err: any) {
     opts.warn?.('attention file: dismiss refused', { id, status: err?.status });
   }
-  return { thread, firstTurn };
 }
 
 function detailOf(message?: string): string | undefined {

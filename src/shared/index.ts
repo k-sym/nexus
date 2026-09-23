@@ -276,7 +276,7 @@ export interface Idea {
   /** The assistant session holding the idea's dialogue; null until first discussed. */
   session_id: string | null;
   graduated_to: IdeaGraduation | null;
-  /** 'idea_watcher', or 'braindump' for rows migrated from the old table. */
+  /** 'idea_watcher', 'attention' for a filed Needs-you item, or 'braindump' for rows migrated from the old table. */
   source: string;
   created_at: string;
   updated_at: string;

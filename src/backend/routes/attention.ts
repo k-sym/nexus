@@ -2,9 +2,9 @@ import { FastifyInstance } from 'fastify';
 import { loadConfig, resolveAssistantKey, resolveEnvVars } from '../config.js';
 import { createPartnerClient, type PartnerAttentionResolveBody, type PartnerFetch } from '../partner/client.js';
 import { daemon, type DaemonRecallItem } from '../memory/client.js';
-import { FileAttentionError, fileAttentionItem } from '../attention/file.js';
+import { FileAttentionError, fileAttentionAsIdea, fileAttentionItem } from '../attention/file.js';
 import { lookupAttentionPage } from '../attention/page.js';
-import type { NexusConfig, OriginSessionResult } from '@nexus/shared';
+import type { Idea, NexusConfig, OriginSessionResult } from '@nexus/shared';
 
 interface AttentionRoutesOptions {
   fetchImpl?: PartnerFetch;
@@ -125,6 +125,29 @@ export function createAttentionRoutes(load: () => NexusConfig = loadConfig, opti
       try {
         return await fileAttentionItem(fastify.db, partner, id, {
           projectId: body.project_id,
+          by: typeof body.by === 'string' && body.by.trim() ? body.by : 'nexus',
+          surface: typeof body.surface === 'string' && body.surface.trim() ? body.surface : undefined,
+          warn: (message, detail) => fastify.log?.warn?.(detail, message),
+        });
+      } catch (err: any) {
+        reply.code(err instanceof FileAttentionError ? err.status : 502);
+        return { error: err?.message || 'Filing failed.' };
+      }
+    });
+
+    // "File as an idea": for an item that belongs to no project (a reminder
+    // to do some training, a thought for later). The item becomes a parked
+    // Idea Watcher row and is dismissed on the partner, like a to-do.
+    fastify.post('/api/attention/:id/file/idea', async (request, reply): Promise<Idea | { error: string }> => {
+      const { id } = request.params as { id: string };
+      const body = (request.body ?? {}) as { by?: unknown; surface?: unknown };
+      const partner = client();
+      if (!partner) {
+        reply.code(400);
+        return { error: 'Assistant URL and key must be configured in Settings.' };
+      }
+      try {
+        return await fileAttentionAsIdea(fastify.db, partner, id, {
           by: typeof body.by === 'string' && body.by.trim() ? body.by : 'nexus',
           surface: typeof body.surface === 'string' && body.surface.trim() ? body.surface : undefined,
           warn: (message, detail) => fastify.log?.warn?.(detail, message),

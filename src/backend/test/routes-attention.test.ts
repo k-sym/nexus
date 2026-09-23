@@ -410,6 +410,36 @@ test('filing refuses a missing project_id or an unknown project before touching 
   db.close();
 });
 
+test('POST /api/attention/:id/file/idea parks an idea from the item and dismisses it with filed_as idea:<id>', async () => {
+  const resolves: any[] = [];
+  const db = dbWithProject();
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), partnerFor({ ...ITEM, source: { ...ITEM.source, ref: 'AAMk01' }, body: 'hostile snippet' }, resolves), { db });
+  const res = await app.inject({ method: 'POST', url: '/api/attention/att_01/file/idea', payload: { by: 'ios', surface: 'phone' } });
+  assert.equal(res.statusCode, 200);
+  const idea = res.json();
+  assert.equal(idea.title, ITEM.title);
+  assert.equal(idea.state, 'parked');
+  assert.equal(idea.source, 'attention');
+  assert.deepEqual(idea.tags, []);
+  assert.match(idea.seed, /^waiting 3\.2d from jane/);
+  assert.match(idea.seed, /Source: partner attention item att_01 — waiting mail \(account ssuk\); mail conversation ssuk:AAMk01 .*Filed from the phone as an idea\./);
+  assert.doesNotMatch(idea.seed, /hostile snippet/, 'D43: a mail snippet never rides into the idea');
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM chat_threads').get() as { c: number }).c, 0, 'an idea is not a Board session');
+  assert.deepEqual(resolves, [{ verb: 'dismiss', by: 'ios', surface: 'phone', result: { filed_as: `idea:${idea.id}` } }]);
+  await app.close();
+  db.close();
+});
+
+test('filing as an idea passes a missing item through as 404 and parks nothing', async () => {
+  const db = dbWithProject();
+  const app = await appWith(loadWith('http://adapter:8788', 'k1'), partnerFor(MEETING), { db });
+  const res = await app.inject({ method: 'POST', url: '/api/attention/att_gone/file/idea', payload: {} });
+  assert.equal(res.statusCode, 404);
+  assert.equal((db.prepare('SELECT COUNT(*) AS c FROM ideas').get() as { c: number }).c, 0);
+  await app.close();
+  db.close();
+});
+
 test('the to-do first turn and title degrade gracefully for a bare item', () => {
   const bare = { id: 'x', kind: 'future.kind', title: '  ' };
   assert.equal(attentionThreadTitle(bare), 'Needs you: future.kind');

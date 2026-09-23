@@ -225,8 +225,18 @@ public struct AttentionResolution: Decodable, Sendable {
     public var closedURL: URL? { AttentionLinks.httpURL(closedUrl) }
     /// Approve cleanup (D35) recorded `{approved: true}` on the dismiss.
     public var approved: Bool { result?["approved"]?.bool == true }
-    /// File as a to-do (D34) recorded the thread the item became.
+    /// What a filing recorded (D34): the thread id of a to-do, `idea:<id>` for
+    /// an idea, or `reminder` for an Apple reminder the phone added.
     public var filedAs: String? { result?["filed_as"]?.string }
+    /// How the outcome names what the item became.
+    public var filedAsLabel: String? {
+        guard let filedAs else { return nil }
+        if filedAs.hasPrefix("idea:") { return "Filed as an idea" }
+        if filedAs == AttentionResolution.reminderFiling { return "Filed as a reminder" }
+        return "Filed as a to-do"
+    }
+    /// The `filed_as` value the phone records after adding an Apple reminder.
+    public static let reminderFiling = "reminder"
 }
 
 /// Append-only ledger row from the detail call. `verb` here includes

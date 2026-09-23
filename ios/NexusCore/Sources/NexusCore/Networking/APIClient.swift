@@ -582,6 +582,13 @@ public actor APIClient {
         return try await request(.fileAttention(id, body: body), decoder: plainDecoder)
     }
 
+    /// "File as an idea": the item becomes a parked Idea Watcher row and is
+    /// dismissed on the partner with `{ filed_as: "idea:<id>" }`.
+    public func fileAttentionAsIdea(id: String, by: String = "ios", surface: String = "phone") async throws -> Idea {
+        let body = try JSONSerialization.data(withJSONObject: ["by": by, "surface": surface])
+        return try await request(.fileAttentionIdea(id, body: body))
+    }
+
     /// The partner's current conversation as a local session — the target for
     /// "Ask the partner" from an attention item.
     public func assistantCurrent() async throws -> AssistantSession {

@@ -18,6 +18,7 @@ final class ProjectsViewModel {
             async let projectsTask = api.projects()
             let runs = (try? await api.activeChatRuns()) ?? []
             let projects = try await projectsTask
+            ProjectsCache.shared.store(projects)
             state = .loaded(ProjectListItem.assemble(projects: projects, runs: runs))
         } catch {
             state = .failed(LoadState<[ProjectListItem]>.message(for: error))
