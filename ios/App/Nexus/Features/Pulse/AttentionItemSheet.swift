@@ -27,6 +27,7 @@ struct AttentionItemSheet: View {
     /// Confirm gates for the two writes that need one (D32 close, D35 approve).
     @State private var confirmingClose = false
     @State private var confirmingCleanup = false
+    @State private var choosingSnooze = false
     @State private var loadError: String?
     @State private var actionError: String?
     @State private var busy = false
@@ -120,6 +121,16 @@ struct AttentionItemSheet: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text(closeMessage)
+            }
+            .confirmationDialog("Snooze until…", isPresented: $choosingSnooze, titleVisibility: .visible) {
+                ForEach(AttentionSnoozePreset.allCases, id: \.self) { preset in
+                    Button(preset.label) {
+                        if let item { Task { await run(item, .snooze, preset: preset) } }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The item leaves Needs you and comes back then.")
             }
             .confirmationDialog("Approve the cleanup?", isPresented: $confirmingCleanup, titleVisibility: .visible) {
                 Button("Approve cleanup", role: .destructive) {
@@ -414,10 +425,10 @@ struct AttentionItemSheet: View {
             }
             .disabled(busy)
         case .snooze:
-            Menu {
-                ForEach(AttentionSnoozePreset.allCases, id: \.self) { preset in
-                    Button(preset.label) { Task { await run(item, .snooze, preset: preset) } }
-                }
+            // An action sheet, not a `Menu`: a menu open inside a Form row goes
+            // dead when the sheet re-renders under it (a poll, the thread load).
+            Button {
+                choosingSnooze = true
             } label: {
                 Label("Snooze", systemImage: "zzz")
                     .fontWeight(proposed ? .semibold : .regular)
