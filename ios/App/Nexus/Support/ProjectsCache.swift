@@ -14,6 +14,9 @@ final class ProjectsCache {
     private(set) var projects: [Project] = []
     private(set) var fetchedAt: Date?
     private var inFlight: Task<Error?, Never>?
+    /// Bumped by `clear()`: a fetch started before a disconnect belongs to the
+    /// old backend and must not land in the cache afterwards.
+    private var generation = 0
 
     /// Record a list fetched elsewhere (onboarding, the Projects tab).
     func store(_ projects: [Project]) {
@@ -29,17 +32,25 @@ final class ProjectsCache {
         if let inFlight {
             task = inFlight
         } else {
+            let started = generation
             task = Task { @MainActor in
-                do { self.store(try await api.projects()); return nil } catch { return error }
+                do {
+                    let fetched = try await api.projects()
+                    if started == self.generation { self.store(fetched) }
+                    return nil
+                } catch { return error }
             }
             inFlight = task
         }
         let failure = await task.value
-        inFlight = nil
+        if inFlight == task { inFlight = nil }
         if let failure, projects.isEmpty { throw failure }
     }
 
     func clear() {
+        generation += 1
+        inFlight?.cancel()
+        inFlight = nil
         projects = []
         fetchedAt = nil
     }
