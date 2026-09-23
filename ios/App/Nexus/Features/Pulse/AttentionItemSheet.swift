@@ -27,6 +27,7 @@ struct AttentionItemSheet: View {
     /// Confirm gates for the two writes that need one (D32 close, D35 approve).
     @State private var confirmingClose = false
     @State private var confirmingCleanup = false
+    @State private var choosingSnooze = false
     @State private var loadError: String?
     @State private var actionError: String?
     @State private var busy = false
@@ -37,9 +38,11 @@ struct AttentionItemSheet: View {
     /// "Show the page": the vault page behind the item, rendered as markdown.
     @State private var page: AttentionPage?
     @State private var loadingPage = false
-    /// "File as a to-do": the project picker, then the created session is pushed.
-    @State private var pickingProject = false
-    @State private var projects: [Project] = []
+    /// "File…": the destination picker (idea, reminder or a project). The pick
+    /// is acted on once the picker has gone, so a reminder sheet can follow it.
+    @State private var pickingDestination = false
+    @State private var pendingDestination: FileToSheet.Destination?
+    @State private var composingReminder = false
     @State private var filing = false
     /// A chat pushed inside this sheet's own stack — the partner's current
     /// conversation (Ask the partner) or the just-filed to-do session.
@@ -119,6 +122,16 @@ struct AttentionItemSheet: View {
             } message: {
                 Text(closeMessage)
             }
+            .confirmationDialog("Snooze until…", isPresented: $choosingSnooze, titleVisibility: .visible) {
+                ForEach(AttentionSnoozePreset.allCases, id: \.self) { preset in
+                    Button(preset.label) {
+                        if let item { Task { await run(item, .snooze, preset: preset) } }
+                    }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("The item leaves Needs you and comes back then.")
+            }
             .confirmationDialog("Approve the cleanup?", isPresented: $confirmingCleanup, titleVisibility: .visible) {
                 Button("Approve cleanup", role: .destructive) {
                     if let item { Task { await runApproveCleanup(item) } }
@@ -133,8 +146,15 @@ struct AttentionItemSheet: View {
             .sheet(item: $page) { page in
                 AttentionPageSheet(page: page)
             }
-            .sheet(isPresented: $pickingProject) {
-                projectPicker
+            .sheet(isPresented: $pickingDestination, onDismiss: runPendingFiling) {
+                FileToSheet(api: api, suggestedProject: item?.suggestedProject) { pendingDestination = $0 }
+            }
+            .sheet(isPresented: $composingReminder) {
+                if let item {
+                    ReminderComposer(title: item.title, notes: reminderNotes(for: item)) {
+                        Task { await markFiledAsReminder(item) }
+                    }
+                }
             }
             .navigationDestination(item: $chat) { target in
                 switch target.kind {
@@ -218,12 +238,15 @@ struct AttentionItemSheet: View {
             .disabled(busy)
             if item.isActionable {
                 Button {
-                    Task { await openProjectPicker() }
+                    pickingDestination = true
+                    // Warm the project list while the sheet animates in.
+                    Task { try? await ProjectsCache.shared.refresh(api: api) }
                 } label: {
-                    Label(filing ? "Filing…" : "File as a to-do", systemImage: "tray.and.arrow.down")
+                    Label(filing ? "Filing…" : "File…", systemImage: "tray.and.arrow.down")
                 }
                 .disabled(busy || filing)
             }
+
             // Approve cleanup (D35): a dismiss carrying the exact key the
             // reconciliation skill reads back; offered only on the one item it
             // reads it from, and only while the partner still accepts a dismiss.
@@ -245,7 +268,7 @@ struct AttentionItemSheet: View {
     private func followUpFooter(for item: AttentionItem) -> String {
         var parts = ["Ask opens the partner's conversation with this item as the first message."]
         if item.isActionable {
-            parts.append("File starts a Board session on a project and marks the item seen.")
+            parts.append("File makes it a Board session on a project, an idea or an Apple reminder, and marks the item seen.")
         }
         if item.isActionable, item.isCleanupApproval {
             parts.append("Approve records your approval on the item; the partner acts on it, Nexus deletes nothing.")
@@ -256,54 +279,6 @@ struct AttentionItemSheet: View {
     private var closeMessage: String {
         let url = item?.links?.url.map { " (\($0))" } ?? ""
         return "The partner closes it with its own gh\(url). Nothing is merged."
-    }
-
-    /// The project picker for "file as a to-do": the producer's suggestion (slice
-    /// 6b) first when it names a known slug or badge; otherwise the rail order.
-    private var projectPicker: some View {
-        NavigationStack {
-            List {
-                if projects.isEmpty {
-                    ProgressView()
-                } else {
-                    ForEach(orderedProjects) { project in
-                        Button {
-                            pickingProject = false
-                            Task { await file(to: project) }
-                        } label: {
-                            HStack(spacing: 10) {
-                                Text(project.badge)
-                                    .font(.caption2.weight(.bold)).tracking(0.5)
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(.thinMaterial, in: Capsule())
-                                Text(project.name)
-                                if project.slug == item?.suggestedProject || project.badge == item?.suggestedProject {
-                                    Spacer()
-                                    Text("suggested").font(.caption).foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .navigationTitle("File to…")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { pickingProject = false }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
-    }
-
-    private var orderedProjects: [Project] {
-        guard let hint = item?.suggestedProject, !hint.isEmpty else { return projects }
-        return projects.sorted { a, b in
-            let aHit = a.slug == hint || a.badge == hint
-            let bHit = b.slug == hint || b.badge == hint
-            return aHit && !bHit
-        }
     }
 
     // MARK: Sections
@@ -382,8 +357,8 @@ struct AttentionItemSheet: View {
                         if res.approved {
                             Label("Cleanup approved", systemImage: "checkmark.seal").foregroundStyle(.secondary)
                         }
-                        if res.filedAs != nil {
-                            Label("Filed as a to-do", systemImage: "tray.and.arrow.down").foregroundStyle(.secondary)
+                        if let filed = res.filedAsLabel {
+                            Label(filed, systemImage: "tray.and.arrow.down").foregroundStyle(.secondary)
                         }
                     } else {
                         Text(item.status == .expired ? "Expired without action." : "Resolved.")
@@ -450,10 +425,10 @@ struct AttentionItemSheet: View {
             }
             .disabled(busy)
         case .snooze:
-            Menu {
-                ForEach(AttentionSnoozePreset.allCases, id: \.self) { preset in
-                    Button(preset.label) { Task { await run(item, .snooze, preset: preset) } }
-                }
+            // An action sheet, not a `Menu`: a menu open inside a Form row goes
+            // dead when the sheet re-renders under it (a poll, the thread load).
+            Button {
+                choosingSnooze = true
             } label: {
                 Label("Snooze", systemImage: "zzz")
                     .fontWeight(proposed ? .semibold : .regular)
@@ -523,14 +498,58 @@ struct AttentionItemSheet: View {
         }
     }
 
-    private func openProjectPicker() async {
-        if projects.isEmpty {
-            do { projects = try await api.projects() } catch {
-                actionError = LoadState<[Project]>.message(for: error)
-                return
-            }
+    /// Act on the picker's choice once it has dismissed (a sheet cannot present
+    /// another while it is still going away).
+    private func runPendingFiling() {
+        guard let destination = pendingDestination else { return }
+        pendingDestination = nil
+        switch destination {
+        case .project(let project): Task { await file(to: project) }
+        case .idea: Task { await fileAsIdea() }
+        case .reminder: composingReminder = true
         }
-        pickingProject = true
+    }
+
+    /// "File as an idea": a parked Idea Watcher row; the item is dismissed on the
+    /// partner by the same call.
+    private func fileAsIdea() async {
+        guard let item else { return }
+        filing = true
+        actionError = nil
+        defer { filing = false }
+        do {
+            _ = try await api.fileAttentionAsIdea(id: item.id)
+            onChanged()
+            await load()
+        } catch {
+            actionError = LoadState<Idea>.message(for: error)
+        }
+    }
+
+    /// The reminder is already in Apple Reminders; record it on the item (a
+    /// dismiss with `{ filed_as: "reminder" }`) so it leaves Needs-you.
+    private func markFiledAsReminder(_ item: AttentionItem) async {
+        filing = true
+        actionError = nil
+        defer { filing = false }
+        do {
+            self.item = try await api.resolveAttention(id: item.id, verb: .dismiss,
+                                                       result: ["filed_as": AttentionResolution.reminderFiling])
+            onChanged()
+        } catch {
+            // The reminder exists either way; say the item is still open.
+            actionError = "Added to Reminders, but the item stayed open: \(LoadState<AttentionItem>.message(for: error))"
+        }
+    }
+
+    /// Reminder notes: the why and who, never the mail text itself (D43 keeps
+    /// message bodies with the partner).
+    private func reminderNotes(for item: AttentionItem) -> String {
+        var lines: [String] = []
+        if let why = item.why, !why.isEmpty { lines.append(why) }
+        if let from = thread.value?.latest?.senderLine, !from.isEmpty { lines.append("From \(from)") }
+        lines.append("Filed from Nexus · Needs you")
+        return lines.joined(separator: "\n")
     }
 
     /// "File as a to-do" (D20): a Board session on the project, seeded with the

@@ -246,6 +246,13 @@ final class AttentionModelsTests: XCTestCase {
         """.data(using: .utf8)!)
         XCTAssertEqual(filed.filedAs, "thread-1")
         XCTAssertFalse(filed.approved, "a filed_as is not approval")
+        XCTAssertEqual(filed.filedAsLabel, "Filed as a to-do")
+        for (raw, label) in [("idea:abc", "Filed as an idea"), ("reminder", "Filed as a reminder")] {
+            let json = #"{"verb": "dismiss", "result": {"filed_as": "\#(raw)"}}"#
+            let r = try JSONDecoder.nexusREST.decode(AttentionResolution.self, from: json.data(using: .utf8)!)
+            XCTAssertEqual(r.filedAsLabel, label)
+        }
+        XCTAssertNil(approved.filedAsLabel)
     }
 
     // Slice 6d: the latest message behind a mail item.

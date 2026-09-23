@@ -354,6 +354,11 @@ public struct Endpoint: Sendable {
         Endpoint(path: "/api/attention/\(id)/file", method: "POST", body: body)
     }
 
+    /// File an item as a parked idea (for things that belong to no project) → `Idea`.
+    public static func fileAttentionIdea(_ id: String, body: Data) -> Endpoint {
+        Endpoint(path: "/api/attention/\(id)/file/idea", method: "POST", body: body)
+    }
+
     /// The partner's one current conversation (adopted locally) → `AssistantCurrentResponse`.
     public static let assistantCurrent = Endpoint(path: "/api/assistant/current")
 
