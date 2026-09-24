@@ -411,3 +411,42 @@ test('a transient Claude subscription notice preserves quota bars and their capt
   assert.equal(recovered.claude.source, 'codexbar-claude');
   assert.equal(recovered.claude.error, undefined);
 });
+
+test('a Claude probe outage after a restart shows the persisted quota, dropping windows past their reset', async () => {
+  resetUsageStatsCacheForTests();
+  let stored = '';
+  const claudeQuota = { read: async () => stored, write: async (json: string) => { stored = json; } };
+  let failing = false;
+  const options = {
+    useCache: false,
+    readHistory: async () => '',
+    claudeQuota,
+    codexBarUsage: async (provider: string) => {
+      if (failing) return JSON.stringify([{ provider, error: { message: 'Claude CLI /usage returned a subscription notice without session quota data.' } }]);
+      return JSON.stringify([{ provider, source: 'claude', usage: {
+        primary: { usedPercent: 20, windowMinutes: 300, resetsAt: '2026-09-24T14:39:00Z' },
+        secondary: { usedPercent: 34, windowMinutes: 10080, resetsAt: '2026-09-27T21:59:00Z' },
+      } }]);
+    },
+    codexBarCost: async () => JSON.stringify([{ provider: 'claude', sessionCostUSD: 0 }]),
+    codexUsage: async () => ({}),
+    openRouterBalance: async () => null,
+  };
+  const live = await getUsageStats({ ...options, now: () => Date.parse('2026-09-24T12:00:00Z') });
+  assert.equal(live.claude.source, 'codexbar-claude');
+
+  failing = true;
+  const held = await getUsageStats({ ...options, now: () => Date.parse('2026-09-24T13:00:00Z') });
+  assert.equal(held.claude.source, 'history-cache');
+  assert.equal(held.claude.sampledAt, live.claude.sampledAt);
+  assert.equal(held.claude.windows?.session?.usedPercent, 20);
+  assert.match(held.claude.error ?? '', /subscription notice/);
+
+  const afterSessionReset = await getUsageStats({ ...options, now: () => Date.parse('2026-09-24T15:00:00Z') });
+  assert.equal(afterSessionReset.claude.windows?.session, undefined);
+  assert.equal(afterSessionReset.claude.windows?.weekly?.usedPercent, 34);
+  assert.equal(afterSessionReset.claude.value, '66%');
+
+  const afterWeeklyReset = await getUsageStats({ ...options, now: () => Date.parse('2026-09-28T00:00:00Z') });
+  assert.equal(afterWeeklyReset.claude.source, 'codexbar-cost');
+});

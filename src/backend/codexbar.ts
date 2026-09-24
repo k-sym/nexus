@@ -1,9 +1,9 @@
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { loadConfig, resolveOpenRouterKey } from './config.js';
+import { getNexusDir, loadConfig, resolveOpenRouterKey } from './config.js';
 
 export type CodexBarProvider = 'claude' | 'codex' | 'openrouter';
 
@@ -371,6 +371,43 @@ async function readHistoryFallback(provider: CodexBarProvider, readHistory: () =
   }
 }
 
+/**
+ * Last live Claude quota reading, persisted so a CodexBar probe outage (its
+ * `claude /usage` scrape can return a subscription notice for hours) that
+ * spans a backend restart still shows bars. Windows past their reset are
+ * dropped: the old percentage no longer describes them.
+ */
+export interface QuotaStore {
+  read: () => Promise<string>;
+  write: (json: string) => Promise<void>;
+}
+
+function claudeQuotaStore(): QuotaStore {
+  const path = join(getNexusDir(), 'claude-usage.json');
+  return { read: () => readFile(path, 'utf8'), write: (json) => writeFile(path, json) };
+}
+
+export function parseStoredQuota(json: string, now: number): CodexBarProviderStats | null {
+  const saved = JSON.parse(json) as CodexBarProviderStats;
+  if (!saved?.ok || !saved.windows) return null;
+  const windows: CodexBarProviderStats['windows'] = {};
+  for (const kind of ['session', 'weekly'] as const) {
+    const window = saved.windows[kind];
+    if (!window) continue;
+    if (window.resetsAt && Date.parse(window.resetsAt) <= now) continue;
+    windows[kind] = window;
+  }
+  if (!windows.session && !windows.weekly) return null;
+  const lead = windows.session ?? windows.weekly!;
+  return {
+    ...saved,
+    value: `${lead.remainingPercent}%`,
+    caption: captionForWindow(windows.session ? 'session' : 'weekly', lead),
+    windows,
+    source: 'history-cache',
+  };
+}
+
 interface OpenRouterBalance {
   balance: number;
   currency?: string;
@@ -386,6 +423,7 @@ export interface UsageStatsOptions {
   openRouterBalance?: () => Promise<OpenRouterBalance | null>;
   codexBarUsage?: (provider: CodexBarProvider) => Promise<string>;
   codexBarCost?: () => Promise<string>;
+  claudeQuota?: QuotaStore;
 }
 
 function defaultReadHistory(): Promise<string> {
@@ -511,6 +549,7 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
   const openRouterBalance = options.openRouterBalance ?? (() => fetchOpenRouterBalance(openRouterKey));
   const codexBarUsage = options.codexBarUsage ?? (Object.keys(options).length === 0 ? defaultCodexBarUsage : undefined);
   const codexBarCost = options.codexBarCost ?? (Object.keys(options).length === 0 ? defaultCodexBarCost : undefined);
+  const claudeQuota = options.claudeQuota ?? (Object.keys(options).length === 0 ? claudeQuotaStore() : undefined);
 
   const entries = await Promise.all(PROVIDERS.map(async (provider) => {
     if (provider === 'claude') {
@@ -518,7 +557,10 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
       if (codexBarUsage) {
         try {
           const live = sampled(parseCodexBarUsage(provider, await codexBarUsage(provider)), sampledAt);
-          if (live.ok && (live.windows?.session || live.windows?.weekly)) return [provider, live] as const;
+          if (live.ok && (live.windows?.session || live.windows?.weekly)) {
+            await claudeQuota?.write(JSON.stringify(live)).catch(() => {});
+            return [provider, live] as const;
+          }
           quotaError = live.error;
         } catch (err: any) {
           try {
@@ -533,6 +575,11 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
       const history = await readHistoryFallback(provider, readHistory);
       if (history?.windows?.session || history?.windows?.weekly) {
         return [provider, sampled(history, sampledAt)] as const;
+      }
+
+      const stored = claudeQuota ? await claudeQuota.read().then((json) => parseStoredQuota(json, now)).catch(() => null) : null;
+      if (stored) {
+        return [provider, { ...stored, error: quotaError || 'Live Claude quota unavailable; showing the last captured usage.' }] as const;
       }
 
       if (!codexBarCost) return [provider, unavailable(provider, 'No Claude usage data found')] as const;
