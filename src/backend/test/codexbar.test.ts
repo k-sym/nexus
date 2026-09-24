@@ -450,3 +450,20 @@ test('a Claude probe outage after a restart shows the persisted quota, dropping 
   const afterWeeklyReset = await getUsageStats({ ...options, now: () => Date.parse('2026-09-28T00:00:00Z') });
   assert.equal(afterWeeklyReset.claude.source, 'codexbar-cost');
 });
+
+test('an expired Claude history entry does not beat the persisted quota or the cost fallback', async () => {
+  resetUsageStatsCacheForTests();
+  const history = JSON.stringify({ provider: 'claude', usedPercent: 90, windowMinutes: 300, resetsAt: '2026-09-24T10:00:00Z', sampledAt: '2026-09-24T09:00:00Z' });
+  const stats = await getUsageStats({
+    useCache: false,
+    now: () => Date.parse('2026-09-24T12:00:00Z'),
+    readHistory: async () => history,
+    claudeQuota: { read: async () => { throw new Error('none'); }, write: async () => {} },
+    codexBarUsage: async (provider: string) => JSON.stringify([{ provider, error: { message: 'Claude CLI /usage returned a subscription notice without session quota data.' } }]),
+    codexBarCost: async () => JSON.stringify([{ provider: 'claude', sessionCostUSD: 0 }]),
+    codexUsage: async () => ({}),
+    openRouterBalance: async () => null,
+  });
+  assert.equal(stats.claude.source, 'codexbar-cost');
+  assert.equal(stats.claude.windows?.session, undefined);
+});

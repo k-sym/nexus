@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -384,11 +384,28 @@ export interface QuotaStore {
 
 function claudeQuotaStore(): QuotaStore {
   const path = join(getNexusDir(), 'claude-usage.json');
-  return { read: () => readFile(path, 'utf8'), write: (json) => writeFile(path, json) };
+  return {
+    read: () => readFile(path, 'utf8'),
+    // Write-then-rename so a restart mid-write never leaves truncated JSON;
+    // concurrent writers each use their own temp file and the last rename wins.
+    write: async (json) => {
+      const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+      try {
+        await writeFile(tmp, json);
+        await rename(tmp, path);
+      } catch (err) {
+        await rm(tmp, { force: true });
+        throw err;
+      }
+    },
+  };
 }
 
 export function parseStoredQuota(json: string, now: number): CodexBarProviderStats | null {
-  const saved = JSON.parse(json) as CodexBarProviderStats;
+  return withoutExpiredWindows(JSON.parse(json) as CodexBarProviderStats, now);
+}
+
+function withoutExpiredWindows(saved: CodexBarProviderStats | null, now: number): CodexBarProviderStats | null {
   if (!saved?.ok || !saved.windows) return null;
   const windows: CodexBarProviderStats['windows'] = {};
   for (const kind of ['session', 'weekly'] as const) {
@@ -572,8 +589,8 @@ export async function getUsageStats(options: UsageStatsOptions = {}): Promise<Co
         }
       }
 
-      const history = await readHistoryFallback(provider, readHistory);
-      if (history?.windows?.session || history?.windows?.weekly) {
+      const history = withoutExpiredWindows(await readHistoryFallback(provider, readHistory), now);
+      if (history) {
         return [provider, sampled(history, sampledAt)] as const;
       }
 
