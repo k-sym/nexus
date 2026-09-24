@@ -10,6 +10,7 @@ struct StreamingChatView: View {
     @State private var showAttachMenu = false
     @State private var showPhotosPicker = false
     @State private var showFileImporter = false
+    @FocusState private var inputFocused: Bool
     @Environment(\.scenePhase) private var scenePhase
 
     /// Backend-agnostic entry point. `seed` is sent once after history loads.
@@ -104,6 +105,8 @@ struct StreamingChatView: View {
                 }
                 .padding()
             }
+            // Drag the transcript down to pull the keyboard away with it.
+            .scrollDismissesKeyboard(.interactively)
             .onChange(of: vm.scrollTrigger) {
                 withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
@@ -160,7 +163,18 @@ struct StreamingChatView: View {
                 TextField("Message", text: $vm.input, axis: .vertical)
                     .textFieldStyle(.roundedBorder)
                     .lineLimit(2...6)
+                    .focused($inputFocused)
                     .disabled(vm.isSending || vm.isBackgroundActive)
+
+                // The keyboard has no hide key of its own; this is the explicit one.
+                if inputFocused {
+                    Button { inputFocused = false } label: {
+                        Image(systemName: "keyboard.chevron.compact.down").font(.title2)
+                    }
+                    .tint(.secondary)
+                    .accessibilityLabel("Hide keyboard")
+                    .accessibilityIdentifier("hide-keyboard")
+                }
 
                 // Hand off to a durable background run (assistant only): the turn
                 // keeps running on the backend even if the app is suspended.
