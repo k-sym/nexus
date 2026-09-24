@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Documentation and plan artifacts live in `project_docs/`; do not create root `docs/`.
+- This plan is versioned in `intent/`; the spec and other documentation live in Dropbox `project_docs/` (git-ignored, never staged); do not create root `docs/`.
 - Use the existing Assistant config (`assistant.url`, `assistant.api_key`) and never store raw API keys in SQLite.
 - Keep project chat/Pi session behavior unchanged.
 - Use test-first changes for new behavior.

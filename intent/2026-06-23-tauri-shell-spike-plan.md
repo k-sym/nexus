@@ -201,7 +201,7 @@ This validates the spec's #1 risk **before** investing in the supervisor. If loc
 - Modify: `tauri/src-tauri/tauri.conf.json` (point window at the probe, then revert)
 
 **Interfaces:**
-- Produces: a documented verdict (works / which CSP / blocked) recorded in `docs/superpowers/specs/2026-06-23-tauri-shell-spike-design.md` under a new "Risk #1 verdict" note.
+- Produces: a documented verdict (works / which CSP / blocked) recorded in `project_docs/specs/2026-06-23-tauri-shell-spike-design.md` under a new "Risk #1 verdict" note.
 
 - [ ] **Step 1: Start a real backend to probe against**
 
@@ -255,7 +255,7 @@ Append a "## Risk #1 verdict (probe result)" section to the design doc stating: 
 ```bash
 rm tauri/src-tauri/probe.html
 # revert tauri.conf.json window url back to the frontend; keep the CSP value that worked
-git add tauri/src-tauri/tauri.conf.json docs/superpowers/specs/2026-06-23-tauri-shell-spike-design.md
+git add tauri/src-tauri/tauri.conf.json
 git commit -m "spike(tauri): verify webview->localhost fetch/ws (risk #1 gate)"
 ```
 
@@ -1093,7 +1093,7 @@ git commit -m "feat(tauri): bundle services + node as resources; prod resource-d
 
 **Files:**
 - Modify: `electron/main.ts` (add a two-line cold-start log only), `tauri/src-tauri/src/lib.rs` (cold-start log)
-- Create: `docs/superpowers/specs/2026-06-23-tauri-shell-measurements.md`
+- Create: `project_docs/specs/2026-06-23-tauri-shell-measurements.md`
 
 **Interfaces:**
 - Produces: a measurements table feeding the Task 11 recommendation.
@@ -1132,7 +1132,7 @@ Sum RSS of the shell + its webview helper processes. Record.
 
 Fill `2026-06-23-tauri-shell-measurements.md` with three tables (size, cold start, RSS), each showing Electron vs Tauri and the delta.
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-shell-measurements.md electron/main.ts tauri/src-tauri/src/lib.rs
+git add electron/main.ts tauri/src-tauri/src/lib.rs
 git commit -m "spike(tauri): instrument + record shell footprint measurements"
 ```
 
@@ -1141,7 +1141,7 @@ git commit -m "spike(tauri): instrument + record shell footprint measurements"
 ## Task 11: Spike writeup — recommendation + follow-up issues
 
 **Files:**
-- Create: `docs/superpowers/specs/2026-06-23-tauri-shell-spike-result.md`
+- Create: `project_docs/specs/2026-06-23-tauri-shell-spike-result.md`
 
 **Interfaces:**
 - Consumes: Task 2 risk verdict, Task 8/9 parity observations, Task 10 measurements.
@@ -1157,10 +1157,10 @@ Check each spec §11 criterion against the deliverables. If risk #1 was a blocke
 - [ ] **Step 3: Commit + open PR**
 
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-shell-spike-result.md
-git commit -m "spike(tauri): result, recommendation, and follow-up issues (#78)"
+# project_docs/specs/2026-06-23-tauri-shell-spike-result.md lives in Dropbox (git-ignored): save it, nothing to stage
+# nothing to commit for this step (was: git commit -m "spike(tauri): result, recommendation, and follow-up issues (#78)")
 git push -u origin spike/tauri-v2-shell
-gh pr create --fill --title "Spike: Tauri v2 shell evaluation (#78)" --body "Closes #78 spike. See docs/superpowers/specs/2026-06-23-tauri-shell-spike-result.md for the recommendation and evidence."
+gh pr create --fill --title "Spike: Tauri v2 shell evaluation (#78)" --body "Closes #78 spike. See project_docs/specs/2026-06-23-tauri-shell-spike-result.md for the recommendation and evidence."
 ```
 
 ---

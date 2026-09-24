@@ -1389,15 +1389,15 @@ Expected: Only intended files are modified/created:
 - `src/frontend/src/components/KanbanBoard.tsx`
 - `src/frontend/src/components/KanbanBoard.test.tsx`
 - `src/frontend/src/App.tsx`
-- `docs/superpowers/specs/2026-06-19-diff-aware-review-actions-design.md`
-- `docs/superpowers/plans/2026-06-19-diff-aware-review-actions.md`
+- `project_docs/specs/2026-06-19-diff-aware-review-actions-design.md` (Dropbox, git-ignored; not staged)
+- `intent/2026-06-19-diff-aware-review-actions-plan.md`
 
 - [ ] **Step 5: Commit only if explicitly requested**
 
 If the user asks to commit, run:
 
 ```bash
-git add src/shared/index.ts src/backend/git/diff.ts src/backend/routes/projects.ts src/backend/test/git-diff.test.ts src/frontend/src/api.ts src/frontend/src/components/DiffReviewPanel.tsx src/frontend/src/components/DiffReviewPanel.test.tsx src/frontend/src/components/KanbanBoard.tsx src/frontend/src/components/KanbanBoard.test.tsx src/frontend/src/App.tsx docs/superpowers/specs/2026-06-19-diff-aware-review-actions-design.md docs/superpowers/plans/2026-06-19-diff-aware-review-actions.md
+git add src/shared/index.ts src/backend/git/diff.ts src/backend/routes/projects.ts src/backend/test/git-diff.test.ts src/frontend/src/api.ts src/frontend/src/components/DiffReviewPanel.tsx src/frontend/src/components/DiffReviewPanel.test.tsx src/frontend/src/components/KanbanBoard.tsx src/frontend/src/components/KanbanBoard.test.tsx src/frontend/src/App.tsx intent/2026-06-19-diff-aware-review-actions-plan.md
 git commit -m "feat: add diff-aware review actions"
 ```
 

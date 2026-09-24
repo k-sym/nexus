@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-From `docs/superpowers/specs/2026-06-23-tauri-full-conversion-design.md`:
+From `project_docs/specs/2026-06-23-tauri-full-conversion-design.md`:
 
 - **Platform: macOS arm64 only.** No Linux/Windows work.
 - **This phase is the go/no-go gate** (spec §4 Phase 1, §5). Electron stays fully intact and runnable until Phase 6 — do NOT modify `electron/`, `electron-builder.yml`, or remove Electron in this phase.
@@ -26,8 +26,8 @@ From `docs/superpowers/specs/2026-06-23-tauri-full-conversion-design.md`:
 ## File structure
 
 ```
-docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md   # living audit checklist (Task 1, updated through Task 5)
-docs/superpowers/specs/2026-06-23-tauri-parity-result.md      # go/no-go result (Task 6)
+project_docs/specs/2026-06-23-tauri-parity-checklist.md   # living audit checklist (Task 1, updated through Task 5)
+project_docs/specs/2026-06-23-tauri-parity-result.md      # go/no-go result (Task 6)
 src/frontend/src/**                                            # targeted parity fixes only (Task 5)
 ```
 
@@ -38,7 +38,7 @@ No new production source files are expected unless a fix requires one. The two d
 ## Task 1: Inspection harness + parity checklist
 
 **Files:**
-- Create: `docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md`
+- Create: `project_docs/specs/2026-06-23-tauri-parity-checklist.md`
 
 **Interfaces:**
 - Produces: a repeatable way to (a) launch the Tauri dev shell, (b) read the WKWebView console/network via Safari Web Inspector, and (c) a checklist enumerating every surface with concrete check + expected outcome + a result field. Consumed by Tasks 2–5.
@@ -54,7 +54,7 @@ Expected: console attaches and shows the app's logs. If the webview does not app
 
 - [ ] **Step 3: Write the parity checklist doc**
 
-Create `docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md` with the harness steps above and a table of every surface to verify, each row: **Surface | Check (what to do) | Expected | Result (pass/divergence) | Notes**. Seed it with these rows (the real surfaces, from `src/frontend/src`):
+Create `project_docs/specs/2026-06-23-tauri-parity-checklist.md` with the harness steps above and a table of every surface to verify, each row: **Surface | Check (what to do) | Expected | Result (pass/divergence) | Notes**. Seed it with these rows (the real surfaces, from `src/frontend/src`):
 
 Views: `dashboard` (KanbanBoard dnd, ProjectModal/TaskModal, task cards), `activity` (ActivityConsole, AgentRunCard, ToolCallTimeline, DiffReviewPanel), `missions` (MissionsView list + MissionControl + run ledger), `tickets` (TicketsView list + TriageToProject), `braindump` (BraindumpView capture), `assistant` (AssistantView/ChatPanel streaming — see Task 2), `settings` (SettingsPage, ModelCuration, ModelSelector, PiAuthSection OAuth, TrustPrivacySection).
 Cross-cutting: chat streaming (Task 2), clipboard copy (ChatPanel/App copy buttons), dnd-kit Kanban drag, CommandPalette + keyboard shortcuts, modals/`<dialog>` behaviour, toasts (NotificationToasts/DaemonToasts), dark mode (`appearance.ts` `matchMedia('prefers-color-scheme')`), scroll-follow (`useFollowAtBottom`), external-link/OAuth open (PiAuthSection → system browser via tauri-plugin-shell).
@@ -62,8 +62,8 @@ Cross-cutting: chat streaming (Task 2), clipboard copy (ChatPanel/App copy butto
 - [ ] **Step 4: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md
-git commit -m "docs(tauri): parity audit harness + surface checklist (phase 1)"
+# project_docs/specs/2026-06-23-tauri-parity-checklist.md lives in Dropbox (git-ignored): save it, nothing to stage
+# nothing to commit for this step (was: git commit -m "docs(tauri): parity audit harness + surface checklist (phase 1)")
 ```
 
 ---
@@ -72,7 +72,7 @@ git commit -m "docs(tauri): parity audit harness + surface checklist (phase 1)"
 
 **Files:**
 - Modify (only if a divergence is found): `src/frontend/src/components/ChatPanel.tsx` and/or the stream-reading path
-- Update: `docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md` (streaming rows)
+- Update: `project_docs/specs/2026-06-23-tauri-parity-checklist.md` (streaming rows)
 
 **Interfaces:**
 - Consumes: the harness from Task 1.
@@ -99,17 +99,17 @@ Run `npm run --workspace=src/frontend test` (must stay green). Re-run Steps 1–
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md src/frontend 2>/dev/null
+git add src/frontend 2>/dev/null
 git commit -m "test(tauri): verify chat streaming parity in WKWebView (phase 1)"
 ```
-(If no fix was needed, commit only the checklist update with message `docs(tauri): chat streaming parity verified in WKWebView`.)
+(If no fix was needed, there is nothing to commit: the checklist update lives in Dropbox `project_docs/specs/`.)
 
 ---
 
 ## Task 3: Per-view parity sweep
 
 **Files:**
-- Update: `docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md` (one row per view, filled in)
+- Update: `project_docs/specs/2026-06-23-tauri-parity-checklist.md` (one row per view, filled in)
 
 **Interfaces:**
 - Consumes: the harness (Task 1).
@@ -132,8 +132,8 @@ For each view, mark PASS or describe the divergence precisely (what looked/behav
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md
-git commit -m "docs(tauri): per-view WKWebView parity sweep results (phase 1)"
+# project_docs/specs/2026-06-23-tauri-parity-checklist.md lives in Dropbox (git-ignored): save it, nothing to stage
+# nothing to commit for this step (was: git commit -m "docs(tauri): per-view WKWebView parity sweep results (phase 1)")
 ```
 
 ---
@@ -141,7 +141,7 @@ git commit -m "docs(tauri): per-view WKWebView parity sweep results (phase 1)"
 ## Task 4: Cross-cutting interaction parity
 
 **Files:**
-- Update: `docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md` (cross-cutting rows)
+- Update: `project_docs/specs/2026-06-23-tauri-parity-checklist.md` (cross-cutting rows)
 
 **Interfaces:**
 - Consumes: the harness (Task 1).
@@ -163,8 +163,8 @@ In the WKWebView, exercise and record:
 
 Mark each PASS or divergence in the checklist.
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md
-git commit -m "docs(tauri): cross-cutting WKWebView parity results (phase 1)"
+# project_docs/specs/2026-06-23-tauri-parity-checklist.md lives in Dropbox (git-ignored): save it, nothing to stage
+# nothing to commit for this step (was: git commit -m "docs(tauri): cross-cutting WKWebView parity results (phase 1)")
 ```
 
 ---
@@ -174,7 +174,7 @@ git commit -m "docs(tauri): cross-cutting WKWebView parity results (phase 1)"
 **Files:**
 - Modify: `src/frontend/src/**` (targeted, per divergence)
 - Test: existing `src/frontend/src/**/*.test.tsx` (regression guard)
-- Update: `docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md` (mark each divergence resolved)
+- Update: `project_docs/specs/2026-06-23-tauri-parity-checklist.md` (mark each divergence resolved)
 
 **Interfaces:**
 - Consumes: the divergence list catalogued in Tasks 2–4.
@@ -193,7 +193,7 @@ Run `npm run --workspace=src/frontend test` (must pass). Reload the Tauri dev we
 - [ ] **Step 3: Commit this fix**
 
 ```bash
-git add src/frontend docs/superpowers/specs/2026-06-23-tauri-parity-checklist.md
+git add src/frontend
 git commit -m "fix(tauri): <divergence> parity in WKWebView (phase 1)"
 ```
 Repeat Steps 1–3 for the next divergence.
@@ -207,7 +207,7 @@ Run `npm run --workspace=src/frontend test` once more. Expected: full suite gree
 ## Task 6: Parity-pass result doc (go/no-go)
 
 **Files:**
-- Create: `docs/superpowers/specs/2026-06-23-tauri-parity-result.md`
+- Create: `project_docs/specs/2026-06-23-tauri-parity-result.md`
 
 **Interfaces:**
 - Consumes: the completed checklist + fixes.
@@ -224,8 +224,8 @@ Confirm the Phase 1 acceptance bar from spec §4 is met: "every flow exercised, 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-parity-result.md
-git commit -m "docs(tauri): WKWebView parity gate result + go/no-go (phase 1)"
+# project_docs/specs/2026-06-23-tauri-parity-result.md lives in Dropbox (git-ignored): save it, nothing to stage
+# nothing to commit for this step (was: git commit -m "docs(tauri): WKWebView parity gate result + go/no-go (phase 1)")
 ```
 
 ---
