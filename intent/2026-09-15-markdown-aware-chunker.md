@@ -31,7 +31,7 @@ No backend, frontend, iOS or schema change.
 
 ## Constraints
 - No new dependency. Chonkie's TypeScript core was evaluated during the spec (D1 in
-  `project_docs/design/2026-09-15-markdown-aware-chunker.md`): it has no markdown recipe,
+  `project_docs/specs/2026-09-15-markdown-aware-chunker.md`): it has no markdown recipe,
   its rules cannot express heading splits, and it pulls in an async WASM module. The
   heading walk and section sizing are ~100 lines of plain TypeScript in `chunk.ts`.
   Any later change to chunk boundaries needs a forced rebuild, because they feed `seg_hash`.

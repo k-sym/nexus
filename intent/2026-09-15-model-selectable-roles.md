@@ -7,4 +7,4 @@ Give Nexus threads five explicit child roles (Scout, Researcher, Builder, Refute
 
 Preserve project ownership, approvals and audit transcripts. Children run sequentially in the same working tree, cannot delegate, and stop with the parent or their configured ceilings. Persist per-thread model overrides and expose choices on web and iOS. No new external-write tools. Rich nested Activity rendering follows in #455.
 
-Design: project_docs/design/2026-09-15-model-selectable-roles.md
+Design: project_docs/specs/2026-09-15-model-selectable-roles.md
