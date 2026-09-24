@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-From `docs/superpowers/specs/2026-06-23-tauri-full-conversion-design.md` (§2, §4 Phase 3–4):
+From `project_docs/specs/2026-06-23-tauri-full-conversion-design.md` (§2, §4 Phase 3–4):
 
 - **macOS arm64 only.** Developer ID distribution (NOT Mac App Store). **No auto-update.**
 - **Electron stays intact** until Phase 6 — do not modify `electron/` or remove it here.
@@ -31,7 +31,7 @@ tauri/src-tauri/tauri.conf.json     # add dmg target + macOS signingIdentity/min
 tauri/src-tauri/entitlements.plist  # fix misleading comment; keep the (needed) entitlements
 scripts/prune-foreign-natives.cjs   # NEW: prune non-arm64-darwin .node prebuilds from .stage (Task 2)
 scripts/sign-nested-binaries.sh     # NEW (only if Task 4 shows Tauri didn't sign them): codesign sweep
-docs/superpowers/specs/2026-06-23-tauri-signing-result.md  # result (Task 7)
+project_docs/specs/2026-06-23-tauri-signing-result.md  # result (Task 7)
 .gitignore                          # ensure cred material is ignored
 ```
 
@@ -51,7 +51,7 @@ Verify:
 ```bash
 security find-identity -v -p codesigning | grep "Developer ID Application"
 ```
-Expected: a line like `… "Developer ID Application: Keith Symmonds (TEAMID)"`. Record the identity string + the 10-char Team ID.
+Expected: a line like `… "Developer ID Application: <name> (<TEAMID>)"`. Record the identity string + the 10-char Team ID.
 
 - [ ] **Step 2: Create notarization credentials and store them with notarytool**
 
@@ -311,7 +311,7 @@ Expected: `accepted` (notarized) even with a quarantine attribute — i.e. it wo
 ## Task 7: Result doc
 
 **Files:**
-- Create: `docs/superpowers/specs/2026-06-23-tauri-signing-result.md`
+- Create: `project_docs/specs/2026-06-23-tauri-signing-result.md`
 
 - [ ] **Step 1: Document the outcome**
 
@@ -320,8 +320,8 @@ Record: the signing identity + notarization method used; whether Tauri signed ne
 - [ ] **Step 2: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-06-23-tauri-signing-result.md
-git commit -m "docs(tauri): signing + notarization result (phase 3-4)"
+# project_docs/specs/2026-06-23-tauri-signing-result.md lives in Dropbox (git-ignored): save it, nothing to stage
+# nothing to commit for this step (was: git commit -m "docs(tauri): signing + notarization result (phase 3-4)")
 ```
 
 ---

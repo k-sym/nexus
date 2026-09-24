@@ -10,7 +10,7 @@
 
 **Spec:** `project_docs/specs/2026-06-02-opencode-provider-design.md`
 
-**Conventions:** This plan lives in `project_docs/` (gitignored). Commit code changes per task; the doc itself won't be tracked. Run all commands from the repo root `/Users/k-sym/Projects/nexus`.
+**Conventions:** This plan is versioned in `intent/`; the spec lives in Dropbox `project_docs/specs/` (git-ignored, never staged). Commit code changes per task. Run all commands from the repo root `/Users/k-sym/Projects/nexus`.
 
 ---
 

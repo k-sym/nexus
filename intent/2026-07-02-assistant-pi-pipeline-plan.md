@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Documentation/plans live in `project_docs/` (a gitignored Dropbox symlink); never create a root `docs/` tree.
+- This plan is versioned in `intent/`; the spec and other documentation live in `project_docs/` (a git-ignored Dropbox symlink, never staged); never create a root `docs/` tree.
 - Do not expose Assistant API keys or bearer tokens in frontend responses.
 - Keep the Assistant local-first: if Hermes listing/streaming is unavailable, keep rendering local sessions.
 - Hermes stays the agent — never register Hermes as a Pi provider and never invoke Pi's local tool executor.

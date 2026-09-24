@@ -1,7 +1,7 @@
 # Pi Thinking Options Implementation Plan
 
 > **For agentic workers:** Execute task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-> Spec: [`project_docs/specs/2026-07-24-pi-thinking-options-design.md`](../design/2026-07-24-pi-thinking-options-design.md)
+> Spec: [`project_docs/specs/2026-07-24-pi-thinking-options-design.md`](../project_docs/specs/2026-07-24-pi-thinking-options-design.md)
 
 **Goal:** Expose Pi thinking levels on the desktop chat composer, sticky per thread, applied on each send via `session.setThinkingLevel()`.
 

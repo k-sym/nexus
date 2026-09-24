@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Documentation and plan artifacts live in `project_docs/`; do not create root `docs/`.
+- This plan is versioned in `intent/`; the spec and other documentation live in Dropbox `project_docs/` (git-ignored, never staged); do not create root `docs/`.
 - Do not expose Assistant API keys or raw bearer tokens in frontend responses.
 - Do not list Hermes cron/jobs in the Assistant rail; `/api/jobs` remains separate and out of scope.
 - Do not replace the local Assistant session list with an unfiltered remote list.

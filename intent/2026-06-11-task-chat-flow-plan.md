@@ -8,7 +8,7 @@
 
 **Tech Stack:** React + TypeScript (Vite, Vitest, Testing Library) frontend; Fastify + better-sqlite3 backend (node:test via `tsx --test`); `@nexus/shared` workspace for shared types.
 
-**Design reference:** `docs/superpowers/specs/2026-06-11-task-chat-flow-design.md`
+**Design reference:** `project_docs/specs/2026-06-11-task-chat-flow-design.md`
 
 **Branch:** `feat/task-chat-flow` (already checked out; spec already committed).
 

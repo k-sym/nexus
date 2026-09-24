@@ -10,7 +10,7 @@
 
 **Spec:** `project_docs/specs/2026-06-02-hermes-agent-design.md`
 
-**Conventions:** Plan lives in `project_docs/` (gitignored). Commit code per task; never `git add` any `dist/` (gitignored) — for shared, `git add src/shared/index.ts` only. Run commands from repo root `/Users/k-sym/Projects/nexus`. Branch for this work: `feat/hermes-agent` (create it before Task 1 if not present).
+**Conventions:** This plan is versioned in `intent/`; the spec lives in Dropbox `project_docs/specs/` (git-ignored, never staged). Commit code per task; never `git add` any `dist/` (gitignored) — for shared, `git add src/shared/index.ts` only. Run commands from repo root `/Users/k-sym/Projects/nexus`. Branch for this work: `feat/hermes-agent` (create it before Task 1 if not present).
 
 **Note on adding a union member:** adding `'hermes'` to `ProviderKind` does NOT break other files' typechecks (TS `switch` without an exhaustive `never` check tolerates extra members), so per-task backend typechecks are expected to pass throughout.
 
@@ -57,8 +57,8 @@ Append to `src/backend/test/providers.test.ts`:
 import { hermesHealthUrl } from '../orchestrator/providers';
 
 test('hermesHealthUrl derives /health from a /v1 base', () => {
-  assert.equal(hermesHealthUrl('http://100.87.109.31:8642/v1'), 'http://100.87.109.31:8642/health');
-  assert.equal(hermesHealthUrl('http://100.87.109.31:8642/v1/'), 'http://100.87.109.31:8642/health');
+  assert.equal(hermesHealthUrl('http://<tailnet-ip>:8642/v1'), 'http://<tailnet-ip>:8642/health');
+  assert.equal(hermesHealthUrl('http://<tailnet-ip>:8642/v1/'), 'http://<tailnet-ip>:8642/health');
   assert.equal(hermesHealthUrl('http://h:8642'), 'http://h:8642/health');
 });
 ```
@@ -362,7 +362,7 @@ function seedHermesPersona(db: Database.Database): void {
 In `seedProviders`, after the `opencode` const, add the `hermes` const:
 
 ```ts
-  const hermes = { id: 'seed-hermes', name: 'Hermes', kind: 'hermes', base_url: 'http://100.87.109.31:8642/v1', api_key: '${HERMES_API_KEY}', default_model: 'hermes-agent', models: JSON.stringify(['hermes-agent']), args: null, created_at: now };
+  const hermes = { id: 'seed-hermes', name: 'Hermes', kind: 'hermes', base_url: 'http://<tailnet-ip>:8642/v1', api_key: '${HERMES_API_KEY}', default_model: 'hermes-agent', models: JSON.stringify(['hermes-agent']), args: null, created_at: now };
 ```
 
 In the `if (n === 0)` branch, add `hermes` to the `seed` array (after `opencode`), then replace the tail of that branch (`db.pragma('user_version = 1'); return;`) with:
