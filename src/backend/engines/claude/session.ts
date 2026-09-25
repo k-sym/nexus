@@ -20,7 +20,7 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentSessionEventListener, ContextUsage, SessionManager } from '@earendil-works/pi-coding-agent';
-import type { ImageContent, UserMessage } from '@earendil-works/pi-ai';
+import type { ImageContent, JsonValue, UserMessage } from '@earendil-works/pi-ai';
 import { ENGINE_SESSION_CUSTOM_TYPE, type EngineSessionRecord } from '@nexus/shared';
 import { decideToolCall, type ApprovalBroker } from '../../pi/approvals.js';
 import type { ToolPolicyResolver } from '../../pi/tool-policy.js';
@@ -145,7 +145,7 @@ export class ClaudeEngineSession implements EngineSession {
   private sdkSessionId: string | undefined;
   private active: ActiveTurn | null = null;
   private lastContextUsage: ContextUsage | undefined;
-  private readonly detailsByToolCall = new Map<string, unknown>();
+  private readonly detailsByToolCall = new Map<string, JsonValue>();
   private loggedAuthSource = false;
 
   constructor(private readonly deps: ClaudeSessionDeps) {

@@ -17,6 +17,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ContextUsage } from '@earendil-works/pi-coding-agent';
 import type {
   AssistantMessage,
+  JsonValue,
   StopReason,
   TextContent,
   ThinkingContent,
@@ -35,7 +36,7 @@ export interface MapperSinks {
   emit(event: EngineSessionEvent): void;
   persist(message: AssistantMessage | ToolResultMessage): void;
   /** Structured details a bridged Nexus tool produced for this tool call (Task 8 side channel). */
-  detailsFor(toolCallId: string): unknown;
+  detailsFor(toolCallId: string): JsonValue | undefined;
   onSessionId(sessionId: string, apiKeySource: string): void;
   onContextUsage(usage: ContextUsage): void;
   now?: () => number;
