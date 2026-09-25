@@ -10,6 +10,7 @@ test('every catalog model is claude-code, vision-capable and keyed by its SDK id
     assert.match(model.id, /^claude-/);
   }
   assert.ok(findClaudeModel('claude-opus-5'));
+  assert.ok(findClaudeModel('claude-opus-5-5'));
   assert.equal(findClaudeModel('gpt-5'), undefined);
 });
 
@@ -17,6 +18,8 @@ test('capability resolver derives Nexus thinking levels from the catalog', () =>
   const opus = capabilitiesFromModel(findClaudeModel('claude-opus-5')!);
   assert.deepEqual(opus.reasoning.levels, ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
   assert.equal(opus.imageInput, 'supported');
+  const opus55 = capabilitiesFromModel(findClaudeModel('claude-opus-5-5')!);
+  assert.deepEqual(opus55.reasoning.levels, ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
   const fable = capabilitiesFromModel(findClaudeModel('claude-fable-5-1')!);
   assert.equal(fable.reasoning.mandatory, true);
   assert.ok(!fable.reasoning.levels.includes('off'));

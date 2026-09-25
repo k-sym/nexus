@@ -14,7 +14,7 @@
     "test:live": "tsx --test test/live/*.test.ts"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "0.3.278",
+    "@anthropic-ai/claude-agent-sdk": "0.3.282",
     "@earendil-works/pi-agent-core": "0.87.1",
     "@earendil-works/pi-ai": "0.87.1",
     "@earendil-works/pi-coding-agent": "0.87.1",

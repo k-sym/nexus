@@ -20,6 +20,8 @@ const ALWAYS_ON = { off: null, xhigh: 'xhigh', max: 'max' } as const;
 
 export const CLAUDE_CODE_MODELS: EngineModel[] = [
   { provider: CLAUDE_CODE_PROVIDER, id: 'claude-fable-5-1', name: 'Claude Fable 5.1', reasoning: true, contextWindow: 1_000_000, maxTokens: 128_000, input: ['text', 'image'], thinkingLevelMap: ALWAYS_ON },
+  // Needs Claude Code 2.1.280+ (Agent SDK 0.3.280+); older CLIs get a 400 for this id.
+  { provider: CLAUDE_CODE_PROVIDER, id: 'claude-opus-5-5', name: 'Claude Opus 5.5', reasoning: true, contextWindow: 1_000_000, maxTokens: 128_000, input: ['text', 'image'], thinkingLevelMap: FULL_EFFORT },
   { provider: CLAUDE_CODE_PROVIDER, id: 'claude-opus-5', name: 'Claude Opus 5', reasoning: true, contextWindow: 1_000_000, maxTokens: 128_000, input: ['text', 'image'], thinkingLevelMap: FULL_EFFORT },
   { provider: CLAUDE_CODE_PROVIDER, id: 'claude-opus-4-8', name: 'Claude Opus 4.8', reasoning: true, contextWindow: 1_000_000, maxTokens: 128_000, input: ['text', 'image'], thinkingLevelMap: FULL_EFFORT },
   { provider: CLAUDE_CODE_PROVIDER, id: 'claude-sonnet-5', name: 'Claude Sonnet 5', reasoning: true, contextWindow: 1_000_000, maxTokens: 128_000, input: ['text', 'image'], thinkingLevelMap: FULL_EFFORT },
