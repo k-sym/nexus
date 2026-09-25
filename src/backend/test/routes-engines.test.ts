@@ -9,6 +9,7 @@ import { registerEngineRoutes } from '../routes/engines.js';
 import { registerAuthRoutes } from '../routes/auth.js';
 import { registerPiRoutes } from '../routes/pi.js';
 import { claudeEngineStatus, isPiAnthropicOAuthHidden } from '../engines/claude/status.js';
+import { CLAUDE_CODE_MODELS } from '../engines/claude/models.js';
 import { EngineRegistry } from '../engines/registry.js';
 import { PiEngine } from '../engines/pi-engine.js';
 
@@ -18,7 +19,7 @@ const desktop = { appFound: true, indexFound: false };
 
 test('claudeEngineStatus reports token, login and api_key modes without leaking the token', () => {
   assert.deepEqual(claudeEngineStatus(enabled, { CLAUDE_CODE_OAUTH_TOKEN: 'secret' }, desktop), {
-    id: 'claude-code', enabled: true, auth: 'subscription', tokenConfigured: true, authSource: 'token', executablePath: null, modelCount: 5,
+    id: 'claude-code', enabled: true, auth: 'subscription', tokenConfigured: true, authSource: 'token', executablePath: null, modelCount: CLAUDE_CODE_MODELS.length,
     settingSources: [], skills: 'all', desktop,
   });
   assert.equal(claudeEngineStatus(enabled, {}).authSource, 'login');
