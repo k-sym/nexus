@@ -18,6 +18,7 @@ import {
   type SdkMcpToolDefinition,
 } from '@anthropic-ai/claude-agent-sdk';
 import type { AgentToolResult, ExtensionContext, ExtensionFactory, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import type { JsonValue } from '@earendil-works/pi-ai';
 import { NEXUS_MCP_SERVER, toClaudeToolName } from './tool-names.js';
 import type { ToolUseCorrelator } from './tool-use-correlator.js';
 
@@ -31,7 +32,7 @@ export interface BridgeContext {
   onUpdate: (toolCallId: string, toolName: string, partial: AgentToolResult<unknown>) => void;
   /** Pi tools return structured `details` beside text; MCP only carries the text
    *  back through Claude, so details travel on this side channel. */
-  onDetails: (toolCallId: string, details: unknown) => void;
+  onDetails: (toolCallId: string, details: JsonValue) => void;
 }
 
 /** A callable proxy whose every property is itself: absorbs `pi.on(...)`,
