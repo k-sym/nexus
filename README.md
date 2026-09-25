@@ -165,7 +165,7 @@ Settings provides two maintenance controls:
 
 ### Prerequisites
 
-- **Node.js** ≥ 20
+- **Node.js** ≥ 22.19 (the floor the Pi runtime packages declare)
 - **Rust** (stable) + **Xcode Command Line Tools** — to build the Tauri desktop shell on macOS. The WebView is the OS-provided WebKit (nothing extra to install). `xcode-select --install`; install Rust via [rustup](https://rustup.rs) or `brew install rust`.
 - **At least one model provider credential** — pick whichever you want to use:
   - **OpenRouter API key** — the easiest way to reach hundreds of models from one key ([get one](https://openrouter.ai/keys)).
